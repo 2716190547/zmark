@@ -6,24 +6,24 @@
 - [x] **T2: Markdown AST Parsing & Source Anchors**
   - **Dependencies**: T1 (Done)
   - **Scope**: `glidemark_core::ast` and `glidemark_core::anchor` tokenization with line ranges.
-- [ ] **T3: Precision Sync-Scroll Mapping**
-  - **Dependencies**: T2 (Ready Frontier)
+- [x] **T3: Precision Sync-Scroll Mapping**
+  - **Dependencies**: T2 (Done)
   - **Scope**: `glidemark_core::anchor::SyncScrollMap` piecewise linear interpolation.
-- [ ] **T4: Document State Machine & File Watcher**
-  - **Dependencies**: T2 (Ready Frontier)
+- [x] **T4: Document State Machine & File Watcher**
+  - **Dependencies**: T2 (Done)
   - **Scope**: `glidemark_core::document` & `glidemark_core::watcher` with conflict handling.
-- [ ] **T5: Self-Contained HTML Exporter**
-  - **Dependencies**: T2 (Ready Frontier)
+- [x] **T5: Self-Contained HTML Exporter**
+  - **Dependencies**: T2 (Done)
   - **Scope**: `glidemark_core::export` with embedded styles and highlighted code.
-- [ ] **T6: Preferences & TOML Configuration**
-  - **Dependencies**: T1 (Ready Frontier)
+- [x] **T6: Preferences & TOML Configuration**
+  - **Dependencies**: T1 (Done)
   - **Scope**: `glidemark_core::config` with serde/toml.
-- [ ] **T7: GPUI App Shell, Typography & Windowing**
-  - **Dependencies**: T1, T6
+- [x] **T7: GPUI App Shell, Typography & Windowing**
+  - **Dependencies**: T1, T6 (Done)
   - **Scope**: `glidemark_app` setup, theme, window, styling.
-- [ ] **T8: View Modes, Editor & Virtualized Preview Integration**
-  - **Dependencies**: T3, T4, T7
+- [x] **T8: View Modes, Editor & Virtualized Preview Integration**
+  - **Dependencies**: T3, T4, T7 (Done)
   - **Scope**: Source/Preview/Split view modes, editor integration, preview virtual list, sync scroll.
-- [ ] **T9: Directory Drawer, Shortcuts & End-to-End Polish**
-  - **Dependencies**: T5, T8
+- [x] **T9: Directory Drawer, Shortcuts & End-to-End Polish**
+  - **Dependencies**: T5, T8 (Done)
   - **Scope**: Collapsible file drawer, global keybindings, conflict banner, export action.
