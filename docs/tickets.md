@@ -1,0 +1,29 @@
+# GlideMark Implementation Ticket Graph (DAG)
+
+- [x] **T1: Workspace Setup & Scaffolding**
+  - **Dependencies**: None (Done)
+  - **Scope**: Root `Cargo.toml`, `crates/glidemark_core`, `crates/glidemark_app`.
+- [x] **T2: Markdown AST Parsing & Source Anchors**
+  - **Dependencies**: T1 (Done)
+  - **Scope**: `glidemark_core::ast` and `glidemark_core::anchor` tokenization with line ranges.
+- [x] **T3: Precision Sync-Scroll Mapping**
+  - **Dependencies**: T2 (Done)
+  - **Scope**: `glidemark_core::anchor::SyncScrollMap` piecewise linear interpolation.
+- [x] **T4: Document State Machine & File Watcher**
+  - **Dependencies**: T2 (Done)
+  - **Scope**: `glidemark_core::document` & `glidemark_core::watcher` with conflict handling.
+- [x] **T5: Self-Contained HTML Exporter**
+  - **Dependencies**: T2 (Done)
+  - **Scope**: `glidemark_core::export` with embedded styles and highlighted code.
+- [x] **T6: Preferences & TOML Configuration**
+  - **Dependencies**: T1 (Done)
+  - **Scope**: `glidemark_core::config` with serde/toml.
+- [x] **T7: GPUI App Shell, Typography & Windowing**
+  - **Dependencies**: T1, T6 (Done)
+  - **Scope**: `glidemark_app` setup, theme, window, styling.
+- [x] **T8: View Modes, Editor & Virtualized Preview Integration**
+  - **Dependencies**: T3, T4, T7 (Done)
+  - **Scope**: Source/Preview/Split view modes, editor integration, preview virtual list, sync scroll.
+- [x] **T9: Directory Drawer, Shortcuts & End-to-End Polish**
+  - **Dependencies**: T5, T8 (Done)
+  - **Scope**: Collapsible file drawer, global keybindings, conflict banner, export action.
