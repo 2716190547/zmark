@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "crates/glidemark_core",
+    "crates/glidemark_app",
+]
+resolver = "2"
