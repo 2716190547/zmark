@@ -52,5 +52,39 @@ _Avoid_: PDF generator, print renderer, web exporter
 User-defined layout, typography, and theme settings persisted in an OS-standard TOML configuration file.
 _Avoid_: Settings DB, registry, user state
 
+**Palette**:
+A curated semantic color scheme (e.g. MiaoYan Pure, Claude Warm, macOS Vibrant, Tokyo Night, Catppuccin, Nord, Gruvbox, GitHub Modern, Solarized) providing light and dark styling variants.
+_Avoid_: Theme file, skin, color pack
+
+**Editor Engine**:
+The responsive in-memory line buffer tracking cursor position, text selection, keystrokes, and undo/redo history.
+_Avoid_: Text box, input widget, textarea
+
+**Window Inset**:
+Platform-specific layout padding reserving top-bar space for native window management controls (macOS traffic lights on the left, Windows caption buttons on the right).
+_Avoid_: Titlebar margin, top padding, button offset
+
+**Locale**:
+The active regional language translation dictionary mapped across 10 supported languages (zh-CN, zh-TW, en, ja, ko, fr, de, es, ru, pt).
+_Avoid_: Language pack, string bundle, i18n file
+
+**Split Ratio**:
+The dynamic proportional divider coordinate (clamped between 0.20 and 0.80) that allocates horizontal viewport space between the Source Editor and Preview panes.
+_Avoid_: Split position, pane width, column size
+
+**Inline Rename**:
+In-place document title editing state enabling file path renaming directly on disk without disrupting the active reading or editing session.
+_Avoid_: Save-as prompt, title edit dialog, rename modal
+
+**External Drop**:
+The operating system file drop mechanism delivering native path collections (`ExternalPaths`) to open dropped markdown documents directly.
+_Avoid_: Drag file, file import, drop listener
+
+**App Bundle**:
+The self-contained macOS desktop bundle (`.app`) containing native arm64 binary, document association metadata (`Info.plist`), and icon resources (`AppIcon.icns`).
+_Avoid_: Executable zip, dmg package, installer archive
+
+
+
 
 

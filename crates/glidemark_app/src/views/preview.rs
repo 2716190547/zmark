@@ -7,11 +7,14 @@ use crate::theme::ThemeColors;
 pub fn render_preview_pane(
     parsed: &ParsedDocument,
     theme: &ThemeColors,
-    max_column_width: f32,
+    _max_column_width: f32,
     font_size: f32,
+    scroll_handle: &ScrollHandle,
+    title: &str,
 ) -> impl IntoElement {
     div()
         .flex_1()
+        .min_h(px(0.))
         .h_full()
         .flex()
         .flex_col()
@@ -31,7 +34,7 @@ pub fn render_preview_pane(
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text_muted)
-                        .child("PREVIEW (120FPS GPU RENDER)"),
+                        .child(title.to_string()),
                 )
                 .child(
                     div()
@@ -43,15 +46,15 @@ pub fn render_preview_pane(
         .child(
             div()
                 .id("preview_scroll_container")
+                .track_scroll(scroll_handle)
                 .flex_1()
+                .min_h(px(0.))
                 .overflow_y_scroll()
-                .p_8()
-                .flex()
-                .justify_center()
+                .px_8()
+                .py_6()
                 .child(
                     div()
                         .w_full()
-                        .max_w(px(max_column_width))
                         .flex()
                         .flex_col()
                         .gap_4()

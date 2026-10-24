@@ -1,8 +1,9 @@
 //! glidemark_core - Pure Rust headless domain logic for GlideMark.
 
-pub mod ast;
 pub mod anchor;
+pub mod ast;
 pub mod config;
 pub mod document;
 pub mod export;
+pub mod i18n;
 pub mod watcher;

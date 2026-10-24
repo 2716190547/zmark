@@ -2,6 +2,11 @@ use gpui::*;
 
 #[derive(Debug, Clone)]
 pub struct ThemeColors {
+    #[allow(dead_code)]
+    pub id: &'static str,
+    #[allow(dead_code)]
+    pub name: &'static str,
+    pub is_dark: bool,
     pub bg: Hsla,
     pub surface: Hsla,
     pub border: Hsla,
@@ -13,32 +18,342 @@ pub struct ThemeColors {
     pub conflict_border: Hsla,
 }
 
+pub struct PaletteDescriptor {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub preview_color: Hsla,
+}
+
+pub const ALL_PALETTES: &[PaletteDescriptor] = &[
+    PaletteDescriptor { id: "miaoyan", name: "MiaoYan", preview_color: Hsla { h: 145.0 / 360.0, s: 0.50, l: 0.40, a: 1.0 } },
+    PaletteDescriptor { id: "claude", name: "Claude Warm", preview_color: Hsla { h: 35.0 / 360.0, s: 0.9, l: 0.5, a: 1.0 } },
+    PaletteDescriptor { id: "macos", name: "macOS Vibrant", preview_color: Hsla { h: 211.0 / 360.0, s: 1.0, l: 0.45, a: 1.0 } },
+    PaletteDescriptor { id: "tokyo-night", name: "Tokyo Night", preview_color: Hsla { h: 224.0 / 360.0, s: 0.88, l: 0.72, a: 1.0 } },
+    PaletteDescriptor { id: "catppuccin", name: "Catppuccin", preview_color: Hsla { h: 267.0 / 360.0, s: 0.83, l: 0.8, a: 1.0 } },
+    PaletteDescriptor { id: "nord", name: "Nord", preview_color: Hsla { h: 193.0 / 360.0, s: 0.43, l: 0.67, a: 1.0 } },
+    PaletteDescriptor { id: "gruvbox", name: "Gruvbox", preview_color: Hsla { h: 43.0 / 360.0, s: 0.96, l: 0.58, a: 1.0 } },
+    PaletteDescriptor { id: "github", name: "GitHub Modern", preview_color: Hsla { h: 212.0 / 360.0, s: 0.92, l: 0.45, a: 1.0 } },
+    PaletteDescriptor { id: "solarized", name: "Solarized", preview_color: Hsla { h: 175.0 / 360.0, s: 0.59, l: 0.4, a: 1.0 } },
+];
+
 impl ThemeColors {
-    pub fn dark() -> Self {
-        Self {
-            bg: rgb(0x121214).into(),
-            surface: rgb(0x1a1a1e).into(),
-            border: rgb(0x27272a).into(),
-            text_primary: rgb(0xf4f4f5).into(),
-            text_muted: rgb(0xa1a1aa).into(),
-            accent: rgb(0x38bdf8).into(),
-            code_bg: rgb(0x18181b).into(),
-            conflict_bg: rgb(0x451a03).into(),
-            conflict_border: rgb(0xb45309).into(),
+    pub fn resolve(palette_id: &str, is_dark: bool) -> Self {
+        match palette_id {
+            "claude" => Self::claude_warm(is_dark),
+            "macos" => Self::macos(is_dark),
+            "tokyo-night" => Self::tokyo_night(is_dark),
+            "catppuccin" => Self::catppuccin(is_dark),
+            "nord" => Self::nord(is_dark),
+            "gruvbox" => Self::gruvbox(is_dark),
+            "github" => Self::github(is_dark),
+            "solarized" => Self::solarized(is_dark),
+            _ => Self::miaoyan(is_dark),
         }
     }
 
-    pub fn light() -> Self {
-        Self {
-            bg: rgb(0xfcfcfc).into(),
-            surface: rgb(0xf4f4f5).into(),
-            border: rgb(0xe4e4e7).into(),
-            text_primary: rgb(0x18181b).into(),
-            text_muted: rgb(0x71717a).into(),
-            accent: rgb(0x0284c7).into(),
-            code_bg: rgb(0xf1f5f9).into(),
-            conflict_bg: rgb(0xfef3c7).into(),
-            conflict_border: rgb(0xf59e0b).into(),
+    pub fn miaoyan(is_dark: bool) -> Self {
+        if is_dark {
+            Self {
+                id: "miaoyan",
+                name: "MiaoYan",
+                is_dark: true,
+                bg: rgb(0x181818).into(),
+                surface: rgb(0x202020).into(),
+                border: rgb(0x2c2c2c).into(),
+                text_primary: rgb(0xe6e6e6).into(),
+                text_muted: rgb(0x888888).into(),
+                accent: rgb(0x3ea368).into(),
+                code_bg: rgb(0x222222).into(),
+                conflict_bg: rgb(0x382218).into(),
+                conflict_border: rgb(0x5e3322).into(),
+            }
+        } else {
+            Self {
+                id: "miaoyan",
+                name: "MiaoYan",
+                is_dark: false,
+                bg: rgb(0xffffff).into(),
+                surface: rgb(0xf9f9f9).into(),
+                border: rgb(0xededed).into(),
+                text_primary: rgb(0x1f2328).into(),
+                text_muted: rgb(0x858585).into(),
+                accent: rgb(0x2da44e).into(),
+                code_bg: rgb(0xf6f6f6).into(),
+                conflict_bg: rgb(0xfef2f2).into(),
+                conflict_border: rgb(0xfecaca).into(),
+            }
+        }
+    }
+
+    pub fn claude_warm(is_dark: bool) -> Self {
+        if is_dark {
+            Self {
+                id: "claude",
+                name: "Claude Warm",
+                is_dark: true,
+                bg: rgb(0x1a1917).into(),
+                surface: rgb(0x24221f).into(),
+                border: rgb(0x36332e).into(),
+                text_primary: rgb(0xeae7e1).into(),
+                text_muted: rgb(0x9e978c).into(),
+                accent: rgb(0xf59e0b).into(),
+                code_bg: rgb(0x2c2925).into(),
+                conflict_bg: rgb(0x451a03).into(),
+                conflict_border: rgb(0xb45309).into(),
+            }
+        } else {
+            Self {
+                id: "claude",
+                name: "Claude Warm",
+                is_dark: false,
+                bg: rgb(0xfaf9f6).into(),
+                surface: rgb(0xf3efea).into(),
+                border: rgb(0xe6dfd5).into(),
+                text_primary: rgb(0x2a2723).into(),
+                text_muted: rgb(0x797369).into(),
+                accent: rgb(0xd97706).into(),
+                code_bg: rgb(0xefece6).into(),
+                conflict_bg: rgb(0xfef3c7).into(),
+                conflict_border: rgb(0xf59e0b).into(),
+            }
+        }
+    }
+
+    pub fn macos(is_dark: bool) -> Self {
+        if is_dark {
+            Self {
+                id: "macos",
+                name: "macOS Vibrant",
+                is_dark: true,
+                bg: rgb(0x1c1c1e).into(),
+                surface: rgb(0x2c2c2e).into(),
+                border: rgb(0x3a3a3c).into(),
+                text_primary: rgb(0xf5f5f7).into(),
+                text_muted: rgb(0x8e8e93).into(),
+                accent: rgb(0x2997ff).into(),
+                code_bg: rgb(0x252528).into(),
+                conflict_bg: rgb(0x451a03).into(),
+                conflict_border: rgb(0xb45309).into(),
+            }
+        } else {
+            Self {
+                id: "macos",
+                name: "macOS Vibrant",
+                is_dark: false,
+                bg: rgb(0xffffff).into(),
+                surface: rgb(0xf5f5f7).into(),
+                border: rgb(0xe5e5ea).into(),
+                text_primary: rgb(0x1d1d1f).into(),
+                text_muted: rgb(0x86868b).into(),
+                accent: rgb(0x0071e3).into(),
+                code_bg: rgb(0xf0f0f2).into(),
+                conflict_bg: rgb(0xfef3c7).into(),
+                conflict_border: rgb(0xf59e0b).into(),
+            }
+        }
+    }
+
+    pub fn tokyo_night(is_dark: bool) -> Self {
+        if is_dark {
+            Self {
+                id: "tokyo-night",
+                name: "Tokyo Night",
+                is_dark: true,
+                bg: rgb(0x1a1b26).into(),
+                surface: rgb(0x1f2335).into(),
+                border: rgb(0x292e42).into(),
+                text_primary: rgb(0xc0caf5).into(),
+                text_muted: rgb(0x7aa2f7).into(),
+                accent: rgb(0x7aa2f7).into(),
+                code_bg: rgb(0x24283b).into(),
+                conflict_bg: rgb(0x441b22).into(),
+                conflict_border: rgb(0xf7768e).into(),
+            }
+        } else {
+            Self {
+                id: "tokyo-night",
+                name: "Tokyo Night",
+                is_dark: false,
+                bg: rgb(0xe1e2e7).into(),
+                surface: rgb(0xd5d6db).into(),
+                border: rgb(0xb4b5b9).into(),
+                text_primary: rgb(0x343b58).into(),
+                text_muted: rgb(0x565f89).into(),
+                accent: rgb(0x3d59a1).into(),
+                code_bg: rgb(0xcbccd1).into(),
+                conflict_bg: rgb(0xfde8e8).into(),
+                conflict_border: rgb(0xf7768e).into(),
+            }
+        }
+    }
+
+    pub fn catppuccin(is_dark: bool) -> Self {
+        if is_dark {
+            Self {
+                id: "catppuccin",
+                name: "Catppuccin",
+                is_dark: true,
+                bg: rgb(0x24273a).into(),
+                surface: rgb(0x1e2030).into(),
+                border: rgb(0x363a4f).into(),
+                text_primary: rgb(0xcad3f5).into(),
+                text_muted: rgb(0x8087a2).into(),
+                accent: rgb(0xc6a0f6).into(),
+                code_bg: rgb(0x181926).into(),
+                conflict_bg: rgb(0x49202a).into(),
+                conflict_border: rgb(0xed8796).into(),
+            }
+        } else {
+            Self {
+                id: "catppuccin",
+                name: "Catppuccin",
+                is_dark: false,
+                bg: rgb(0xeff1f5).into(),
+                surface: rgb(0xe6e9ef).into(),
+                border: rgb(0xccd0da).into(),
+                text_primary: rgb(0x4c4f69).into(),
+                text_muted: rgb(0x7c7f93).into(),
+                accent: rgb(0x8839ef).into(),
+                code_bg: rgb(0xdce0e8).into(),
+                conflict_bg: rgb(0xfce8ec).into(),
+                conflict_border: rgb(0xe64553).into(),
+            }
+        }
+    }
+
+    pub fn nord(is_dark: bool) -> Self {
+        if is_dark {
+            Self {
+                id: "nord",
+                name: "Nord",
+                is_dark: true,
+                bg: rgb(0x2e3440).into(),
+                surface: rgb(0x3b4252).into(),
+                border: rgb(0x434c5e).into(),
+                text_primary: rgb(0xeceff4).into(),
+                text_muted: rgb(0xd8dee9).into(),
+                accent: rgb(0x88c0d0).into(),
+                code_bg: rgb(0x3b4252).into(),
+                conflict_bg: rgb(0x4c3238).into(),
+                conflict_border: rgb(0xbf616a).into(),
+            }
+        } else {
+            Self {
+                id: "nord",
+                name: "Nord",
+                is_dark: false,
+                bg: rgb(0xeceff4).into(),
+                surface: rgb(0xe5e9f0).into(),
+                border: rgb(0xd8dee9).into(),
+                text_primary: rgb(0x2e3440).into(),
+                text_muted: rgb(0x4c566a).into(),
+                accent: rgb(0x5e81ac).into(),
+                code_bg: rgb(0xe5e9f0).into(),
+                conflict_bg: rgb(0xfbedee).into(),
+                conflict_border: rgb(0xbf616a).into(),
+            }
+        }
+    }
+
+    pub fn gruvbox(is_dark: bool) -> Self {
+        if is_dark {
+            Self {
+                id: "gruvbox",
+                name: "Gruvbox",
+                is_dark: true,
+                bg: rgb(0x282828).into(),
+                surface: rgb(0x32302f).into(),
+                border: rgb(0x504945).into(),
+                text_primary: rgb(0xebdbb2).into(),
+                text_muted: rgb(0xa89984).into(),
+                accent: rgb(0xfabd2f).into(),
+                code_bg: rgb(0x3c3836).into(),
+                conflict_bg: rgb(0x502624).into(),
+                conflict_border: rgb(0xfb4934).into(),
+            }
+        } else {
+            Self {
+                id: "gruvbox",
+                name: "Gruvbox",
+                is_dark: false,
+                bg: rgb(0xfbf1c7).into(),
+                surface: rgb(0xf2e5bc).into(),
+                border: rgb(0xd5c4a1).into(),
+                text_primary: rgb(0x282828).into(),
+                text_muted: rgb(0x7c6f64).into(),
+                accent: rgb(0xb57614).into(),
+                code_bg: rgb(0xebdbb2).into(),
+                conflict_bg: rgb(0xf9e0de).into(),
+                conflict_border: rgb(0xcc241d).into(),
+            }
+        }
+    }
+
+    pub fn github(is_dark: bool) -> Self {
+        if is_dark {
+            Self {
+                id: "github",
+                name: "GitHub Modern",
+                is_dark: true,
+                bg: rgb(0x0d1117).into(),
+                surface: rgb(0x161b22).into(),
+                border: rgb(0x30363d).into(),
+                text_primary: rgb(0xe6edf3).into(),
+                text_muted: rgb(0x848d97).into(),
+                accent: rgb(0x2f81f7).into(),
+                code_bg: rgb(0x1f242c).into(),
+                conflict_bg: rgb(0x3d1d20).into(),
+                conflict_border: rgb(0xf85149).into(),
+            }
+        } else {
+            Self {
+                id: "github",
+                name: "GitHub Modern",
+                is_dark: false,
+                bg: rgb(0xffffff).into(),
+                surface: rgb(0xf6f8fa).into(),
+                border: rgb(0xd0d7de).into(),
+                text_primary: rgb(0x1f2328).into(),
+                text_muted: rgb(0x656d76).into(),
+                accent: rgb(0x0969da).into(),
+                code_bg: rgb(0xf1f5f9).into(),
+                conflict_bg: rgb(0xffebe9).into(),
+                conflict_border: rgb(0xcf222e).into(),
+            }
+        }
+    }
+
+    pub fn solarized(is_dark: bool) -> Self {
+        if is_dark {
+            Self {
+                id: "solarized",
+                name: "Solarized",
+                is_dark: true,
+                bg: rgb(0x002b36).into(),
+                surface: rgb(0x073642).into(),
+                border: rgb(0x586e75).into(),
+                text_primary: rgb(0x839496).into(),
+                text_muted: rgb(0x657b83).into(),
+                accent: rgb(0x2aa198).into(),
+                code_bg: rgb(0x073642).into(),
+                conflict_bg: rgb(0x3e1f24).into(),
+                conflict_border: rgb(0xdc322f).into(),
+            }
+        } else {
+            Self {
+                id: "solarized",
+                name: "Solarized",
+                is_dark: false,
+                bg: rgb(0xfdf6e3).into(),
+                surface: rgb(0xeee8d5).into(),
+                border: rgb(0x93a1a1).into(),
+                text_primary: rgb(0x657b83).into(),
+                text_muted: rgb(0x93a1a1).into(),
+                accent: rgb(0x268bd2).into(),
+                code_bg: rgb(0xeee8d5).into(),
+                conflict_bg: rgb(0xfdf0ed).into(),
+                conflict_border: rgb(0xdc322f).into(),
+            }
         }
     }
 }

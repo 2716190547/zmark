@@ -4,7 +4,9 @@ use glidemark_core::anchor::SyncScrollMap;
 use glidemark_core::config::{Preferences, ThemeMode};
 use glidemark_core::document::{Document, DocumentStatus};
 use glidemark_core::export::export_html;
+use glidemark_core::i18n::{get_strings, I18nStrings, SupportedLocale};
 
+use crate::editor_engine::EditorEngine;
 use crate::theme::ThemeColors;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -17,10 +19,13 @@ pub enum ViewMode {
 
 pub struct AppState {
     pub doc: Document,
+    pub editor: EditorEngine,
     pub view_mode: ViewMode,
     pub drawer_open: bool,
+    pub settings_open: bool,
     pub preferences: Preferences,
     pub theme: ThemeColors,
+    pub strings: &'static I18nStrings,
     pub sync_map: SyncScrollMap,
     pub sibling_files: Vec<PathBuf>,
 }
@@ -28,17 +33,24 @@ pub struct AppState {
 impl AppState {
     pub fn new(doc: Document) -> Self {
         let preferences = Preferences::load_or_default();
-        let theme = match preferences.theme {
-            ThemeMode::Light => ThemeColors::light(),
-            ThemeMode::Dark | ThemeMode::Auto => ThemeColors::dark(),
+        let is_dark = match preferences.theme {
+            ThemeMode::Light => false,
+            ThemeMode::Dark | ThemeMode::Auto => true,
         };
+        let theme = ThemeColors::resolve(&preferences.palette, is_dark);
+        let strings = get_strings(preferences.locale);
         let sync_map = SyncScrollMap::new(doc.parsed.anchors.clone());
+        let editor = EditorEngine::new(&doc.buffer);
+
         let mut state = Self {
             doc,
+            editor,
             view_mode: ViewMode::Split,
             drawer_open: false,
+            settings_open: false,
             preferences,
             theme,
+            strings,
             sync_map,
             sibling_files: Vec::new(),
         };
@@ -57,8 +69,56 @@ impl AppState {
         }
     }
 
+    pub fn toggle_settings(&mut self) {
+        self.settings_open = !self.settings_open;
+    }
+
+    pub fn set_theme_mode(&mut self, mode: ThemeMode) {
+        self.preferences.theme = mode;
+        let _ = self.preferences.save();
+        self.recompute_theme();
+    }
+
+    pub fn set_palette(&mut self, palette_id: &str) {
+        self.preferences.palette = palette_id.to_string();
+        let _ = self.preferences.save();
+        self.recompute_theme();
+    }
+
+    pub fn set_locale(&mut self, locale: SupportedLocale) {
+        self.preferences.locale = locale;
+        let _ = self.preferences.save();
+        self.strings = get_strings(locale);
+    }
+
+    pub fn update_appearance(&mut self, is_dark: bool) {
+        let effective_dark = match self.preferences.theme {
+            ThemeMode::Light => false,
+            ThemeMode::Dark => true,
+            ThemeMode::Auto => is_dark,
+        };
+        if self.theme.is_dark != effective_dark {
+            self.theme = ThemeColors::resolve(&self.preferences.palette, effective_dark);
+        }
+    }
+
+    pub fn recompute_theme(&mut self) {
+        let is_dark = match self.preferences.theme {
+            ThemeMode::Light => false,
+            ThemeMode::Dark | ThemeMode::Auto => true,
+        };
+        self.theme = ThemeColors::resolve(&self.preferences.palette, is_dark);
+    }
+
+    pub fn sync_from_editor(&mut self) {
+        let new_text = self.editor.to_text();
+        self.doc.update_buffer(new_text);
+        self.sync_map = SyncScrollMap::new(self.doc.parsed.anchors.clone());
+    }
+
     #[allow(dead_code)]
     pub fn update_content(&mut self, new_text: String) {
+        self.editor.reset_text(&new_text);
         self.doc.update_buffer(new_text);
         self.sync_map = SyncScrollMap::new(self.doc.parsed.anchors.clone());
     }
@@ -86,13 +146,40 @@ impl AppState {
 
     pub fn load_file(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
         let doc = Document::from_file(path)?;
+        self.editor.reset_text(&doc.buffer);
         self.doc = doc;
         self.sync_map = SyncScrollMap::new(self.doc.parsed.anchors.clone());
         self.refresh_sibling_files();
         Ok(())
     }
 
+    pub fn rename_file(&mut self, new_name: &str) -> Result<(), std::io::Error> {
+        let clean_name = if new_name.ends_with(".md") || new_name.ends_with(".markdown") {
+            new_name.to_string()
+        } else {
+            format!("{}.md", new_name)
+        };
+
+        if let Some(old_path) = self.doc.path.clone() {
+            if let Some(parent) = old_path.parent() {
+                let new_path = parent.join(&clean_name);
+                if new_path != old_path {
+                    std::fs::rename(&old_path, &new_path)?;
+                    self.doc.path = Some(new_path);
+                    self.refresh_sibling_files();
+                }
+            }
+        } else {
+            let target_path = std::env::current_dir()?.join(&clean_name);
+            self.doc.path = Some(target_path);
+            self.save()?;
+            self.refresh_sibling_files();
+        }
+        Ok(())
+    }
+
     pub fn save(&mut self) -> Result<(), std::io::Error> {
+        self.sync_from_editor();
         self.doc.save()
     }
 
@@ -103,7 +190,7 @@ impl AppState {
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
-            .unwrap_or("GlideMark Document");
+            .unwrap_or(self.strings.untitled);
         export_html(&self.doc.parsed, title)
     }
 

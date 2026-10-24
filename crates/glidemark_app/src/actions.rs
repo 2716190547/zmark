@@ -7,6 +7,8 @@ actions!(
         ToggleSplitMode,
         TogglePreviewMode,
         ToggleDrawer,
+        ToggleSettings,
+        OpenFileDialog,
         SaveFile,
         ExportHtml
     ]

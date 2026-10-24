@@ -3,6 +3,7 @@ use std::env;
 use std::path::PathBuf;
 
 mod actions;
+mod editor_engine;
 mod state;
 mod theme;
 mod views;
@@ -76,6 +77,8 @@ Enjoy writing and reading with pure speed!
             KeyBinding::new("cmd-2", ToggleSplitMode, None),
             KeyBinding::new("cmd-3", TogglePreviewMode, None),
             KeyBinding::new("cmd-b", ToggleDrawer, None),
+            KeyBinding::new("cmd-o", OpenFileDialog, None),
+            KeyBinding::new("cmd-,", ToggleSettings, None),
             KeyBinding::new("cmd-s", SaveFile, None),
             KeyBinding::new("cmd-shift-e", ExportHtml, None),
         ]);

@@ -1,6 +1,7 @@
 use gpui::prelude::*;
 use gpui::*;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::theme::ThemeColors;
 
@@ -8,6 +9,9 @@ pub fn render_drawer(
     sibling_files: &[PathBuf],
     current_path: Option<&PathBuf>,
     theme: &ThemeColors,
+    title: &str,
+    scroll_handle: &ScrollHandle,
+    on_select: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
 ) -> impl IntoElement {
     div()
         .w(px(240.))
@@ -30,13 +34,15 @@ pub fn render_drawer(
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_muted)
-                        .child("DIRECTORY FILES"),
+                        .child(title.to_string()),
                 ),
         )
         .child(
             div()
                 .id("drawer_file_list")
+                .track_scroll(scroll_handle)
                 .flex_1()
+                .min_h(px(0.))
                 .overflow_y_scroll()
                 .p_2()
                 .flex()
@@ -57,13 +63,21 @@ pub fn render_drawer(
                         .text_sm()
                         .cursor_pointer();
 
+                    let p = path.clone();
+                    let on_select = on_select.clone();
+                    let interactive_item = item.on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                        on_select(&p, window, cx);
+                    });
+
                     if is_active {
-                        item.bg(theme.accent)
+                        interactive_item
+                            .bg(theme.accent)
                             .text_color(rgb(0xffffff))
                             .font_weight(FontWeight::MEDIUM)
                             .child(file_name)
                     } else {
-                        item.text_color(theme.text_primary)
+                        interactive_item
+                            .text_color(theme.text_primary)
                             .hover(|s| s.bg(theme.bg))
                             .child(file_name)
                     }

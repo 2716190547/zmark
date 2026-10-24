@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::i18n::SupportedLocale;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("I/O error: {0}")]
@@ -29,6 +31,8 @@ pub struct Preferences {
     pub line_height: f32,
     pub max_column_width: f32,
     pub theme: ThemeMode,
+    pub palette: String,
+    pub locale: SupportedLocale,
     pub tab_size: usize,
     pub auto_save_on_blur: bool,
 }
@@ -41,6 +45,8 @@ impl Default for Preferences {
             line_height: 1.6,
             max_column_width: 820.0,
             theme: ThemeMode::Auto,
+            palette: "miaoyan".to_string(),
+            locale: SupportedLocale::Auto,
             tab_size: 4,
             auto_save_on_blur: true,
         }

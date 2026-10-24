@@ -1,0 +1,384 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SupportedLocale {
+    #[default]
+    Auto,
+    ZhCn,
+    ZhTw,
+    En,
+    Ja,
+    Ko,
+    Fr,
+    De,
+    Es,
+    Ru,
+    Pt,
+}
+
+impl SupportedLocale {
+    pub fn all() -> &'static [(SupportedLocale, &'static str, &'static str)] {
+        &[
+            (SupportedLocale::ZhCn, "zh-CN", "简体中文"),
+            (SupportedLocale::ZhTw, "zh-TW", "繁體中文"),
+            (SupportedLocale::En, "en", "English"),
+            (SupportedLocale::Ja, "ja", "日本語"),
+            (SupportedLocale::Ko, "ko", "한국어"),
+            (SupportedLocale::Fr, "fr", "Français"),
+            (SupportedLocale::De, "de", "Deutsch"),
+            (SupportedLocale::Es, "es", "Español"),
+            (SupportedLocale::Ru, "ru", "Русский"),
+            (SupportedLocale::Pt, "pt", "Português"),
+        ]
+    }
+
+    pub fn from_tag(tag: &str) -> Self {
+        let clean = tag.replace('_', "-").to_lowercase();
+        if clean.starts_with("zh-tw") || clean.starts_with("zh-hk") {
+            SupportedLocale::ZhTw
+        } else if clean.starts_with("zh") {
+            SupportedLocale::ZhCn
+        } else if clean.starts_with("ja") {
+            SupportedLocale::Ja
+        } else if clean.starts_with("ko") {
+            SupportedLocale::Ko
+        } else if clean.starts_with("fr") {
+            SupportedLocale::Fr
+        } else if clean.starts_with("de") {
+            SupportedLocale::De
+        } else if clean.starts_with("es") {
+            SupportedLocale::Es
+        } else if clean.starts_with("ru") {
+            SupportedLocale::Ru
+        } else if clean.starts_with("pt") {
+            SupportedLocale::Pt
+        } else if clean.starts_with("en") {
+            SupportedLocale::En
+        } else {
+            SupportedLocale::En
+        }
+    }
+
+    pub fn resolve(self) -> Self {
+        if self == SupportedLocale::Auto {
+            let sys = std::env::var("LANG").unwrap_or_else(|_| "zh-CN".to_string());
+            Self::from_tag(&sys)
+        } else {
+            self
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct I18nStrings {
+    pub app_title: &'static str,
+    pub open_file: &'static str,
+    pub save_file: &'static str,
+    pub export_html: &'static str,
+    pub directory_drawer: &'static str,
+    pub close_drawer: &'static str,
+    pub source_mode: &'static str,
+    pub split_mode: &'static str,
+    pub preview_mode: &'static str,
+    pub settings: &'static str,
+    pub appearance: &'static str,
+    pub theme_auto: &'static str,
+    pub theme_light: &'static str,
+    pub theme_dark: &'static str,
+    pub palette: &'static str,
+    pub language: &'static str,
+    pub font_size: &'static str,
+    pub column_width: &'static str,
+    pub conflict_warning: &'static str,
+    pub keep_local: &'static str,
+    pub reload_disk: &'static str,
+    pub lines: &'static str,
+    pub blocks: &'static str,
+    pub untitled: &'static str,
+}
+
+pub fn get_strings(locale: SupportedLocale) -> &'static I18nStrings {
+    match locale.resolve() {
+        SupportedLocale::ZhCn => &ZH_CN,
+        SupportedLocale::ZhTw => &ZH_TW,
+        SupportedLocale::En | SupportedLocale::Auto => &EN,
+        SupportedLocale::Ja => &JA,
+        SupportedLocale::Ko => &KO,
+        SupportedLocale::Fr => &FR,
+        SupportedLocale::De => &DE,
+        SupportedLocale::Es => &ES,
+        SupportedLocale::Ru => &RU,
+        SupportedLocale::Pt => &PT,
+    }
+}
+
+static ZH_CN: I18nStrings = I18nStrings {
+    app_title: "GlideMark",
+    open_file: "打开",
+    save_file: "保存",
+    export_html: "导出 HTML",
+    directory_drawer: "目录",
+    close_drawer: "关闭目录",
+    source_mode: "源码",
+    split_mode: "分屏",
+    preview_mode: "预览",
+    settings: "设置",
+    appearance: "外观模式",
+    theme_auto: "跟随系统",
+    theme_light: "浅色",
+    theme_dark: "深色",
+    palette: "配色体系",
+    language: "界面语言",
+    font_size: "字体大小",
+    column_width: "正文阅读宽度",
+    conflict_warning: "警告：当前文件在外部被修改。",
+    keep_local: "保留本地编辑",
+    reload_disk: "重载磁盘内容",
+    lines: "行",
+    blocks: "块",
+    untitled: "未命名.md",
+};
+
+static ZH_TW: I18nStrings = I18nStrings {
+    app_title: "GlideMark",
+    open_file: "開啟",
+    save_file: "儲存",
+    export_html: "匯出 HTML",
+    directory_drawer: "目錄",
+    close_drawer: "關閉目錄",
+    source_mode: "原始碼",
+    split_mode: "分頁",
+    preview_mode: "預覽",
+    settings: "設定",
+    appearance: "外觀模式",
+    theme_auto: "跟隨系統",
+    theme_light: "淺色",
+    theme_dark: "深色",
+    palette: "配色體系",
+    language: "介面語言",
+    font_size: "字體大小",
+    column_width: "閱讀寬度",
+    conflict_warning: "警告：當前檔案在外部已被修改。",
+    keep_local: "保留本地編輯",
+    reload_disk: "重載磁碟內容",
+    lines: "行",
+    blocks: "區塊",
+    untitled: "未命名.md",
+};
+
+static EN: I18nStrings = I18nStrings {
+    app_title: "GlideMark",
+    open_file: "Open",
+    save_file: "Save",
+    export_html: "Export HTML",
+    directory_drawer: "Directory",
+    close_drawer: "Close Drawer",
+    source_mode: "Source",
+    split_mode: "Split",
+    preview_mode: "Preview",
+    settings: "Settings",
+    appearance: "Appearance",
+    theme_auto: "System Auto",
+    theme_light: "Light",
+    theme_dark: "Dark",
+    palette: "Color Palette",
+    language: "Language",
+    font_size: "Font Size",
+    column_width: "Column Width",
+    conflict_warning: "Warning: File was modified externally on disk.",
+    keep_local: "Keep Local Edits",
+    reload_disk: "Reload From Disk",
+    lines: "lines",
+    blocks: "blocks",
+    untitled: "Untitled.md",
+};
+
+static JA: I18nStrings = I18nStrings {
+    app_title: "GlideMark",
+    open_file: "開く",
+    save_file: "保存",
+    export_html: "HTML出力",
+    directory_drawer: "ディレクトリ",
+    close_drawer: "閉じる",
+    source_mode: "ソース",
+    split_mode: "分割",
+    preview_mode: "プレビュー",
+    settings: "設定",
+    appearance: "外観",
+    theme_auto: "システム準拠",
+    theme_light: "ライト",
+    theme_dark: "ダーク",
+    palette: "配色テーマ",
+    language: "言語",
+    font_size: "フォントサイズ",
+    column_width: "読書幅",
+    conflict_warning: "警告：ファイルが外部で更新されました。",
+    keep_local: "編集を保持",
+    reload_disk: "ディスクから再読込",
+    lines: "行",
+    blocks: "ブロック",
+    untitled: "無題.md",
+};
+
+static KO: I18nStrings = I18nStrings {
+    app_title: "GlideMark",
+    open_file: "열기",
+    save_file: "저장",
+    export_html: "HTML 내보내기",
+    directory_drawer: "디렉토리",
+    close_drawer: "서랍 닫기",
+    source_mode: "소스",
+    split_mode: "분할",
+    preview_mode: "미리보기",
+    settings: "설정",
+    appearance: "모드",
+    theme_auto: "시스템 동기화",
+    theme_light: "라이트",
+    theme_dark: "다크",
+    palette: "색상 팔레트",
+    language: "언어",
+    font_size: "글꼴 크기",
+    column_width: "열 너비",
+    conflict_warning: "경고: 파일이 외부에서 수정되었습니다.",
+    keep_local: "로컬 편집 유지",
+    reload_disk: "디스크에서 다시 로드",
+    lines: "줄",
+    blocks: "블록",
+    untitled: "제목없음.md",
+};
+
+static FR: I18nStrings = I18nStrings {
+    app_title: "GlideMark",
+    open_file: "Ouvrir",
+    save_file: "Enregistrer",
+    export_html: "Exporter HTML",
+    directory_drawer: "Dossier",
+    close_drawer: "Fermer",
+    source_mode: "Source",
+    split_mode: "Partagé",
+    preview_mode: "Aperçu",
+    settings: "Paramètres",
+    appearance: "Apparence",
+    theme_auto: "Auto Système",
+    theme_light: "Clair",
+    theme_dark: "Sombre",
+    palette: "Palette",
+    language: "Langue",
+    font_size: "Taille de police",
+    column_width: "Largeur de colonne",
+    conflict_warning: "Attention : Fichier modifié en externe.",
+    keep_local: "Conserver local",
+    reload_disk: "Recharger disque",
+    lines: "lignes",
+    blocks: "blocs",
+    untitled: "Sans_titre.md",
+};
+
+static DE: I18nStrings = I18nStrings {
+    app_title: "GlideMark",
+    open_file: "Öffnen",
+    save_file: "Speichern",
+    export_html: "HTML exportieren",
+    directory_drawer: "Verzeichnis",
+    close_drawer: "Schließen",
+    source_mode: "Quelle",
+    split_mode: "Geteilt",
+    preview_mode: "Vorschau",
+    settings: "Einstellungen",
+    appearance: "Erscheinungsbild",
+    theme_auto: "System automatisch",
+    theme_light: "Hell",
+    theme_dark: "Dunkel",
+    palette: "Farbpalette",
+    language: "Sprache",
+    font_size: "Schriftgröße",
+    column_width: "Spaltenbreite",
+    conflict_warning: "Warnung: Datei extern geändert.",
+    keep_local: "Lokal behalten",
+    reload_disk: "Von Festplatte neu laden",
+    lines: "Zeilen",
+    blocks: "Blöcke",
+    untitled: "Unbenannt.md",
+};
+
+static ES: I18nStrings = I18nStrings {
+    app_title: "GlideMark",
+    open_file: "Abrir",
+    save_file: "Guardar",
+    export_html: "Exportar HTML",
+    directory_drawer: "Directorio",
+    close_drawer: "Cerrar",
+    source_mode: "Código",
+    split_mode: "Dividido",
+    preview_mode: "Vista previa",
+    settings: "Ajustes",
+    appearance: "Apariencia",
+    theme_auto: "Sistema automático",
+    theme_light: "Claro",
+    theme_dark: "Oscuro",
+    palette: "Paleta",
+    language: "Idioma",
+    font_size: "Tamaño de fuente",
+    column_width: "Ancho de lectura",
+    conflict_warning: "Aviso: Archivo modificado externamente.",
+    keep_local: "Mantener local",
+    reload_disk: "Recargar del disco",
+    lines: "líneas",
+    blocks: "bloques",
+    untitled: "Sin_título.md",
+};
+
+static RU: I18nStrings = I18nStrings {
+    app_title: "GlideMark",
+    open_file: "Открыть",
+    save_file: "Сохранить",
+    export_html: "Экспорт в HTML",
+    directory_drawer: "Каталог",
+    close_drawer: "Закрыть",
+    source_mode: "Исходник",
+    split_mode: "Разделение",
+    preview_mode: "Просмотр",
+    settings: "Настройки",
+    appearance: "Оформление",
+    theme_auto: "Системная",
+    theme_light: "Светлая",
+    theme_dark: "Тёмная",
+    palette: "Цветовая схема",
+    language: "Язык",
+    font_size: "Размер шрифта",
+    column_width: "Ширина чтения",
+    conflict_warning: "Внимание: Файл изменён внешне.",
+    keep_local: "Сохранить локально",
+    reload_disk: "Перезагрузить с диска",
+    lines: "строк",
+    blocks: "блоков",
+    untitled: "Безымянный.md",
+};
+
+static PT: I18nStrings = I18nStrings {
+    app_title: "GlideMark",
+    open_file: "Abrir",
+    save_file: "Salvar",
+    export_html: "Exportar HTML",
+    directory_drawer: "Diretório",
+    close_drawer: "Fechar",
+    source_mode: "Código",
+    split_mode: "Dividido",
+    preview_mode: "Visualização",
+    settings: "Configurações",
+    appearance: "Aparência",
+    theme_auto: "Auto Sistema",
+    theme_light: "Claro",
+    theme_dark: "Escuro",
+    palette: "Paleta",
+    language: "Idioma",
+    font_size: "Tamanho da fonte",
+    column_width: "Largura da coluna",
+    conflict_warning: "Aviso: Arquivo modificado externamente.",
+    keep_local: "Manter local",
+    reload_disk: "Recarregar do disco",
+    lines: "linhas",
+    blocks: "blocos",
+    untitled: "Sem_título.md",
+};
