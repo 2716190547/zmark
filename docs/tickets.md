@@ -1,10 +1,10 @@
 # GlideMark Implementation Ticket Graph (DAG)
 
-- [ ] **T1: Workspace Setup & Scaffolding**
-  - **Dependencies**: None (Frontier)
+- [x] **T1: Workspace Setup & Scaffolding**
+  - **Dependencies**: None (Done)
   - **Scope**: Root `Cargo.toml`, `crates/glidemark_core`, `crates/glidemark_app`.
 - [ ] **T2: Markdown AST Parsing & Source Anchors**
-  - **Dependencies**: T1
+  - **Dependencies**: T1 (Ready Frontier)
   - **Scope**: `glidemark_core::ast` and `glidemark_core::anchor` tokenization with line ranges.
 - [ ] **T3: Precision Sync-Scroll Mapping**
   - **Dependencies**: T2
@@ -16,7 +16,7 @@
   - **Dependencies**: T2
   - **Scope**: `glidemark_core::export` with embedded styles and highlighted code.
 - [ ] **T6: Preferences & TOML Configuration**
-  - **Dependencies**: T1
+  - **Dependencies**: T1 (Ready Frontier)
   - **Scope**: `glidemark_core::config` with serde/toml.
 - [ ] **T7: GPUI App Shell, Typography & Windowing**
   - **Dependencies**: T1, T6
