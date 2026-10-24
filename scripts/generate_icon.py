@@ -11,37 +11,27 @@ SIZE = CANVAS_SIZE * SS
 
 img = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
 
-# macOS squircle specs at 1024:
-# standard squircle bounds: pad=104 -> width=816
-pad = int(104 * SS)
+# Standard macOS App Icon grid specifications:
+# Canvas: 1024 x 1024. Icon squircle: 864 x 864, centered with 80px margin.
+# IMPORTANT: Never bake in drop shadows, as macOS dynamically adds its own shadow.
+# A baked shadow causes macOS to detect non-continuous alpha and forces the icon into a secondary gray tile ("squircle jail").
+pad = int(80 * SS)
 squircle_w = SIZE - 2 * pad
-squircle_r = int(squircle_w * 0.223)
+squircle_r = int(squircle_w * 0.2237)
 
-# 1. Subtle ambient drop shadow
-shadow_img = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
-shadow_draw = ImageDraw.Draw(shadow_img)
-shadow_offset_y = int(14 * SS)
-shadow_draw.rounded_rectangle(
-    [pad, pad + shadow_offset_y, SIZE - pad, SIZE - pad + shadow_offset_y],
-    radius=squircle_r,
-    fill=(0, 0, 0, 48)
-)
-shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(radius=int(20 * SS)))
-img.paste(shadow_img, (0, 0), shadow_img)
-
-# 2. Pure white squircle base
+# 1. Pure white squircle base with precise continuous curvature
 squircle_mask = Image.new('L', (SIZE, SIZE), 0)
 s_draw = ImageDraw.Draw(squircle_mask)
 s_draw.rounded_rectangle([pad, pad, SIZE - pad, SIZE - pad], radius=squircle_r, fill=255)
 
 squircle_base = Image.new('RGBA', (SIZE, SIZE), (255, 255, 255, 255))
-# Very subtle hairline edge (0.5pt macOS stroke)
 base_draw = ImageDraw.Draw(squircle_base)
-base_draw.rounded_rectangle([pad, pad, SIZE - pad, SIZE - pad], radius=squircle_r, outline=(0, 0, 0, 18), width=int(1.5 * SS))
+# Subtle 0.5pt hairline edge
+base_draw.rounded_rectangle([pad, pad, SIZE - pad, SIZE - pad], radius=squircle_r, outline=(0, 0, 0, 16), width=int(1.5 * SS))
 
-# 3. Z Glyph bounds centered inside squircle
-# Z glyph size: ~500x500 at 1024
-glyph_size = int(500 * SS)
+# 2. Z Glyph bounds centered inside squircle
+# Z glyph size: ~520x520 at 1024
+glyph_size = int(520 * SS)
 gx0 = (SIZE - glyph_size) // 2
 gy0 = (SIZE - glyph_size) // 2
 gx1 = gx0 + glyph_size

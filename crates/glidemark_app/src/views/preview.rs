@@ -558,6 +558,17 @@ fn render_code_block(
                                 .text_color(theme.text_muted)
                                 .child(format!("{} lines", line_count)),
                         ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(
+                            svg()
+                                .path("icons/copy.svg")
+                                .size(px(13.))
+                                .text_color(theme.text_muted),
+                        ),
                 ),
         )
         .child(

@@ -187,41 +187,6 @@ impl ThemeColors {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn catppuccin(is_dark: bool) -> Self {
-        if is_dark {
-            Self {
-                id: "catppuccin",
-                name: "Catppuccin",
-                is_dark: true,
-                bg: rgb(0x24273a).into(),
-                surface: rgb(0x1e2030).into(),
-                border: rgb(0x363a4f).into(),
-                text_primary: rgb(0xcad3f5).into(),
-                text_muted: rgb(0x8087a2).into(),
-                accent: rgb(0xc6a0f6).into(),
-                code_bg: rgb(0x181926).into(),
-                conflict_bg: rgb(0x49202a).into(),
-                conflict_border: rgb(0xed8796).into(),
-            }
-        } else {
-            Self {
-                id: "catppuccin",
-                name: "Catppuccin",
-                is_dark: false,
-                bg: rgb(0xeff1f5).into(),
-                surface: rgb(0xe6e9ef).into(),
-                border: rgb(0xccd0da).into(),
-                text_primary: rgb(0x4c4f69).into(),
-                text_muted: rgb(0x7c7f93).into(),
-                accent: rgb(0x8839ef).into(),
-                code_bg: rgb(0xdce0e8).into(),
-                conflict_bg: rgb(0xfce8ec).into(),
-                conflict_border: rgb(0xe64553).into(),
-            }
-        }
-    }
-
     pub fn nord(is_dark: bool) -> Self {
         if is_dark {
             Self {
@@ -252,41 +217,6 @@ impl ThemeColors {
                 code_bg: rgb(0xe5e9f0).into(),
                 conflict_bg: rgb(0xfbedee).into(),
                 conflict_border: rgb(0xbf616a).into(),
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn gruvbox(is_dark: bool) -> Self {
-        if is_dark {
-            Self {
-                id: "gruvbox",
-                name: "Gruvbox",
-                is_dark: true,
-                bg: rgb(0x282828).into(),
-                surface: rgb(0x32302f).into(),
-                border: rgb(0x504945).into(),
-                text_primary: rgb(0xebdbb2).into(),
-                text_muted: rgb(0xa89984).into(),
-                accent: rgb(0xfabd2f).into(),
-                code_bg: rgb(0x3c3836).into(),
-                conflict_bg: rgb(0x502624).into(),
-                conflict_border: rgb(0xfb4934).into(),
-            }
-        } else {
-            Self {
-                id: "gruvbox",
-                name: "Gruvbox",
-                is_dark: false,
-                bg: rgb(0xfbf1c7).into(),
-                surface: rgb(0xf2e5bc).into(),
-                border: rgb(0xd5c4a1).into(),
-                text_primary: rgb(0x282828).into(),
-                text_muted: rgb(0x7c6f64).into(),
-                accent: rgb(0xb57614).into(),
-                code_bg: rgb(0xebdbb2).into(),
-                conflict_bg: rgb(0xf9e0de).into(),
-                conflict_border: rgb(0xcc241d).into(),
             }
         }
     }

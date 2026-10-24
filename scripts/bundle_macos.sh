@@ -82,6 +82,15 @@ echo "==> Installing to $APP_DEST..."
 rm -rf "$APP_DEST"
 cp -R "$BUNDLE_DIR" "$APP_DEST"
 touch "$APP_DEST"
+
+echo "==> Registering with macOS LaunchServices and resetting Dock cache..."
+if [ -x "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" ]; then
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DEST" || true
+fi
+
+# Clear user dock icon caches
+find /private/var/folders/ -name "com.apple.dock.iconcache" -exec rm {} + 2>/dev/null || true
+find /private/var/folders/ -name "com.apple.iconservices" -exec rm -rf {} + 2>/dev/null || true
 killall Dock 2>/dev/null || true
 
 echo "==> GlideMark successfully installed to $APP_DEST!"

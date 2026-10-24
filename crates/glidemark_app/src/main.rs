@@ -3,12 +3,14 @@ use std::env;
 use std::path::PathBuf;
 
 mod actions;
+mod assets;
 mod editor_engine;
 mod state;
 mod theme;
 mod views;
 
 use actions::*;
+use assets::AppAssets;
 use state::AppState;
 use views::workspace::WorkspaceView;
 use glidemark_core::document::Document;
@@ -69,7 +71,7 @@ Enjoy writing and reading with pure speed!
         d
     };
 
-    let app = Application::new();
+    let app = Application::new().with_assets(AppAssets);
     app.run(move |cx: &mut App| {
         // Register keybindings
         cx.bind_keys([

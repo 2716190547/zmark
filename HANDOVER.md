@@ -77,12 +77,17 @@
 - **修复**：为外层容器补充 `.items_center()`，为行内代码补充 `.px_1p5().py_0p5().rounded_sm()`，杜绝异常拉伸。
 
 ### 11. 解决 macOS Dock 栏图标双层嵌套 (Squircle Jail)
-- **根因**：macOS 14/15/Tahoe 会对传统仅提供 `.icns` 且有透明边距的应用图标强加系统毛玻璃灰色圆角衬底。
-- **修复**：利用系统 `/usr/bin/actool` 将全套 Retina 图标编译为标准的现代化 macOS Asset Catalog (`Assets.car`)，并在 `Info.plist` 中声明 `CFBundleIconName`，使系统原生识别，彻底消除套娃灰框。
+- **根因分析**：
+  - 此前生成的图标资产中烘焙了手绘的漫反射投影（`GaussianBlur`），导致透明边缘充满非零 Alpha 杂色，macOS Tahoe 的连续曲率探测器误判其为不规则老旧图标；
+  - 同时 macOS Dock 会对旧应用持久化缓存图层（`/private/var/folders/.../com.apple.dock.iconcache`）。
+- **工程解决**：
+  - 彻底去除手绘阴影，采用 Apple 官方标准连续曲率网格（1024x1024 画布，864x864 纯白基底，80px 边缘透明留白）；
+  - 使用 `/usr/bin/actool` 将全套 Retina 资产编译为现代化 `Assets.car`；
+  - 打包脚本自动调用 `lsregister -f` 强制刷新 LaunchServices，并清空系统 Dock 缓存，使 Dock 栏图标与系统原生应用完全融为一体。
 
-### 12. 顶栏图标圆润重构与微交互动效
-- **圆润图标**：顶栏与侧栏功能按钮采用 1.75px~2px 圆润平滑几何路径重绘，触感更加柔和现代。
-- **微动效**：侧边栏展开/收回平滑滑动，按钮悬停胶囊平滑渐变，分屏拖拽柔和反馈。
+### 12. 官方标准矢量图标库 (Lucide SVG via AssetSource)
+- **去手工拼凑**：完全剔除此前用 `div` 拼接方块线条的简陋写法（净删除 150+ 行手工拼凑代码）。
+- **GPUI 原生集成**：通过 GPUI 原生 `AssetSource` 特征机制挂载官方标准 Lucide 矢量图标集（`panel-left.svg`, `folder.svg`, `columns-2.svg`, `book-open.svg`, `code.svg`, `download.svg`, `save.svg`, `settings.svg`, `copy.svg`, `files.svg`, `list.svg`），使用 `svg().path(...).text_color(color)` 渲染，色彩动态跟随主题，全屏绝对平滑，极简优雅。
 
 ---
 

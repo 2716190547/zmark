@@ -52,12 +52,14 @@ pub fn render_drawer(
                         .gap_0p5()
                         .child(render_tab_pill(
                             strings.tab_files,
+                            "icons/files.svg",
                             active_tab == DrawerTab::Files,
                             theme,
                             move |_, window, cx| t1(DrawerTab::Files, window, cx),
                         ))
                         .child(render_tab_pill(
                             strings.tab_outline,
+                            "icons/list.svg",
                             active_tab == DrawerTab::Outline,
                             theme,
                             move |_, window, cx| t2(DrawerTab::Outline, window, cx),
@@ -167,6 +169,7 @@ pub fn render_drawer(
 
 fn render_tab_pill<F>(
     title: &str,
+    icon_path: &'static str,
     active: bool,
     theme: &ThemeColors,
     handler: F,
@@ -182,17 +185,23 @@ where
         .flex()
         .items_center()
         .justify_center()
+        .gap_1p5()
         .text_xs()
         .on_mouse_down(MouseButton::Left, handler);
+
+    let color = if active { theme.accent } else { theme.text_muted };
+    let icon_el = svg().path(icon_path).size(px(13.)).text_color(color);
 
     if active {
         base.bg(theme.surface)
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.accent)
+            .child(icon_el)
             .child(title.to_string())
     } else {
         base.text_color(theme.text_muted)
             .hover(|s| s.text_color(theme.text_primary))
+            .child(icon_el)
             .child(title.to_string())
     }
 }

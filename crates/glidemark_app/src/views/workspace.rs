@@ -486,7 +486,7 @@ impl Render for WorkspaceView {
                             .child(render_mode_icon_tab(
                                 view_mode == ViewMode::Source,
                                 theme,
-                                div().text_xs().font_family("ui-monospace").font_weight(FontWeight::BOLD).child("< / >"),
+                                render_source_mode_icon(if view_mode == ViewMode::Source { theme.accent } else { theme.text_muted }),
                                 cx.listener(|this, _, _window, cx| {
                                     this.state.set_view_mode(ViewMode::Source);
                                     cx.notify();
@@ -820,157 +820,35 @@ where
     }
 }
 
-// Native GPUI vector icons (Rounded modern friendly geometry)
+// Standard Lucide SVG icons rendered natively by GPUI
 fn render_sidebar_icon(color: Hsla) -> impl IntoElement {
-    div()
-        .w(px(16.))
-        .h(px(14.))
-        .rounded_md()
-        .border_2()
-        .border_color(color)
-        .p(px(1.5))
-        .flex()
-        .child(
-            div()
-                .w(px(3.5))
-                .h_full()
-                .rounded_sm()
-                .bg(color),
-        )
+    svg().path("icons/panel-left.svg").size(px(16.)).text_color(color)
 }
 
 fn render_folder_icon(color: Hsla) -> impl IntoElement {
-    div()
-        .w(px(16.))
-        .h(px(13.))
-        .flex()
-        .flex_col()
-        .child(
-            div()
-                .w(px(7.))
-                .h(px(3.))
-                .bg(color)
-                .rounded_t_sm(),
-        )
-        .child(
-            div()
-                .w(px(16.))
-                .h(px(10.))
-                .rounded_md()
-                .border_2()
-                .border_color(color),
-        )
+    svg().path("icons/folder.svg").size(px(16.)).text_color(color)
+}
+
+fn render_source_mode_icon(color: Hsla) -> impl IntoElement {
+    svg().path("icons/code.svg").size(px(15.)).text_color(color)
 }
 
 fn render_split_mode_icon(color: Hsla) -> impl IntoElement {
-    div()
-        .w(px(15.))
-        .h(px(13.))
-        .rounded_md()
-        .border_2()
-        .border_color(color)
-        .flex()
-        .justify_center()
-        .items_center()
-        .child(
-            div()
-                .w(px(1.5))
-                .h(px(9.))
-                .rounded_full()
-                .bg(color),
-        )
+    svg().path("icons/columns-2.svg").size(px(15.)).text_color(color)
 }
 
 fn render_preview_mode_icon(color: Hsla) -> impl IntoElement {
-    div()
-        .w(px(14.))
-        .h(px(14.))
-        .rounded_md()
-        .border_2()
-        .border_color(color)
-        .flex()
-        .flex_col()
-        .justify_around()
-        .px_1p5()
-        .py_2()
-        .child(div().w_full().h(px(1.75)).rounded_full().bg(color))
-        .child(div().w_full().h(px(1.75)).rounded_full().bg(color))
-        .child(div().w(px(6.)).h(px(1.75)).rounded_full().bg(color))
+    svg().path("icons/book-open.svg").size(px(15.)).text_color(color)
 }
 
 fn render_export_icon(color: Hsla) -> impl IntoElement {
-    div()
-        .w(px(15.))
-        .h(px(14.))
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_between()
-        .child(
-            div()
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
-                .text_color(color)
-                .line_height(relative(0.7))
-                .child("↑"),
-        )
-        .child(
-            div()
-                .w_full()
-                .h(px(6.))
-                .rounded_b_md()
-                .border_b_2()
-                .border_l_2()
-                .border_r_2()
-                .border_color(color),
-        )
+    svg().path("icons/download.svg").size(px(16.)).text_color(color)
 }
 
 fn render_save_icon(color: Hsla) -> impl IntoElement {
-    div()
-        .w(px(15.))
-        .h(px(14.))
-        .rounded_md()
-        .border_2()
-        .border_color(color)
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_start()
-        .pt_0p5()
-        .child(
-            div()
-                .w(px(7.))
-                .h(px(4.))
-                .rounded_b_sm()
-                .border_b_2()
-                .border_l_2()
-                .border_r_2()
-                .border_color(color),
-        )
+    svg().path("icons/save.svg").size(px(16.)).text_color(color)
 }
 
 fn render_settings_icon(color: Hsla) -> impl IntoElement {
-    div()
-        .w(px(16.))
-        .h(px(13.))
-        .flex()
-        .flex_col()
-        .justify_around()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .child(div().w(px(3.)).h(px(2.)).rounded_full().bg(color))
-                .child(div().w(px(5.)).h(px(5.)).rounded_full().border_2().border_color(color).bg(color))
-                .child(div().flex_1().h(px(2.)).rounded_full().bg(color)),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .child(div().flex_1().h(px(2.)).rounded_full().bg(color))
-                .child(div().w(px(5.)).h(px(5.)).rounded_full().border_2().border_color(color).bg(color))
-                .child(div().w(px(3.)).h(px(2.)).rounded_full().bg(color)),
-        )
+    svg().path("icons/settings.svg").size(px(16.)).text_color(color)
 }

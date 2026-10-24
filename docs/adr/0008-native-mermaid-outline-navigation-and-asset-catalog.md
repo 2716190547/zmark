@@ -23,13 +23,17 @@
    - 解析 AST 所有的 `BlockElement::Heading`，提取 H1~H6 层级缩进，点击即可精准定位至正文对应行并平滑滚动。
 3. **修复行内排版拉高 Bug**:
    - 在 `preview.rs` 中的行内代码元素增加 `.h_fit().self_start()` 约束，并在段落与表格的 flex 容器中设置 `.items_center()` / `.items_baseline()`，杜绝跨轴拉伸。
-4. **编译 macOS Asset Catalog (`Assets.car`) 消除 Dock 双层嵌套**:
+4. **消除 macOS Dock 栏图标双层嵌套 (Squircle Jail) 与资产目录升级**:
+   - 彻底移除图标源图中的手绘烘焙投影（Baked Drop Shadow），将画布严格对齐 Apple 官方标准 macOS 连续曲率网格（1024x1024 画布，864x864 纯白圆角矩形，80px 边缘留白，无外层杂色渐变），交由系统物理渲染引擎添加自然阴影。
    - 使用系统内置 `/usr/bin/actool` 将全套 Retina 图标资产打包为标准的 `Assets.car`。
-   - 在 `Info.plist` 中补充 `CFBundleIconName = "AppIcon"`，让 macOS 26 Tahoe / Sonoma 识别为原生标准化现代应用图标，彻底消除系统强加的灰色底框。
-5. **视觉设计升级与全量国际化**:
+   - 在 `Info.plist` 中声明 `CFBundleIconName = "AppIcon"` 与 `CFBundleIconFile = "AppIcon"`。
+   - 打包脚本自动调用 `/System/Library/Frameworks/CoreServices.framework/.../lsregister -f` 强制刷新 LaunchServices，并清空 `/private/var/folders/.../com.apple.dock.iconcache` 缓存，彻底根除 macOS 26 Tahoe / Sonoma 强加的毛玻璃灰色圆角外框。
+5. **官方标准矢量图标库 (Lucide SVG via AssetSource)**:
+   - 杜绝使用手绘 `div` 拼接图标。通过 GPUI 内置原生 `AssetSource` 特征机制加载官方标准 Lucide 矢量图标（`panel-left.svg`, `folder.svg`, `columns-2.svg`, `book-open.svg`, `code.svg`, `download.svg`, `save.svg`, `settings.svg`, `copy.svg`, `files.svg`, `list.svg`）。
+   - 通过 GPUI 原生 `svg().path("...").size(...).text_color(color)` 渲染，色彩动态跟随主题，Retina 屏绝对平滑，大幅削减 150+ 行手工拼凑代码。
+6. **视觉设计升级与全量国际化**:
    - 默认主题命名为“默认 (Default)”，强调色设定为暖陶珊瑚色 `#D9532F`，完美呼应折叠 Z Logo；
-   - 8 套调色板全量支持 10 国语言本地化翻译；
-   - 全套顶栏功能图标采用圆润友好的 1.75px~2px 几何圆角风格绘制。
+   - 8 套调色板全量支持 10 国语言本地化翻译，清理掉未使用的测试主题代码。
 
 ## 影响 (Consequences)
 - 彻底解决长文档排版与图表浏览需求；
