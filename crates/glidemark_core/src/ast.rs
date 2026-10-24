@@ -35,6 +35,30 @@ impl InlineGroup {
     pub fn push(&mut self, item: InlineItem) {
         self.0.push(item);
     }
+
+    pub fn plain_text(&self) -> String {
+        let mut out = String::new();
+        for item in &self.0 {
+            match item {
+                InlineItem::Text(s)
+                | InlineItem::Bold(s)
+                | InlineItem::Italic(s)
+                | InlineItem::Strikethrough(s)
+                | InlineItem::Code(s) => out.push_str(s),
+                InlineItem::Link { text, .. } => out.push_str(text),
+                InlineItem::Image { alt, .. } => out.push_str(alt),
+            }
+        }
+        out
+    }
+}
+
+/// A parsed heading outline item for table of contents navigation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeadingItem {
+    pub level: u8,
+    pub text: String,
+    pub block_index: usize,
 }
 
 /// An individual list item.
@@ -73,6 +97,22 @@ pub enum BlockElement {
 pub struct ParsedDocument {
     pub blocks: Vec<BlockElement>,
     pub anchors: Vec<SourceAnchor>,
+}
+
+impl ParsedDocument {
+    pub fn headings(&self) -> Vec<HeadingItem> {
+        let mut list = Vec::new();
+        for (idx, block) in self.blocks.iter().enumerate() {
+            if let BlockElement::Heading { level, content } = block {
+                list.push(HeadingItem {
+                    level: *level,
+                    text: content.plain_text(),
+                    block_index: idx,
+                });
+            }
+        }
+        list
+    }
 }
 
 /// Fast line index mapping byte offsets to 1-based line numbers.

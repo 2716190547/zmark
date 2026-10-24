@@ -8,7 +8,7 @@ fn test_default_preferences() {
     assert_eq!(pref.font_size, 16.0);
     assert_eq!(pref.max_column_width, 820.0);
     assert_eq!(pref.theme, ThemeMode::Auto);
-    assert_eq!(pref.palette, "miaoyan");
+    assert_eq!(pref.palette, "default");
     assert_eq!(pref.locale, SupportedLocale::Auto);
     assert!(pref.auto_save_on_blur);
 }

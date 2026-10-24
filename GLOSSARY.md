@@ -84,7 +84,19 @@ _Avoid_: Drag file, file import, drop listener
 The self-contained macOS desktop bundle (`.app`) containing native arm64 binary, document association metadata (`Info.plist`), and icon resources (`AppIcon.icns`).
 _Avoid_: Executable zip, dmg package, installer archive
 
+**Outline Navigation**:
+The hierarchical table of contents extracted from markdown headings (H1–H6), enabling instant anchor navigation and visual section tracking in the drawer panel.
+_Avoid_: TOC menu, header list, bookmark list
 
+**Diagram Card**:
+A specialized visual element rendering Mermaid flowcharts and structural diagrams as GPU-native cards with connected flow steps, badges, and code toggle.
+_Avoid_: Webview iframe, image chart, mermaid canvas
 
+**Asset Catalog**:
+The compiled macOS asset container (`Assets.car`) compiled via `actool` specifying `CFBundleIconName` to provide native dock integration without fallback framing.
+_Avoid_: Raw icns, icon directory, tile wrapper
 
+**Default Palette**:
+The primary warm terracotta (`#D9532F`) and golden-amber color scheme with pure white canvas, harmonizing with the GlideMark brand identity.
+_Avoid_: MiaoYan theme, custom skin, orange theme
 

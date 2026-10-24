@@ -93,6 +93,23 @@ impl Render for WorkspaceView {
             });
         });
 
+        let view_tab = cx.entity().clone();
+        let on_select_tab = Arc::new(move |tab: crate::state::DrawerTab, _window: &mut Window, cx: &mut App| {
+            view_tab.update(cx, |this, cx| {
+                this.state.set_drawer_tab(tab);
+                cx.notify();
+            });
+        });
+
+        let view_heading = cx.entity().clone();
+        let on_select_heading = Arc::new(move |block_idx: usize, _window: &mut Window, cx: &mut App| {
+            view_heading.update(cx, |this, cx| {
+                let y_approx = (block_idx as f32) * 55.0;
+                this.preview_scroll_handle.set_offset(point(px(0.), px(-y_approx)));
+                cx.notify();
+            });
+        });
+
         let view_close = cx.entity().clone();
         let on_close_settings = Arc::new(move |_: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
             view_close.update(cx, |this, cx| {
@@ -607,12 +624,16 @@ impl Render for WorkspaceView {
                     .overflow_hidden()
                     .when(self.state.drawer_open, |body| {
                         body.child(render_drawer(
+                            self.state.drawer_tab,
                             &self.state.sibling_files,
                             self.state.doc.path.as_ref(),
+                            &self.state.doc.parsed.headings(),
                             theme,
-                            strings.directory_drawer,
+                            strings,
                             &self.drawer_scroll_handle,
+                            on_select_tab,
                             on_select_file,
+                            on_select_heading,
                         ))
                     })
                     .child(match view_mode {
@@ -799,101 +820,157 @@ where
     }
 }
 
-// Native GPUI vector icons
+// Native GPUI vector icons (Rounded modern friendly geometry)
 fn render_sidebar_icon(color: Hsla) -> impl IntoElement {
     div()
-        .w(px(14.))
-        .h(px(12.))
-        .border_1()
+        .w(px(16.))
+        .h(px(14.))
+        .rounded_md()
+        .border_2()
         .border_color(color)
-        .rounded_xs()
+        .p(px(1.5))
         .flex()
-        .child(div().w(px(4.)).h_full().border_r_1().border_color(color))
+        .child(
+            div()
+                .w(px(3.5))
+                .h_full()
+                .rounded_sm()
+                .bg(color),
+        )
 }
 
 fn render_folder_icon(color: Hsla) -> impl IntoElement {
     div()
-        .w(px(14.))
-        .h(px(11.))
+        .w(px(16.))
+        .h(px(13.))
         .flex()
         .flex_col()
-        .child(div().w(px(6.)).h(px(2.)).bg(color).rounded_t_xs())
-        .child(div().w(px(14.)).h(px(9.)).border_1().border_color(color).rounded_xs())
+        .child(
+            div()
+                .w(px(7.))
+                .h(px(3.))
+                .bg(color)
+                .rounded_t_sm(),
+        )
+        .child(
+            div()
+                .w(px(16.))
+                .h(px(10.))
+                .rounded_md()
+                .border_2()
+                .border_color(color),
+        )
 }
 
 fn render_split_mode_icon(color: Hsla) -> impl IntoElement {
     div()
-        .w(px(14.))
-        .h(px(12.))
-        .border_1()
+        .w(px(15.))
+        .h(px(13.))
+        .rounded_md()
+        .border_2()
         .border_color(color)
-        .rounded_xs()
         .flex()
-        .child(div().w_1_2().h_full().border_r_1().border_color(color))
+        .justify_center()
+        .items_center()
+        .child(
+            div()
+                .w(px(1.5))
+                .h(px(9.))
+                .rounded_full()
+                .bg(color),
+        )
 }
 
 fn render_preview_mode_icon(color: Hsla) -> impl IntoElement {
     div()
-        .w(px(13.))
-        .h(px(13.))
-        .border_1()
+        .w(px(14.))
+        .h(px(14.))
+        .rounded_md()
+        .border_2()
         .border_color(color)
-        .rounded_xs()
         .flex()
         .flex_col()
         .justify_around()
-        .p(px(2.))
-        .child(div().w_full().h(px(1.5)).bg(color))
-        .child(div().w_full().h(px(1.5)).bg(color))
-        .child(div().w(px(6.)).h(px(1.5)).bg(color))
+        .px_1p5()
+        .py_2()
+        .child(div().w_full().h(px(1.75)).rounded_full().bg(color))
+        .child(div().w_full().h(px(1.75)).rounded_full().bg(color))
+        .child(div().w(px(6.)).h(px(1.75)).rounded_full().bg(color))
 }
 
 fn render_export_icon(color: Hsla) -> impl IntoElement {
     div()
-        .w(px(13.))
-        .h(px(13.))
+        .w(px(15.))
+        .h(px(14.))
         .flex()
         .flex_col()
         .items_center()
         .justify_between()
-        .child(div().text_xs().line_height(relative(0.8)).font_weight(FontWeight::BOLD).text_color(color).child("^"))
-        .child(div().w_full().h(px(4.)).border_b_1().border_l_1().border_r_1().border_color(color))
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(color)
+                .line_height(relative(0.7))
+                .child("↑"),
+        )
+        .child(
+            div()
+                .w_full()
+                .h(px(6.))
+                .rounded_b_md()
+                .border_b_2()
+                .border_l_2()
+                .border_r_2()
+                .border_color(color),
+        )
 }
 
 fn render_save_icon(color: Hsla) -> impl IntoElement {
     div()
-        .w(px(13.))
-        .h(px(13.))
-        .border_1()
+        .w(px(15.))
+        .h(px(14.))
+        .rounded_md()
+        .border_2()
         .border_color(color)
-        .rounded_xs()
         .flex()
         .flex_col()
         .items_center()
-        .child(div().w(px(7.)).h(px(4.)).border_b_1().border_l_1().border_r_1().border_color(color))
+        .justify_start()
+        .pt_0p5()
+        .child(
+            div()
+                .w(px(7.))
+                .h(px(4.))
+                .rounded_b_sm()
+                .border_b_2()
+                .border_l_2()
+                .border_r_2()
+                .border_color(color),
+        )
 }
 
 fn render_settings_icon(color: Hsla) -> impl IntoElement {
     div()
-        .w(px(14.))
-        .h(px(11.))
+        .w(px(16.))
+        .h(px(13.))
         .flex()
         .flex_col()
-        .justify_between()
+        .justify_around()
         .child(
             div()
                 .flex()
                 .items_center()
-                .child(div().w(px(3.)).h(px(1.5)).bg(color))
-                .child(div().w(px(4.)).h(px(4.)).rounded_full().border_1().border_color(color))
-                .child(div().flex_1().h(px(1.5)).bg(color)),
+                .child(div().w(px(3.)).h(px(2.)).rounded_full().bg(color))
+                .child(div().w(px(5.)).h(px(5.)).rounded_full().border_2().border_color(color).bg(color))
+                .child(div().flex_1().h(px(2.)).rounded_full().bg(color)),
         )
         .child(
             div()
                 .flex()
                 .items_center()
-                .child(div().flex_1().h(px(1.5)).bg(color))
-                .child(div().w(px(4.)).h(px(4.)).rounded_full().border_1().border_color(color))
-                .child(div().w(px(3.)).h(px(1.5)).bg(color)),
+                .child(div().flex_1().h(px(2.)).rounded_full().bg(color))
+                .child(div().w(px(5.)).h(px(5.)).rounded_full().border_2().border_color(color).bg(color))
+                .child(div().w(px(3.)).h(px(2.)).rounded_full().bg(color)),
         )
 }

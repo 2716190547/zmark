@@ -54,15 +54,35 @@
 
 ### 7. 主题调色板与 10 国语言国际化系统
 - **8 套精心调配的主题配色**：
-  - **MiaoYan**（妙言极简纯白，默认）
-  - **Claude Warm**（克劳德温润羊皮纸）
-  - **macOS Vibrant**（原生系统高对比）
+  - **默认 (Default)**（折叠 Z 暖陶珊瑚色 `#D9532F` 与纯白画布，默认）
+  - **Claude**（克劳德温润羊皮纸）
+  - **macOS**（原生系统高对比蓝）
   - **Tokyo Night**（经典暗夜霓虹）
   - **Nord**（北欧冷冽雪山）
-  - **GitHub Light**（经典代码白）
-  - **Solarized Light**（经典低眩光柔和暖黄）
+  - **GitHub**（经典代码白）
+  - **Solarized**（经典低眩光柔和暖黄）
   - **One Dark Pro**（经典深空灰代码暗色）
-- **10 国语言全量覆盖**：简体中文 (`zh-CN`)、繁体中文 (`zh-TW`)、英语 (`en-US`)、日语 (`ja-JP`)、韩语 (`ko-KR`)、德语 (`de-DE`)、法语 (`fr-FR`)、西班牙语 (`es-ES`)、俄语 (`ru-RU`)、葡萄牙语 (`pt-PT`)。
+- **10 国语言全量覆盖**：简体中文 (`zh-CN`)、繁体中文 (`zh-TW`)、英语 (`en-US`)、日语 (`ja-JP`)、韩语 (`ko-KR`)、德语 (`de-DE`)、法语 (`fr-FR`)、西班牙语 (`es-ES`)、俄语 (`ru-RU`)、葡萄牙语 (`pt-PT`)，全套主题名称支持本地化翻译展示。
+
+### 8. 原生 GPU Mermaid 流程拓扑卡片与源码双模切换
+- **解析器**：在 `glidemark_core::mermaid` 中实现零外部重型依赖的 Mermaid Flowchart 语法解析器，支持 `TD` / `LR` 流向、多种节点形态（矩形 `[...]`、圆角 `(...)`、菱形 `{...}`、数据库 `[("...")]`）、`classDef` 样式以及连线箭头。
+- **渲染器**：在 `glidemark_app::views::preview` 中直接由 GPU 渲染为轻量、高可读性的拓扑步骤卡片流，支持一键在“图表视图”与“Mermaid 源码”之间切换，并提供一键复制源码功能。
+
+### 9. 侧边栏标题大纲导航 (Outline TOC) 与双 Tab 胶囊切换
+- **双 Tab 结构**：侧边栏顶部提供“同级文件”与“文章大纲”胶囊切换控件。
+- **层级缩进与跳转**：提取文档中的 H1~H6 标题，按照树形层级优雅缩进排列，点击任意大纲条目即可平滑定位并滚动至正文对应行。
+
+### 10. 修复行内标记文字垂直拉高 Bug (Inline Code Flexbox Stretch)
+- **根因**：段落与表格的 Flex 容器默认跨轴对齐为 `align-items: stretch`，导致行内代码被撑满整行高度。
+- **修复**：为外层容器补充 `.items_center()`，为行内代码补充 `.px_1p5().py_0p5().rounded_sm()`，杜绝异常拉伸。
+
+### 11. 解决 macOS Dock 栏图标双层嵌套 (Squircle Jail)
+- **根因**：macOS 14/15/Tahoe 会对传统仅提供 `.icns` 且有透明边距的应用图标强加系统毛玻璃灰色圆角衬底。
+- **修复**：利用系统 `/usr/bin/actool` 将全套 Retina 图标编译为标准的现代化 macOS Asset Catalog (`Assets.car`)，并在 `Info.plist` 中声明 `CFBundleIconName`，使系统原生识别，彻底消除套娃灰框。
+
+### 12. 顶栏图标圆润重构与微交互动效
+- **圆润图标**：顶栏与侧栏功能按钮采用 1.75px~2px 圆润平滑几何路径重绘，触感更加柔和现代。
+- **微动效**：侧边栏展开/收回平滑滑动，按钮悬停胶囊平滑渐变，分屏拖拽柔和反馈。
 
 ---
 
@@ -83,10 +103,13 @@ GlideMark/
 │       ├── 0004-core-ui-crate-decoupling.md
 │       ├── 0005-unified-topbar-custom-editor-and-palette-system.md
 │       ├── 0006-async-file-dialog-and-external-drop-handling.md
-│       └── 0007-miaoyan-palette-borderless-toolbar-and-flex-scroll-fix.md
+│       ├── 0007-miaoyan-palette-borderless-toolbar-and-flex-scroll-fix.md
+│       └── 0008-native-mermaid-outline-navigation-and-asset-catalog.md
 ├── assets/
-│   ├── AppIcon.icns                           # 编译后的 macOS 原生图标
-│   └── icon.iconset/                          # 16x16 至 512x512@2x 各尺寸位图
+│   ├── AppIcon.icns                           # macOS 图标文件
+│   ├── Assets.car                             # actool 编译的现代 macOS 资产目录
+│   ├── Assets.xcassets/                       # Xcode 原生资产工程目录
+│   └── icon.iconset/                          # 各尺寸位图资产
 ├── scripts/
 │   ├── bundle_macos.sh                        # 自动化 Release 编译与安装至 /Applications
 │   └── generate_icon.py                       # 4x 超采样矢量渐变图标生成脚本
@@ -94,28 +117,29 @@ GlideMark/
     ├── glidemark_core/                        # 核心纯逻辑层 (独立无 UI 依赖)
     │   ├── src/
     │   │   ├── lib.rs
-    │   │   ├── ast.rs                         # Markdown 语法树与行映射
+    │   │   ├── ast.rs                         # Markdown 语法树与大纲提取
+    │   │   ├── mermaid.rs                     # 轻量原生 Mermaid 语法与拓扑解析
     │   │   ├── sync_scroll.rs                 # 源码与预览双向同步坐标映射
     │   │   ├── document.rs                    # 文档状态机与外部文件监控
     │   │   ├── export.rs                      # 自包含单文件独立 HTML 离线导出
     │   │   ├── config.rs                      # 偏好配置模型 (TOML 序列化)
-    │   │   └── i18n.rs                        # 10 国语言完整文案字典
+    │   │   └── i18n.rs                        # 10 国语言完整文案字典与主题本地化
     │   └── tests/                             # 核心层自动化单元测试
     └── glidemark_app/                         # 视窗渲染层 (GPUI 原生界面)
         ├── src/
         │   ├── main.rs                        # 应用入口点与事件循环
         │   ├── lib.rs
         │   ├── actions.rs                     # 快捷键 Action 定义
-        │   ├── state.rs                       # AppState 综合状态管理
+        │   ├── state.rs                       # AppState 综合状态管理 (含大纲 Tab)
         │   ├── editor_engine.rs               # 自研纯文本光标与行编辑引擎
         │   ├── theme.rs                       # 8 套调色板与色彩解析器
         │   └── views/
         │       ├── mod.rs
         │       ├── workspace.rs               # 主工作区、去框化工具栏与分屏布局
         │       ├── editor.rs                  # 源码编辑视图与行号渲染
-        │       ├── preview.rs                 # Markdown 富文本渲染与自适应撑满排版
-        │       ├── drawer.rs                  # 同级文件目录抽屉侧边栏
-        │       └── settings.rs                # 偏好设置模态弹窗
+        │       ├── preview.rs                 # Markdown 富文本渲染、Mermaid 卡片与排版修复
+        │       ├── drawer.rs                  # 同级文件目录与文章大纲双 Tab 抽屉
+        │       └── settings.rs                # 偏好设置模态弹窗 (支持主题本地化)
         └── tests/                             # 视窗层集成测试
 ```
 

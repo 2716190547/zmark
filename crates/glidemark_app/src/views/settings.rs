@@ -161,7 +161,7 @@ pub fn render_settings_modal(
                                                 .text_xs()
                                                 .font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
                                                 .text_color(if is_active { theme.accent } else { theme.text_primary })
-                                                .child(desc.name),
+                                                .child(glidemark_core::i18n::localize_palette_name(desc.id, strings).to_string()),
                                         )
                                 })),
                         ),

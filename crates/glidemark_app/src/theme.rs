@@ -20,65 +20,65 @@ pub struct ThemeColors {
 
 pub struct PaletteDescriptor {
     pub id: &'static str,
+    #[allow(dead_code)]
     pub name: &'static str,
     pub preview_color: Hsla,
 }
 
 pub const ALL_PALETTES: &[PaletteDescriptor] = &[
-    PaletteDescriptor { id: "miaoyan", name: "MiaoYan", preview_color: Hsla { h: 145.0 / 360.0, s: 0.50, l: 0.40, a: 1.0 } },
+    PaletteDescriptor { id: "default", name: "Default", preview_color: Hsla { h: 12.0 / 360.0, s: 0.70, l: 0.52, a: 1.0 } },
     PaletteDescriptor { id: "claude", name: "Claude Warm", preview_color: Hsla { h: 35.0 / 360.0, s: 0.9, l: 0.5, a: 1.0 } },
     PaletteDescriptor { id: "macos", name: "macOS Vibrant", preview_color: Hsla { h: 211.0 / 360.0, s: 1.0, l: 0.45, a: 1.0 } },
     PaletteDescriptor { id: "tokyo-night", name: "Tokyo Night", preview_color: Hsla { h: 224.0 / 360.0, s: 0.88, l: 0.72, a: 1.0 } },
-    PaletteDescriptor { id: "catppuccin", name: "Catppuccin", preview_color: Hsla { h: 267.0 / 360.0, s: 0.83, l: 0.8, a: 1.0 } },
     PaletteDescriptor { id: "nord", name: "Nord", preview_color: Hsla { h: 193.0 / 360.0, s: 0.43, l: 0.67, a: 1.0 } },
-    PaletteDescriptor { id: "gruvbox", name: "Gruvbox", preview_color: Hsla { h: 43.0 / 360.0, s: 0.96, l: 0.58, a: 1.0 } },
-    PaletteDescriptor { id: "github", name: "GitHub Modern", preview_color: Hsla { h: 212.0 / 360.0, s: 0.92, l: 0.45, a: 1.0 } },
-    PaletteDescriptor { id: "solarized", name: "Solarized", preview_color: Hsla { h: 175.0 / 360.0, s: 0.59, l: 0.4, a: 1.0 } },
+    PaletteDescriptor { id: "github", name: "GitHub Light", preview_color: Hsla { h: 212.0 / 360.0, s: 0.92, l: 0.45, a: 1.0 } },
+    PaletteDescriptor { id: "solarized", name: "Solarized Light", preview_color: Hsla { h: 44.0 / 360.0, s: 0.85, l: 0.5, a: 1.0 } },
+    PaletteDescriptor { id: "one-dark", name: "One Dark Pro", preview_color: Hsla { h: 220.0 / 360.0, s: 0.60, l: 0.55, a: 1.0 } },
 ];
 
 impl ThemeColors {
     pub fn resolve(palette_id: &str, is_dark: bool) -> Self {
         match palette_id {
+            "default" | "miaoyan" => Self::default_palette(is_dark),
             "claude" => Self::claude_warm(is_dark),
             "macos" => Self::macos(is_dark),
             "tokyo-night" => Self::tokyo_night(is_dark),
-            "catppuccin" => Self::catppuccin(is_dark),
             "nord" => Self::nord(is_dark),
-            "gruvbox" => Self::gruvbox(is_dark),
             "github" => Self::github(is_dark),
             "solarized" => Self::solarized(is_dark),
-            _ => Self::miaoyan(is_dark),
+            "one-dark" => Self::one_dark(is_dark),
+            _ => Self::default_palette(is_dark),
         }
     }
 
-    pub fn miaoyan(is_dark: bool) -> Self {
+    pub fn default_palette(is_dark: bool) -> Self {
         if is_dark {
             Self {
-                id: "miaoyan",
-                name: "MiaoYan",
+                id: "default",
+                name: "Default",
                 is_dark: true,
-                bg: rgb(0x181818).into(),
-                surface: rgb(0x202020).into(),
-                border: rgb(0x2c2c2c).into(),
-                text_primary: rgb(0xe6e6e6).into(),
-                text_muted: rgb(0x888888).into(),
-                accent: rgb(0x3ea368).into(),
-                code_bg: rgb(0x222222).into(),
+                bg: rgb(0x18181a).into(),
+                surface: rgb(0x222226).into(),
+                border: rgb(0x2e2e33).into(),
+                text_primary: rgb(0xf4f4f5).into(),
+                text_muted: rgb(0x8a8a93).into(),
+                accent: rgb(0xe26543).into(), // Warm terracotta matching logo
+                code_bg: rgb(0x202024).into(),
                 conflict_bg: rgb(0x382218).into(),
                 conflict_border: rgb(0x5e3322).into(),
             }
         } else {
             Self {
-                id: "miaoyan",
-                name: "MiaoYan",
+                id: "default",
+                name: "Default",
                 is_dark: false,
                 bg: rgb(0xffffff).into(),
-                surface: rgb(0xf9f9f9).into(),
-                border: rgb(0xededed).into(),
+                surface: rgb(0xfafaf9).into(),
+                border: rgb(0xededed).into(), // Delicate hairline
                 text_primary: rgb(0x1f2328).into(),
-                text_muted: rgb(0x858585).into(),
-                accent: rgb(0x2da44e).into(),
-                code_bg: rgb(0xf6f6f6).into(),
+                text_muted: rgb(0x71717a).into(),
+                accent: rgb(0xd9532f).into(), // Warm Terracotta Coral matching Logo
+                code_bg: rgb(0xf4f4f5).into(),
                 conflict_bg: rgb(0xfef2f2).into(),
                 conflict_border: rgb(0xfecaca).into(),
             }
@@ -187,6 +187,7 @@ impl ThemeColors {
         }
     }
 
+    #[allow(dead_code)]
     pub fn catppuccin(is_dark: bool) -> Self {
         if is_dark {
             Self {
@@ -255,6 +256,7 @@ impl ThemeColors {
         }
     }
 
+    #[allow(dead_code)]
     pub fn gruvbox(is_dark: bool) -> Self {
         if is_dark {
             Self {
@@ -353,6 +355,40 @@ impl ThemeColors {
                 code_bg: rgb(0xeee8d5).into(),
                 conflict_bg: rgb(0xfdf0ed).into(),
                 conflict_border: rgb(0xdc322f).into(),
+            }
+        }
+    }
+
+    pub fn one_dark(is_dark: bool) -> Self {
+        if is_dark {
+            Self {
+                id: "one-dark",
+                name: "One Dark Pro",
+                is_dark: true,
+                bg: rgb(0x21252b).into(),
+                surface: rgb(0x282c34).into(),
+                border: rgb(0x353b45).into(),
+                text_primary: rgb(0xabb2bf).into(),
+                text_muted: rgb(0x5c6370).into(),
+                accent: rgb(0x61afef).into(),
+                code_bg: rgb(0x1e2227).into(),
+                conflict_bg: rgb(0x451a03).into(),
+                conflict_border: rgb(0xb45309).into(),
+            }
+        } else {
+            Self {
+                id: "one-dark",
+                name: "One Dark Pro",
+                is_dark: false,
+                bg: rgb(0xfafafa).into(),
+                surface: rgb(0xf0f0f0).into(),
+                border: rgb(0xe0e0e0).into(),
+                text_primary: rgb(0x383a42).into(),
+                text_muted: rgb(0xa0a1a7).into(),
+                accent: rgb(0x4078f2).into(),
+                code_bg: rgb(0xf4f4f4).into(),
+                conflict_bg: rgb(0xfef2f2).into(),
+                conflict_border: rgb(0xfecaca).into(),
             }
         }
     }

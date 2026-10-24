@@ -6,4 +6,5 @@ pub mod config;
 pub mod document;
 pub mod export;
 pub mod i18n;
+pub mod mermaid;
 pub mod watcher;

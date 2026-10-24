@@ -94,9 +94,12 @@ img.paste(squircle_base, (0, 0), squircle_mask)
 
 master_1024 = img.resize((CANVAS_SIZE, CANVAS_SIZE), Image.Resampling.LANCZOS)
 
-# Generate iconset
+# Generate iconset and xcassets
 iconset_dir = 'assets/icon.iconset'
 os.makedirs(iconset_dir, exist_ok=True)
+
+xcassets_dir = 'assets/Assets.xcassets/AppIcon.appiconset'
+os.makedirs(xcassets_dir, exist_ok=True)
 
 sizes = [
     (16, 'icon_16x16.png'),
@@ -114,5 +117,35 @@ sizes = [
 for sz, fname in sizes:
     resized = master_1024.resize((sz, sz), Image.Resampling.LANCZOS)
     resized.save(os.path.join(iconset_dir, fname))
+    resized.save(os.path.join(xcassets_dir, fname))
 
-print("All iconset PNGs generated successfully.")
+import subprocess
+import shutil
+
+# Try iconutil
+try:
+    subprocess.run(['iconutil', '-c', 'icns', iconset_dir, '-o', 'assets/AppIcon.icns'], check=True)
+    print("iconutil compiled AppIcon.icns successfully.")
+except Exception as e:
+    print(f"iconutil skipped or failed: {e}")
+
+# Try actool
+try:
+    tmp_out = 'assets/build_car_tmp'
+    os.makedirs(tmp_out, exist_ok=True)
+    subprocess.run([
+        '/usr/bin/actool', 'assets/Assets.xcassets',
+        '--compile', tmp_out,
+        '--platform', 'macosx',
+        '--minimum-deployment-target', '12.0',
+        '--app-icon', 'AppIcon',
+        '--output-partial-info-plist', os.path.join(tmp_out, 'partial.plist')
+    ], check=True)
+    if os.path.exists(os.path.join(tmp_out, 'Assets.car')):
+        shutil.copy(os.path.join(tmp_out, 'Assets.car'), 'assets/Assets.car')
+        print("actool compiled Assets.car successfully.")
+    shutil.rmtree(tmp_out, ignore_errors=True)
+except Exception as e:
+    print(f"actool skipped or failed: {e}")
+
+print("All icon assets generated successfully.")

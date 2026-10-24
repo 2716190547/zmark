@@ -45,7 +45,7 @@ impl Default for Preferences {
             line_height: 1.6,
             max_column_width: 820.0,
             theme: ThemeMode::Auto,
-            palette: "miaoyan".to_string(),
+            palette: "default".to_string(),
             locale: SupportedLocale::Auto,
             tab_size: 4,
             auto_save_on_blur: true,

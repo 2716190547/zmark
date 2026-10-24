@@ -17,11 +17,19 @@ pub enum ViewMode {
     Preview,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DrawerTab {
+    #[default]
+    Files,
+    Outline,
+}
+
 pub struct AppState {
     pub doc: Document,
     pub editor: EditorEngine,
     pub view_mode: ViewMode,
     pub drawer_open: bool,
+    pub drawer_tab: DrawerTab,
     pub settings_open: bool,
     pub preferences: Preferences,
     pub theme: ThemeColors,
@@ -47,6 +55,7 @@ impl AppState {
             editor,
             view_mode: ViewMode::Split,
             drawer_open: false,
+            drawer_tab: DrawerTab::Files,
             settings_open: false,
             preferences,
             theme,
@@ -67,6 +76,10 @@ impl AppState {
         if self.drawer_open {
             self.refresh_sibling_files();
         }
+    }
+
+    pub fn set_drawer_tab(&mut self, tab: DrawerTab) {
+        self.drawer_tab = tab;
     }
 
     pub fn toggle_settings(&mut self) {

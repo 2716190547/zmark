@@ -18,9 +18,12 @@ echo "==> Copying binary..."
 cp "$DIR/target/release/glidemark_app" "$BUNDLE_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$BUNDLE_DIR/Contents/MacOS/$APP_NAME"
 
-echo "==> Copying app icon..."
+echo "==> Copying app icon and modern asset catalog..."
 if [ -f "$DIR/assets/AppIcon.icns" ]; then
     cp "$DIR/assets/AppIcon.icns" "$BUNDLE_DIR/Contents/Resources/AppIcon.icns"
+fi
+if [ -f "$DIR/assets/Assets.car" ]; then
+    cp "$DIR/assets/Assets.car" "$BUNDLE_DIR/Contents/Resources/Assets.car"
 fi
 
 echo "==> Generating Info.plist..."
@@ -46,6 +49,8 @@ cat << 'EOF' > "$BUNDLE_DIR/Contents/Info.plist"
     <key>CFBundleExecutable</key>
     <string>GlideMark</string>
     <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
@@ -76,5 +81,7 @@ EOF
 echo "==> Installing to $APP_DEST..."
 rm -rf "$APP_DEST"
 cp -R "$BUNDLE_DIR" "$APP_DEST"
+touch "$APP_DEST"
+killall Dock 2>/dev/null || true
 
 echo "==> GlideMark successfully installed to $APP_DEST!"

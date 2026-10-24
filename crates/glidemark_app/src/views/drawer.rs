@@ -2,44 +2,72 @@ use gpui::prelude::*;
 use gpui::*;
 use std::path::PathBuf;
 use std::sync::Arc;
+use glidemark_core::ast::HeadingItem;
+use glidemark_core::i18n::I18nStrings;
 
+use crate::state::DrawerTab;
 use crate::theme::ThemeColors;
 
 pub fn render_drawer(
+    active_tab: DrawerTab,
     sibling_files: &[PathBuf],
     current_path: Option<&PathBuf>,
+    headings: &[HeadingItem],
     theme: &ThemeColors,
-    title: &str,
+    strings: &I18nStrings,
     scroll_handle: &ScrollHandle,
-    on_select: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
+    on_select_tab: Arc<dyn Fn(DrawerTab, &mut Window, &mut App)>,
+    on_select_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
+    on_select_heading: Arc<dyn Fn(usize, &mut Window, &mut App)>,
 ) -> impl IntoElement {
+    let t1 = on_select_tab.clone();
+    let t2 = on_select_tab.clone();
+
     div()
-        .w(px(240.))
+        .w(px(250.))
         .h_full()
         .bg(theme.surface)
         .border_r_1()
         .border_color(theme.border)
         .flex()
         .flex_col()
+        // Top Header: Dual Segment Capsule Tabs (Files / Outline)
         .child(
             div()
-                .p_3()
+                .p_2p5()
                 .border_b_1()
                 .border_color(theme.border)
                 .flex()
                 .items_center()
-                .justify_between()
+                .justify_center()
                 .child(
                     div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.text_muted)
-                        .child(title.to_string()),
+                        .w_full()
+                        .bg(theme.bg)
+                        .p_0p5()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(theme.border)
+                        .flex()
+                        .gap_0p5()
+                        .child(render_tab_pill(
+                            strings.tab_files,
+                            active_tab == DrawerTab::Files,
+                            theme,
+                            move |_, window, cx| t1(DrawerTab::Files, window, cx),
+                        ))
+                        .child(render_tab_pill(
+                            strings.tab_outline,
+                            active_tab == DrawerTab::Outline,
+                            theme,
+                            move |_, window, cx| t2(DrawerTab::Outline, window, cx),
+                        )),
                 ),
         )
+        // Scrollable Tab Body
         .child(
             div()
-                .id("drawer_file_list")
+                .id("drawer_content_scroll")
                 .track_scroll(scroll_handle)
                 .flex_1()
                 .min_h(px(0.))
@@ -48,39 +76,123 @@ pub fn render_drawer(
                 .flex()
                 .flex_col()
                 .gap_1()
-                .children(sibling_files.iter().map(|path| {
-                    let is_active = current_path.map_or(false, |cp| cp == path);
-                    let file_name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("untitled.md")
-                        .to_string();
+                .child(match active_tab {
+                    DrawerTab::Files => div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .children(sibling_files.iter().map(|path| {
+                            let is_active = current_path.map_or(false, |cp| cp == path);
+                            let file_name = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("untitled.md")
+                                .to_string();
 
-                    let item = div()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .text_sm()
-                        .cursor_pointer();
+                            let item = div()
+                                .px_2p5()
+                                .py_1p5()
+                                .rounded_md()
+                                .text_xs()
+                                .cursor_pointer();
 
-                    let p = path.clone();
-                    let on_select = on_select.clone();
-                    let interactive_item = item.on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                        on_select(&p, window, cx);
-                    });
+                            let p = path.clone();
+                            let on_select = on_select_file.clone();
+                            let interactive_item = item.on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                                on_select(&p, window, cx);
+                            });
 
-                    if is_active {
-                        interactive_item
-                            .bg(theme.accent)
-                            .text_color(rgb(0xffffff))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(file_name)
-                    } else {
-                        interactive_item
-                            .text_color(theme.text_primary)
-                            .hover(|s| s.bg(theme.bg))
-                            .child(file_name)
+                            if is_active {
+                                interactive_item
+                                    .bg(theme.accent)
+                                    .text_color(rgb(0xffffff))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(file_name)
+                            } else {
+                                interactive_item
+                                    .text_color(theme.text_primary)
+                                    .hover(|s| s.bg(theme.bg))
+                                    .child(file_name)
+                            }
+                        }))
+                        .into_any_element(),
+                    DrawerTab::Outline => {
+                        if headings.is_empty() {
+                            div()
+                                .p_4()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(strings.outline_empty)
+                                .into_any_element()
+                        } else {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .children(headings.iter().map(|h| {
+                                    let block_idx = h.block_index;
+                                    let on_jump = on_select_heading.clone();
+                                    let indent = ((h.level.saturating_sub(1) as f32) * 12.0).min(36.0);
+
+                                    let font_weight = match h.level {
+                                        1 => FontWeight::BOLD,
+                                        2 => FontWeight::SEMIBOLD,
+                                        _ => FontWeight::NORMAL,
+                                    };
+
+                                    div()
+                                        .pl(px(indent + 8.0))
+                                        .pr_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .text_xs()
+                                        .font_weight(font_weight)
+                                        .text_color(theme.text_primary)
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(theme.bg).text_color(theme.accent))
+                                        .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                                            on_jump(block_idx, window, cx);
+                                        })
+                                        .child(h.text.clone())
+                                }))
+                                .into_any_element()
+                        }
                     }
-                })),
+                }),
         )
+}
+
+fn render_tab_pill<F>(
+    title: &str,
+    active: bool,
+    theme: &ThemeColors,
+    handler: F,
+) -> impl IntoElement
+where
+    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+{
+    let base = div()
+        .flex_1()
+        .py_1()
+        .rounded_md()
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_xs()
+        .on_mouse_down(MouseButton::Left, handler);
+
+    if active {
+        base.bg(theme.surface)
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(theme.accent)
+            .child(title.to_string())
+    } else {
+        base.text_color(theme.text_muted)
+            .hover(|s| s.text_color(theme.text_primary))
+            .child(title.to_string())
+    }
 }

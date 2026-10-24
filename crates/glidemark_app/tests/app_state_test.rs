@@ -81,7 +81,7 @@ fn test_theme_palettes_and_appearance_modes() {
 
     // Verify 8 palettes can all be set cleanly
     let palettes = [
-        "claude", "macos", "tokyo-night", "catppuccin", "nord", "gruvbox", "github", "solarized",
+        "default", "claude", "macos", "tokyo-night", "nord", "github", "solarized", "one-dark",
     ];
     for palette in palettes {
         state.set_palette(palette);
