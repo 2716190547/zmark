@@ -128,17 +128,17 @@ _Avoid_: Auto sync, periodic save, timer poll
 A two-column preferences dialog organizing configuration domains into a left category navigation sidebar (Appearance, Editor & Save, Language, About) and a right card panel.
 _Avoid_: Settings page, preferences window, config popover
 
-**Settings Window**:
-A standalone, dedicated native macOS window opened via `open_window` to manage application preferences independently of the main editing session.
-_Avoid_: Settings modal, config popup, preferences sheet
+**Settings Drawer**:
+A right-sliding in-window drawer (width 380px) displaying application preferences and theme controls with live preview, eliminating secondary window borrow re-entrancy crashes.
+_Avoid_: Settings modal, config popup, preferences window
 
-**Elevated Card**:
-A discrete rounded-rectangle container (`rounded_xl` / 12px radius) elevated atop a recessed canvas (`#F4F4F6`), organizing editor and preview panes into tactile, breathable workspaces.
-_Avoid_: Box, panel, column wrapper
+**Continuous Surface**:
+An edge-to-edge, full-height writing and preview canvas separated by delicate 1px hairlines and tonal background distinction, eliminating floating card gutters for immersive drafting.
+_Avoid_: Floating card, dashboard box, rounded tile
 
-**Transparent Dock Glyph**:
-A pure vector brand mark rendered directly on a transparent canvas without an enclosing card, allowing macOS Dock materials to host the glyph natively.
-_Avoid_: Framed icon, square logo, box tile
+**HIG White Squircle Icon**:
+An Apple Human Interface Guidelines compliant 824x824 pure white (`#FFFFFF`) squircle base with ambient drop shadow hosting the warm gradient Z glyph centered in a 1024x1024 canvas.
+_Avoid_: Transparent glyph, framed icon, gray tile
 
 
 

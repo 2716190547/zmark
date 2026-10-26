@@ -22,7 +22,7 @@ pub fn render_editor_pane(
         .h_full()
         .flex()
         .flex_col()
-        .bg(theme.bg)
+        .bg(theme.surface)
         .child(
             div()
                 .h(px(32.))
@@ -104,9 +104,9 @@ pub fn render_editor_pane(
                         });
 
                     let styled_row = if is_active {
-                        row.bg(theme.surface)
+                        row.bg(theme.bg)
                     } else {
-                        row.hover(|s| s.bg(theme.surface))
+                        row.hover(|s| s.bg(theme.bg))
                     };
 
                     styled_row

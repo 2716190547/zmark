@@ -4,22 +4,69 @@ import math
 from PIL import Image, ImageDraw, ImageFilter
 
 CANVAS_SIZE = 1024
-
-# 4x supersampling for ultra-crisp vector rendering
-SS = 4
+SS = 4  # 4x supersampling for ultra-crisp edges
 SIZE = CANVAS_SIZE * SS
 
-# Pure transparent canvas across the entire 1024x1024 frame.
-# By making the icon transparent and outputting only the pure vector Z glyph,
-# macOS 27 Dock hosts the glyph directly on the native glass tile.
-# This eliminates any outer white card, border clipping, or gray tile mismatch.
-img = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
+# Apple macOS HIG squircle dimensions at 1024x1024 (scaled by SS)
+# Base squircle: 824x824, centered at x=100..924, y=90..914 (optical center with downward shadow)
+BASE_W = int(824 * SS)
+BASE_H = int(824 * SS)
+BASE_X0 = int(100 * SS)
+BASE_Y0 = int(90 * SS)
+BASE_X1 = BASE_X0 + BASE_W
+BASE_Y1 = BASE_Y0 + BASE_H
+CORNER_RADIUS = int(185 * SS)
 
-# 2. Z Glyph bounds centered inside canvas
-# Glyph size: ~680x680 at 1024x1024 (scaled by SS) for bold, clear brand recognition
-glyph_size = int(680 * SS)
-gx0 = (SIZE - glyph_size) // 2
-gy0 = (SIZE - glyph_size) // 2
+# Create master canvas with transparent border
+canvas = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
+
+# 1. Generate macOS standard ambient drop shadow
+# Shadow offset dy = 18px * SS, blur = 24px * SS
+shadow_layer = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
+s_draw = ImageDraw.Draw(shadow_layer)
+shadow_dy = int(18 * SS)
+s_draw.rounded_rectangle(
+    [BASE_X0, BASE_Y0 + shadow_dy, BASE_X1, BASE_Y1 + shadow_dy],
+    radius=CORNER_RADIUS,
+    fill=(0, 0, 0, 45)  # Soft natural drop shadow
+)
+# Additional tighter contact shadow at bottom edge
+s_draw.rounded_rectangle(
+    [BASE_X0 + int(20 * SS), BASE_Y1 - int(10 * SS), BASE_X1 - int(20 * SS), BASE_Y1 + int(12 * SS)],
+    radius=int(40 * SS),
+    fill=(0, 0, 0, 25)
+)
+shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=int(18 * SS)))
+canvas.paste(shadow_layer, (0, 0), shadow_layer)
+
+# 2. Draw Pure White Squircle Card
+squircle_mask = Image.new('L', (SIZE, SIZE), 0)
+m_draw = ImageDraw.Draw(squircle_mask)
+m_draw.rounded_rectangle(
+    [BASE_X0, BASE_Y0, BASE_X1, BASE_Y1],
+    radius=CORNER_RADIUS,
+    fill=255
+)
+
+# Squircle background: Pure white (#FFFFFF) with subtle delicate 1px boundary stroke
+squircle_img = Image.new('RGBA', (SIZE, SIZE), (255, 255, 255, 255))
+sq_draw = ImageDraw.Draw(squircle_img)
+# 1px border at 1024 (4px at SS) in subtle neutral gray rgba(0,0,0,0.06)
+sq_draw.rounded_rectangle(
+    [BASE_X0, BASE_Y0, BASE_X1, BASE_Y1],
+    radius=CORNER_RADIUS,
+    outline=(0, 0, 0, 16),
+    width=max(1, int(1.5 * SS))
+)
+
+# Paste pure white squircle onto canvas
+canvas.paste(squircle_img, (0, 0), squircle_mask)
+
+# 3. Render warm terracotta-to-amber gradient Z glyph centered inside squircle
+# Glyph size: ~480x480 at 1024x1024
+glyph_size = int(480 * SS)
+gx0 = BASE_X0 + (BASE_W - glyph_size) // 2
+gy0 = BASE_Y0 + (BASE_H - glyph_size) // 2
 gx1 = gx0 + glyph_size
 gy1 = gy0 + glyph_size
 
@@ -27,7 +74,7 @@ gy1 = gy0 + glyph_size
 glyph_mask = Image.new('L', (SIZE, SIZE), 0)
 g_draw = ImageDraw.Draw(glyph_mask)
 
-# Top polygon: (gx0, gy0) -> (gx1, gy0) -> (gx0 + 5/8 * w, gy0 + 1/2 * h) -> (gx0, gy0 + 1/2 * h)
+# Top polygon of Z:
 p_top = [
     (gx0, gy0),
     (gx1, gy0),
@@ -36,7 +83,7 @@ p_top = [
 ]
 g_draw.polygon(p_top, fill=255)
 
-# Bottom polygon: (gx0 + 3/8 * w, gy0 + 1/2 * h) -> (gx1, gy0 + 1/2 * h) -> (gx1, gy1) -> (gx0, gy1)
+# Bottom polygon of Z:
 p_bot = [
     (gx0 + glyph_size * 3 // 8, gy0 + glyph_size // 2),
     (gx1, gy0 + glyph_size // 2),
@@ -45,7 +92,7 @@ p_bot = [
 ]
 g_draw.polygon(p_bot, fill=255)
 
-# 4. Generate diagonal linear gradient: warm terracotta red-brown to golden yellow
+# Generate diagonal linear gradient: warm terracotta red-brown to golden yellow
 grad_img = Image.new('RGBA', (SIZE, SIZE))
 grad_pix = grad_img.load()
 
@@ -62,10 +109,11 @@ for y in range(gy0, gy1):
         b = int(c_start[2] + (c_end[2] - c_start[2]) * t_smooth)
         grad_pix[x, y] = (r, g, b, 255)
 
-# Composite glyph directly onto full-bleed white canvas
-img.paste(grad_img, (0, 0), glyph_mask)
+# Composite gradient glyph onto squircle card
+canvas.paste(grad_img, (0, 0), glyph_mask)
 
-master_1024 = img.resize((CANVAS_SIZE, CANVAS_SIZE), Image.Resampling.LANCZOS)
+# Downscale to master 1024x1024 using Lanczos filter
+master_1024 = canvas.resize((CANVAS_SIZE, CANVAS_SIZE), Image.Resampling.LANCZOS)
 
 # Generate iconset and xcassets
 iconset_dir = 'assets/icon.iconset'
@@ -95,30 +143,25 @@ for sz, fname in sizes:
 import subprocess
 import shutil
 
-# Try iconutil
+# Try iconutil to build AppIcon.icns
 try:
     subprocess.run(['iconutil', '-c', 'icns', iconset_dir, '-o', 'assets/AppIcon.icns'], check=True)
-    print("iconutil compiled AppIcon.icns successfully.")
+    print("Successfully built assets/AppIcon.icns")
 except Exception as e:
-    print(f"iconutil skipped or failed: {e}")
+    print(f"Warning: iconutil failed: {e}")
 
-# Try actool
-try:
-    tmp_out = 'assets/build_car_tmp'
-    os.makedirs(tmp_out, exist_ok=True)
-    subprocess.run([
-        '/usr/bin/actool', 'assets/Assets.xcassets',
-        '--compile', tmp_out,
-        '--platform', 'macosx',
-        '--minimum-deployment-target', '12.0',
-        '--app-icon', 'AppIcon',
-        '--output-partial-info-plist', os.path.join(tmp_out, 'partial.plist')
-    ], check=True)
-    if os.path.exists(os.path.join(tmp_out, 'Assets.car')):
-        shutil.copy(os.path.join(tmp_out, 'Assets.car'), 'assets/Assets.car')
-        print("actool compiled Assets.car successfully.")
-    shutil.rmtree(tmp_out, ignore_errors=True)
-except Exception as e:
-    print(f"actool skipped or failed: {e}")
-
-print("All icon assets generated successfully.")
+# Try actool if Xcode tools are available to build Assets.car
+if shutil.which('actool'):
+    try:
+        subprocess.run([
+            'actool',
+            'assets/Assets.xcassets',
+            '--compile', 'assets',
+            '--platform', 'macosx',
+            '--minimum-deployment-target', '13.0',
+            '--app-icon', 'AppIcon',
+            '--output-partial-info-plist', '/tmp/appicon_partial.plist'
+        ], check=True)
+        print("Successfully compiled assets/Assets.car via actool")
+    except Exception as e:
+        print(f"actool notice: {e}")

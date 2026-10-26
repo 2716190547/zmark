@@ -7,7 +7,7 @@ use crate::theme::ThemeColors;
 pub fn render_preview_pane(
     parsed: &ParsedDocument,
     theme: &ThemeColors,
-    _max_column_width: f32,
+    max_column_width: f32,
     font_size: f32,
     scroll_handle: &ScrollHandle,
     title: &str,
@@ -18,7 +18,7 @@ pub fn render_preview_pane(
         .h_full()
         .flex()
         .flex_col()
-        .bg(theme.bg)
+        .bg(theme.surface)
         .child(
             div()
                 .h(px(32.))
@@ -55,6 +55,8 @@ pub fn render_preview_pane(
                 .child(
                     div()
                         .w_full()
+                        .max_w(px(max_column_width))
+                        .mx_auto()
                         .flex()
                         .flex_col()
                         .gap_4()
