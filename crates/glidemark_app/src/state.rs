@@ -46,6 +46,7 @@ pub struct AppState {
     pub strings: &'static I18nStrings,
     pub sync_map: SyncScrollMap,
     pub sibling_files: Vec<PathBuf>,
+    pub is_system_dark: bool,
 }
 
 impl AppState {
@@ -53,7 +54,8 @@ impl AppState {
         let preferences = Preferences::load_or_default();
         let is_dark = match preferences.theme {
             ThemeMode::Light => false,
-            ThemeMode::Dark | ThemeMode::Auto => true,
+            ThemeMode::Dark => true,
+            ThemeMode::Auto => false,
         };
         let theme = ThemeColors::resolve(&preferences.palette, is_dark);
         let strings = get_strings(preferences.locale);
@@ -73,6 +75,7 @@ impl AppState {
             strings,
             sync_map,
             sibling_files: Vec::new(),
+            is_system_dark: false,
         };
         state.refresh_sibling_files();
         state
@@ -138,6 +141,7 @@ impl AppState {
     }
 
     pub fn update_appearance(&mut self, is_dark: bool) {
+        self.is_system_dark = is_dark;
         let effective_dark = match self.preferences.theme {
             ThemeMode::Light => false,
             ThemeMode::Dark => true,
@@ -151,7 +155,8 @@ impl AppState {
     pub fn recompute_theme(&mut self) {
         let is_dark = match self.preferences.theme {
             ThemeMode::Light => false,
-            ThemeMode::Dark | ThemeMode::Auto => true,
+            ThemeMode::Dark => true,
+            ThemeMode::Auto => self.is_system_dark,
         };
         self.theme = ThemeColors::resolve(&self.preferences.palette, is_dark);
     }

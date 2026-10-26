@@ -7,7 +7,7 @@ use crate::theme::ThemeColors;
 pub fn render_preview_pane(
     parsed: &ParsedDocument,
     theme: &ThemeColors,
-    max_column_width: f32,
+    _max_column_width: f32,
     font_size: f32,
     scroll_handle: &ScrollHandle,
     title: &str,
@@ -55,8 +55,6 @@ pub fn render_preview_pane(
                 .child(
                     div()
                         .w_full()
-                        .max_w(px(max_column_width))
-                        .mx_auto()
                         .flex()
                         .flex_col()
                         .gap_4()
@@ -103,13 +101,13 @@ fn render_block_element(
                 .into_any_element()
         }
         BlockElement::Paragraph(content) => div()
+            .w_full()
             .text_size(px(base_font_size))
-            .line_height(relative(1.7))
+            .line_height(relative(1.75))
             .text_color(theme.text_primary)
             .flex()
             .flex_wrap()
-            .items_center()
-            .gap_1()
+            .items_baseline()
             .children(render_inline_elements(content, theme, base_font_size))
             .into_any_element(),
         BlockElement::FencedCode { lang, code } => {
@@ -196,51 +194,59 @@ fn render_block_element(
             }))
             .into_any_element(),
         BlockElement::Table { headers, rows } => div()
+            .id("preview_table_scroll")
             .w_full()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.border)
-            .overflow_hidden()
-            .flex()
-            .flex_col()
+            .overflow_x_scroll()
+            .my_2()
             .child(
                 div()
-                    .bg(theme.surface)
-                    .border_b_1()
+                    .w_full()
+                    .min_w(px(520.))
+                    .rounded_md()
+                    .border_1()
                     .border_color(theme.border)
+                    .overflow_hidden()
                     .flex()
-                    .children(headers.iter().map(|h| {
+                    .flex_col()
+                    .child(
                         div()
-                            .flex_1()
-                            .p_2()
-                            .font_weight(FontWeight::BOLD)
-                            .text_size(px(base_font_size * 0.95))
-                            .text_color(theme.text_primary)
+                            .bg(theme.bg)
+                            .border_b_1()
+                            .border_color(theme.border)
                             .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap_1()
-                            .children(render_inline_elements(h, theme, base_font_size * 0.95))
+                            .children(headers.iter().map(|h| {
+                                div()
+                                    .flex_1()
+                                    .min_w(px(120.))
+                                    .p_3()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_size(px(base_font_size * 0.95))
+                                    .text_color(theme.text_primary)
+                                    .flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .children(render_inline_elements(h, theme, base_font_size * 0.95))
+                            })),
+                    )
+                    .children(rows.iter().map(|row| {
+                        div()
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .flex()
+                            .children(row.iter().map(|cell| {
+                                div()
+                                    .flex_1()
+                                    .min_w(px(120.))
+                                    .p_3()
+                                    .text_size(px(base_font_size * 0.95))
+                                    .text_color(theme.text_primary)
+                                    .flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .children(render_inline_elements(cell, theme, base_font_size * 0.95))
+                            }))
                     })),
             )
-            .children(rows.iter().map(|row| {
-                div()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .children(row.iter().map(|cell| {
-                        div()
-                            .flex_1()
-                            .p_2()
-                            .text_size(px(base_font_size * 0.95))
-                            .text_color(theme.text_primary)
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap_1()
-                            .children(render_inline_elements(cell, theme, base_font_size * 0.95))
-                    }))
-            }))
             .into_any_element(),
         BlockElement::Rule => div()
             .w_full()
@@ -376,29 +382,114 @@ fn render_mermaid_diagram(code: &str, theme: &ThemeColors, base_font_size: f32) 
                     div()
                         .text_xs()
                         .text_color(theme.text_muted)
-                        .child(format!("{} 阶段  {} 节点", diagram.stages.len(), diagram.nodes.len())),
+                        .child(format!("{} 阶段  {} 节点  {} 连线", diagram.stages.len(), diagram.nodes.len(), diagram.edges.len())),
                 ),
         )
-        // Topological Diagram Stages
+        // Topological Diagram Stages with Connectors & Real Shapes
         .child(
             div()
                 .p_6()
                 .flex()
                 .flex_col()
                 .items_center()
-                .gap_3()
+                .gap_4()
                 .children(diagram.stages.iter().enumerate().map(|(stage_idx, stage_nodes)| {
-                    div()
+                    let mut stage_wrapper = div()
                         .w_full()
                         .flex()
                         .flex_col()
                         .items_center()
-                        .gap_3()
-                        .when(stage_idx > 0, |el| {
-                            el.child(
+                        .gap_3();
+
+                    // Render connecting lines & branch conditions from previous stage
+                    if stage_idx > 0 {
+                        let prev_stage = &diagram.stages[stage_idx - 1];
+                        let prev_ids: std::collections::HashSet<&str> = prev_stage.iter().map(|n| n.id.as_str()).collect();
+                        let curr_ids: std::collections::HashSet<&str> = stage_nodes.iter().map(|n| n.id.as_str()).collect();
+
+                        // Find edges crossing between previous stage and current stage
+                        let relevant_edges: Vec<&glidemark_core::mermaid::MermaidEdge> = diagram
+                            .edges
+                            .iter()
+                            .filter(|e| {
+                                e.from.iter().any(|f| prev_ids.contains(f.as_str()))
+                                    && e.to.iter().any(|t| curr_ids.contains(t.as_str()))
+                            })
+                            .collect();
+
+                        if !relevant_edges.is_empty() {
+                            stage_wrapper = stage_wrapper.child(
                                 div()
-                                    .w(px(22.))
-                                    .h(px(22.))
+                                    .w_full()
+                                    .flex()
+                                    .flex_wrap()
+                                    .justify_center()
+                                    .items_center()
+                                    .gap_4()
+                                    .children(relevant_edges.iter().map(|edge| {
+                                        let label_text = edge.label.clone();
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .items_center()
+                                            .gap_0p5()
+                                            // Flow connector track with arrow & condition badge
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .child(
+                                                        div()
+                                                            .w(px(24.))
+                                                            .h(px(1.5))
+                                                            .bg(theme.border),
+                                                    )
+                                                    .child(
+                                                        if let Some(lbl) = label_text {
+                                                            div()
+                                                                .px_2()
+                                                                .py_0p5()
+                                                                .rounded_full()
+                                                                .bg(theme.surface)
+                                                                .border_1()
+                                                                .border_color(theme.accent)
+                                                                .text_size(px(10.))
+                                                                .font_weight(FontWeight::BOLD)
+                                                                .text_color(theme.accent)
+                                                                .shadow_sm()
+                                                                .child(format!("{} ▼", lbl))
+                                                        } else {
+                                                            div()
+                                                                .w(px(20.))
+                                                                .h(px(20.))
+                                                                .rounded_full()
+                                                                .bg(theme.bg)
+                                                                .border_1()
+                                                                .border_color(theme.border)
+                                                                .flex()
+                                                                .items_center()
+                                                                .justify_center()
+                                                                .text_size(px(11.))
+                                                                .font_weight(FontWeight::BOLD)
+                                                                .text_color(theme.accent)
+                                                                .child("↓")
+                                                        }
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .w(px(24.))
+                                                            .h(px(1.5))
+                                                            .bg(theme.border),
+                                                    ),
+                                            )
+                                    }))
+                            );
+                        } else {
+                            stage_wrapper = stage_wrapper.child(
+                                div()
+                                    .w(px(20.))
+                                    .h(px(20.))
                                     .rounded_full()
                                     .bg(theme.bg)
                                     .border_1()
@@ -410,19 +501,21 @@ fn render_mermaid_diagram(code: &str, theme: &ThemeColors, base_font_size: f32) 
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(theme.accent)
                                     .child("↓"),
-                            )
-                        })
-                        .child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .flex_wrap()
-                                .justify_center()
-                                .gap_3()
-                                .children(stage_nodes.iter().map(|node| {
-                                    render_mermaid_node_card(node, theme, base_font_size)
-                                })),
-                        )
+                            );
+                        }
+                    }
+
+                    stage_wrapper.child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .flex_wrap()
+                            .justify_center()
+                            .gap_4()
+                            .children(stage_nodes.iter().map(|node| {
+                                render_mermaid_node_card(node, theme, base_font_size)
+                            })),
+                    )
                 })),
         )
         .into_any_element()
@@ -433,31 +526,55 @@ fn render_mermaid_node_card(
     theme: &ThemeColors,
     base_font_size: f32,
 ) -> AnyElement {
-    let (bg_color, border_color, accent_tag) = match node.class_name.as_deref() {
-        Some("step") => (theme.surface, theme.accent, "步骤"),
-        Some("run") => (theme.code_bg, rgb(0x22c55e).into(), "执行"),
-        Some("check") => (theme.surface, rgb(0xf59e0b).into(), "校验"),
-        _ => (theme.bg, theme.border, "阶段"),
+    let (bg_color, border_color) = match node.class_name.as_deref() {
+        Some("step") => (theme.surface, theme.accent),
+        Some("run") => (theme.code_bg, rgb(0x22c55e).into()),
+        Some("check") => (theme.surface, rgb(0xf59e0b).into()),
+        _ => match node.shape {
+            glidemark_core::mermaid::MermaidShape::Diamond => (theme.surface, rgb(0xf59e0b).into()),
+            glidemark_core::mermaid::MermaidShape::Database => (theme.surface, rgb(0x0ea5e9).into()),
+            glidemark_core::mermaid::MermaidShape::Rounded => (theme.surface, theme.accent),
+            glidemark_core::mermaid::MermaidShape::Rectangle => (theme.surface, theme.border),
+        },
     };
 
     let shape_icon = match node.shape {
-        glidemark_core::mermaid::MermaidShape::Database => "🗄️",
-        glidemark_core::mermaid::MermaidShape::Diamond => "◇",
-        glidemark_core::mermaid::MermaidShape::Rounded => "○",
-        glidemark_core::mermaid::MermaidShape::Rectangle => "■",
+        glidemark_core::mermaid::MermaidShape::Database => "🗄️ 数据库",
+        glidemark_core::mermaid::MermaidShape::Diamond => "◇ 条件分支",
+        glidemark_core::mermaid::MermaidShape::Rounded => "⬭ 流程起止",
+        glidemark_core::mermaid::MermaidShape::Rectangle => "■ 处理单元",
     };
 
-    div()
+    let mut card = div()
         .min_w(px(200.))
-        .max_w(px(380.))
-        .p_3()
+        .max_w(px(400.))
+        .p_3p5()
         .bg(bg_color)
-        .rounded_lg()
         .border_1()
         .border_color(border_color)
         .flex()
         .flex_col()
-        .gap_1p5()
+        .gap_2();
+
+    // Geometric styling matching real Mermaid node shape semantics
+    card = match node.shape {
+        glidemark_core::mermaid::MermaidShape::Diamond => card
+            .rounded_2xl()
+            .border_2()
+            .border_color(rgb(0xf59e0b)),
+        glidemark_core::mermaid::MermaidShape::Database => card
+            .rounded_t_2xl()
+            .rounded_b_md()
+            .border_t_4()
+            .border_color(rgb(0x0ea5e9)),
+        glidemark_core::mermaid::MermaidShape::Rounded => card
+            .rounded_full()
+            .px_5(),
+        glidemark_core::mermaid::MermaidShape::Rectangle => card
+            .rounded_lg(),
+    };
+
+    card
         .child(
             div()
                 .flex()
@@ -468,27 +585,26 @@ fn render_mermaid_node_card(
                         .flex()
                         .items_center()
                         .gap_1p5()
-                        .child(div().text_size(px(10.)).child(shape_icon))
                         .child(
                             div()
                                 .text_size(px(10.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .font_family("ui-monospace")
+                                .font_weight(FontWeight::BOLD)
                                 .text_color(theme.accent)
                                 .child(node.id.clone()),
                         ),
                 )
                 .child(
                     div()
-                        .px_1p5()
+                        .px_2()
                         .py_0p5()
-                        .rounded_xs()
+                        .rounded_full()
                         .bg(theme.bg)
                         .border_1()
-                        .border_color(theme.border)
-                        .text_size(px(9.))
+                        .border_color(border_color)
+                        .text_size(px(10.))
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text_muted)
-                        .child(accent_tag),
+                        .child(shape_icon),
                 ),
         )
         .child(
@@ -498,7 +614,7 @@ fn render_mermaid_node_card(
                 .gap_0p5()
                 .children(node.label.lines().map(|line| {
                     div()
-                        .text_size(px(base_font_size * 0.85))
+                        .text_size(px(base_font_size * 0.9))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text_primary)
                         .line_height(relative(1.4))

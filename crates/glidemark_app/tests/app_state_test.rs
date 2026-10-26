@@ -104,6 +104,13 @@ fn test_theme_palettes_and_appearance_modes() {
     assert!(!state.theme.is_dark);
     state.update_appearance(true);
     assert!(state.theme.is_dark);
+
+    // Switching palette in Auto mode when system is light should stay light
+    state.update_appearance(false);
+    state.set_theme_mode(ThemeMode::Auto);
+    state.set_palette("forest");
+    assert!(!state.theme.is_dark);
+    assert_eq!(state.preferences.palette, "forest");
 }
 
 #[test]

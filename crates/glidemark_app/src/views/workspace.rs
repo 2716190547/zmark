@@ -934,8 +934,8 @@ where
             let t = text.clone();
             cx.new(|_| TooltipView { text: t }).into()
         })
-        .w(px(28.))
-        .h(px(28.))
+        .w(px(32.))
+        .h(px(32.))
         .rounded_md()
         .cursor_pointer()
         .flex()
@@ -970,8 +970,8 @@ where
             let t = text.clone();
             cx.new(|_| TooltipView { text: t }).into()
         })
-        .w(px(32.))
-        .h(px(22.))
+        .w(px(36.))
+        .h(px(26.))
         .rounded(px(5.))
         .cursor_pointer()
         .flex()
@@ -994,33 +994,33 @@ where
 
 // Standard Lucide SVG icons rendered natively by GPUI
 fn render_sidebar_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/panel-left.svg").size(px(16.)).text_color(color)
+    svg().path("icons/panel-left.svg").size(px(20.)).text_color(color)
 }
 
 fn render_folder_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/folder.svg").size(px(16.)).text_color(color)
+    svg().path("icons/folder.svg").size(px(20.)).text_color(color)
 }
 
 fn render_source_mode_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/code.svg").size(px(15.)).text_color(color)
+    svg().path("icons/code.svg").size(px(18.)).text_color(color)
 }
 
 fn render_split_mode_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/columns-2.svg").size(px(15.)).text_color(color)
+    svg().path("icons/columns-2.svg").size(px(18.)).text_color(color)
 }
 
 fn render_preview_mode_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/book-open.svg").size(px(15.)).text_color(color)
+    svg().path("icons/book-open.svg").size(px(18.)).text_color(color)
 }
 
 fn render_export_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/download.svg").size(px(16.)).text_color(color)
+    svg().path("icons/download.svg").size(px(20.)).text_color(color)
 }
 
 fn render_save_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/save.svg").size(px(16.)).text_color(color)
+    svg().path("icons/save.svg").size(px(20.)).text_color(color)
 }
 
 fn render_settings_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/settings.svg").size(px(16.)).text_color(color)
+    svg().path("icons/settings.svg").size(px(20.)).text_color(color)
 }

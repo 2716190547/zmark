@@ -51,13 +51,32 @@ impl MermaidDiagram {
                 continue;
             }
 
-            // Parse edges (e.g. A --> B, A & B --> C, A --> D & E)
+            // Parse edges (e.g. A --> B, A -->|Yes| B, A -- label --> B, A & B --> C, A --> D & E)
             if trimmed.contains("-->") || trimmed.contains("---") {
                 let separator = if trimmed.contains("-->") { "-->" } else { "---" };
                 let parts: Vec<&str> = trimmed.split(separator).collect();
                 if parts.len() >= 2 {
-                    let from_part = parts[0].trim();
-                    let to_part = parts[1].trim();
+                    let mut from_part = parts[0].trim();
+                    let raw_to = parts[1].trim();
+
+                    let mut edge_label = None;
+                    let to_part = if raw_to.starts_with('|') {
+                        if let Some(end) = raw_to[1..].find('|') {
+                            edge_label = Some(raw_to[1..1 + end].trim().to_string());
+                            raw_to[1 + end + 1..].trim()
+                        } else {
+                            raw_to
+                        }
+                    } else if from_part.contains("--") {
+                        let sub: Vec<&str> = from_part.split("--").collect();
+                        if sub.len() >= 2 {
+                            from_part = sub[0].trim();
+                            edge_label = Some(sub[1].trim().to_string());
+                        }
+                        raw_to
+                    } else {
+                        raw_to
+                    };
 
                     let from_ids: Vec<String> = from_part
                         .split('&')
@@ -87,7 +106,7 @@ impl MermaidDiagram {
                             .into_iter()
                             .map(|s| clean_node_id(&s))
                             .collect(),
-                        label: None,
+                        label: edge_label,
                     });
                 }
                 continue;
@@ -139,48 +158,50 @@ fn extract_and_add_node(raw: &str, nodes: &mut Vec<MermaidNode>) {
 
     let without_class = without_class.trim();
 
-    // Check Database shape: [("label")]
-    if let Some(start) = without_class.find("[(\"") {
-        if let Some(end) = without_class.rfind("\")]") {
+    // Check Database shape: [("label")] or [(label)]
+    if let Some(start) = without_class.find("[(") {
+        if let Some(end) = without_class.rfind(")]") {
             let id = without_class[..start].trim().to_string();
-            let label = without_class[start + 3..end].to_string();
+            let mut label = without_class[start + 2..end].to_string();
+            if label.starts_with('"') && label.ends_with('"') && label.len() >= 2 {
+                label = label[1..label.len() - 1].to_string();
+            }
             upsert_node(nodes, id, label, MermaidShape::Database, class_name);
             return;
         }
     }
-    // Check Diamond shape: {"label"}
-    if let Some(start) = without_class.find("{\"") {
-        if let Some(end) = without_class.rfind("\"}") {
+    // Check Diamond shape: {"label"} or {label}
+    if let Some(start) = without_class.find('{') {
+        if let Some(end) = without_class.rfind('}') {
             let id = without_class[..start].trim().to_string();
-            let label = without_class[start + 2..end].to_string();
+            let mut label = without_class[start + 1..end].to_string();
+            if label.starts_with('"') && label.ends_with('"') && label.len() >= 2 {
+                label = label[1..label.len() - 1].to_string();
+            }
             upsert_node(nodes, id, label, MermaidShape::Diamond, class_name);
             return;
         }
     }
-    // Check Rectangle shape: ["label"]
-    if let Some(start) = without_class.find("[\"") {
-        if let Some(end) = without_class.rfind("\"]") {
+    // Check Rounded shape: ("label") or (label)
+    if let Some(start) = without_class.find('(') {
+        if let Some(end) = without_class.rfind(')') {
             let id = without_class[..start].trim().to_string();
-            let label = without_class[start + 2..end].to_string();
-            upsert_node(nodes, id, label, MermaidShape::Rectangle, class_name);
-            return;
-        }
-    }
-    // Check Rounded shape: ("label")
-    if let Some(start) = without_class.find("(\"") {
-        if let Some(end) = without_class.rfind("\")") {
-            let id = without_class[..start].trim().to_string();
-            let label = without_class[start + 2..end].to_string();
+            let mut label = without_class[start + 1..end].to_string();
+            if label.starts_with('"') && label.ends_with('"') && label.len() >= 2 {
+                label = label[1..label.len() - 1].to_string();
+            }
             upsert_node(nodes, id, label, MermaidShape::Rounded, class_name);
             return;
         }
     }
-
-    // Unquoted fallback (e.g. A[Label])
+    // Check Rectangle shape: ["label"] or [label]
     if let Some(start) = without_class.find('[') {
         if let Some(end) = without_class.rfind(']') {
             let id = without_class[..start].trim().to_string();
-            let label = without_class[start + 1..end].to_string();
+            let mut label = without_class[start + 1..end].to_string();
+            if label.starts_with('"') && label.ends_with('"') && label.len() >= 2 {
+                label = label[1..label.len() - 1].to_string();
+            }
             upsert_node(nodes, id, label, MermaidShape::Rectangle, class_name);
             return;
         }
@@ -331,6 +352,33 @@ flowchart TD
         assert_eq!(m1.class_name.as_deref(), Some("run"));
 
         assert!(!diagram.stages.is_empty());
+    }
+
+    #[test]
+    fn test_parse_edge_labels_and_unquoted_shapes() {
+        let code = r#"
+graph TD
+    Start(Start Process) --> Decision{Is Authorized?}
+    Decision -->|Yes| DB[(Primary DB)]
+    Decision -->|No| Reject[Reject Request]
+"#;
+        let diagram = MermaidDiagram::parse(code);
+        let start = diagram.nodes.iter().find(|n| n.id == "Start").unwrap();
+        assert_eq!(start.shape, MermaidShape::Rounded);
+
+        let dec = diagram.nodes.iter().find(|n| n.id == "Decision").unwrap();
+        assert_eq!(dec.shape, MermaidShape::Diamond);
+
+        let db = diagram.nodes.iter().find(|n| n.id == "DB").unwrap();
+        assert_eq!(db.shape, MermaidShape::Database);
+
+        let yes_edge = diagram.edges.iter().find(|e| e.label.as_deref() == Some("Yes")).unwrap();
+        assert_eq!(yes_edge.from, vec!["Decision".to_string()]);
+        assert_eq!(yes_edge.to, vec!["DB".to_string()]);
+
+        let no_edge = diagram.edges.iter().find(|e| e.label.as_deref() == Some("No")).unwrap();
+        assert_eq!(no_edge.from, vec!["Decision".to_string()]);
+        assert_eq!(no_edge.to, vec!["Reject".to_string()]);
     }
 }
 

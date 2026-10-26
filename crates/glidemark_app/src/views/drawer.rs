@@ -216,7 +216,7 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     let color = if active { theme.accent } else { theme.text_muted };
-    let icon_el = svg().path(icon_path).size(px(13.)).text_color(color);
+    let icon_el = svg().path(icon_path).size(px(16.)).text_color(color);
 
     if active {
         base.bg(theme.surface)

@@ -51,6 +51,14 @@ impl Render for SettingsWindowView {
             window.appearance(),
             WindowAppearance::Dark | WindowAppearance::VibrantDark
         );
+        let effective_dark = match self.preferences.theme {
+            ThemeMode::Light => false,
+            ThemeMode::Dark => true,
+            ThemeMode::Auto => is_sys_dark,
+        };
+        if self.theme.is_dark != effective_dark {
+            self.theme = ThemeColors::resolve(&self.preferences.palette, effective_dark);
+        }
         let current_tab = self.current_tab;
         let current_mode = self.preferences.theme;
         let current_palette = self.preferences.palette.clone();
@@ -327,7 +335,7 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     let color = if active { theme.accent } else { theme.text_muted };
-    let icon = svg().path(icon_path).size(px(14.)).text_color(color);
+    let icon = svg().path(icon_path).size(px(18.)).text_color(color);
 
     if active {
         base.bg(theme.surface)

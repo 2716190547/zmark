@@ -91,7 +91,7 @@ pub fn render_editor_pane(
 
                     let row = div()
                         .flex()
-                        .items_center()
+                        .items_start()
                         .min_h(px(font_size * 1.5))
                         .px_1()
                         .rounded_sm()
@@ -113,6 +113,7 @@ pub fn render_editor_pane(
                         .child(
                             div()
                                 .w(px(36.))
+                                .flex_shrink_0()
                                 .mr_3()
                                 .text_right()
                                 .text_size(px(font_size * 0.85))
@@ -123,8 +124,7 @@ pub fn render_editor_pane(
                         .child(
                             div()
                                 .flex_1()
-                                .flex()
-                                .items_center()
+                                .min_w(px(0.))
                                 .text_size(px(font_size))
                                 .font_family("ui-monospace")
                                 .text_color(theme.text_primary)
@@ -136,6 +136,7 @@ pub fn render_editor_pane(
 
                                     div()
                                         .flex()
+                                        .flex_wrap()
                                         .items_center()
                                         .child(div().child(if before.is_empty() { String::new() } else { before }))
                                         .child(
