@@ -136,9 +136,9 @@ _Avoid_: In-window drawer, settings popup, config modal
 An edge-to-edge, full-height writing and preview canvas separated by delicate 1px hairlines and tonal background distinction, eliminating floating card gutters for immersive drafting.
 _Avoid_: Floating card, dashboard box, rounded tile
 
-**HIG White Squircle Icon**:
-An 824x824 pure white superellipse squircle with ~185px corner radius, downward ambient drop shadow, 0.5pt hairline border, and 100% transparent canvas corners in a 1024x1024 frame, strictly conforming to macOS Human Interface Guidelines to render as a single native tile and eliminate the system translucent gray Dock container.
-_Avoid_: Solid square bitmap, full-bleed unmasked icon, gray border tile
+**Icon Composer Architecture**:
+Apple's modern `.icon` bundle format combining manifest declarations (`icon.json`) with asset layers, compiled via `actool` into multi-layer `IconImageStack` assets in `Assets.car`. This provides native squircle fill and liquid material handling in macOS Tahoe without falling into legacy "Squircle Jail" gray tiles.
+_Avoid_: Flat bitmap iconset, unlayered png, squircle jail workaround
 
 **Bidirectional Drawer Animation**:
 A smooth 180ms ease-in-out transition animating the directory drawer both when expanding and when collapsing.
