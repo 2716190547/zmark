@@ -9,17 +9,15 @@ CANVAS_SIZE = 1024
 SS = 4
 SIZE = CANVAS_SIZE * SS
 
+# Pure transparent canvas across the entire 1024x1024 frame.
+# By making the icon transparent and outputting only the pure vector Z glyph,
+# macOS 27 Dock hosts the glyph directly on the native glass tile.
+# This eliminates any outer white card, border clipping, or gray tile mismatch.
 img = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
 
-# Full-bleed solid white canvas across the entire 1024x1024 frame.
-# By making the icon full bleed (zero outer transparency / zero inner card margin),
-# macOS LaunchServices / Dock applies its single native system squircle mask.
-# This completely eliminates the "double squircle / nested card" jail effect.
-img = Image.new('RGBA', (SIZE, SIZE), (255, 255, 255, 255))
-
-# 2. Z Glyph bounds centered inside full-bleed canvas
-# Glyph size: 560x560 at 1024x1024 (scaled by SS)
-glyph_size = int(560 * SS)
+# 2. Z Glyph bounds centered inside canvas
+# Glyph size: ~680x680 at 1024x1024 (scaled by SS) for bold, clear brand recognition
+glyph_size = int(680 * SS)
 gx0 = (SIZE - glyph_size) // 2
 gy0 = (SIZE - glyph_size) // 2
 gx1 = gx0 + glyph_size

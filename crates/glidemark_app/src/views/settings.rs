@@ -6,187 +6,227 @@ use glidemark_core::i18n::{I18nStrings, SupportedLocale};
 
 use crate::state::SettingsTab;
 use crate::theme::{ThemeColors, ALL_PALETTES};
+use crate::views::workspace::WorkspaceView;
 
-pub fn render_settings_modal(
-    current_tab: SettingsTab,
-    current_mode: ThemeMode,
-    current_palette: &str,
-    current_locale: SupportedLocale,
-    auto_save: bool,
-    auto_save_on_blur: bool,
-    tab_size: usize,
-    theme: &ThemeColors,
-    strings: &I18nStrings,
-    on_close: Arc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>,
-    on_set_tab: Arc<dyn Fn(SettingsTab, &mut Window, &mut App)>,
-    on_set_mode: Arc<dyn Fn(ThemeMode, &mut Window, &mut App)>,
-    on_set_palette: Arc<dyn Fn(&'static str, &mut Window, &mut App)>,
-    on_set_locale: Arc<dyn Fn(SupportedLocale, &mut Window, &mut App)>,
-    on_toggle_auto_save: Arc<dyn Fn(bool, &mut Window, &mut App)>,
-    on_toggle_auto_save_on_blur: Arc<dyn Fn(bool, &mut Window, &mut App)>,
-    on_set_tab_size: Arc<dyn Fn(usize, &mut Window, &mut App)>,
-) -> impl IntoElement {
-    let on_close_click = on_close.clone();
+pub struct SettingsWindowView {
+    pub workspace: Entity<WorkspaceView>,
+}
 
-    // Modal Backdrop
-    div()
-        .absolute()
-        .inset_0()
-        .bg(hsla(0.0, 0.0, 0.0, 0.45))
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(
-            // Dialog Container
-            div()
-                .w(px(640.))
-                .h(px(460.))
-                .bg(theme.surface)
-                .border_1()
-                .border_color(theme.border)
-                .rounded_xl()
-                .shadow_lg()
-                .overflow_hidden()
-                .flex()
-                .flex_col()
-                .child(
-                    // Dialog Header
-                    div()
-                        .h(px(44.))
-                        .px_4()
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .bg(theme.bg)
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.text_primary)
-                                .child(strings.settings),
-                        )
-                        .child(
-                            div()
-                                .w(px(24.))
-                                .h(px(24.))
-                                .rounded_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_color(theme.text_muted)
-                                .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
-                                .cursor_pointer()
-                                .on_mouse_down(MouseButton::Left, move |e, window, cx| {
-                                    on_close_click(e, window, cx);
-                                })
-                                .child("✕"),
-                        ),
-                )
-                // Split Two-Column Body
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h(px(0.))
-                        .flex()
-                        // Left Sidebar Navigation
-                        .child(
-                            div()
-                                .w(px(160.))
-                                .h_full()
-                                .border_r_1()
-                                .border_color(theme.border)
-                                .bg(theme.bg)
-                                .p_2()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .child(render_nav_item(
-                                    strings.appearance,
-                                    "icons/palette.svg",
-                                    current_tab == SettingsTab::Appearance,
-                                    theme,
-                                    {
-                                        let t = on_set_tab.clone();
-                                        move |_, window, cx| t(SettingsTab::Appearance, window, cx)
-                                    },
-                                ))
-                                .child(render_nav_item(
-                                    strings.editor_and_save,
-                                    "icons/save.svg",
-                                    current_tab == SettingsTab::EditorSave,
-                                    theme,
-                                    {
-                                        let t = on_set_tab.clone();
-                                        move |_, window, cx| t(SettingsTab::EditorSave, window, cx)
-                                    },
-                                ))
-                                .child(render_nav_item(
-                                    strings.language,
-                                    "icons/languages.svg",
-                                    current_tab == SettingsTab::Language,
-                                    theme,
-                                    {
-                                        let t = on_set_tab.clone();
-                                        move |_, window, cx| t(SettingsTab::Language, window, cx)
-                                    },
-                                ))
-                                .child(render_nav_item(
-                                    strings.about,
-                                    "icons/info.svg",
-                                    current_tab == SettingsTab::About,
-                                    theme,
-                                    {
-                                        let t = on_set_tab.clone();
-                                        move |_, window, cx| t(SettingsTab::About, window, cx)
-                                    },
-                                )),
-                        )
-                        // Right Content Panel
-                        .child(
-                            div()
-                                .id("settings_content_scroll")
-                                .flex_1()
-                                .h_full()
-                                .p_5()
-                                .overflow_y_scroll()
-                                .child(match current_tab {
-                                    SettingsTab::Appearance => render_appearance_tab(
-                                        current_mode,
-                                        current_palette,
-                                        theme,
-                                        strings,
-                                        on_set_mode,
-                                        on_set_palette,
-                                    )
-                                    .into_any_element(),
-                                    SettingsTab::EditorSave => render_editor_save_tab(
-                                        auto_save,
-                                        auto_save_on_blur,
-                                        tab_size,
-                                        theme,
-                                        strings,
-                                        on_toggle_auto_save,
-                                        on_toggle_auto_save_on_blur,
-                                        on_set_tab_size,
-                                    )
-                                    .into_any_element(),
-                                    SettingsTab::Language => render_language_tab(
-                                        current_locale,
-                                        theme,
-                                        on_set_locale,
-                                    )
-                                    .into_any_element(),
-                                    SettingsTab::About => render_about_tab(
-                                        theme,
-                                        strings,
-                                    )
-                                    .into_any_element(),
-                                }),
-                        ),
-                ),
-        )
+impl SettingsWindowView {
+    pub fn new(workspace: Entity<WorkspaceView>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&workspace, |_, _, cx| {
+            cx.notify();
+        })
+        .detach();
+        Self { workspace }
+    }
+}
+
+impl Render for SettingsWindowView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _is_sys_dark = matches!(
+            window.appearance(),
+            WindowAppearance::Dark | WindowAppearance::VibrantDark
+        );
+
+        let ws = self.workspace.read(cx);
+        let current_tab = ws.state.settings_tab;
+        let current_mode = ws.state.preferences.theme;
+        let current_palette = ws.state.preferences.palette.clone();
+        let current_locale = ws.state.preferences.locale;
+        let auto_save = ws.state.preferences.auto_save;
+        let auto_save_on_blur = ws.state.preferences.auto_save_on_blur;
+        let tab_size = ws.state.preferences.tab_size;
+        let theme = ws.state.theme.clone();
+        let strings = ws.state.strings;
+
+        let ws_tab = self.workspace.clone();
+        let on_set_tab = Arc::new(move |tab, _window: &mut Window, cx: &mut App| {
+            ws_tab.update(cx, |this, cx| {
+                this.state.set_settings_tab(tab);
+                cx.notify();
+            });
+        });
+
+        let ws_mode = self.workspace.clone();
+        let on_set_mode = Arc::new(move |mode, _window: &mut Window, cx: &mut App| {
+            ws_mode.update(cx, |this, cx| {
+                this.state.set_theme_mode(mode);
+                cx.notify();
+            });
+        });
+
+        let ws_pal = self.workspace.clone();
+        let on_set_palette = Arc::new(move |palette: &'static str, _window: &mut Window, cx: &mut App| {
+            ws_pal.update(cx, |this, cx| {
+                this.state.set_palette(palette);
+                cx.notify();
+            });
+        });
+
+        let ws_loc = self.workspace.clone();
+        let on_set_locale = Arc::new(move |locale, _window: &mut Window, cx: &mut App| {
+            ws_loc.update(cx, |this, cx| {
+                this.state.set_locale(locale);
+                cx.notify();
+            });
+        });
+
+        let ws_as = self.workspace.clone();
+        let on_toggle_auto_save = Arc::new(move |enabled, _window: &mut Window, cx: &mut App| {
+            ws_as.update(cx, |this, cx| {
+                this.state.set_auto_save(enabled);
+                cx.notify();
+            });
+        });
+
+        let ws_asb = self.workspace.clone();
+        let on_toggle_auto_save_on_blur = Arc::new(move |enabled, _window: &mut Window, cx: &mut App| {
+            ws_asb.update(cx, |this, cx| {
+                this.state.set_auto_save_on_blur(enabled);
+                cx.notify();
+            });
+        });
+
+        let ws_ts = self.workspace.clone();
+        let on_set_tab_size = Arc::new(move |tab_size, _window: &mut Window, cx: &mut App| {
+            ws_ts.update(cx, |this, cx| {
+                this.state.set_tab_size(tab_size);
+                cx.notify();
+            });
+        });
+
+        div()
+            .size_full()
+            .bg(theme.bg)
+            .text_color(theme.text_primary)
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            // Top Window Title Bar with traffic-lights safe insets
+            .child(
+                div()
+                    .h(px(44.))
+                    .pl(px(80.))
+                    .pr_4()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .bg(theme.bg)
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text_primary)
+                            .child(strings.settings),
+                    ),
+            )
+            // Two-column Split Body
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .flex()
+                    // Left Sidebar Navigation
+                    .child(
+                        div()
+                            .w(px(160.))
+                            .h_full()
+                            .border_r_1()
+                            .border_color(theme.border)
+                            .bg(theme.bg)
+                            .p_2()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(render_nav_item(
+                                strings.appearance,
+                                "icons/palette.svg",
+                                current_tab == SettingsTab::Appearance,
+                                &theme,
+                                {
+                                    let t = on_set_tab.clone();
+                                    move |_, window, cx| t(SettingsTab::Appearance, window, cx)
+                                },
+                            ))
+                            .child(render_nav_item(
+                                strings.editor_and_save,
+                                "icons/save.svg",
+                                current_tab == SettingsTab::EditorSave,
+                                &theme,
+                                {
+                                    let t = on_set_tab.clone();
+                                    move |_, window, cx| t(SettingsTab::EditorSave, window, cx)
+                                },
+                            ))
+                            .child(render_nav_item(
+                                strings.language,
+                                "icons/languages.svg",
+                                current_tab == SettingsTab::Language,
+                                &theme,
+                                {
+                                    let t = on_set_tab.clone();
+                                    move |_, window, cx| t(SettingsTab::Language, window, cx)
+                                },
+                            ))
+                            .child(render_nav_item(
+                                strings.about,
+                                "icons/info.svg",
+                                current_tab == SettingsTab::About,
+                                &theme,
+                                {
+                                    let t = on_set_tab.clone();
+                                    move |_, window, cx| t(SettingsTab::About, window, cx)
+                                },
+                            )),
+                    )
+                    // Right Content Panel
+                    .child(
+                        div()
+                            .id("settings_content_scroll")
+                            .flex_1()
+                            .h_full()
+                            .p_5()
+                            .bg(theme.surface)
+                            .overflow_y_scroll()
+                            .child(match current_tab {
+                                SettingsTab::Appearance => render_appearance_tab(
+                                    current_mode,
+                                    &current_palette,
+                                    &theme,
+                                    strings,
+                                    on_set_mode,
+                                    on_set_palette,
+                                )
+                                .into_any_element(),
+                                SettingsTab::EditorSave => render_editor_save_tab(
+                                    auto_save,
+                                    auto_save_on_blur,
+                                    tab_size,
+                                    &theme,
+                                    strings,
+                                    on_toggle_auto_save,
+                                    on_toggle_auto_save_on_blur,
+                                    on_set_tab_size,
+                                )
+                                .into_any_element(),
+                                SettingsTab::Language => render_language_tab(
+                                    current_locale,
+                                    &theme,
+                                    on_set_locale,
+                                )
+                                .into_any_element(),
+                                SettingsTab::About => render_about_tab(
+                                    &theme,
+                                    strings,
+                                )
+                                .into_any_element(),
+                            }),
+                    ),
+            )
+    }
 }
 
 fn render_nav_item<F>(

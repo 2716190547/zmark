@@ -10,7 +10,7 @@ use crate::state::{AppState, ViewMode};
 use crate::views::drawer::render_drawer;
 use crate::views::editor::render_editor_pane;
 use crate::views::preview::render_preview_pane;
-use crate::views::settings::render_settings_modal;
+use crate::views::settings::SettingsWindowView;
 
 pub struct WorkspaceView {
     pub state: AppState,
@@ -24,6 +24,7 @@ pub struct WorkspaceView {
     pub rename_buffer: String,
     pub workspace_width: f32,
     pub auto_save_task: Option<Task<()>>,
+    pub settings_window: Option<WindowHandle<SettingsWindowView>>,
 }
 
 impl WorkspaceView {
@@ -40,6 +41,39 @@ impl WorkspaceView {
             rename_buffer: String::new(),
             workspace_width: 1200.0,
             auto_save_task: None,
+            settings_window: None,
+        }
+    }
+
+    pub fn open_settings_window(&mut self, cx: &mut Context<Self>) {
+        if let Some(existing) = &self.settings_window {
+            if existing
+                .update(cx, |_, window, _| {
+                    window.activate_window();
+                })
+                .is_ok()
+            {
+                return;
+            }
+        }
+        let workspace = cx.entity().clone();
+        let bounds = Bounds::centered(None, size(px(640.), px(460.)), cx);
+        let handle = cx.open_window(
+            WindowOptions {
+                titlebar: Some(TitlebarOptions {
+                    title: Some("GlideMark - 设置".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(12.), px(12.))),
+                }),
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            },
+            |_window, cx| {
+                cx.new(|cx| SettingsWindowView::new(workspace, cx))
+            },
+        );
+        if let Ok(h) = handle {
+            self.settings_window = Some(h);
         }
     }
 
@@ -128,70 +162,6 @@ impl Render for WorkspaceView {
             });
         });
 
-        let view_close = cx.entity().clone();
-        let on_close_settings = Arc::new(move |_: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
-            view_close.update(cx, |this, cx| {
-                this.state.settings_open = false;
-                cx.notify();
-            });
-        });
-
-        let view_mode_setter = cx.entity().clone();
-        let on_set_mode = Arc::new(move |mode, _window: &mut Window, cx: &mut App| {
-            view_mode_setter.update(cx, |this, cx| {
-                this.state.set_theme_mode(mode);
-                cx.notify();
-            });
-        });
-
-        let view_pal_setter = cx.entity().clone();
-        let on_set_palette = Arc::new(move |palette: &'static str, _window: &mut Window, cx: &mut App| {
-            view_pal_setter.update(cx, |this, cx| {
-                this.state.set_palette(palette);
-                cx.notify();
-            });
-        });
-
-        let view_loc_setter = cx.entity().clone();
-        let on_set_locale = Arc::new(move |locale, _window: &mut Window, cx: &mut App| {
-            view_loc_setter.update(cx, |this, cx| {
-                this.state.set_locale(locale);
-                cx.notify();
-            });
-        });
-
-        let view_tab_setter = cx.entity().clone();
-        let on_set_settings_tab = Arc::new(move |tab: crate::state::SettingsTab, _window: &mut Window, cx: &mut App| {
-            view_tab_setter.update(cx, |this, cx| {
-                this.state.set_settings_tab(tab);
-                cx.notify();
-            });
-        });
-
-        let view_as_setter = cx.entity().clone();
-        let on_toggle_auto_save = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
-            view_as_setter.update(cx, |this, cx| {
-                this.state.set_auto_save(enabled);
-                cx.notify();
-            });
-        });
-
-        let view_asb_setter = cx.entity().clone();
-        let on_toggle_auto_save_on_blur = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
-            view_asb_setter.update(cx, |this, cx| {
-                this.state.set_auto_save_on_blur(enabled);
-                cx.notify();
-            });
-        });
-
-        let view_ts_setter = cx.entity().clone();
-        let on_set_tab_size = Arc::new(move |tab_size: usize, _window: &mut Window, cx: &mut App| {
-            view_ts_setter.update(cx, |this, cx| {
-                this.state.set_tab_size(tab_size);
-                cx.notify();
-            });
-        });
-
         div()
             .key_context("Workspace")
             .track_focus(&self.focus_handle)
@@ -244,8 +214,7 @@ impl Render for WorkspaceView {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleSettings, _window, cx| {
-                this.state.toggle_settings();
-                cx.notify();
+                this.open_settings_window(cx);
             }))
             .on_action(cx.listener(|_this, _: &OpenFileDialog, _window, cx| {
                 cx.spawn(async move |this, app| {
@@ -275,14 +244,6 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                if this.state.settings_open {
-                    if event.keystroke.key == "escape" {
-                        this.state.settings_open = false;
-                        cx.notify();
-                    }
-                    return;
-                }
-
                 if this.is_renaming {
                     match event.keystroke.key.as_str() {
                         "enter" => {
@@ -362,8 +323,7 @@ impl Render for WorkspaceView {
                             .detach();
                         }
                         "," => {
-                            this.state.toggle_settings();
-                            cx.notify();
+                            this.open_settings_window(cx);
                         }
                         "b" => {
                             this.state.toggle_drawer();
@@ -654,10 +614,9 @@ impl Render for WorkspaceView {
                                 format!("{} (⌘,)", strings.settings),
                                 self.state.settings_open,
                                 theme,
-                                render_settings_icon(if self.state.settings_open { theme.accent } else { theme.text_muted }),
+                                render_settings_icon(theme.text_muted),
                                 cx.listener(|this, _, _window, cx| {
-                                    this.state.toggle_settings();
-                                    cx.notify();
+                                    this.open_settings_window(cx);
                                 }),
                             )),
                     ),
@@ -724,7 +683,7 @@ impl Render for WorkspaceView {
                         ),
                 )
             })
-            // Main workspace content layout
+            // Main workspace content layout with elevated floating cards
             .child(
                 div()
                     .flex_1()
@@ -732,24 +691,36 @@ impl Render for WorkspaceView {
                     .min_w(px(0.))
                     .flex()
                     .overflow_hidden()
+                    .px(px(8.))
+                    .pb(px(8.))
+                    .gap(px(8.))
                     .when(self.state.drawer_open, |body| {
                         body.child(
                             div()
                                 .id("animated_drawer_wrapper")
                                 .h_full()
                                 .overflow_hidden()
-                                .child(render_drawer(
-                                    self.state.drawer_tab,
-                                    &self.state.sibling_files,
-                                    self.state.doc.path.as_ref(),
-                                    &self.state.doc.parsed.headings(),
-                                    theme,
-                                    strings,
-                                    &self.drawer_scroll_handle,
-                                    on_select_tab,
-                                    on_select_file,
-                                    on_select_heading,
-                                ))
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .rounded_xl()
+                                        .border_1()
+                                        .border_color(theme.border)
+                                        .bg(theme.surface)
+                                        .overflow_hidden()
+                                        .child(render_drawer(
+                                            self.state.drawer_tab,
+                                            &self.state.sibling_files,
+                                            self.state.doc.path.as_ref(),
+                                            &self.state.doc.parsed.headings(),
+                                            theme,
+                                            strings,
+                                            &self.drawer_scroll_handle,
+                                            on_select_tab,
+                                            on_select_file,
+                                            on_select_heading,
+                                        )),
+                                )
                                 .with_animation(
                                     "drawer_slide_in",
                                     Animation::new(std::time::Duration::from_millis(180)).with_easing(ease_in_out),
@@ -767,6 +738,10 @@ impl Render for WorkspaceView {
                             .h_full()
                             .flex()
                             .flex_col()
+                            .rounded_xl()
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.surface)
                             .overflow_hidden()
                             .child(render_editor_pane(
                                 &self.state.editor.lines,
@@ -786,6 +761,10 @@ impl Render for WorkspaceView {
                             .h_full()
                             .flex()
                             .flex_col()
+                            .rounded_xl()
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.surface)
                             .overflow_hidden()
                             .child(render_preview_pane(
                                 &self.state.doc.parsed,
@@ -804,6 +783,7 @@ impl Render for WorkspaceView {
                             .flex()
                             .overflow_hidden()
                             .child(
+                                // Left Editor Card
                                 div()
                                     .w(relative(self.split_ratio))
                                     .min_w(px(0.))
@@ -811,6 +791,10 @@ impl Render for WorkspaceView {
                                     .h_full()
                                     .flex()
                                     .flex_col()
+                                    .rounded_xl()
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .bg(theme.surface)
                                     .overflow_hidden()
                                     .child(render_editor_pane(
                                         &self.state.editor.lines,
@@ -823,16 +807,15 @@ impl Render for WorkspaceView {
                                         on_click_line,
                                     )),
                             )
-                            // Draggable resizable divider: 5px hit area with delicate hairline center
+                            // Draggable resizable divider: 8px breathable gap with delicate pill center
                             .child(
                                 div()
-                                    .w(px(5.))
+                                    .w(px(8.))
                                     .h_full()
                                     .flex()
                                     .justify_center()
                                     .items_center()
                                     .cursor_col_resize()
-                                    .hover(|s| s.bg(theme.surface))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, event: &MouseDownEvent, _window, cx| {
@@ -844,8 +827,15 @@ impl Render for WorkspaceView {
                                             }
                                         }),
                                     )
-                                    .child(div().w(px(1.)).h_full().bg(theme.border.opacity(0.35))),
+                                    .child(
+                                        div()
+                                            .w(px(3.))
+                                            .h(px(36.))
+                                            .rounded_full()
+                                            .bg(theme.border),
+                                    ),
                             )
+                            // Right Preview Card
                             .child(
                                 div()
                                     .w(relative(1.0 - self.split_ratio))
@@ -854,6 +844,10 @@ impl Render for WorkspaceView {
                                     .h_full()
                                     .flex()
                                     .flex_col()
+                                    .rounded_xl()
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .bg(theme.surface)
                                     .overflow_hidden()
                                     .child(render_preview_pane(
                                         &self.state.doc.parsed,
@@ -867,37 +861,6 @@ impl Render for WorkspaceView {
                             .into_any_element(),
                     }),
             )
-            // Settings Modal
-            .when(self.state.settings_open, |body| {
-                body.child(
-                    div()
-                        .id("animated_settings_modal")
-                        .child(render_settings_modal(
-                            self.state.settings_tab,
-                            self.state.preferences.theme,
-                            &self.state.preferences.palette,
-                            self.state.preferences.locale,
-                            self.state.preferences.auto_save,
-                            self.state.preferences.auto_save_on_blur,
-                            self.state.preferences.tab_size,
-                            theme,
-                            strings,
-                            on_close_settings,
-                            on_set_settings_tab,
-                            on_set_mode,
-                            on_set_palette,
-                            on_set_locale,
-                            on_toggle_auto_save,
-                            on_toggle_auto_save_on_blur,
-                            on_set_tab_size,
-                        ))
-                        .with_animation(
-                            "settings_fade_in",
-                            Animation::new(std::time::Duration::from_millis(150)).with_easing(ease_in_out),
-                            |el, delta| el.opacity(delta.clamp(0.0, 1.0)),
-                        ),
-                )
-            })
     }
 }
 

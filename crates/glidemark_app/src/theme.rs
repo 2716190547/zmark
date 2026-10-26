@@ -57,13 +57,13 @@ impl ThemeColors {
                 id: "default",
                 name: "Default",
                 is_dark: true,
-                bg: rgb(0x18181a).into(),
-                surface: rgb(0x222226).into(),
-                border: rgb(0x2e2e33).into(),
+                bg: rgb(0x131315).into(),
+                surface: rgb(0x1e1e22).into(),
+                border: rgb(0x2d2d32).into(),
                 text_primary: rgb(0xf4f4f5).into(),
                 text_muted: rgb(0x8a8a93).into(),
                 accent: rgb(0xe26543).into(), // Warm terracotta matching logo
-                code_bg: rgb(0x202024).into(),
+                code_bg: rgb(0x25252a).into(),
                 conflict_bg: rgb(0x382218).into(),
                 conflict_border: rgb(0x5e3322).into(),
             }
@@ -72,13 +72,13 @@ impl ThemeColors {
                 id: "default",
                 name: "Default",
                 is_dark: false,
-                bg: rgb(0xffffff).into(),
-                surface: rgb(0xfafaf9).into(),
-                border: rgb(0xededed).into(), // Delicate hairline
+                bg: rgb(0xf4f4f6).into(),      // Soft mist-gray window canvas
+                surface: rgb(0xffffff).into(), // Crisp pure white elevated card
+                border: rgb(0xe5e5ea).into(),  // Delicate hairline card edge
                 text_primary: rgb(0x1f2328).into(),
                 text_muted: rgb(0x71717a).into(),
-                accent: rgb(0xd9532f).into(), // Warm Terracotta Coral matching Logo
-                code_bg: rgb(0xf4f4f5).into(),
+                accent: rgb(0xd9532f).into(),  // Warm Terracotta Coral matching Logo
+                code_bg: rgb(0xefeff2).into(),
                 conflict_bg: rgb(0xfef2f2).into(),
                 conflict_border: rgb(0xfecaca).into(),
             }
@@ -140,9 +140,9 @@ impl ThemeColors {
                 id: "macos",
                 name: "macOS Vibrant",
                 is_dark: false,
-                bg: rgb(0xffffff).into(),
-                surface: rgb(0xf5f5f7).into(),
-                border: rgb(0xe5e5ea).into(),
+                bg: rgb(0xeeeeef).into(),
+                surface: rgb(0xffffff).into(),
+                border: rgb(0xdcdce0).into(),
                 text_primary: rgb(0x1d1d1f).into(),
                 text_muted: rgb(0x86868b).into(),
                 accent: rgb(0x0071e3).into(),
@@ -242,8 +242,8 @@ impl ThemeColors {
                 id: "github",
                 name: "GitHub Modern",
                 is_dark: false,
-                bg: rgb(0xffffff).into(),
-                surface: rgb(0xf6f8fa).into(),
+                bg: rgb(0xf4f6f8).into(),
+                surface: rgb(0xffffff).into(),
                 border: rgb(0xd0d7de).into(),
                 text_primary: rgb(0x1f2328).into(),
                 text_muted: rgb(0x656d76).into(),

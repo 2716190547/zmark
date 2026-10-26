@@ -106,6 +106,17 @@
 - **分栏排版设置面板 (Split Settings Modal)**：
   - 将设置面板重构为专业的左侧分类导航（外观主题、编辑与保存、界面语言、关于）与右侧内容卡片视图，并在所有 10 种语言中完成完整本地化。
 
+### 15. 原生独立设置窗口、悬浮圆角工作卡片分层与透明矢量 Dock 图标 (ADR 0011)
+- **原生独立设置窗口 (`SettingsWindowView`)**：
+  - 彻底抛弃主工作区内部的遮罩覆盖模态，按 `⌘,` 或点击齿轮时通过 GPUI 原生 `open_window` 打开专属 640x460 居中独立视窗，具有原生红黄绿灯、独立生命周期与标题栏。
+  - 通过 `Entity<WorkspaceView>` 建立双向响应式桥梁，在设置视窗更改配色或语言时，主编辑器窗口毫秒级实时重绘。
+- **悬浮圆角工作卡片架构 (Elevated Rounded Cards)**：
+  - 彻底打破平铺纯白墙面的单调感：底板采用克制的高级微浅雾灰（`#F4F4F6`，暗色为 `#131315`）；
+  - 目录抽屉、源码编辑器、阅读预览区分别重构为**独立的悬浮圆角工作卡片**（`rounded_xl` 12px 圆角、`bg(#FFFFFF)`、`border_1()` 微发丝边线、`overflow_hidden()`），区块分层一目了然；
+  - 分屏调节条重构为 8px 呼吸间隙内的同心胶囊手柄，呈现极致现代的 macOS 质感。
+- **纯透明背景矢量 Z 造型图标 (Transparent Dock Glyph)**：
+  - 移除 `generate_icon.py` 中一切白色多余方块，输出纯透明背景矢量渐变 Z 字；macOS 27 直接将 Z 字投射在系统统一毛玻璃底座上，彻底解决白底缩放外露灰色底座边缘的瑕疵。
+
 ---
 
 ## 三、 代码仓库架构与文件目录速查
@@ -128,7 +139,8 @@ GlideMark/
 │       ├── 0007-miaoyan-palette-borderless-toolbar-and-flex-scroll-fix.md
 │       ├── 0008-native-mermaid-outline-navigation-and-asset-catalog.md
 │       ├── 0009-tooltips-borderless-minimalism-rename-fix-and-animations.md
-│       └── 0010-dock-full-bleed-icon-minimal-segmented-control-auto-save-split-settings.md
+│       ├── 0010-dock-full-bleed-icon-minimal-segmented-control-auto-save-split-settings.md
+│       └── 0011-native-settings-window-elevated-rounded-cards-and-transparent-dock-glyph.md
 ├── assets/
 │   ├── AppIcon.icns                           # macOS 图标文件
 │   ├── Assets.car                             # actool 编译的现代 macOS 资产目录

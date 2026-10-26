@@ -93,6 +93,7 @@ impl AppState {
         self.drawer_tab = tab;
     }
 
+    #[allow(dead_code)]
     pub fn toggle_settings(&mut self) {
         self.settings_open = !self.settings_open;
     }

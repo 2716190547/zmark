@@ -128,4 +128,17 @@ _Avoid_: Auto sync, periodic save, timer poll
 A two-column preferences dialog organizing configuration domains into a left category navigation sidebar (Appearance, Editor & Save, Language, About) and a right card panel.
 _Avoid_: Settings page, preferences window, config popover
 
+**Settings Window**:
+A standalone, dedicated native macOS window opened via `open_window` to manage application preferences independently of the main editing session.
+_Avoid_: Settings modal, config popup, preferences sheet
+
+**Elevated Card**:
+A discrete rounded-rectangle container (`rounded_xl` / 12px radius) elevated atop a recessed canvas (`#F4F4F6`), organizing editor and preview panes into tactile, breathable workspaces.
+_Avoid_: Box, panel, column wrapper
+
+**Transparent Dock Glyph**:
+A pure vector brand mark rendered directly on a transparent canvas without an enclosing card, allowing macOS Dock materials to host the glyph natively.
+_Avoid_: Framed icon, square logo, box tile
+
+
 
