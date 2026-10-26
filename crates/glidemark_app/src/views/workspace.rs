@@ -804,6 +804,7 @@ impl Render for WorkspaceView {
                                     .into_any_element(),
                                 ViewMode::Preview => div()
                                     .size_full()
+                                    .min_w(px(0.))
                                     .child(render_preview_pane(
                                         &self.state.doc.parsed,
                                         theme,

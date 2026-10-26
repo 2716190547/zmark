@@ -380,5 +380,37 @@ graph TD
         assert_eq!(no_edge.from, vec!["Decision".to_string()]);
         assert_eq!(no_edge.to, vec!["Reject".to_string()]);
     }
+
+    #[test]
+    fn test_render_mermaid_to_svg() {
+        let code = r#"
+graph TD
+    Start(Start Process) --> Decision{Is Authorized?}
+    Decision -->|Yes| DB[(Primary DB)]
+    Decision -->|No| Reject[Reject Request]
+"#;
+        let svg = render_to_svg(code).expect("should render svg");
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("</svg>"));
+
+        let dark_svg = render_to_svg_themed(code, true).expect("should render dark svg");
+        assert!(dark_svg.contains("<svg"));
+    }
+}
+
+/// Renders a Mermaid diagram source to a standard, high-quality SVG vector graphic.
+pub fn render_to_svg(code: &str) -> Result<String, String> {
+    render_to_svg_themed(code, false)
+}
+
+/// Renders a Mermaid diagram source to SVG tailored for light or dark backgrounds.
+pub fn render_to_svg_themed(code: &str, is_dark: bool) -> Result<String, String> {
+    let mut opts = mermaid_rs_renderer::RenderOptions::default();
+    opts.theme = if is_dark {
+        mermaid_rs_renderer::Theme::dark()
+    } else {
+        mermaid_rs_renderer::Theme::modern()
+    };
+    mermaid_rs_renderer::render_with_options(code, opts).map_err(|e| format!("{:?}", e))
 }
 

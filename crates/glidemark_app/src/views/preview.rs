@@ -14,6 +14,8 @@ pub fn render_preview_pane(
 ) -> impl IntoElement {
     div()
         .flex_1()
+        .w_full()
+        .min_w(px(0.))
         .min_h(px(0.))
         .h_full()
         .flex()
@@ -48,13 +50,17 @@ pub fn render_preview_pane(
                 .id("preview_scroll_container")
                 .track_scroll(scroll_handle)
                 .flex_1()
+                .w_full()
+                .min_w(px(0.))
                 .min_h(px(0.))
                 .overflow_y_scroll()
+                .overflow_x_hidden()
                 .px_8()
                 .py_6()
                 .child(
                     div()
                         .w_full()
+                        .min_w(px(0.))
                         .flex()
                         .flex_col()
                         .gap_4()
@@ -83,32 +89,28 @@ fn render_block_element(
             };
 
             let mut el = div()
+                .w_full()
+                .min_w(px(0.))
                 .text_size(px(base_font_size * size_mult))
                 .font_weight(FontWeight::BOLD)
                 .text_color(theme.text_primary)
                 .pt_3()
-                .pb_1()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap_1();
+                .pb_1();
 
             if border_bottom {
                 el = el.border_b_1().border_color(theme.border);
             }
 
-            el.children(render_inline_elements(content, theme, base_font_size * size_mult))
+            el.child(render_styled_inlines(content, theme, base_font_size * size_mult))
                 .into_any_element()
         }
         BlockElement::Paragraph(content) => div()
             .w_full()
+            .min_w(px(0.))
             .text_size(px(base_font_size))
             .line_height(relative(1.75))
             .text_color(theme.text_primary)
-            .flex()
-            .flex_wrap()
-            .items_baseline()
-            .children(render_inline_elements(content, theme, base_font_size))
+            .child(render_styled_inlines(content, theme, base_font_size))
             .into_any_element(),
         BlockElement::FencedCode { lang, code } => {
             if lang.as_deref() == Some("mermaid") {
@@ -119,6 +121,7 @@ fn render_block_element(
         }
         BlockElement::BlockQuote(blocks) => div()
             .w_full()
+            .min_w(px(0.))
             .border_l_4()
             .border_color(theme.accent)
             .bg(theme.surface)
@@ -135,11 +138,14 @@ fn render_block_element(
             .into_any_element(),
         BlockElement::List { ordered, items } => div()
             .w_full()
+            .min_w(px(0.))
             .flex()
             .flex_col()
-            .gap_1()
+            .gap_1p5()
             .children(items.iter().enumerate().map(|(idx, item)| {
                 div()
+                    .w_full()
+                    .min_w(px(0.))
                     .flex()
                     .items_start()
                     .gap_2()
@@ -156,46 +162,47 @@ fn render_block_element(
                             .items_center()
                             .justify_center()
                             .child(if checked {
-                                div()
-                                    .text_size(px(10.))
+                                svg()
+                                    .path("icons/check.svg")
+                                    .size(px(9.))
                                     .text_color(rgb(0xffffff))
-                                    .child("✓")
+                                    .into_any_element()
                             } else {
-                                div().child("")
+                                div().into_any_element()
                             })
                     } else if *ordered {
                         div()
+                            .flex_shrink_0()
+                            .w(px(20.))
+                            .text_right()
                             .text_size(px(base_font_size))
                             .font_family("ui-monospace")
                             .text_color(theme.text_muted)
                             .child(format!("{}.", idx + 1))
                     } else {
                         div()
+                            .flex_shrink_0()
+                            .w(px(12.))
+                            .text_center()
                             .text_size(px(base_font_size))
                             .text_color(theme.accent)
-                            .child("•")
+                            .child("–")
                     })
                     .child(
                         div()
                             .flex_1()
+                            .min_w(px(0.))
                             .text_size(px(base_font_size))
                             .line_height(relative(1.6))
                             .text_color(theme.text_primary)
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap_1()
-                            .children(render_inline_elements(
-                                &item.content,
-                                theme,
-                                base_font_size,
-                            )),
+                            .child(render_styled_inlines(&item.content, theme, base_font_size)),
                     )
             }))
             .into_any_element(),
         BlockElement::Table { headers, rows } => div()
             .id("preview_table_scroll")
             .w_full()
+            .min_w(px(0.))
             .overflow_x_scroll()
             .my_2()
             .child(
@@ -222,10 +229,7 @@ fn render_block_element(
                                     .font_weight(FontWeight::BOLD)
                                     .text_size(px(base_font_size * 0.95))
                                     .text_color(theme.text_primary)
-                                    .flex()
-                                    .flex_wrap()
-                                    .items_center()
-                                    .children(render_inline_elements(h, theme, base_font_size * 0.95))
+                                    .child(render_styled_inlines(h, theme, base_font_size * 0.95))
                             })),
                     )
                     .children(rows.iter().map(|row| {
@@ -240,10 +244,7 @@ fn render_block_element(
                                     .p_3()
                                     .text_size(px(base_font_size * 0.95))
                                     .text_color(theme.text_primary)
-                                    .flex()
-                                    .flex_wrap()
-                                    .items_center()
-                                    .children(render_inline_elements(cell, theme, base_font_size * 0.95))
+                                    .child(render_styled_inlines(cell, theme, base_font_size * 0.95))
                             }))
                     })),
             )
@@ -257,371 +258,210 @@ fn render_block_element(
     }
 }
 
-fn render_inline_elements(
+fn render_styled_inlines(
     group: &InlineGroup,
     theme: &ThemeColors,
     font_size: f32,
-) -> Vec<AnyElement> {
-    group
-        .0
-        .iter()
-        .map(|item| match item {
-            InlineItem::Text(s) => div().text_size(px(font_size)).child(s.clone()).into_any_element(),
-            InlineItem::Bold(s) => div()
-                .text_size(px(font_size))
-                .font_weight(FontWeight::BOLD)
-                .child(s.clone())
-                .into_any_element(),
-            InlineItem::Italic(s) => div()
-                .text_size(px(font_size))
-                .child(s.clone())
-                .into_any_element(),
-            InlineItem::Strikethrough(s) => div()
-                .text_size(px(font_size))
-                .line_through()
-                .text_color(theme.text_muted)
-                .child(s.clone())
-                .into_any_element(),
-            InlineItem::Code(s) => div()
-                .px_1p5()
-                .py_0p5()
-                .rounded_sm()
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.code_bg)
-                .font_family("ui-monospace")
-                .text_size(px(font_size * 0.88))
-                .text_color(theme.accent)
-                .child(s.clone())
-                .into_any_element(),
-            InlineItem::Link { text, url: _, title: _ } => div()
-                .text_size(px(font_size))
-                .text_color(theme.accent)
-                .underline()
-                .cursor_pointer()
-                .child(text.clone())
-                .into_any_element(),
-            InlineItem::Image { alt, url, title: _ } => div()
-                .p_2()
-                .rounded_md()
+) -> AnyElement {
+    let has_image = group.0.iter().any(|item| matches!(item, InlineItem::Image { .. }));
+    if has_image {
+        return div()
+            .w_full()
+            .min_w(px(0.))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .children(group.0.iter().map(|item| match item {
+                InlineItem::Image { alt, url, .. } => div()
+                    .w_full()
+                    .min_w(px(0.))
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.bg)
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        svg()
+                            .path("icons/image.svg")
+                            .size(px(18.))
+                            .text_color(theme.text_muted),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .text_sm()
+                            .text_color(theme.text_muted)
+                            .child(if alt.is_empty() { url.clone() } else { format!("{} ({})", alt, url) }),
+                    )
+                    .into_any_element(),
+                other => {
+                    let single = InlineGroup(vec![other.clone()]);
+                    render_styled_text_only(&single, theme, font_size).into_any_element()
+                }
+            }))
+            .into_any_element();
+    }
+
+    render_styled_text_only(group, theme, font_size).into_any_element()
+}
+
+fn render_styled_text_only(
+    group: &InlineGroup,
+    theme: &ThemeColors,
+    _font_size: f32,
+) -> StyledText {
+    let mut text = String::new();
+    let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+
+    for item in &group.0 {
+        let start = text.len();
+        match item {
+            InlineItem::Text(s) => {
+                text.push_str(s);
+            }
+            InlineItem::Bold(s) => {
+                text.push_str(s);
+                let end = text.len();
+                if start < end {
+                    highlights.push((start..end, HighlightStyle {
+                        font_weight: Some(FontWeight::BOLD),
+                        ..Default::default()
+                    }));
+                }
+            }
+            InlineItem::Italic(s) => {
+                text.push_str(s);
+                let end = text.len();
+                if start < end {
+                    highlights.push((start..end, HighlightStyle {
+                        font_style: Some(FontStyle::Italic),
+                        ..Default::default()
+                    }));
+                }
+            }
+            InlineItem::Strikethrough(s) => {
+                text.push_str(s);
+                let end = text.len();
+                if start < end {
+                    highlights.push((start..end, HighlightStyle {
+                        color: Some(theme.text_muted),
+                        strikethrough: Some(StrikethroughStyle {
+                            thickness: px(1.),
+                            color: Some(theme.text_muted),
+                        }),
+                        ..Default::default()
+                    }));
+                }
+            }
+            InlineItem::Code(s) => {
+                text.push_str(s);
+                let end = text.len();
+                if start < end {
+                    highlights.push((start..end, HighlightStyle {
+                        color: Some(theme.accent),
+                        background_color: Some(theme.code_bg),
+                        ..Default::default()
+                    }));
+                }
+            }
+            InlineItem::Link { text: link_text, .. } => {
+                text.push_str(link_text);
+                let end = text.len();
+                if start < end {
+                    highlights.push((start..end, HighlightStyle {
+                        color: Some(theme.accent),
+                        underline: Some(UnderlineStyle {
+                            thickness: px(1.),
+                            color: Some(theme.accent),
+                            wavy: false,
+                        }),
+                        ..Default::default()
+                    }));
+                }
+            }
+            InlineItem::Image { alt, .. } => {
+                text.push_str(alt);
+            }
+        }
+    }
+
+    if text.is_empty() {
+        text.push(' ');
+    }
+
+    StyledText::new(text).with_highlights(highlights)
+}
+
+fn render_mermaid_diagram(code: &str, theme: &ThemeColors, _base_font_size: f32) -> AnyElement {
+    let result = glidemark_core::mermaid::render_to_svg_themed(code, theme.is_dark);
+    match result {
+        Ok(svg_content) => {
+            let cache_dir = std::env::temp_dir()
+                .join("glidemark")
+                .join("mermaid");
+            let _ = std::fs::create_dir_all(&cache_dir);
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            code.hash(&mut hasher);
+            theme.is_dark.hash(&mut hasher);
+            let filename = format!("{:016x}.svg", hasher.finish());
+            let path = cache_dir.join(filename);
+            let _ = std::fs::write(&path, svg_content);
+
+            div()
+                .id("mermaid_diagram_scroll")
+                .w_full()
+                .min_w(px(0.))
+                .my_3()
+                .rounded_xl()
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface)
+                .p_4()
                 .flex()
+                .justify_center()
                 .items_center()
-                .gap_2()
-                .child(div().text_size(px(14.)).child("🖼️"))
+                .overflow_x_scroll()
                 .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(format!("{} ({})", alt, url)),
+                    img(path)
+                        .max_w_full()
                 )
-                .into_any_element(),
-        })
-        .collect()
-}
-
-fn render_mermaid_diagram(code: &str, theme: &ThemeColors, base_font_size: f32) -> AnyElement {
-    let diagram = glidemark_core::mermaid::MermaidDiagram::parse(code);
-
-    div()
-        .w_full()
-        .rounded_xl()
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.surface)
-        .overflow_hidden()
-        .flex()
-        .flex_col()
-        // Header
-        .child(
+                .into_any_element()
+        }
+        Err(err) => {
             div()
-                .h(px(34.))
-                .px_4()
-                .bg(theme.bg)
-                .border_b_1()
+                .w_full()
+                .min_w(px(0.))
+                .my_3()
+                .rounded_lg()
+                .border_1()
                 .border_color(theme.border)
+                .bg(theme.bg)
+                .p_3()
                 .flex()
-                .items_center()
-                .justify_between()
+                .flex_col()
+                .gap_1()
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .w(px(6.))
-                                .h(px(6.))
-                                .rounded_full()
-                                .bg(theme.accent),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.text_primary)
-                                .child("Mermaid 流程拓扑图"),
-                        )
-                        .child(
-                            div()
-                                .px_1p5()
-                                .py_0p5()
-                                .rounded_sm()
-                                .bg(theme.surface)
-                                .border_1()
-                                .border_color(theme.border)
-                                .text_size(px(10.))
-                                .font_family("ui-monospace")
-                                .text_color(theme.text_muted)
-                                .child(diagram.direction.clone()),
-                        ),
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.accent)
+                        .child("Mermaid Syntax Error"),
                 )
                 .child(
                     div()
                         .text_xs()
+                        .font_family("ui-monospace")
                         .text_color(theme.text_muted)
-                        .child(format!("{} 阶段  {} 节点  {} 连线", diagram.stages.len(), diagram.nodes.len(), diagram.edges.len())),
-                ),
-        )
-        // Topological Diagram Stages with Connectors & Real Shapes
-        .child(
-            div()
-                .p_6()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap_4()
-                .children(diagram.stages.iter().enumerate().map(|(stage_idx, stage_nodes)| {
-                    let mut stage_wrapper = div()
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .gap_3();
-
-                    // Render connecting lines & branch conditions from previous stage
-                    if stage_idx > 0 {
-                        let prev_stage = &diagram.stages[stage_idx - 1];
-                        let prev_ids: std::collections::HashSet<&str> = prev_stage.iter().map(|n| n.id.as_str()).collect();
-                        let curr_ids: std::collections::HashSet<&str> = stage_nodes.iter().map(|n| n.id.as_str()).collect();
-
-                        // Find edges crossing between previous stage and current stage
-                        let relevant_edges: Vec<&glidemark_core::mermaid::MermaidEdge> = diagram
-                            .edges
-                            .iter()
-                            .filter(|e| {
-                                e.from.iter().any(|f| prev_ids.contains(f.as_str()))
-                                    && e.to.iter().any(|t| curr_ids.contains(t.as_str()))
-                            })
-                            .collect();
-
-                        if !relevant_edges.is_empty() {
-                            stage_wrapper = stage_wrapper.child(
-                                div()
-                                    .w_full()
-                                    .flex()
-                                    .flex_wrap()
-                                    .justify_center()
-                                    .items_center()
-                                    .gap_4()
-                                    .children(relevant_edges.iter().map(|edge| {
-                                        let label_text = edge.label.clone();
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .items_center()
-                                            .gap_0p5()
-                                            // Flow connector track with arrow & condition badge
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .child(
-                                                        div()
-                                                            .w(px(24.))
-                                                            .h(px(1.5))
-                                                            .bg(theme.border),
-                                                    )
-                                                    .child(
-                                                        if let Some(lbl) = label_text {
-                                                            div()
-                                                                .px_2()
-                                                                .py_0p5()
-                                                                .rounded_full()
-                                                                .bg(theme.surface)
-                                                                .border_1()
-                                                                .border_color(theme.accent)
-                                                                .text_size(px(10.))
-                                                                .font_weight(FontWeight::BOLD)
-                                                                .text_color(theme.accent)
-                                                                .shadow_sm()
-                                                                .child(format!("{} ▼", lbl))
-                                                        } else {
-                                                            div()
-                                                                .w(px(20.))
-                                                                .h(px(20.))
-                                                                .rounded_full()
-                                                                .bg(theme.bg)
-                                                                .border_1()
-                                                                .border_color(theme.border)
-                                                                .flex()
-                                                                .items_center()
-                                                                .justify_center()
-                                                                .text_size(px(11.))
-                                                                .font_weight(FontWeight::BOLD)
-                                                                .text_color(theme.accent)
-                                                                .child("↓")
-                                                        }
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .w(px(24.))
-                                                            .h(px(1.5))
-                                                            .bg(theme.border),
-                                                    ),
-                                            )
-                                    }))
-                            );
-                        } else {
-                            stage_wrapper = stage_wrapper.child(
-                                div()
-                                    .w(px(20.))
-                                    .h(px(20.))
-                                    .rounded_full()
-                                    .bg(theme.bg)
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.accent)
-                                    .child("↓"),
-                            );
-                        }
-                    }
-
-                    stage_wrapper.child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .flex_wrap()
-                            .justify_center()
-                            .gap_4()
-                            .children(stage_nodes.iter().map(|node| {
-                                render_mermaid_node_card(node, theme, base_font_size)
-                            })),
-                    )
-                })),
-        )
-        .into_any_element()
-}
-
-fn render_mermaid_node_card(
-    node: &glidemark_core::mermaid::MermaidNode,
-    theme: &ThemeColors,
-    base_font_size: f32,
-) -> AnyElement {
-    let (bg_color, border_color) = match node.class_name.as_deref() {
-        Some("step") => (theme.surface, theme.accent),
-        Some("run") => (theme.code_bg, rgb(0x22c55e).into()),
-        Some("check") => (theme.surface, rgb(0xf59e0b).into()),
-        _ => match node.shape {
-            glidemark_core::mermaid::MermaidShape::Diamond => (theme.surface, rgb(0xf59e0b).into()),
-            glidemark_core::mermaid::MermaidShape::Database => (theme.surface, rgb(0x0ea5e9).into()),
-            glidemark_core::mermaid::MermaidShape::Rounded => (theme.surface, theme.accent),
-            glidemark_core::mermaid::MermaidShape::Rectangle => (theme.surface, theme.border),
-        },
-    };
-
-    let shape_icon = match node.shape {
-        glidemark_core::mermaid::MermaidShape::Database => "🗄️ 数据库",
-        glidemark_core::mermaid::MermaidShape::Diamond => "◇ 条件分支",
-        glidemark_core::mermaid::MermaidShape::Rounded => "⬭ 流程起止",
-        glidemark_core::mermaid::MermaidShape::Rectangle => "■ 处理单元",
-    };
-
-    let mut card = div()
-        .min_w(px(200.))
-        .max_w(px(400.))
-        .p_3p5()
-        .bg(bg_color)
-        .border_1()
-        .border_color(border_color)
-        .flex()
-        .flex_col()
-        .gap_2();
-
-    // Geometric styling matching real Mermaid node shape semantics
-    card = match node.shape {
-        glidemark_core::mermaid::MermaidShape::Diamond => card
-            .rounded_2xl()
-            .border_2()
-            .border_color(rgb(0xf59e0b)),
-        glidemark_core::mermaid::MermaidShape::Database => card
-            .rounded_t_2xl()
-            .rounded_b_md()
-            .border_t_4()
-            .border_color(rgb(0x0ea5e9)),
-        glidemark_core::mermaid::MermaidShape::Rounded => card
-            .rounded_full()
-            .px_5(),
-        glidemark_core::mermaid::MermaidShape::Rectangle => card
-            .rounded_lg(),
-    };
-
-    card
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1p5()
-                        .child(
-                            div()
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme.accent)
-                                .child(node.id.clone()),
-                        ),
+                        .child(err),
                 )
-                .child(
-                    div()
-                        .px_2()
-                        .py_0p5()
-                        .rounded_full()
-                        .bg(theme.bg)
-                        .border_1()
-                        .border_color(border_color)
-                        .text_size(px(10.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(shape_icon),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .children(node.label.lines().map(|line| {
-                    div()
-                        .text_size(px(base_font_size * 0.9))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_primary)
-                        .line_height(relative(1.4))
-                        .child(line.trim().to_string())
-                })),
-        )
-        .into_any_element()
+                .into_any_element()
+        }
+    }
 }
 
 struct CodeTooltipView {
@@ -656,6 +496,7 @@ fn render_code_block(
 
     div()
         .w_full()
+        .min_w(px(0.))
         .rounded_lg()
         .border_1()
         .border_color(theme.border)

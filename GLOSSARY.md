@@ -88,9 +88,9 @@ _Avoid_: Executable zip, dmg package, installer archive
 The hierarchical table of contents extracted from markdown headings (H1–H6), enabling instant anchor navigation and visual section tracking in the drawer panel.
 _Avoid_: TOC menu, header list, bookmark list
 
-**Diagram Card**:
-A specialized visual element rendering Mermaid flowcharts and structural diagrams as GPU-native cards with connected flow steps, badges, and code toggle.
-_Avoid_: Webview iframe, image chart, mermaid canvas
+**Vector Diagram**:
+A specialized visual element rendering Mermaid flowcharts and structural diagrams as GPU-native vector graphics (via pure-Rust SVG pipeline) with full semantic layout, directional connectors, and source code inspection.
+_Avoid_: Webview iframe, emoji flowchart, kaomoji card
 
 **Asset Catalog**:
 The compiled macOS asset container (`Assets.car`) compiled via `actool` specifying `CFBundleIconName` to provide native dock integration without fallback framing.
