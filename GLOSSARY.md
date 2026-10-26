@@ -89,8 +89,8 @@ The hierarchical table of contents extracted from markdown headings (H1–H6), e
 _Avoid_: TOC menu, header list, bookmark list
 
 **Vector Diagram**:
-A specialized visual element rendering Mermaid flowcharts and structural diagrams as GPU-native vector graphics via an in-memory memoized, native macOS WebKit + official Mermaid.js pipeline with full Dagre topological routing, subgraphs, and source code inspection.
-_Avoid_: Webview iframe, emoji flowchart, kaomoji card, unmemoized render-loop diagram
+A specialized visual element rendering Mermaid flowcharts and structural diagrams as GPU-native vector graphics via an in-memory memoized, 100% pure-Rust rendering pipeline (`rusty-mermaid`) with Sugiyama layered graph layout (`rusty-mermaid-dagre`), compound subgraphs, database shapes, and dark mode support.
+_Avoid_: WebKit iframe, external JS runner, emoji flowchart, kaomoji card, unmemoized render-loop diagram
 
 **Asset Catalog**:
 The compiled macOS asset container (`Assets.car`) compiled via `actool` specifying `CFBundleIconName` to provide native dock integration without fallback framing.

@@ -421,66 +421,55 @@ flowchart TD
         let svg = render_to_svg(code).expect("should render svg");
         assert!(svg.contains("<svg"));
         assert!(svg.contains("</svg>"));
+        assert!(svg.contains("1. 前端交互层"));
+        assert!(svg.contains("MySQL (dw + meta)"));
+        assert!(!svg.contains("&quot;1. 前端交互层&quot;"));
+
+        let dark_svg = render_to_svg_themed(code, true).expect("should render dark svg");
+        assert!(dark_svg.contains("<svg"));
+        assert!(dark_svg.contains("#1e1e2e"));
     }
 }
 
-/// Renders a Mermaid diagram source to a standard, high-quality SVG vector graphic.
+/// Renders a Mermaid diagram source to a standard, high-quality SVG vector graphic in pure Rust.
 pub fn render_to_svg(code: &str) -> Result<String, String> {
     render_to_svg_themed(code, false)
 }
 
-/// Renders a Mermaid diagram source to SVG tailored for light or dark backgrounds.
+/// Renders a Mermaid diagram source to SVG tailored for light or dark backgrounds in 100% pure Rust.
 pub fn render_to_svg_themed(code: &str, is_dark: bool) -> Result<String, String> {
-    // 1. Prefer macOS native WebKit with official Mermaid.js engine
-    if let Ok(svg) = render_with_webkit_helper(code, is_dark) {
-        return Ok(svg);
-    }
-
-    // 2. Fallback to mermaid-rs-renderer if WebKit helper is not found
-    let mut opts = mermaid_rs_renderer::RenderOptions::default();
-    opts.theme = if is_dark {
-        mermaid_rs_renderer::Theme::dark()
+    let sanitized = sanitize_mermaid(code);
+    let theme = if is_dark {
+        rusty_mermaid::Theme::dark()
     } else {
-        mermaid_rs_renderer::Theme::modern()
+        rusty_mermaid::Theme::light()
     };
-    mermaid_rs_renderer::render_with_options(code, opts).map_err(|e| format!("{:?}", e))
+    rusty_mermaid::to_svg(&sanitized, &theme).map_err(|e| format!("{:?}", e))
 }
 
-fn render_with_webkit_helper(code: &str, is_dark: bool) -> Result<String, String> {
-    let mut helper_paths = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            helper_paths.push(parent.join("glidemark_mermaid"));
+fn sanitize_mermaid(code: &str) -> String {
+    let mut out = String::with_capacity(code.len());
+    for line in code.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("subgraph ") {
+            if let Some(open) = line.find("[\"") {
+                if let Some(close) = line.rfind("\"]") {
+                    if close > open + 1 {
+                        let prefix = &line[..open + 1];
+                        let inner = &line[open + 2..close];
+                        let suffix = &line[close + 1..];
+                        out.push_str(prefix);
+                        out.push_str(inner);
+                        out.push_str(suffix);
+                        out.push('\n');
+                        continue;
+                    }
+                }
+            }
         }
+        out.push_str(line);
+        out.push('\n');
     }
-    helper_paths.push(std::path::PathBuf::from("crates/glidemark_app/assets/helpers/glidemark_mermaid"));
-    helper_paths.push(std::path::PathBuf::from("/tmp/glidemark_mermaid"));
-
-    let helper_path = helper_paths.into_iter().find(|p| p.exists())
-        .ok_or_else(|| "WebKit mermaid helper not found".to_string())?;
-
-    let mut cmd = std::process::Command::new(helper_path);
-    if is_dark {
-        cmd.arg("--dark");
-    }
-    cmd.stdin(std::process::Stdio::piped());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn helper: {}", e))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        let _ = stdin.write_all(code.as_bytes());
-    }
-
-    let output = child.wait_with_output().map_err(|e| format!("Helper wait failed: {}", e))?;
-    if output.status.success() {
-        let svg = String::from_utf8(output.stdout).map_err(|e| format!("UTF8 error: {}", e))?;
-        if svg.contains("<svg") {
-            return Ok(svg);
-        }
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(format!("Helper failed: {}", stderr))
+    out
 }
 
