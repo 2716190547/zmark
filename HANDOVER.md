@@ -95,6 +95,17 @@
 - **标题双击内联改名引擎修复**：双击立即将系统焦点锁定在输入控件，支持全选原名、连续键盘键入（包括字母、数字、空格与点号）、退格删除，按 `Enter` 提交重命名至磁盘并自动刷新侧栏同级列表，按 `Esc` 放弃还原。
 - **GPU 驱动原生微动效**：基于 GPUI `AnimationExt::with_animation` 与 `ease_in_out`，侧边栏抽屉展开收起实现 180ms 宽度平滑伸缩与透明度渐入，偏好设置模态实现 150ms 缩放淡入，标题编辑时光标带 600ms 呼吸律动。
 
+### 14. Dock 图标终极去套娃、原生极简分段选择器、防抖自动保存与分栏设置重构 (ADR 0010)
+- **Dock 栏图标终极去套娃 (Full-Bleed 1024)**：
+  - 彻底根治 macOS 27 系统毛玻璃底座引起的「双重圆角嵌套」：白底直接全画幅 1024x1024 铺满，居中排版暖红褐-暖黄渐变的 Z 几何造型，完全依赖 macOS 原生 LaunchServices 裁切标准圆角，Dock 栏呈现唯一的纯净单层圆角。
+- **视图模式切换器视觉升级 (Native Segmented Control)**：
+  - 移除此前生硬浮起的 `shadow_sm()` 灰色投影。
+  - 外层使用弱背景胶囊与微边框；选中项采用高贴合度的微同心圆角（7 - 2 = 5），纯净平滑，呈现标准的 macOS 原生分段控制器质感。
+- **定时防抖自动保存 (Debounced Auto Save)**：
+  - 默认开启 1000ms 防抖自动静默保存机制，用户停止打字 1 秒后自动静默持久化至磁盘，且窗口失焦或关闭时立即保存，杜绝丢字。
+- **分栏排版设置面板 (Split Settings Modal)**：
+  - 将设置面板重构为专业的左侧分类导航（外观主题、编辑与保存、界面语言、关于）与右侧内容卡片视图，并在所有 10 种语言中完成完整本地化。
+
 ---
 
 ## 三、 代码仓库架构与文件目录速查
@@ -116,7 +127,8 @@ GlideMark/
 │       ├── 0006-async-file-dialog-and-external-drop-handling.md
 │       ├── 0007-miaoyan-palette-borderless-toolbar-and-flex-scroll-fix.md
 │       ├── 0008-native-mermaid-outline-navigation-and-asset-catalog.md
-│       └── 0009-tooltips-borderless-minimalism-rename-fix-and-animations.md
+│       ├── 0009-tooltips-borderless-minimalism-rename-fix-and-animations.md
+│       └── 0010-dock-full-bleed-icon-minimal-segmented-control-auto-save-split-settings.md
 ├── assets/
 │   ├── AppIcon.icns                           # macOS 图标文件
 │   ├── Assets.car                             # actool 编译的现代 macOS 资产目录

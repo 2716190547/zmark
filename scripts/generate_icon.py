@@ -11,27 +11,15 @@ SIZE = CANVAS_SIZE * SS
 
 img = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
 
-# Standard macOS App Icon grid specifications:
-# Canvas: 1024 x 1024. Icon squircle: 864 x 864, centered with 80px margin.
-# IMPORTANT: Never bake in drop shadows, as macOS dynamically adds its own shadow.
-# A baked shadow causes macOS to detect non-continuous alpha and forces the icon into a secondary gray tile ("squircle jail").
-pad = int(80 * SS)
-squircle_w = SIZE - 2 * pad
-squircle_r = int(squircle_w * 0.2237)
+# Full-bleed solid white canvas across the entire 1024x1024 frame.
+# By making the icon full bleed (zero outer transparency / zero inner card margin),
+# macOS LaunchServices / Dock applies its single native system squircle mask.
+# This completely eliminates the "double squircle / nested card" jail effect.
+img = Image.new('RGBA', (SIZE, SIZE), (255, 255, 255, 255))
 
-# 1. Pure white squircle base with precise continuous curvature
-squircle_mask = Image.new('L', (SIZE, SIZE), 0)
-s_draw = ImageDraw.Draw(squircle_mask)
-s_draw.rounded_rectangle([pad, pad, SIZE - pad, SIZE - pad], radius=squircle_r, fill=255)
-
-squircle_base = Image.new('RGBA', (SIZE, SIZE), (255, 255, 255, 255))
-base_draw = ImageDraw.Draw(squircle_base)
-# Subtle 0.5pt hairline edge
-base_draw.rounded_rectangle([pad, pad, SIZE - pad, SIZE - pad], radius=squircle_r, outline=(0, 0, 0, 16), width=int(1.5 * SS))
-
-# 2. Z Glyph bounds centered inside squircle
-# Z glyph size: ~520x520 at 1024
-glyph_size = int(520 * SS)
+# 2. Z Glyph bounds centered inside full-bleed canvas
+# Glyph size: 560x560 at 1024x1024 (scaled by SS)
+glyph_size = int(560 * SS)
 gx0 = (SIZE - glyph_size) // 2
 gy0 = (SIZE - glyph_size) // 2
 gx1 = gx0 + glyph_size
@@ -76,11 +64,8 @@ for y in range(gy0, gy1):
         b = int(c_start[2] + (c_end[2] - c_start[2]) * t_smooth)
         grad_pix[x, y] = (r, g, b, 255)
 
-# Composite glyph onto white squircle
-squircle_base.paste(grad_img, (0, 0), glyph_mask)
-
-# Composite squircle onto final image with squircle_mask
-img.paste(squircle_base, (0, 0), squircle_mask)
+# Composite glyph directly onto full-bleed white canvas
+img.paste(grad_img, (0, 0), glyph_mask)
 
 master_1024 = img.resize((CANVAS_SIZE, CANVAS_SIZE), Image.Resampling.LANCZOS)
 

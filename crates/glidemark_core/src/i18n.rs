@@ -111,6 +111,13 @@ pub struct I18nStrings {
     pub palette_github: &'static str,
     pub palette_solarized: &'static str,
     pub palette_one_dark: &'static str,
+    pub editor_and_save: &'static str,
+    pub about: &'static str,
+    pub auto_save_label: &'static str,
+    pub auto_save_desc: &'static str,
+    pub auto_save_on_blur_label: &'static str,
+    pub tab_size_label: &'static str,
+    pub shortcuts_label: &'static str,
 }
 
 pub fn localize_palette_name<'a>(id: &'a str, strings: &'a I18nStrings) -> &'a str {
@@ -182,6 +189,13 @@ static ZH_CN: I18nStrings = I18nStrings {
     palette_github: "GitHub 浅色",
     palette_solarized: "柔和浅黄",
     palette_one_dark: "暗色极客",
+    editor_and_save: "编辑与保存",
+    about: "关于",
+    auto_save_label: "定时自动保存",
+    auto_save_desc: "停止输入 1 秒后自动静默持久化至磁盘",
+    auto_save_on_blur_label: "窗口失焦时立即保存",
+    tab_size_label: "Tab 缩进空格数",
+    shortcuts_label: "快捷键指南",
 };
 
 static ZH_TW: I18nStrings = I18nStrings {
@@ -224,6 +238,13 @@ static ZH_TW: I18nStrings = I18nStrings {
     palette_github: "GitHub 淺色",
     palette_solarized: "柔和淺黃",
     palette_one_dark: "暗色極客",
+    editor_and_save: "編輯與儲存",
+    about: "關於",
+    auto_save_label: "定時自動儲存",
+    auto_save_desc: "停止輸入 1 秒後自動靜默持久化至磁碟",
+    auto_save_on_blur_label: "視窗失焦時立即儲存",
+    tab_size_label: "Tab 縮排空格數",
+    shortcuts_label: "快速鍵指南",
 };
 
 static EN: I18nStrings = I18nStrings {
@@ -266,6 +287,13 @@ static EN: I18nStrings = I18nStrings {
     palette_github: "GitHub Light",
     palette_solarized: "Solarized Light",
     palette_one_dark: "One Dark Pro",
+    editor_and_save: "Editor & Save",
+    about: "About",
+    auto_save_label: "Auto Save",
+    auto_save_desc: "Automatically writes to disk 1 second after typing stops",
+    auto_save_on_blur_label: "Save immediately when window loses focus",
+    tab_size_label: "Tab Size (Spaces)",
+    shortcuts_label: "Keyboard Shortcuts",
 };
 
 static JA: I18nStrings = I18nStrings {
@@ -308,6 +336,13 @@ static JA: I18nStrings = I18nStrings {
     palette_github: "GitHub ライト",
     palette_solarized: "ソーラライズド",
     palette_one_dark: "ワンダーク",
+    editor_and_save: "編集と保存",
+    about: "情報",
+    auto_save_label: "自動保存",
+    auto_save_desc: "入力停止1秒後に自動でディスクへ保存します",
+    auto_save_on_blur_label: "フォーカス喪失時に即時保存",
+    tab_size_label: "タブ幅 (スペース)",
+    shortcuts_label: "キーボードショートカット",
 };
 
 static KO: I18nStrings = I18nStrings {
@@ -350,6 +385,13 @@ static KO: I18nStrings = I18nStrings {
     palette_github: "깃허브 라이트",
     palette_solarized: "솔라라이즈드",
     palette_one_dark: "원 다크",
+    editor_and_save: "편집 및 저장",
+    about: "정보",
+    auto_save_label: "자동 저장",
+    auto_save_desc: "입력을 멈춘 후 1초 뒤 디스크에 자동 저장됩니다",
+    auto_save_on_blur_label: "창 포커스를 잃을 때 즉시 저장",
+    tab_size_label: "탭 크기 (공백)",
+    shortcuts_label: "키보드 단축키",
 };
 
 static FR: I18nStrings = I18nStrings {
@@ -392,6 +434,13 @@ static FR: I18nStrings = I18nStrings {
     palette_github: "GitHub Light",
     palette_solarized: "Solarized Light",
     palette_one_dark: "One Dark Pro",
+    editor_and_save: "Éditeur & Sauvegarde",
+    about: "À propos",
+    auto_save_label: "Sauvegarde auto",
+    auto_save_desc: "Enregistre sur disque 1 seconde après la frappe",
+    auto_save_on_blur_label: "Enregistrer à la perte de focus",
+    tab_size_label: "Taille des tabulations",
+    shortcuts_label: "Raccourcis clavier",
 };
 
 static DE: I18nStrings = I18nStrings {
@@ -434,6 +483,13 @@ static DE: I18nStrings = I18nStrings {
     palette_github: "GitHub Light",
     palette_solarized: "Solarized Light",
     palette_one_dark: "One Dark Pro",
+    editor_and_save: "Editor & Speichern",
+    about: "Über",
+    auto_save_label: "Automatisches Speichern",
+    auto_save_desc: "Speichert 1 Sekunde nach Tipppause auf die Festplatte",
+    auto_save_on_blur_label: "Sofort speichern beim Fokusverlust",
+    tab_size_label: "Tabulatorgröße",
+    shortcuts_label: "Tastatur-Kurzbefehle",
 };
 
 static ES: I18nStrings = I18nStrings {
@@ -476,6 +532,13 @@ static ES: I18nStrings = I18nStrings {
     palette_github: "GitHub Light",
     palette_solarized: "Solarized Light",
     palette_one_dark: "One Dark Pro",
+    editor_and_save: "Editor y Guardar",
+    about: "Acerca de",
+    auto_save_label: "Guardado automático",
+    auto_save_desc: "Guarda en disco 1 segundo después de dejar de escribir",
+    auto_save_on_blur_label: "Guardar inmediatamente al perder el foco",
+    tab_size_label: "Tamaño de tabulación",
+    shortcuts_label: "Atajos de teclado",
 };
 
 static RU: I18nStrings = I18nStrings {
@@ -518,6 +581,13 @@ static RU: I18nStrings = I18nStrings {
     palette_github: "GitHub Light",
     palette_solarized: "Solarized Light",
     palette_one_dark: "One Dark Pro",
+    editor_and_save: "Редактор и Сохранение",
+    about: "О программе",
+    auto_save_label: "Автосохранение",
+    auto_save_desc: "Сохраняет на диск через 1 секунду после окончания ввода",
+    auto_save_on_blur_label: "Сохранять при потере фокуса",
+    tab_size_label: "Размер табуляции",
+    shortcuts_label: "Сочетания клавиш",
 };
 
 static PT: I18nStrings = I18nStrings {
@@ -560,4 +630,11 @@ static PT: I18nStrings = I18nStrings {
     palette_github: "GitHub Light",
     palette_solarized: "Solarized Light",
     palette_one_dark: "One Dark Pro",
+    editor_and_save: "Editor e Salvar",
+    about: "Sobre",
+    auto_save_label: "Salvamento automático",
+    auto_save_desc: "Salva no disco 1 segundo após parar de digitar",
+    auto_save_on_blur_label: "Salvar ao perder o foco",
+    tab_size_label: "Tamanho da tabulação",
+    shortcuts_label: "Atalhos de teclado",
 };

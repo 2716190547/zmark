@@ -220,7 +220,8 @@ where
 
     if active {
         base.bg(theme.surface)
-            .shadow_sm()
+            .border_1()
+            .border_color(theme.border)
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.accent)
             .child(icon_el)

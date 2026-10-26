@@ -19,6 +19,9 @@ impl AssetSource for AppAssets {
             "icons/files.svg" => Some(include_bytes!("../assets/icons/files.svg")),
             "icons/list.svg" => Some(include_bytes!("../assets/icons/list.svg")),
             "icons/chevron-right.svg" => Some(include_bytes!("../assets/icons/chevron-right.svg")),
+            "icons/palette.svg" => Some(include_bytes!("../assets/icons/palette.svg")),
+            "icons/languages.svg" => Some(include_bytes!("../assets/icons/languages.svg")),
+            "icons/info.svg" => Some(include_bytes!("../assets/icons/info.svg")),
             _ => None,
         };
         Ok(bytes.map(Cow::Borrowed))
@@ -39,6 +42,9 @@ impl AssetSource for AppAssets {
             "icons/files.svg".into(),
             "icons/list.svg".into(),
             "icons/chevron-right.svg".into(),
+            "icons/palette.svg".into(),
+            "icons/languages.svg".into(),
+            "icons/info.svg".into(),
         ])
     }
 }

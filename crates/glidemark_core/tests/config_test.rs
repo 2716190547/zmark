@@ -10,6 +10,8 @@ fn test_default_preferences() {
     assert_eq!(pref.theme, ThemeMode::Auto);
     assert_eq!(pref.palette, "default");
     assert_eq!(pref.locale, SupportedLocale::Auto);
+    assert!(pref.auto_save);
+    assert_eq!(pref.auto_save_delay_ms, 1000);
     assert!(pref.auto_save_on_blur);
 }
 

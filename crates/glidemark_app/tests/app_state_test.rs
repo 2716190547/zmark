@@ -155,3 +155,49 @@ fn test_rename_file_on_disk() {
     assert!(!file.exists());
     assert!(dir.path().join("renamed.md").exists());
 }
+
+#[test]
+fn test_auto_save_and_settings_tabs() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("autosave_doc.md");
+    fs::write(&file, "Initial text").unwrap();
+
+    let doc = Document::from_file(file.clone()).unwrap();
+    let mut state = AppState::new(doc);
+
+    // Verify auto_save defaults to true and tabs can be switched
+    assert!(state.preferences.auto_save);
+    assert_eq!(state.preferences.auto_save_delay_ms, 1000);
+    assert_eq!(state.settings_tab, glidemark_app::state::SettingsTab::Appearance);
+
+    // Switch tabs
+    state.set_settings_tab(glidemark_app::state::SettingsTab::EditorSave);
+    assert_eq!(state.settings_tab, glidemark_app::state::SettingsTab::EditorSave);
+
+    state.set_settings_tab(glidemark_app::state::SettingsTab::Language);
+    assert_eq!(state.settings_tab, glidemark_app::state::SettingsTab::Language);
+
+    state.set_settings_tab(glidemark_app::state::SettingsTab::About);
+    assert_eq!(state.settings_tab, glidemark_app::state::SettingsTab::About);
+
+    // Toggle auto-save
+    state.set_auto_save(false);
+    assert!(!state.preferences.auto_save);
+    state.set_auto_save(true);
+    assert!(state.preferences.auto_save);
+
+    // Test tab size
+    state.set_tab_size(2);
+    assert_eq!(state.preferences.tab_size, 2);
+    state.set_tab_size(4);
+    assert_eq!(state.preferences.tab_size, 4);
+
+    // Verify editing dirty state and saving to disk
+    state.editor.insert_text(" - updated");
+    state.sync_from_editor();
+    assert!(state.is_dirty());
+    state.save().unwrap();
+    assert!(!state.is_dirty());
+    let saved_content = fs::read_to_string(&file).unwrap();
+    assert!(saved_content.contains("updated"));
+}

@@ -23,6 +23,7 @@ pub struct WorkspaceView {
     pub is_renaming: bool,
     pub rename_buffer: String,
     pub workspace_width: f32,
+    pub auto_save_task: Option<Task<()>>,
 }
 
 impl WorkspaceView {
@@ -38,7 +39,24 @@ impl WorkspaceView {
             is_renaming: false,
             rename_buffer: String::new(),
             workspace_width: 1200.0,
+            auto_save_task: None,
         }
+    }
+
+    pub fn trigger_auto_save(&mut self, cx: &mut Context<Self>) {
+        if !self.state.preferences.auto_save {
+            return;
+        }
+        let delay_ms = self.state.preferences.auto_save_delay_ms;
+        self.auto_save_task = Some(cx.spawn(async move |this, app| {
+            app.background_executor().timer(std::time::Duration::from_millis(delay_ms)).await;
+            let _ = this.update(app, |this, cx| {
+                if this.state.is_dirty() {
+                    let _ = this.state.save();
+                    cx.notify();
+                }
+            });
+        }));
     }
 }
 
@@ -138,6 +156,38 @@ impl Render for WorkspaceView {
         let on_set_locale = Arc::new(move |locale, _window: &mut Window, cx: &mut App| {
             view_loc_setter.update(cx, |this, cx| {
                 this.state.set_locale(locale);
+                cx.notify();
+            });
+        });
+
+        let view_tab_setter = cx.entity().clone();
+        let on_set_settings_tab = Arc::new(move |tab: crate::state::SettingsTab, _window: &mut Window, cx: &mut App| {
+            view_tab_setter.update(cx, |this, cx| {
+                this.state.set_settings_tab(tab);
+                cx.notify();
+            });
+        });
+
+        let view_as_setter = cx.entity().clone();
+        let on_toggle_auto_save = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
+            view_as_setter.update(cx, |this, cx| {
+                this.state.set_auto_save(enabled);
+                cx.notify();
+            });
+        });
+
+        let view_asb_setter = cx.entity().clone();
+        let on_toggle_auto_save_on_blur = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
+            view_asb_setter.update(cx, |this, cx| {
+                this.state.set_auto_save_on_blur(enabled);
+                cx.notify();
+            });
+        });
+
+        let view_ts_setter = cx.entity().clone();
+        let on_set_tab_size = Arc::new(move |tab_size: usize, _window: &mut Window, cx: &mut App| {
+            view_ts_setter.update(cx, |this, cx| {
+                this.state.set_tab_size(tab_size);
                 cx.notify();
             });
         });
@@ -288,6 +338,7 @@ impl Render for WorkspaceView {
                                 this.state.editor.undo();
                             }
                             this.state.sync_from_editor();
+                            this.trigger_auto_save(cx);
                             cx.notify();
                         }
                         "s" => {
@@ -340,7 +391,10 @@ impl Render for WorkspaceView {
                     "backspace" => this.state.editor.delete_backward(),
                     "delete" => this.state.editor.delete_forward(),
                     "enter" => this.state.editor.insert_newline(),
-                    "tab" => this.state.editor.insert_text("    "),
+                    "tab" => {
+                        let spaces = " ".repeat(this.state.preferences.tab_size);
+                        this.state.editor.insert_text(&spaces);
+                    }
                     "left" => this.state.editor.move_left(),
                     "right" => this.state.editor.move_right(),
                     "up" => this.state.editor.move_up(),
@@ -364,6 +418,7 @@ impl Render for WorkspaceView {
 
                 if handled {
                     this.state.sync_from_editor();
+                    this.trigger_auto_save(cx);
                     cx.notify();
                 }
             }))
@@ -515,15 +570,17 @@ impl Render for WorkspaceView {
                                     }),
                             ),
                     )
-                    // Center area: View Mode Switcher Icons (Borderless floating capsule)
+                    // Center area: View Mode Switcher Icons (Mac-style Segmented Control)
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .bg(theme.bg)
-                            .p_0p5()
-                            .rounded_md()
-                            .gap_0p5()
+                            .p(px(2.))
+                            .rounded(px(7.))
+                            .gap(px(2.))
+                            .border_1()
+                            .border_color(theme.border)
                             .child(render_mode_icon_tab(
                                 "btn_mode_source",
                                 format!("{} (⌘1)", strings.source_mode),
@@ -816,15 +873,23 @@ impl Render for WorkspaceView {
                     div()
                         .id("animated_settings_modal")
                         .child(render_settings_modal(
+                            self.state.settings_tab,
                             self.state.preferences.theme,
                             &self.state.preferences.palette,
                             self.state.preferences.locale,
+                            self.state.preferences.auto_save,
+                            self.state.preferences.auto_save_on_blur,
+                            self.state.preferences.tab_size,
                             theme,
                             strings,
                             on_close_settings,
+                            on_set_settings_tab,
                             on_set_mode,
                             on_set_palette,
                             on_set_locale,
+                            on_toggle_auto_save,
+                            on_toggle_auto_save_on_blur,
+                            on_set_tab_size,
                         ))
                         .with_animation(
                             "settings_fade_in",
@@ -913,9 +978,9 @@ where
             let t = text.clone();
             cx.new(|_| TooltipView { text: t }).into()
         })
-        .w(px(28.))
-        .h(px(24.))
-        .rounded_sm()
+        .w(px(32.))
+        .h(px(22.))
+        .rounded(px(5.))
         .cursor_pointer()
         .flex()
         .items_center()
@@ -924,7 +989,8 @@ where
 
     if active {
         base.bg(theme.surface)
-            .shadow_sm()
+            .border_1()
+            .border_color(theme.border)
             .text_color(theme.accent)
             .child(icon)
     } else {

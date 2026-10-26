@@ -24,6 +24,15 @@ pub enum DrawerTab {
     Outline,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsTab {
+    #[default]
+    Appearance,
+    EditorSave,
+    Language,
+    About,
+}
+
 pub struct AppState {
     pub doc: Document,
     pub editor: EditorEngine,
@@ -31,6 +40,7 @@ pub struct AppState {
     pub drawer_open: bool,
     pub drawer_tab: DrawerTab,
     pub settings_open: bool,
+    pub settings_tab: SettingsTab,
     pub preferences: Preferences,
     pub theme: ThemeColors,
     pub strings: &'static I18nStrings,
@@ -57,6 +67,7 @@ impl AppState {
             drawer_open: false,
             drawer_tab: DrawerTab::Files,
             settings_open: false,
+            settings_tab: SettingsTab::Appearance,
             preferences,
             theme,
             strings,
@@ -84,6 +95,25 @@ impl AppState {
 
     pub fn toggle_settings(&mut self) {
         self.settings_open = !self.settings_open;
+    }
+
+    pub fn set_settings_tab(&mut self, tab: SettingsTab) {
+        self.settings_tab = tab;
+    }
+
+    pub fn set_auto_save(&mut self, enabled: bool) {
+        self.preferences.auto_save = enabled;
+        let _ = self.preferences.save();
+    }
+
+    pub fn set_auto_save_on_blur(&mut self, enabled: bool) {
+        self.preferences.auto_save_on_blur = enabled;
+        let _ = self.preferences.save();
+    }
+
+    pub fn set_tab_size(&mut self, tab_size: usize) {
+        self.preferences.tab_size = tab_size;
+        let _ = self.preferences.save();
     }
 
     pub fn set_theme_mode(&mut self, mode: ThemeMode) {

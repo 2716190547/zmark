@@ -112,3 +112,20 @@ _Avoid_: Frameless mode, line-free UI, flat theme
 Short, hardware-accelerated transitions (150–200ms) with easing curves applied to drawer toggles, modal dialogues, and control highlights to deliver smooth tactile feedback.
 _Avoid_: Heavy animations, visual effects, transitions pack
 
+**Full-Bleed Icon**:
+A 1024x1024 edge-to-edge application icon artwork without baked-in padding or inner squircle cards, relying exclusively on macOS LaunchServices to apply the native system squircle mask.
+_Avoid_: Padded icon, card tile, framed icon
+
+**Segmented Control**:
+A concentric, borderless or hairline-pill multi-segment switcher (Source / Split / Preview) with uniform recessed track and flat active indicator capsule.
+_Avoid_: Tab bar, button row, toggle strip
+
+**Auto Save**:
+A silent, debounced background task automatically writing dirty document buffers to disk after 1000ms of user typing inactivity, alongside immediate saves on blur.
+_Avoid_: Auto sync, periodic save, timer poll
+
+**Split Settings Modal**:
+A two-column preferences dialog organizing configuration domains into a left category navigation sidebar (Appearance, Editor & Save, Language, About) and a right card panel.
+_Avoid_: Settings page, preferences window, config popover
+
+

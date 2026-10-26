@@ -24,6 +24,14 @@ pub enum ThemeMode {
     Light,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_auto_save_delay() -> u64 {
+    1000
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Preferences {
     pub font_family: String,
@@ -34,6 +42,11 @@ pub struct Preferences {
     pub palette: String,
     pub locale: SupportedLocale,
     pub tab_size: usize,
+    #[serde(default = "default_true")]
+    pub auto_save: bool,
+    #[serde(default = "default_auto_save_delay")]
+    pub auto_save_delay_ms: u64,
+    #[serde(default = "default_true")]
     pub auto_save_on_blur: bool,
 }
 
@@ -48,6 +61,8 @@ impl Default for Preferences {
             palette: "default".to_string(),
             locale: SupportedLocale::Auto,
             tab_size: 4,
+            auto_save: true,
+            auto_save_delay_ms: 1000,
             auto_save_on_blur: true,
         }
     }
