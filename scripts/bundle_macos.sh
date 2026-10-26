@@ -18,6 +18,13 @@ echo "==> Copying binary..."
 cp "$DIR/target/release/glidemark_app" "$BUNDLE_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$BUNDLE_DIR/Contents/MacOS/$APP_NAME"
 
+echo "==> Compiling and bundling native Mermaid WebKit helper..."
+swiftc -O "$DIR/crates/glidemark_app/assets/helpers/glidemark_mermaid.swift" -o "$BUNDLE_DIR/Contents/MacOS/glidemark_mermaid"
+chmod +x "$BUNDLE_DIR/Contents/MacOS/glidemark_mermaid"
+if [ -f "$DIR/crates/glidemark_app/assets/mermaid.min.js" ]; then
+    cp "$DIR/crates/glidemark_app/assets/mermaid.min.js" "$BUNDLE_DIR/Contents/Resources/mermaid.min.js"
+fi
+
 echo "==> Copying app icon and modern asset catalog..."
 if [ -f "$DIR/assets/AppIcon.icns" ]; then
     cp "$DIR/assets/AppIcon.icns" "$BUNDLE_DIR/Contents/Resources/AppIcon.icns"

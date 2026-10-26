@@ -396,6 +396,32 @@ graph TD
         let dark_svg = render_to_svg_themed(code, true).expect("should render dark svg");
         assert!(dark_svg.contains("<svg"));
     }
+
+    #[test]
+    fn test_render_complex_flowchart_with_subgraphs() {
+        let code = r#"
+flowchart TD
+    subgraph S1["1. 前端交互层"]
+        A[Vue 3 问答页] --> B[SSE 流接收器] --> C[状态灯与表格]
+    end
+
+    subgraph S2["2. 后端服务层"]
+        D[FastAPI 路由] --> E[QueryService] --> F[LangGraph 状态机]
+    end
+
+    subgraph S3["3. 存储与模型底座"]
+        G[(MySQL (dw + meta))]
+        H[(Qdrant + ES 索引)]
+        I[DeepSeek + BGE 模型]
+    end
+
+    F <-->|SSE 实时流| S1
+    F <-->|检索 / 推理 / 查数| S3
+"#;
+        let svg = render_to_svg(code).expect("should render svg");
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("</svg>"));
+    }
 }
 
 /// Renders a Mermaid diagram source to a standard, high-quality SVG vector graphic.
@@ -405,6 +431,12 @@ pub fn render_to_svg(code: &str) -> Result<String, String> {
 
 /// Renders a Mermaid diagram source to SVG tailored for light or dark backgrounds.
 pub fn render_to_svg_themed(code: &str, is_dark: bool) -> Result<String, String> {
+    // 1. Prefer macOS native WebKit with official Mermaid.js engine
+    if let Ok(svg) = render_with_webkit_helper(code, is_dark) {
+        return Ok(svg);
+    }
+
+    // 2. Fallback to mermaid-rs-renderer if WebKit helper is not found
     let mut opts = mermaid_rs_renderer::RenderOptions::default();
     opts.theme = if is_dark {
         mermaid_rs_renderer::Theme::dark()
@@ -412,5 +444,43 @@ pub fn render_to_svg_themed(code: &str, is_dark: bool) -> Result<String, String>
         mermaid_rs_renderer::Theme::modern()
     };
     mermaid_rs_renderer::render_with_options(code, opts).map_err(|e| format!("{:?}", e))
+}
+
+fn render_with_webkit_helper(code: &str, is_dark: bool) -> Result<String, String> {
+    let mut helper_paths = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            helper_paths.push(parent.join("glidemark_mermaid"));
+        }
+    }
+    helper_paths.push(std::path::PathBuf::from("crates/glidemark_app/assets/helpers/glidemark_mermaid"));
+    helper_paths.push(std::path::PathBuf::from("/tmp/glidemark_mermaid"));
+
+    let helper_path = helper_paths.into_iter().find(|p| p.exists())
+        .ok_or_else(|| "WebKit mermaid helper not found".to_string())?;
+
+    let mut cmd = std::process::Command::new(helper_path);
+    if is_dark {
+        cmd.arg("--dark");
+    }
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn helper: {}", e))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let _ = stdin.write_all(code.as_bytes());
+    }
+
+    let output = child.wait_with_output().map_err(|e| format!("Helper wait failed: {}", e))?;
+    if output.status.success() {
+        let svg = String::from_utf8(output.stdout).map_err(|e| format!("UTF8 error: {}", e))?;
+        if svg.contains("<svg") {
+            return Ok(svg);
+        }
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!("Helper failed: {}", stderr))
 }
 

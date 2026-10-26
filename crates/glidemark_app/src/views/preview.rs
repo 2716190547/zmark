@@ -396,21 +396,62 @@ fn render_styled_text_only(
     StyledText::new(text).with_highlights(highlights)
 }
 
+static DIAGRAM_CACHE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<(u64, bool), std::path::PathBuf>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
 fn render_mermaid_diagram(code: &str, theme: &ThemeColors, _base_font_size: f32) -> AnyElement {
-    let result = glidemark_core::mermaid::render_to_svg_themed(code, theme.is_dark);
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut hasher);
+    let code_hash = hasher.finish();
+    let is_dark = theme.is_dark;
+
+    // Check in-memory memoized cache first (zero-cost on scroll)
+    let cached_path = {
+        let cache = DIAGRAM_CACHE.lock().unwrap();
+        cache.get(&(code_hash, is_dark)).cloned()
+    };
+
+    if let Some(path) = cached_path {
+        if path.exists() {
+            return div()
+                .id("mermaid_diagram_scroll")
+                .w_full()
+                .min_w(px(0.))
+                .my_3()
+                .rounded_xl()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.surface)
+                .p_4()
+                .flex()
+                .justify_center()
+                .items_center()
+                .overflow_x_scroll()
+                .child(
+                    img(path)
+                        .max_w_full()
+                )
+                .into_any_element();
+        }
+    }
+
+    let result = glidemark_core::mermaid::render_to_svg_themed(code, is_dark);
     match result {
         Ok(svg_content) => {
             let cache_dir = std::env::temp_dir()
                 .join("glidemark")
                 .join("mermaid");
             let _ = std::fs::create_dir_all(&cache_dir);
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            code.hash(&mut hasher);
-            theme.is_dark.hash(&mut hasher);
-            let filename = format!("{:016x}.svg", hasher.finish());
+            let filename = format!("{:016x}_{}.svg", code_hash, if is_dark { "dark" } else { "light" });
             let path = cache_dir.join(filename);
             let _ = std::fs::write(&path, svg_content);
+
+            {
+                let mut cache = DIAGRAM_CACHE.lock().unwrap();
+                cache.insert((code_hash, is_dark), path.clone());
+            }
 
             div()
                 .id("mermaid_diagram_scroll")
