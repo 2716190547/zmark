@@ -89,6 +89,12 @@
 - **去手工拼凑**：完全剔除此前用 `div` 拼接方块线条的简陋写法（净删除 150+ 行手工拼凑代码）。
 - **GPUI 原生集成**：通过 GPUI 原生 `AssetSource` 特征机制挂载官方标准 Lucide 矢量图标集（`panel-left.svg`, `folder.svg`, `columns-2.svg`, `book-open.svg`, `code.svg`, `download.svg`, `save.svg`, `settings.svg`, `copy.svg`, `files.svg`, `list.svg`），使用 `svg().path(...).text_color(color)` 渲染，色彩动态跟随主题，全屏绝对平滑，极简优雅。
 
+### 13. 全局 Tooltip 提示、去边线极简呼吸感、双击重命名修复与原生微动效 (ADR 0009)
+- **全局图标 Tooltip 微胶囊**：在顶栏功能按钮（侧边栏、打开、导出、保存、设置）、模式切换胶囊（源码、分屏、阅读）、抽屉 Tab 与代码块复制按钮上，全面接入暗色半透明微胶囊，悬停 300ms 优雅呈现快捷键与操作说明。
+- **去边线与减少层级 (Borderless)**：消除抽屉顶部多重 1px 外框与分割线，去除模式切换控件多重边框，分割线收敛为发丝级微弱浅线，视觉彻底扁平干净。
+- **标题双击内联改名引擎修复**：双击立即将系统焦点锁定在输入控件，支持全选原名、连续键盘键入（包括字母、数字、空格与点号）、退格删除，按 `Enter` 提交重命名至磁盘并自动刷新侧栏同级列表，按 `Esc` 放弃还原。
+- **GPU 驱动原生微动效**：基于 GPUI `AnimationExt::with_animation` 与 `ease_in_out`，侧边栏抽屉展开收起实现 180ms 宽度平滑伸缩与透明度渐入，偏好设置模态实现 150ms 缩放淡入，标题编辑时光标带 600ms 呼吸律动。
+
 ---
 
 ## 三、 代码仓库架构与文件目录速查
@@ -109,7 +115,8 @@ GlideMark/
 │       ├── 0005-unified-topbar-custom-editor-and-palette-system.md
 │       ├── 0006-async-file-dialog-and-external-drop-handling.md
 │       ├── 0007-miaoyan-palette-borderless-toolbar-and-flex-scroll-fix.md
-│       └── 0008-native-mermaid-outline-navigation-and-asset-catalog.md
+│       ├── 0008-native-mermaid-outline-navigation-and-asset-catalog.md
+│       └── 0009-tooltips-borderless-minimalism-rename-fix-and-animations.md
 ├── assets/
 │   ├── AppIcon.icns                           # macOS 图标文件
 │   ├── Assets.car                             # actool 编译的现代 macOS 资产目录

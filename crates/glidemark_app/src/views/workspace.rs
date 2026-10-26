@@ -236,8 +236,10 @@ impl Render for WorkspaceView {
                 if this.is_renaming {
                     match event.keystroke.key.as_str() {
                         "enter" => {
-                            if !this.rename_buffer.trim().is_empty() {
-                                let _ = this.state.rename_file(&this.rename_buffer.clone());
+                            let new_name = this.rename_buffer.trim();
+                            if !new_name.is_empty() {
+                                let _ = this.state.rename_file(new_name);
+                                this.state.refresh_sibling_files();
                             }
                             this.is_renaming = false;
                             cx.notify();
@@ -250,11 +252,22 @@ impl Render for WorkspaceView {
                             this.rename_buffer.pop();
                             cx.notify();
                         }
+                        "space" => {
+                            this.rename_buffer.push(' ');
+                            cx.notify();
+                        }
+                        "period" => {
+                            this.rename_buffer.push('.');
+                            cx.notify();
+                        }
                         key => {
                             if let Some(ch) = &event.keystroke.key_char {
                                 this.rename_buffer.push_str(ch);
                                 cx.notify();
-                            } else if key.chars().count() == 1 && !event.keystroke.modifiers.control && !event.keystroke.modifiers.platform {
+                            } else if key.chars().count() == 1
+                                && !event.keystroke.modifiers.control
+                                && !event.keystroke.modifiers.platform
+                            {
                                 this.rename_buffer.push_str(key);
                                 cx.notify();
                             }
@@ -367,7 +380,7 @@ impl Render for WorkspaceView {
                     .pr(topbar_pr)
                     .bg(theme.surface)
                     .border_b_1()
-                    .border_color(theme.border)
+                    .border_color(theme.border.opacity(0.35))
                     .flex()
                     .items_center()
                     .justify_between()
@@ -379,6 +392,8 @@ impl Render for WorkspaceView {
                             .gap_1p5()
                             // Sidebar Drawer icon button
                             .child(render_icon_button(
+                                "btn_drawer",
+                                format!("{} (⌘B)", strings.directory_drawer),
                                 self.state.drawer_open,
                                 theme,
                                 render_sidebar_icon(if self.state.drawer_open { theme.accent } else { theme.text_muted }),
@@ -389,6 +404,8 @@ impl Render for WorkspaceView {
                             ))
                             // Open file icon button
                             .child(render_icon_button(
+                                "btn_open",
+                                format!("{} (⌘O)", strings.open_file),
                                 false,
                                 theme,
                                 render_folder_icon(theme.text_muted),
@@ -418,17 +435,42 @@ impl Render for WorkspaceView {
                                     .ml_2()
                                     .child(if self.is_renaming {
                                         div()
+                                            .id("title_rename_box")
                                             .px_2()
                                             .py_0p5()
                                             .bg(theme.bg)
                                             .border_1()
                                             .border_color(theme.accent)
                                             .rounded_sm()
+                                            .shadow_sm()
+                                            .flex()
+                                            .items_center()
+                                            .cursor_text()
+                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, _cx| {
+                                                window.focus(&this.focus_handle);
+                                            }))
                                             .child(
                                                 div()
                                                     .text_xs()
                                                     .font_weight(FontWeight::MEDIUM)
-                                                    .child(format!("{}_", self.rename_buffer)),
+                                                    .text_color(theme.text_primary)
+                                                    .child(if self.rename_buffer.is_empty() {
+                                                        "Untitled.md".to_string()
+                                                    } else {
+                                                        self.rename_buffer.clone()
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(px(1.5))
+                                                    .h(px(12.))
+                                                    .ml_0p5()
+                                                    .bg(theme.accent)
+                                                    .with_animation(
+                                                        "rename_cursor_blink",
+                                                        Animation::new(std::time::Duration::from_millis(600)).repeat(),
+                                                        |el, delta| el.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
+                                                    ),
                                             )
                                             .into_any_element()
                                     } else {
@@ -437,7 +479,7 @@ impl Render for WorkspaceView {
                                             .hover(|s| s.text_color(theme.accent))
                                             .on_mouse_down(
                                                 MouseButton::Left,
-                                                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                                cx.listener(|this, event: &MouseDownEvent, window, cx| {
                                                     if event.click_count == 2 {
                                                         let name = this
                                                             .state
@@ -449,6 +491,7 @@ impl Render for WorkspaceView {
                                                             .unwrap_or("Untitled.md");
                                                         this.rename_buffer = name.to_string();
                                                         this.is_renaming = true;
+                                                        window.focus(&this.focus_handle);
                                                         cx.notify();
                                                     }
                                                 }),
@@ -472,7 +515,7 @@ impl Render for WorkspaceView {
                                     }),
                             ),
                     )
-                    // Center area: View Mode Switcher Icons
+                    // Center area: View Mode Switcher Icons (Borderless floating capsule)
                     .child(
                         div()
                             .flex()
@@ -480,10 +523,10 @@ impl Render for WorkspaceView {
                             .bg(theme.bg)
                             .p_0p5()
                             .rounded_md()
-                            .border_1()
-                            .border_color(theme.border)
                             .gap_0p5()
                             .child(render_mode_icon_tab(
+                                "btn_mode_source",
+                                format!("{} (⌘1)", strings.source_mode),
                                 view_mode == ViewMode::Source,
                                 theme,
                                 render_source_mode_icon(if view_mode == ViewMode::Source { theme.accent } else { theme.text_muted }),
@@ -493,6 +536,8 @@ impl Render for WorkspaceView {
                                 }),
                             ))
                             .child(render_mode_icon_tab(
+                                "btn_mode_split",
+                                format!("{} (⌘2)", strings.split_mode),
                                 view_mode == ViewMode::Split,
                                 theme,
                                 render_split_mode_icon(if view_mode == ViewMode::Split { theme.accent } else { theme.text_muted }),
@@ -502,6 +547,8 @@ impl Render for WorkspaceView {
                                 }),
                             ))
                             .child(render_mode_icon_tab(
+                                "btn_mode_preview",
+                                format!("{} (⌘3)", strings.preview_mode),
                                 view_mode == ViewMode::Preview,
                                 theme,
                                 render_preview_mode_icon(if view_mode == ViewMode::Preview { theme.accent } else { theme.text_muted }),
@@ -519,6 +566,8 @@ impl Render for WorkspaceView {
                             .gap_1p5()
                             // Export HTML icon button
                             .child(render_icon_button(
+                                "btn_export",
+                                format!("{} (⇧⌘E)", strings.export_html),
                                 false,
                                 theme,
                                 render_export_icon(theme.text_muted),
@@ -532,6 +581,8 @@ impl Render for WorkspaceView {
                             ))
                             // Save file icon button
                             .child(render_icon_button(
+                                "btn_save",
+                                format!("{} (⌘S)", strings.save_file),
                                 false,
                                 theme,
                                 render_save_icon(if is_dirty { theme.accent } else { theme.text_muted }),
@@ -542,6 +593,8 @@ impl Render for WorkspaceView {
                             ))
                             // Settings icon button
                             .child(render_icon_button(
+                                "btn_settings",
+                                format!("{} (⌘,)", strings.settings),
                                 self.state.settings_open,
                                 theme,
                                 render_settings_icon(if self.state.settings_open { theme.accent } else { theme.text_muted }),
@@ -623,18 +676,31 @@ impl Render for WorkspaceView {
                     .flex()
                     .overflow_hidden()
                     .when(self.state.drawer_open, |body| {
-                        body.child(render_drawer(
-                            self.state.drawer_tab,
-                            &self.state.sibling_files,
-                            self.state.doc.path.as_ref(),
-                            &self.state.doc.parsed.headings(),
-                            theme,
-                            strings,
-                            &self.drawer_scroll_handle,
-                            on_select_tab,
-                            on_select_file,
-                            on_select_heading,
-                        ))
+                        body.child(
+                            div()
+                                .id("animated_drawer_wrapper")
+                                .h_full()
+                                .overflow_hidden()
+                                .child(render_drawer(
+                                    self.state.drawer_tab,
+                                    &self.state.sibling_files,
+                                    self.state.doc.path.as_ref(),
+                                    &self.state.doc.parsed.headings(),
+                                    theme,
+                                    strings,
+                                    &self.drawer_scroll_handle,
+                                    on_select_tab,
+                                    on_select_file,
+                                    on_select_heading,
+                                ))
+                                .with_animation(
+                                    "drawer_slide_in",
+                                    Animation::new(std::time::Duration::from_millis(180)).with_easing(ease_in_out),
+                                    |el, delta| {
+                                        el.w(px(250.0 * delta)).opacity(delta.clamp(0.0, 1.0))
+                                    },
+                                ),
+                        )
                     })
                     .child(match view_mode {
                         ViewMode::Source => div()
@@ -721,7 +787,7 @@ impl Render for WorkspaceView {
                                             }
                                         }),
                                     )
-                                    .child(div().w(px(1.)).h_full().bg(theme.border)),
+                                    .child(div().w(px(1.)).h_full().bg(theme.border.opacity(0.35))),
                             )
                             .child(
                                 div()
@@ -746,32 +812,71 @@ impl Render for WorkspaceView {
             )
             // Settings Modal
             .when(self.state.settings_open, |body| {
-                body.child(render_settings_modal(
-                    self.state.preferences.theme,
-                    &self.state.preferences.palette,
-                    self.state.preferences.locale,
-                    theme,
-                    strings,
-                    on_close_settings,
-                    on_set_mode,
-                    on_set_palette,
-                    on_set_locale,
-                ))
+                body.child(
+                    div()
+                        .id("animated_settings_modal")
+                        .child(render_settings_modal(
+                            self.state.preferences.theme,
+                            &self.state.preferences.palette,
+                            self.state.preferences.locale,
+                            theme,
+                            strings,
+                            on_close_settings,
+                            on_set_mode,
+                            on_set_palette,
+                            on_set_locale,
+                        ))
+                        .with_animation(
+                            "settings_fade_in",
+                            Animation::new(std::time::Duration::from_millis(150)).with_easing(ease_in_out),
+                            |el, delta| el.opacity(delta.clamp(0.0, 1.0)),
+                        ),
+                )
             })
     }
 }
 
-// Minimalist vector icon button helper (Borderless in idle, soft capsule on hover)
+// Floating tooltip micro-capsule with dark frosted styling
+struct TooltipView {
+    text: String,
+}
+
+impl Render for TooltipView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(rgba(0x18181bf2))
+            .border_1()
+            .border_color(rgba(0x3f3f4640))
+            .text_size(px(11.))
+            .text_color(rgb(0xf4f4f5))
+            .font_family("ui-sans-serif, system-ui")
+            .shadow_md()
+            .child(self.text.clone())
+    }
+}
+
+// Minimalist vector icon button helper with tooltips and hover capsule
 fn render_icon_button<F>(
+    id: impl Into<ElementId>,
+    tooltip_text: impl Into<String>,
     active: bool,
     theme: &crate::theme::ThemeColors,
-    icon: impl IntoElement,
+    icon: impl IntoElement + 'static,
     handler: F,
 ) -> impl IntoElement
 where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
+    let text = tooltip_text.into();
     let base = div()
+        .id(id)
+        .tooltip(move |_window, cx| {
+            let t = text.clone();
+            cx.new(|_| TooltipView { text: t }).into()
+        })
         .w(px(28.))
         .h(px(28.))
         .rounded_md()
@@ -791,15 +896,23 @@ where
 }
 
 fn render_mode_icon_tab<F>(
+    id: impl Into<ElementId>,
+    tooltip_text: impl Into<String>,
     active: bool,
     theme: &crate::theme::ThemeColors,
-    icon: impl IntoElement,
+    icon: impl IntoElement + 'static,
     handler: F,
 ) -> impl IntoElement
 where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
+    let text = tooltip_text.into();
     let base = div()
+        .id(id)
+        .tooltip(move |_window, cx| {
+            let t = text.clone();
+            cx.new(|_| TooltipView { text: t }).into()
+        })
         .w(px(28.))
         .h(px(24.))
         .rounded_sm()
@@ -811,6 +924,7 @@ where
 
     if active {
         base.bg(theme.surface)
+            .shadow_sm()
             .text_color(theme.accent)
             .child(icon)
     } else {

@@ -506,6 +506,27 @@ fn render_mermaid_node_card(
         .into_any_element()
 }
 
+struct CodeTooltipView {
+    text: String,
+}
+
+impl Render for CodeTooltipView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(rgba(0x18181bf2))
+            .border_1()
+            .border_color(rgba(0x3f3f4640))
+            .text_size(px(11.))
+            .text_color(rgb(0xf4f4f5))
+            .font_family("ui-sans-serif, system-ui")
+            .shadow_md()
+            .child(self.text.clone())
+    }
+}
+
 fn render_code_block(
     lang: Option<&str>,
     code: &str,
@@ -561,6 +582,11 @@ fn render_code_block(
                 )
                 .child(
                     div()
+                        .id(SharedString::from(format!("copy_code_btn_{}", code.len())))
+                        .tooltip(|_window, cx| {
+                            cx.new(|_| CodeTooltipView { text: "复制代码".to_string() }).into()
+                        })
+                        .cursor_pointer()
                         .flex()
                         .items_center()
                         .child(

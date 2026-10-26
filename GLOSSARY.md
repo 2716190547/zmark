@@ -100,3 +100,15 @@ _Avoid_: Raw icns, icon directory, tile wrapper
 The primary warm terracotta (`#D9532F`) and golden-amber color scheme with pure white canvas, harmonizing with the GlideMark brand identity.
 _Avoid_: MiaoYan theme, custom skin, orange theme
 
+**Tooltip**:
+A contextual floating micro-capsule surfaced on icon hover after a brief delay, detailing the action name and its keyboard shortcut.
+_Avoid_: Hint box, hover popup, title tag
+
+**Borderless Hierarchy**:
+A flattened, breathable visual design system removing redundant boundary borders and multi-level outlines in favor of clean whitespace and gentle background separation.
+_Avoid_: Frameless mode, line-free UI, flat theme
+
+**Micro-animations**:
+Short, hardware-accelerated transitions (150–200ms) with easing curves applied to drawer toggles, modal dialogues, and control highlights to deliver smooth tactile feedback.
+_Avoid_: Heavy animations, visual effects, transitions pack
+

@@ -28,15 +28,13 @@ pub fn render_drawer(
         .h_full()
         .bg(theme.surface)
         .border_r_1()
-        .border_color(theme.border)
+        .border_color(theme.border.opacity(0.35))
         .flex()
         .flex_col()
         // Top Header: Dual Segment Capsule Tabs (Files / Outline)
         .child(
             div()
-                .p_2p5()
-                .border_b_1()
-                .border_color(theme.border)
+                .p_2()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -45,12 +43,11 @@ pub fn render_drawer(
                         .w_full()
                         .bg(theme.bg)
                         .p_0p5()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(theme.border)
+                        .rounded_md()
                         .flex()
                         .gap_0p5()
                         .child(render_tab_pill(
+                            "tab_pill_files",
                             strings.tab_files,
                             "icons/files.svg",
                             active_tab == DrawerTab::Files,
@@ -58,6 +55,7 @@ pub fn render_drawer(
                             move |_, window, cx| t1(DrawerTab::Files, window, cx),
                         ))
                         .child(render_tab_pill(
+                            "tab_pill_outline",
                             strings.tab_outline,
                             "icons/list.svg",
                             active_tab == DrawerTab::Outline,
@@ -167,7 +165,29 @@ pub fn render_drawer(
         )
 }
 
+struct DrawerTooltipView {
+    text: String,
+}
+
+impl Render for DrawerTooltipView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(rgba(0x18181bf2))
+            .border_1()
+            .border_color(rgba(0x3f3f4640))
+            .text_size(px(11.))
+            .text_color(rgb(0xf4f4f5))
+            .font_family("ui-sans-serif, system-ui")
+            .shadow_md()
+            .child(self.text.clone())
+    }
+}
+
 fn render_tab_pill<F>(
+    id: impl Into<ElementId>,
     title: &str,
     icon_path: &'static str,
     active: bool,
@@ -177,7 +197,13 @@ fn render_tab_pill<F>(
 where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
+    let text = title.to_string();
     let base = div()
+        .id(id)
+        .tooltip(move |_window, cx| {
+            let t = text.clone();
+            cx.new(|_| DrawerTooltipView { text: t }).into()
+        })
         .flex_1()
         .py_1()
         .rounded_md()
@@ -194,6 +220,7 @@ where
 
     if active {
         base.bg(theme.surface)
+            .shadow_sm()
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.accent)
             .child(icon_el)
