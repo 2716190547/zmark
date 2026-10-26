@@ -1,30 +1,76 @@
 #!/usr/bin/env python3
 import os
 import math
-from PIL import Image, ImageDraw
+import shutil
+import subprocess
+from PIL import Image, ImageDraw, ImageFilter
 
 CANVAS_SIZE = 1024
-SS = 4  # 4x supersampling for ultra-crisp edges
+SS = 4  # 4x supersampling for crisp Retina edges
 SIZE = CANVAS_SIZE * SS
 
-# 1. Full-bleed pure white canvas: solid #FFFFFF across entire 1024x1024 frame.
-# This eliminates any inner floating squircle and lets macOS Dock clip it
-# cleanly to the native single-layer Dock tile with zero nesting ("一层套一层").
-canvas = Image.new('RGBA', (SIZE, SIZE), (255, 255, 255, 255))
+# Apple macOS HIG squircle dimensions at 1024x1024 (scaled by SS)
+# Base squircle: 824x824, centered at x=100..924, y=100..924
+BASE_W = int(824 * SS)
+BASE_H = int(824 * SS)
+BASE_X0 = int(100 * SS)
+BASE_Y0 = int(100 * SS)
+BASE_X1 = BASE_X0 + BASE_W
+BASE_Y1 = BASE_Y0 + BASE_H
+CORNER_RADIUS = int(185 * SS)
 
-# 2. Render warm terracotta-to-amber gradient Z glyph centered inside canvas
-# Glyph size: ~620x620 at 1024x1024 (scaled by SS) for bold, clear brand recognition
-glyph_size = int(620 * SS)
-gx0 = (SIZE - glyph_size) // 2
-gy0 = (SIZE - glyph_size) // 2
+# Create 100% transparent canvas (macOS requires alpha=0 at outer corners to avoid system squircle jail)
+canvas = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
+
+# 1. Soft downward ambient drop shadow (macOS HIG standard)
+shadow = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
+s_draw = ImageDraw.Draw(shadow)
+shadow_dy = int(16 * SS)
+s_draw.rounded_rectangle(
+    [BASE_X0, BASE_Y0 + shadow_dy, BASE_X1, BASE_Y1 + shadow_dy],
+    radius=CORNER_RADIUS,
+    fill=(0, 0, 0, 48)  # ~18.8% alpha ambient shadow
+)
+# Additional tighter contact shadow at bottom edge
+s_draw.rounded_rectangle(
+    [BASE_X0 + int(30 * SS), BASE_Y1 - int(10 * SS), BASE_X1 - int(30 * SS), BASE_Y1 + int(10 * SS)],
+    radius=int(30 * SS),
+    fill=(0, 0, 0, 24)
+)
+shadow = shadow.filter(ImageFilter.GaussianBlur(radius=int(18 * SS)))
+canvas.paste(shadow, (0, 0), shadow)
+
+# 2. Pure White Squircle Card with delicate hairline boundary stroke
+squircle_mask = Image.new('L', (SIZE, SIZE), 0)
+m_draw = ImageDraw.Draw(squircle_mask)
+m_draw.rounded_rectangle(
+    [BASE_X0, BASE_Y0, BASE_X1, BASE_Y1],
+    radius=CORNER_RADIUS,
+    fill=255
+)
+
+squircle_img = Image.new('RGBA', (SIZE, SIZE), (255, 255, 255, 255))
+sq_draw = ImageDraw.Draw(squircle_img)
+# 1px border at 1024 in subtle neutral gray rgba(0, 0, 0, 0.08)
+sq_draw.rounded_rectangle(
+    [BASE_X0, BASE_Y0, BASE_X1, BASE_Y1],
+    radius=CORNER_RADIUS,
+    outline=(0, 0, 0, 20),
+    width=max(1, int(1.5 * SS))
+)
+canvas.paste(squircle_img, (0, 0), squircle_mask)
+
+# 3. Terracotta-to-amber gradient Z glyph centered inside squircle
+# Glyph size: ~500x500 at 1024 (~60% of squircle for Apple HIG optical breathing room)
+glyph_size = int(500 * SS)
+gx0 = BASE_X0 + (BASE_W - glyph_size) // 2
+gy0 = BASE_Y0 + (BASE_H - glyph_size) // 2
 gx1 = gx0 + glyph_size
 gy1 = gy0 + glyph_size
 
-# Create glyph mask
 glyph_mask = Image.new('L', (SIZE, SIZE), 0)
 g_draw = ImageDraw.Draw(glyph_mask)
 
-# Top polygon of Z:
 p_top = [
     (gx0, gy0),
     (gx1, gy0),
@@ -33,7 +79,6 @@ p_top = [
 ]
 g_draw.polygon(p_top, fill=255)
 
-# Bottom polygon of Z:
 p_bot = [
     (gx0 + glyph_size * 3 // 8, gy0 + glyph_size // 2),
     (gx1, gy0 + glyph_size // 2),
@@ -42,10 +87,8 @@ p_bot = [
 ]
 g_draw.polygon(p_bot, fill=255)
 
-# Generate diagonal linear gradient: warm terracotta red-brown to golden yellow
 grad_img = Image.new('RGBA', (SIZE, SIZE))
 grad_pix = grad_img.load()
-
 c_start = (194, 65, 40)   # Terracotta red-brown #C24128
 c_end = (245, 158, 11)    # Golden amber #F59E0B
 
@@ -59,7 +102,6 @@ for y in range(gy0, gy1):
         b = int(c_start[2] + (c_end[2] - c_start[2]) * t_smooth)
         grad_pix[x, y] = (r, g, b, 255)
 
-# Composite gradient glyph onto white canvas
 canvas.paste(grad_img, (0, 0), glyph_mask)
 
 # Downscale to master 1024x1024 using Lanczos filter
@@ -89,9 +131,6 @@ for sz, fname in sizes:
     resized = master_1024.resize((sz, sz), Image.Resampling.LANCZOS)
     resized.save(os.path.join(iconset_dir, fname))
     resized.save(os.path.join(xcassets_dir, fname))
-
-import subprocess
-import shutil
 
 # Try iconutil to build AppIcon.icns
 try:
