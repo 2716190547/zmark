@@ -128,17 +128,21 @@ _Avoid_: Auto sync, periodic save, timer poll
 A two-column preferences dialog organizing configuration domains into a left category navigation sidebar (Appearance, Editor & Save, Language, About) and a right card panel.
 _Avoid_: Settings page, preferences window, config popover
 
-**Settings Drawer**:
-A right-sliding in-window drawer (width 380px) displaying application preferences and theme controls with live preview, eliminating secondary window borrow re-entrancy crashes.
-_Avoid_: Settings modal, config popup, preferences window
+**Decoupled Settings Window**:
+A dedicated native macOS window opened asynchronously via `cx.defer` with two-column split layout (160px category nav + scrollable settings content) decoupled from WorkspaceView to eliminate borrow panics.
+_Avoid_: In-window drawer, settings popup, config modal
 
 **Continuous Surface**:
 An edge-to-edge, full-height writing and preview canvas separated by delicate 1px hairlines and tonal background distinction, eliminating floating card gutters for immersive drafting.
 _Avoid_: Floating card, dashboard box, rounded tile
 
-**HIG White Squircle Icon**:
-An Apple Human Interface Guidelines compliant 824x824 pure white (`#FFFFFF`) squircle base with ambient drop shadow hosting the warm gradient Z glyph centered in a 1024x1024 canvas.
-_Avoid_: Transparent glyph, framed icon, gray tile
+**Full-Bleed White Icon**:
+A solid pure white (`#FFFFFF`) 1024x1024 canvas hosting the centered gradient Z brand glyph, allowing macOS Dock's single native squircle mask to clip it directly without nested inner cards.
+_Avoid_: Squircle-in-squircle, nested box, gray border tile
+
+**Bidirectional Drawer Animation**:
+A smooth 180ms ease-in-out transition animating the directory drawer both when expanding and when collapsing.
+_Avoid_: Instant snap, zero-duration close, unmount flash
 
 
 

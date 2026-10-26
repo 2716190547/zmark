@@ -1,72 +1,22 @@
 #!/usr/bin/env python3
 import os
 import math
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 CANVAS_SIZE = 1024
 SS = 4  # 4x supersampling for ultra-crisp edges
 SIZE = CANVAS_SIZE * SS
 
-# Apple macOS HIG squircle dimensions at 1024x1024 (scaled by SS)
-# Base squircle: 824x824, centered at x=100..924, y=90..914 (optical center with downward shadow)
-BASE_W = int(824 * SS)
-BASE_H = int(824 * SS)
-BASE_X0 = int(100 * SS)
-BASE_Y0 = int(90 * SS)
-BASE_X1 = BASE_X0 + BASE_W
-BASE_Y1 = BASE_Y0 + BASE_H
-CORNER_RADIUS = int(185 * SS)
+# 1. Full-bleed pure white canvas: solid #FFFFFF across entire 1024x1024 frame.
+# This eliminates any inner floating squircle and lets macOS Dock clip it
+# cleanly to the native single-layer Dock tile with zero nesting ("一层套一层").
+canvas = Image.new('RGBA', (SIZE, SIZE), (255, 255, 255, 255))
 
-# Create master canvas with transparent border
-canvas = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
-
-# 1. Generate macOS standard ambient drop shadow
-# Shadow offset dy = 18px * SS, blur = 24px * SS
-shadow_layer = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
-s_draw = ImageDraw.Draw(shadow_layer)
-shadow_dy = int(18 * SS)
-s_draw.rounded_rectangle(
-    [BASE_X0, BASE_Y0 + shadow_dy, BASE_X1, BASE_Y1 + shadow_dy],
-    radius=CORNER_RADIUS,
-    fill=(0, 0, 0, 45)  # Soft natural drop shadow
-)
-# Additional tighter contact shadow at bottom edge
-s_draw.rounded_rectangle(
-    [BASE_X0 + int(20 * SS), BASE_Y1 - int(10 * SS), BASE_X1 - int(20 * SS), BASE_Y1 + int(12 * SS)],
-    radius=int(40 * SS),
-    fill=(0, 0, 0, 25)
-)
-shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=int(18 * SS)))
-canvas.paste(shadow_layer, (0, 0), shadow_layer)
-
-# 2. Draw Pure White Squircle Card
-squircle_mask = Image.new('L', (SIZE, SIZE), 0)
-m_draw = ImageDraw.Draw(squircle_mask)
-m_draw.rounded_rectangle(
-    [BASE_X0, BASE_Y0, BASE_X1, BASE_Y1],
-    radius=CORNER_RADIUS,
-    fill=255
-)
-
-# Squircle background: Pure white (#FFFFFF) with subtle delicate 1px boundary stroke
-squircle_img = Image.new('RGBA', (SIZE, SIZE), (255, 255, 255, 255))
-sq_draw = ImageDraw.Draw(squircle_img)
-# 1px border at 1024 (4px at SS) in subtle neutral gray rgba(0,0,0,0.06)
-sq_draw.rounded_rectangle(
-    [BASE_X0, BASE_Y0, BASE_X1, BASE_Y1],
-    radius=CORNER_RADIUS,
-    outline=(0, 0, 0, 16),
-    width=max(1, int(1.5 * SS))
-)
-
-# Paste pure white squircle onto canvas
-canvas.paste(squircle_img, (0, 0), squircle_mask)
-
-# 3. Render warm terracotta-to-amber gradient Z glyph centered inside squircle
-# Glyph size: ~480x480 at 1024x1024
-glyph_size = int(480 * SS)
-gx0 = BASE_X0 + (BASE_W - glyph_size) // 2
-gy0 = BASE_Y0 + (BASE_H - glyph_size) // 2
+# 2. Render warm terracotta-to-amber gradient Z glyph centered inside canvas
+# Glyph size: ~620x620 at 1024x1024 (scaled by SS) for bold, clear brand recognition
+glyph_size = int(620 * SS)
+gx0 = (SIZE - glyph_size) // 2
+gy0 = (SIZE - glyph_size) // 2
 gx1 = gx0 + glyph_size
 gy1 = gy0 + glyph_size
 
@@ -109,7 +59,7 @@ for y in range(gy0, gy1):
         b = int(c_start[2] + (c_end[2] - c_start[2]) * t_smooth)
         grad_pix[x, y] = (r, g, b, 255)
 
-# Composite gradient glyph onto squircle card
+# Composite gradient glyph onto white canvas
 canvas.paste(grad_img, (0, 0), glyph_mask)
 
 # Downscale to master 1024x1024 using Lanczos filter

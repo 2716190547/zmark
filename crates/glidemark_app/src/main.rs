@@ -99,9 +99,11 @@ Enjoy writing and reading with pure speed!
             ..Default::default()
         };
 
-        cx.open_window(window_options, |_window, cx| {
+        cx.open_window(window_options, |window, cx| {
             let state = AppState::new(doc);
-            cx.new(|cx| WorkspaceView::new(state, cx))
+            let view = cx.new(|cx| WorkspaceView::new(state, cx));
+            window.focus(&view.read(cx).focus_handle);
+            view
         })
         .unwrap();
     });

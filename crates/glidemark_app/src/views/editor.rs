@@ -27,7 +27,7 @@ pub fn render_editor_pane(
             div()
                 .h(px(32.))
                 .px_4()
-                .bg(theme.surface)
+                .bg(theme.bg)
                 .border_b_1()
                 .border_color(theme.border)
                 .flex()

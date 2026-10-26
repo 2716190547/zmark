@@ -72,9 +72,9 @@ impl ThemeColors {
                 id: "default",
                 name: "Default",
                 is_dark: false,
-                bg: rgb(0xf4f4f6).into(),      // Soft mist-gray window canvas
-                surface: rgb(0xffffff).into(), // Crisp pure white elevated card
-                border: rgb(0xe5e5ea).into(),  // Delicate hairline card edge
+                bg: rgb(0xf0f0f4).into(),      // Soft mist-gray for sidebar & window chrome (#F0F0F4)
+                surface: rgb(0xffffff).into(), // Crisp pure white paper canvas (#FFFFFF)
+                border: rgb(0xe2e2e8).into(),  // Delicate 1px hairline divider (#E2E2E8)
                 text_primary: rgb(0x1f2328).into(),
                 text_muted: rgb(0x71717a).into(),
                 accent: rgb(0xd9532f).into(),  // Warm Terracotta Coral matching Logo

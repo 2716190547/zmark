@@ -10,7 +10,7 @@ use crate::state::{AppState, ViewMode};
 use crate::views::drawer::render_drawer;
 use crate::views::editor::render_editor_pane;
 use crate::views::preview::render_preview_pane;
-use crate::views::settings::render_settings_drawer;
+use crate::views::settings::SettingsWindowView;
 
 pub struct WorkspaceView {
     pub state: AppState,
@@ -24,6 +24,8 @@ pub struct WorkspaceView {
     pub rename_buffer: String,
     pub workspace_width: f32,
     pub auto_save_task: Option<Task<()>>,
+    pub drawer_closing: bool,
+    pub settings_window: Option<WindowHandle<SettingsWindowView>>,
 }
 
 impl WorkspaceView {
@@ -40,12 +42,82 @@ impl WorkspaceView {
             rename_buffer: String::new(),
             workspace_width: 1200.0,
             auto_save_task: None,
+            drawer_closing: false,
+            settings_window: None,
         }
     }
 
-    pub fn toggle_settings(&mut self, cx: &mut Context<Self>) {
-        self.state.toggle_settings();
-        cx.notify();
+    pub fn toggle_drawer(&mut self, cx: &mut Context<Self>) {
+        if self.drawer_closing {
+            self.drawer_closing = false;
+            self.state.drawer_open = true;
+            cx.notify();
+            return;
+        }
+
+        if self.state.drawer_open {
+            self.drawer_closing = true;
+            cx.notify();
+            cx.spawn(async move |this, app| {
+                app.background_executor()
+                    .timer(std::time::Duration::from_millis(180))
+                    .await;
+                let _ = this.update(app, |this, cx| {
+                    if this.drawer_closing {
+                        this.state.drawer_open = false;
+                        this.drawer_closing = false;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        } else {
+            self.state.drawer_open = true;
+            self.drawer_closing = false;
+            cx.notify();
+        }
+    }
+
+    pub fn open_settings_window(&mut self, cx: &mut Context<Self>) {
+        if let Some(existing) = &self.settings_window {
+            if existing
+                .update(cx, |_, window, _| {
+                    window.activate_window();
+                })
+                .is_ok()
+            {
+                return;
+            }
+        }
+        let workspace = cx.entity().clone();
+        let ws = cx.entity().downgrade();
+        let preferences = self.state.preferences.clone();
+        let theme = self.state.theme.clone();
+        let strings = self.state.strings;
+        let current_tab = self.state.settings_tab;
+
+        cx.defer(move |cx| {
+            let bounds = Bounds::centered(None, size(px(640.), px(460.)), cx);
+            let handle = cx.open_window(
+                WindowOptions {
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("GlideMark - 偏好设置".into()),
+                        appears_transparent: true,
+                        traffic_light_position: Some(point(px(14.), px(14.))),
+                    }),
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                |_window, cx| {
+                    cx.new(|cx| SettingsWindowView::new(ws, current_tab, preferences, theme, strings, cx))
+                },
+            );
+            if let Ok(h) = handle {
+                let _ = workspace.update(cx, |this, _cx| {
+                    this.settings_window = Some(h);
+                });
+            }
+        });
     }
 
     pub fn trigger_auto_save(&mut self, cx: &mut Context<Self>) {
@@ -133,69 +205,8 @@ impl Render for WorkspaceView {
             });
         });
 
-        let ws_close_settings = cx.entity().clone();
-        let on_close_settings = Arc::new(move |_e: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
-            ws_close_settings.update(cx, |this, cx| {
-                this.state.settings_open = false;
-                cx.notify();
-            });
-        });
-
-        let ws_tab = cx.entity().clone();
-        let on_set_settings_tab = Arc::new(move |tab, _window: &mut Window, cx: &mut App| {
-            ws_tab.update(cx, |this, cx| {
-                this.state.set_settings_tab(tab);
-                cx.notify();
-            });
-        });
-
-        let ws_mode = cx.entity().clone();
-        let on_set_mode = Arc::new(move |mode, _window: &mut Window, cx: &mut App| {
-            ws_mode.update(cx, |this, cx| {
-                this.state.set_theme_mode(mode);
-                cx.notify();
-            });
-        });
-
-        let ws_pal = cx.entity().clone();
-        let on_set_palette = Arc::new(move |palette: &'static str, _window: &mut Window, cx: &mut App| {
-            ws_pal.update(cx, |this, cx| {
-                this.state.set_palette(palette);
-                cx.notify();
-            });
-        });
-
-        let ws_loc = cx.entity().clone();
-        let on_set_locale = Arc::new(move |locale, _window: &mut Window, cx: &mut App| {
-            ws_loc.update(cx, |this, cx| {
-                this.state.set_locale(locale);
-                cx.notify();
-            });
-        });
-
-        let ws_as = cx.entity().clone();
-        let on_toggle_auto_save = Arc::new(move |enabled, _window: &mut Window, cx: &mut App| {
-            ws_as.update(cx, |this, cx| {
-                this.state.set_auto_save(enabled);
-                cx.notify();
-            });
-        });
-
-        let ws_asb = cx.entity().clone();
-        let on_toggle_auto_save_on_blur = Arc::new(move |enabled, _window: &mut Window, cx: &mut App| {
-            ws_asb.update(cx, |this, cx| {
-                this.state.set_auto_save_on_blur(enabled);
-                cx.notify();
-            });
-        });
-
-        let ws_ts = cx.entity().clone();
-        let on_set_tab_size = Arc::new(move |tab_size, _window: &mut Window, cx: &mut App| {
-            ws_ts.update(cx, |this, cx| {
-                this.state.set_tab_size(tab_size);
-                cx.notify();
-            });
-        });
+        let show_drawer = self.state.drawer_open || self.drawer_closing;
+        let is_drawer_closing = self.drawer_closing;
 
         div()
             .key_context("Workspace")
@@ -222,8 +233,7 @@ impl Render for WorkspaceView {
                     let w = this.workspace_width;
                     let x = f32::from(event.position.x);
                     let left_offset = if this.state.drawer_open { 250.0 } else { 0.0 };
-                    let right_offset = if this.state.settings_open { 380.0 } else { 0.0 };
-                    let avail_w = (w - left_offset - right_offset).max(100.0);
+                    let avail_w = (w - left_offset).max(100.0);
                     let offset_x = (x - left_offset).max(0.0);
                     this.split_ratio = (offset_x / avail_w).clamp(0.20, 0.80);
                     cx.notify();
@@ -247,11 +257,10 @@ impl Render for WorkspaceView {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleDrawer, _window, cx| {
-                this.state.toggle_drawer();
-                cx.notify();
+                this.toggle_drawer(cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleSettings, _window, cx| {
-                this.toggle_settings(cx);
+                this.open_settings_window(cx);
             }))
             .on_action(cx.listener(|_this, _: &OpenFileDialog, _window, cx| {
                 cx.spawn(async move |this, app| {
@@ -366,11 +375,10 @@ impl Render for WorkspaceView {
                             .detach();
                         }
                         "," => {
-                            this.toggle_settings(cx);
+                            this.open_settings_window(cx);
                         }
                         "b" => {
-                            this.state.toggle_drawer();
-                            cx.notify();
+                            this.toggle_drawer(cx);
                         }
                         "1" => {
                             this.state.set_view_mode(ViewMode::Source);
@@ -436,9 +444,9 @@ impl Render for WorkspaceView {
                     .h(px(42.))
                     .pl(topbar_pl)
                     .pr(topbar_pr)
-                    .bg(theme.surface)
+                    .bg(theme.bg)
                     .border_b_1()
-                    .border_color(theme.border.opacity(0.35))
+                    .border_color(theme.border)
                     .flex()
                     .items_center()
                     .justify_between()
@@ -456,8 +464,7 @@ impl Render for WorkspaceView {
                                 theme,
                                 render_sidebar_icon(if self.state.drawer_open { theme.accent } else { theme.text_muted }),
                                 cx.listener(|this, _, _window, cx| {
-                                    this.state.toggle_drawer();
-                                    cx.notify();
+                                    this.toggle_drawer(cx);
                                 }),
                             ))
                             // Open file icon button
@@ -655,11 +662,11 @@ impl Render for WorkspaceView {
                             .child(render_icon_button(
                                 "btn_settings",
                                 format!("{} (⌘,)", strings.settings),
-                                self.state.settings_open,
+                                self.settings_window.is_some(),
                                 theme,
                                 render_settings_icon(theme.text_muted),
                                 cx.listener(|this, _, _window, cx| {
-                                    this.toggle_settings(cx);
+                                    this.open_settings_window(cx);
                                 }),
                             )),
                     ),
@@ -734,11 +741,11 @@ impl Render for WorkspaceView {
                     .min_w(px(0.))
                     .flex()
                     .overflow_hidden()
-                    // 1. Left Drawer (Files & TOC)
-                    .when(self.state.drawer_open, |body| {
+                    // 1. Left Drawer (Files & TOC) with Bidirectional 180ms Animation
+                    .when(show_drawer, |body| {
                         body.child(
                             div()
-                                .id("animated_drawer_wrapper")
+                                .id(if is_drawer_closing { "animated_drawer_closing" } else { "animated_drawer_opening" })
                                 .h_full()
                                 .overflow_hidden()
                                 .child(
@@ -763,10 +770,11 @@ impl Render for WorkspaceView {
                                         )),
                                 )
                                 .with_animation(
-                                    "drawer_slide_in",
+                                    if is_drawer_closing { "drawer_slide_out" } else { "drawer_slide_in" },
                                     Animation::new(std::time::Duration::from_millis(180)).with_easing(ease_in_out),
-                                    |el, delta| {
-                                        el.w(px(250.0 * delta)).opacity(delta.clamp(0.0, 1.0))
+                                    move |el, delta| {
+                                        let factor = if is_drawer_closing { 1.0 - delta } else { delta };
+                                        el.w(px(250.0 * factor)).opacity(factor.clamp(0.0, 1.0))
                                     },
                                 ),
                         )
@@ -880,51 +888,7 @@ impl Render for WorkspaceView {
                                     )
                                     .into_any_element(),
                             }),
-                    )
-                    // 3. Right Drawer (Settings)
-                    .when(self.state.settings_open, |body| {
-                        body.child(
-                            div()
-                                .id("animated_settings_drawer_wrapper")
-                                .h_full()
-                                .overflow_hidden()
-                                .child(
-                                    div()
-                                        .w(px(380.))
-                                        .h_full()
-                                        .border_l_1()
-                                        .border_color(theme.border)
-                                        .bg(theme.bg)
-                                        .overflow_hidden()
-                                        .child(render_settings_drawer(
-                                            self.state.settings_tab,
-                                            self.state.preferences.theme,
-                                            &self.state.preferences.palette,
-                                            self.state.preferences.locale,
-                                            self.state.preferences.auto_save,
-                                            self.state.preferences.auto_save_on_blur,
-                                            self.state.preferences.tab_size,
-                                            theme,
-                                            strings,
-                                            on_close_settings,
-                                            on_set_settings_tab,
-                                            on_set_mode,
-                                            on_set_palette,
-                                            on_set_locale,
-                                            on_toggle_auto_save,
-                                            on_toggle_auto_save_on_blur,
-                                            on_set_tab_size,
-                                        )),
-                                )
-                                .with_animation(
-                                    "settings_drawer_slide_in",
-                                    Animation::new(std::time::Duration::from_millis(180)).with_easing(ease_in_out),
-                                    |el, delta| {
-                                        el.w(px(380.0 * delta)).opacity(delta.clamp(0.0, 1.0))
-                                    },
-                                ),
-                        )
-                    }),
+                    ),
             )
     }
 }

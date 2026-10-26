@@ -82,6 +82,7 @@ impl AppState {
         self.view_mode = mode;
     }
 
+    #[allow(dead_code)]
     pub fn toggle_drawer(&mut self) {
         self.drawer_open = !self.drawer_open;
         if self.drawer_open {
@@ -98,6 +99,7 @@ impl AppState {
         self.settings_open = !self.settings_open;
     }
 
+    #[allow(dead_code)]
     pub fn set_settings_tab(&mut self, tab: SettingsTab) {
         self.settings_tab = tab;
     }
