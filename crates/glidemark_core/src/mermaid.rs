@@ -429,6 +429,39 @@ flowchart TD
         assert!(dark_svg.contains("<svg"));
         assert!(dark_svg.contains("#1e1e2e"));
     }
+
+    #[test]
+    fn test_normalize_svg_bounds_eliminates_empty_void() {
+        let code = r#"
+flowchart LR
+    subgraph FE["1. 前端交互层"]
+        direction TB
+        UI["Vue 3 问答页"] --> SSE["SSE 流接收器"] --> Table["状态灯与表格"]
+    end
+
+    subgraph BE["2. 后端服务层"]
+        direction TB
+        API["FastAPI 路由"] --> Svc["QueryService"] --> Graph["LangGraph 状态机"]
+    end
+
+    subgraph Infra["3. 存储与模型底座"]
+        direction TB
+        MySQL[("MySQL (dw + meta)")]
+        Vec[("Qdrant + ES 索引")]
+        AI["DeepSeek + BGE 模型"]
+    end
+
+    FE <== "SSE 实时流" ==> BE
+    BE <== "检索 / 推理 / 查数" ==> Infra
+"#;
+        let svg = render_to_svg(code).expect("should render svg");
+        // Verify that the normalized SVG does NOT retain the bloated 1300+ px height
+        assert!(svg.contains("<svg"));
+        // Extract height attribute
+        let height_attr = extract_attr(&svg, "height=").expect("height attr");
+        let height: f64 = height_attr.parse().expect("parse height");
+        assert!(height < 400.0, "SVG height should be compact (<400px), but was {}", height);
+    }
 }
 
 /// Renders a Mermaid diagram source to a standard, high-quality SVG vector graphic in pure Rust.
@@ -444,7 +477,107 @@ pub fn render_to_svg_themed(code: &str, is_dark: bool) -> Result<String, String>
     } else {
         rusty_mermaid::Theme::light()
     };
-    rusty_mermaid::to_svg(&sanitized, &theme).map_err(|e| format!("{:?}", e))
+    let raw_svg = rusty_mermaid::to_svg(&sanitized, &theme).map_err(|e| format!("{:?}", e))?;
+    Ok(normalize_svg_bounds(&raw_svg))
+}
+
+pub fn normalize_svg_bounds(svg: &str) -> String {
+    let g_start_tag = match svg.find("<g transform=\"translate(") {
+        Some(idx) => idx,
+        None => return svg.to_string(),
+    };
+    let g_tag_end = match svg[g_start_tag..].find('>') {
+        Some(idx) => g_start_tag + idx + 1,
+        None => return svg.to_string(),
+    };
+    let g_close = match svg.rfind("</g>") {
+        Some(idx) => idx,
+        None => return svg.to_string(),
+    };
+    if g_close <= g_tag_end {
+        return svg.to_string();
+    }
+
+    let inner = &svg[g_tag_end..g_close];
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    // Scan rects: <rect x=".." y=".." width=".." height=".."
+    for part in inner.split("<rect ") {
+        if let (Some(x_val), Some(y_val), Some(w_val), Some(h_val)) = (
+            extract_attr(part, "x="),
+            extract_attr(part, "y="),
+            extract_attr(part, "width="),
+            extract_attr(part, "height="),
+        ) {
+            if !w_val.contains('%') {
+                if let (Ok(x), Ok(y), Ok(w), Ok(h)) = (
+                    x_val.parse::<f64>(),
+                    y_val.parse::<f64>(),
+                    w_val.parse::<f64>(),
+                    h_val.parse::<f64>(),
+                ) {
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x + w);
+                    max_y = max_y.max(y + h);
+                }
+            }
+        }
+    }
+
+    // Scan text: <text x=".." y=".."
+    for part in inner.split("<text ") {
+        if let (Some(x_val), Some(y_val)) = (extract_attr(part, "x="), extract_attr(part, "y=")) {
+            if let (Ok(x), Ok(y)) = (x_val.parse::<f64>(), y_val.parse::<f64>()) {
+                min_x = min_x.min(x - 20.0);
+                min_y = min_y.min(y - 12.0);
+                max_x = max_x.max(x + 20.0);
+                max_y = max_y.max(y + 12.0);
+            }
+        }
+    }
+
+    if !min_x.is_finite() || !min_y.is_finite() || max_x <= min_x || max_y <= min_y {
+        return svg.to_string();
+    }
+
+    let padding = 20.0;
+    let content_w = max_x - min_x;
+    let content_h = max_y - min_y;
+    let new_w = content_w + padding * 2.0;
+    let new_h = content_h + padding * 2.0;
+    let new_tx = padding - min_x;
+    let new_ty = padding - min_y;
+
+    let header_end = match svg.find('>') {
+        Some(idx) => idx + 1,
+        None => return svg.to_string(),
+    };
+    let new_header = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {:.2} {:.2}" width="{:.2}" height="{:.2}">"#,
+        new_w, new_h, new_w, new_h
+    );
+
+    let prefix_before_g = &svg[header_end..g_start_tag];
+    let new_g_tag = format!(r#"<g transform="translate({:.2}, {:.2})">"#, new_tx, new_ty);
+    let suffix = &svg[g_tag_end..];
+
+    format!("{}{}{}{}", new_header, prefix_before_g, new_g_tag, suffix)
+}
+
+fn extract_attr<'a>(s: &'a str, attr_prefix: &str) -> Option<&'a str> {
+    let idx = s.find(attr_prefix)?;
+    let quote_start = idx + attr_prefix.len();
+    let quote_char = *s.as_bytes().get(quote_start)? as char;
+    if quote_char != '"' && quote_char != '\'' {
+        return None;
+    }
+    let rest = &s[quote_start + 1..];
+    let quote_end = rest.find(quote_char)?;
+    Some(&rest[..quote_end])
 }
 
 fn sanitize_mermaid(code: &str) -> String {
