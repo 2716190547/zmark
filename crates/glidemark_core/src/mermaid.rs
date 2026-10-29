@@ -462,6 +462,56 @@ flowchart LR
         let height: f64 = height_attr.parse().expect("parse height");
         assert!(height < 400.0, "SVG height should be compact (<400px), but was {}", height);
     }
+
+    #[test]
+    fn test_apply_texture_budget_clamps_dimensions() {
+        // Test 1: Wide diagram (width > max_dimension)
+        let raw_wide = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3602.72 1539.60" width="3602.72" height="1539.60"><g></g></svg>"#;
+        let budgeted_wide = apply_texture_budget(raw_wide, 1000.0);
+        let w: f64 = extract_attr(&budgeted_wide, "width=").unwrap().parse().unwrap();
+        let h: f64 = extract_attr(&budgeted_wide, "height=").unwrap().parse().unwrap();
+        assert!((w - 1000.0).abs() < 0.1);
+        assert!((h - 427.34).abs() < 0.5);
+        // viewBox must be unchanged to maintain vector resolution
+        assert!(budgeted_wide.contains(r#"viewBox="0 0 3602.72 1539.60""#));
+
+        // Test 2: Tall diagram (height > max_dimension)
+        let raw_tall = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600.00 2400.00" width="600.00" height="2400.00"><g></g></svg>"#;
+        let budgeted_tall = apply_texture_budget(raw_tall, 1000.0);
+        let w_tall: f64 = extract_attr(&budgeted_tall, "width=").unwrap().parse().unwrap();
+        let h_tall: f64 = extract_attr(&budgeted_tall, "height=").unwrap().parse().unwrap();
+        assert!((w_tall - 250.0).abs() < 0.1);
+        assert!((h_tall - 1000.0).abs() < 0.1);
+        assert!(budgeted_tall.contains(r#"viewBox="0 0 600.00 2400.00""#));
+
+        // Test 3: Diagram within budget (both <= max_dimension)
+        let raw_small = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400.00 300.00" width="400.00" height="300.00"><g></g></svg>"#;
+        let budgeted_small = apply_texture_budget(raw_small, 1000.0);
+        let w_small: f64 = extract_attr(&budgeted_small, "width=").unwrap().parse().unwrap();
+        let h_small: f64 = extract_attr(&budgeted_small, "height=").unwrap().parse().unwrap();
+        assert_eq!(w_small, 400.0);
+        assert_eq!(h_small, 300.0);
+        assert!(budgeted_small.contains(r#"viewBox="0 0 400.00 300.00""#));
+    }
+
+    #[test]
+    fn test_panic_isolation_on_malformed_or_panicking_diagram() {
+        // stateDiagram-v2 with Chinese/UTF-8 triggers string slice panic in rusty_mermaid 0.2.0
+        let state_diagram_panic = r#"
+stateDiagram-v2
+    [*] --> 状态1
+    状态1 --> [*]
+"#;
+        let res = render_to_svg_themed(state_diagram_panic, false);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("Mermaid render error"));
+
+        // Malformed diagram syntax returns error without panicking
+        let invalid = "not_a_valid_mermaid_diagram\n123 -> 456";
+        let res_invalid = render_to_svg(invalid);
+        assert!(res_invalid.is_err());
+    }
 }
 
 /// Renders a Mermaid diagram source to a standard, high-quality SVG vector graphic in pure Rust.
@@ -477,8 +527,81 @@ pub fn render_to_svg_themed(code: &str, is_dark: bool) -> Result<String, String>
     } else {
         rusty_mermaid::Theme::light()
     };
-    let raw_svg = rusty_mermaid::to_svg(&sanitized, &theme).map_err(|e| format!("{:?}", e))?;
-    Ok(normalize_svg_bounds(&raw_svg))
+
+    let render_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rusty_mermaid::to_svg(&sanitized, &theme)
+    }));
+
+    let raw_svg = match render_result {
+        Ok(Ok(svg)) => svg,
+        Ok(Err(e)) => return Err(format!("Mermaid render error: {:?}", e)),
+        Err(_) => {
+            return Err("Mermaid render error: diagram parsing panicked or is unsupported".to_string());
+        }
+    };
+
+    let normalized = normalize_svg_bounds(&raw_svg);
+    Ok(apply_texture_budget(&normalized, 1000.0))
+}
+
+/// Clamps the default width and height of an SVG to a texture budget (max_dimension),
+/// while preserving the full viewBox coordinate fidelity and aspect ratio.
+pub fn apply_texture_budget(svg: &str, max_dimension: f64) -> String {
+    let header_start = match svg.find("<svg") {
+        Some(idx) => idx,
+        None => return svg.to_string(),
+    };
+    let header_end = match svg[header_start..].find('>') {
+        Some(idx) => header_start + idx + 1,
+        None => return svg.to_string(),
+    };
+    let header = &svg[header_start..header_end];
+
+    let w_str = extract_attr(header, "width=");
+    let h_str = extract_attr(header, "height=");
+
+    if let (Some(w_val), Some(h_val)) = (w_str, h_str) {
+        if let (Ok(w), Ok(h)) = (w_val.parse::<f64>(), h_val.parse::<f64>()) {
+            let max_side = w.max(h);
+            if max_side > max_dimension && max_side > 0.0 {
+                let ratio = max_dimension / max_side;
+                let budgeted_w = w * ratio;
+                let budgeted_h = h * ratio;
+
+                let mut new_header = header.to_string();
+                new_header = replace_attr(&new_header, "width=", &format!("{:.2}", budgeted_w));
+                new_header = replace_attr(&new_header, "height=", &format!("{:.2}", budgeted_h));
+
+                return format!("{}{}{}", &svg[..header_start], new_header, &svg[header_end..]);
+            }
+        }
+    }
+
+    svg.to_string()
+}
+
+fn replace_attr(header: &str, attr_prefix: &str, new_value: &str) -> String {
+    if let Some(idx) = header.find(attr_prefix) {
+        let quote_start = idx + attr_prefix.len();
+        if let Some(quote_char) = header.as_bytes().get(quote_start).map(|&b| b as char) {
+            if quote_char == '"' || quote_char == '\'' {
+                let rest = &header[quote_start + 1..];
+                if let Some(quote_end) = rest.find(quote_char) {
+                    let end_pos = quote_start + 1 + quote_end + 1;
+                    return format!(
+                        "{}{}{}{}{}{}",
+                        &header[..idx],
+                        attr_prefix,
+                        quote_char,
+                        new_value,
+                        quote_char,
+                        &header[end_pos..]
+                    );
+                }
+            }
+        }
+    }
+    header.to_string()
 }
 
 pub fn normalize_svg_bounds(svg: &str) -> String {

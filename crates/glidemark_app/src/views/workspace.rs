@@ -1,12 +1,13 @@
 use gpui::prelude::*;
 use gpui::*;
 use std::sync::Arc;
+use glidemark_core::document::DocumentStatus;
 
 use crate::actions::{
     ExportHtml, OpenFileDialog, SaveFile, ToggleDrawer, TogglePreviewMode, ToggleSettings,
     ToggleSourceMode, ToggleSplitMode,
 };
-use crate::state::{AppState, ViewMode};
+use crate::state::{parse_debounce, AppState, ViewMode};
 use crate::views::drawer::render_drawer;
 use crate::views::editor::render_editor_pane;
 use crate::views::preview::render_preview_pane;
@@ -15,8 +16,8 @@ use crate::views::settings::SettingsWindowView;
 pub struct WorkspaceView {
     pub state: AppState,
     pub focus_handle: FocusHandle,
-    pub editor_scroll_handle: ScrollHandle,
-    pub preview_scroll_handle: ScrollHandle,
+    pub editor_scroll_handle: UniformListScrollHandle,
+    pub preview_list: ListState,
     pub drawer_scroll_handle: ScrollHandle,
     pub split_ratio: f32,
     pub is_resizing_split: bool,
@@ -24,17 +25,24 @@ pub struct WorkspaceView {
     pub rename_buffer: String,
     pub workspace_width: f32,
     pub auto_save_task: Option<Task<()>>,
+    pub parse_task: Option<Task<()>>,
+    pub parse_paused: bool,
     pub drawer_closing: bool,
     pub settings_window: Option<WindowHandle<SettingsWindowView>>,
 }
 
 impl WorkspaceView {
     pub fn new(state: AppState, cx: &mut Context<Self>) -> Self {
+        let preview_list = ListState::new(
+            state.doc.parsed.blocks.len(),
+            ListAlignment::Top,
+            px(600.),
+        );
         Self {
             state,
             focus_handle: cx.focus_handle(),
-            editor_scroll_handle: ScrollHandle::new(),
-            preview_scroll_handle: ScrollHandle::new(),
+            editor_scroll_handle: UniformListScrollHandle::new(),
+            preview_list,
             drawer_scroll_handle: ScrollHandle::new(),
             split_ratio: 0.5,
             is_resizing_split: false,
@@ -42,9 +50,75 @@ impl WorkspaceView {
             rename_buffer: String::new(),
             workspace_width: 1200.0,
             auto_save_task: None,
+            parse_task: None,
+            parse_paused: false,
             drawer_closing: false,
             settings_window: None,
         }
+    }
+
+    /// Swaps in a new document: the preview list drops cached heights and starts at the top.
+    pub fn reset_preview_list(&self) {
+        self.preview_list.reset(self.state.doc.parsed.blocks.len());
+    }
+
+    /// Re-measures the preview after an edit, keeping the current scroll position.
+    pub fn invalidate_preview_list(&self) {
+        let count = self.state.doc.parsed.blocks.len();
+        let top = self.preview_list.logical_scroll_top();
+        if count != self.preview_list.item_count() {
+            self.preview_list.reset(count);
+            self.preview_list.scroll_to(top);
+        } else {
+            self.preview_list.splice(0..count, count);
+            self.preview_list.scroll_to(top);
+        }
+    }
+
+    /// Debounces a reparse based on document size; very large documents wait for an explicit refresh.
+    pub fn schedule_parse(&mut self, cx: &mut Context<Self>) {
+        let debounce = parse_debounce(self.state.doc.buffer.len());
+        self.parse_task = None;
+        self.parse_paused = debounce.is_none();
+        if let Some(delay) = debounce {
+            self.parse_task = Some(cx.spawn(async move |this, app| {
+                app.background_executor().timer(delay).await;
+                let _ = this.update(app, |this, cx| {
+                    this.state.parse_now();
+                    this.invalidate_preview_list();
+                    cx.notify();
+                });
+            }));
+        }
+        cx.notify();
+    }
+
+    /// Parses immediately (manual save, explicit refresh, or switching into the preview).
+    pub fn parse_now_and_refresh(&mut self) {
+        self.parse_task = None;
+        self.parse_paused = false;
+        self.state.sync_from_editor();
+        if self.state.parse_now() {
+            self.invalidate_preview_list();
+        }
+    }
+
+    /// A new document starts from a preview scrolled to the top, parsing only if needed.
+    pub fn on_document_swapped(&mut self) {
+        self.parse_task = None;
+        self.parse_paused = false;
+        if self.state.view_mode != ViewMode::Source && self.state.doc.is_parse_stale() {
+            self.parse_now_and_refresh();
+        }
+        self.reset_preview_list();
+    }
+
+    fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
+        if mode != ViewMode::Source && self.state.parse_is_stale() {
+            self.parse_now_and_refresh();
+        }
+        self.state.set_view_mode(mode);
+        cx.notify();
     }
 
     pub fn toggle_drawer(&mut self, cx: &mut Context<Self>) {
@@ -135,6 +209,144 @@ impl WorkspaceView {
             });
         }));
     }
+
+    fn render_tab_strip(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> impl IntoElement {
+        let active_idx = self.state.active_doc_idx;
+
+        div()
+            .id("tab_strip_scroll")
+            .h(px(34.))
+            .w_full()
+            .bg(theme.bg)
+            .border_b_1()
+            .border_color(theme.border)
+            .flex()
+            .items_center()
+            .px_2()
+            .gap_1()
+            .overflow_x_scroll()
+            .children(self.state.open_docs.iter().enumerate().map(|(idx, doc)| {
+                let is_active = idx == active_idx;
+                let is_dirty = doc.status == DocumentStatus::Modified;
+                let title = doc.display_name();
+
+                let tab_item = div()
+                    .id(("tab_item", idx))
+                    .h(px(26.))
+                    .max_w(px(180.))
+                    .min_w(px(90.))
+                    .px_2p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_1p5()
+                    .text_xs();
+
+                let switch_handler = cx.listener(move |this, _, _window, cx| {
+                    this.state.switch_tab(idx);
+                    this.on_document_swapped();
+                    cx.notify();
+                });
+
+                let close_handler = cx.listener(move |this, _, _window, cx| {
+                    cx.stop_propagation();
+                    this.state.close_tab(idx);
+                    this.on_document_swapped();
+                    cx.notify();
+                });
+
+                let title_el = div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .truncate()
+                    .child(title);
+
+                let dirty_indicator = if is_dirty {
+                    Some(
+                        div()
+                            .w(px(6.))
+                            .h(px(6.))
+                            .rounded_full()
+                            .bg(theme.accent)
+                            .flex_shrink_0(),
+                    )
+                } else {
+                    None
+                };
+
+                let close_btn = div()
+                    .id(("tab_close_btn", idx))
+                    .w(px(18.))
+                    .h(px(18.))
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.text_muted)
+                    .hover(|s| s.bg(theme.border).text_color(theme.text_primary))
+                    .tooltip(|_window, cx| {
+                        cx.new(|_| TooltipView { text: "关闭标签页 (⌘W)".to_string() }).into()
+                    })
+                    .on_mouse_down(MouseButton::Left, close_handler)
+                    .child(
+                        svg()
+                            .path("icons/x.svg")
+                            .size(px(11.))
+                    );
+
+                let mut tab = tab_item.child(title_el);
+                if let Some(dot) = dirty_indicator {
+                    tab = tab.child(dot);
+                }
+                tab = tab.child(close_btn);
+
+                if is_active {
+                    tab
+                        .bg(theme.surface)
+                        .border_1()
+                        .border_color(theme.border)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.accent)
+                        .on_mouse_down(MouseButton::Left, switch_handler)
+                } else {
+                    tab
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
+                        .on_mouse_down(MouseButton::Left, switch_handler)
+                }
+            }))
+            // "+" Button to open new scratch tab
+            .child(
+                div()
+                    .id("tab_new_btn")
+                    .w(px(24.))
+                    .h(px(24.))
+                    .rounded_md()
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.text_muted)
+                    .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
+                    .tooltip(|_window, cx| {
+                        cx.new(|_| TooltipView { text: "新建标签页 (⌘T)".to_string() }).into()
+                    })
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
+                        this.state.new_tab();
+                        this.on_document_swapped();
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_size(px(16.))
+                            .line_height(relative(1.0))
+                            .child("+")
+                    )
+            )
+    }
 }
 
 impl Render for WorkspaceView {
@@ -151,6 +363,7 @@ impl Render for WorkspaceView {
         let view_mode = self.state.view_mode;
         let is_dirty = self.state.is_dirty();
         let has_conflict = self.state.has_conflict();
+        let parse_paused = self.parse_paused;
 
         let file_title = self
             .state
@@ -184,6 +397,7 @@ impl Render for WorkspaceView {
         let on_select_file = Arc::new(move |path: &std::path::PathBuf, _window: &mut Window, cx: &mut App| {
             view_drawer.update(cx, |this, cx| {
                 let _ = this.state.load_file(path.clone());
+                this.on_document_swapped();
                 cx.notify();
             });
         });
@@ -199,9 +413,34 @@ impl Render for WorkspaceView {
         let view_heading = cx.entity().clone();
         let on_select_heading = Arc::new(move |block_idx: usize, _window: &mut Window, cx: &mut App| {
             view_heading.update(cx, |this, cx| {
-                let y_approx = (block_idx as f32) * 55.0;
-                this.preview_scroll_handle.set_offset(point(px(0.), px(-y_approx)));
+                this.preview_list.scroll_to(ListOffset {
+                    item_ix: block_idx,
+                    offset_in_item: px(0.),
+                });
                 cx.notify();
+            });
+        });
+
+        let view_folder = cx.entity().clone();
+        let on_open_folder = Arc::new(move |_window: &mut Window, cx: &mut App| {
+            let rx = cx.prompt_for_paths(PathPromptOptions {
+                files: false,
+                directories: true,
+                multiple: false,
+                prompt: None,
+            });
+            view_folder.update(cx, |_this, cx| {
+                cx.spawn(async move |this, app| {
+                    if let Ok(Ok(Some(mut paths))) = rx.await {
+                        if let Some(path) = paths.pop() {
+                            let _ = this.update(app, |this, cx| {
+                                this.state.set_workspace_folder(path);
+                                cx.notify();
+                            });
+                        }
+                    }
+                })
+                .detach();
             });
         });
 
@@ -225,6 +464,7 @@ impl Render for WorkspaceView {
                     p.extension().map_or(false, |ext| ext == "md" || ext == "markdown" || ext == "txt")
                 }) {
                     let _ = this.state.load_file(path.clone());
+                    this.on_document_swapped();
                     cx.notify();
                 }
             }))
@@ -245,16 +485,13 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleSourceMode, _window, cx| {
-                this.state.set_view_mode(ViewMode::Source);
-                cx.notify();
+                this.set_view_mode(ViewMode::Source, cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleSplitMode, _window, cx| {
-                this.state.set_view_mode(ViewMode::Split);
-                cx.notify();
+                this.set_view_mode(ViewMode::Split, cx);
             }))
             .on_action(cx.listener(|this, _: &TogglePreviewMode, _window, cx| {
-                this.state.set_view_mode(ViewMode::Preview);
-                cx.notify();
+                this.set_view_mode(ViewMode::Preview, cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleDrawer, _window, cx| {
                 this.toggle_drawer(cx);
@@ -263,22 +500,27 @@ impl Render for WorkspaceView {
                 this.open_settings_window(cx);
             }))
             .on_action(cx.listener(|_this, _: &OpenFileDialog, _window, cx| {
+                let rx = cx.prompt_for_paths(PathPromptOptions {
+                    files: true,
+                    directories: false,
+                    multiple: false,
+                    prompt: None,
+                });
                 cx.spawn(async move |this, app| {
-                    let file = rfd::AsyncFileDialog::new()
-                        .add_filter("Markdown", &["md", "markdown", "txt"])
-                        .pick_file()
-                        .await;
-                    if let Some(file) = file {
-                        let path = file.path().to_path_buf();
-                        let _ = this.update(app, |this, cx| {
-                            let _ = this.state.load_file(path);
-                            cx.notify();
-                        });
+                    if let Ok(Ok(Some(mut paths))) = rx.await {
+                        if let Some(path) = paths.pop() {
+                            let _ = this.update(app, |this, cx| {
+                                let _ = this.state.load_file(path);
+                                this.on_document_swapped();
+                                cx.notify();
+                            });
+                        }
                     }
                 })
                 .detach();
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _window, cx| {
+                this.parse_now_and_refresh();
                 let _ = this.state.save();
                 cx.notify();
             }))
@@ -336,12 +578,6 @@ impl Render for WorkspaceView {
                 let key = event.keystroke.key.as_str();
                 let mods = event.keystroke.modifiers;
 
-                if key == "escape" && this.state.settings_open {
-                    this.state.settings_open = false;
-                    cx.notify();
-                    return;
-                }
-
                 if mods.platform {
                     match key {
                         "z" => {
@@ -350,26 +586,43 @@ impl Render for WorkspaceView {
                             } else {
                                 this.state.editor.undo();
                             }
-                            this.state.sync_from_editor();
+                            if this.state.sync_from_editor() {
+                                this.schedule_parse(cx);
+                            }
                             this.trigger_auto_save(cx);
                             cx.notify();
                         }
                         "s" => {
+                            this.parse_now_and_refresh();
                             let _ = this.state.save();
                             cx.notify();
                         }
+                        "w" => {
+                            this.state.close_tab(this.state.active_doc_idx);
+                            this.on_document_swapped();
+                            cx.notify();
+                        }
+                        "t" => {
+                            this.state.new_tab();
+                            this.on_document_swapped();
+                            cx.notify();
+                        }
                         "o" => {
+                            let rx = cx.prompt_for_paths(PathPromptOptions {
+                                files: true,
+                                directories: false,
+                                multiple: false,
+                                prompt: None,
+                            });
                             cx.spawn(async move |this, app| {
-                                let file = rfd::AsyncFileDialog::new()
-                                    .add_filter("Markdown", &["md", "markdown", "txt"])
-                                    .pick_file()
-                                    .await;
-                                if let Some(file) = file {
-                                    let path = file.path().to_path_buf();
-                                    let _ = this.update(app, |this, cx| {
-                                        let _ = this.state.load_file(path);
-                                        cx.notify();
-                                    });
+                                if let Ok(Ok(Some(mut paths))) = rx.await {
+                                    if let Some(path) = paths.pop() {
+                                        let _ = this.update(app, |this, cx| {
+                                            let _ = this.state.load_file(path);
+                                            this.on_document_swapped();
+                                            cx.notify();
+                                        });
+                                    }
                                 }
                             })
                             .detach();
@@ -381,16 +634,13 @@ impl Render for WorkspaceView {
                             this.toggle_drawer(cx);
                         }
                         "1" => {
-                            this.state.set_view_mode(ViewMode::Source);
-                            cx.notify();
+                            this.set_view_mode(ViewMode::Source, cx);
                         }
                         "2" => {
-                            this.state.set_view_mode(ViewMode::Split);
-                            cx.notify();
+                            this.set_view_mode(ViewMode::Split, cx);
                         }
                         "3" => {
-                            this.state.set_view_mode(ViewMode::Preview);
-                            cx.notify();
+                            this.set_view_mode(ViewMode::Preview, cx);
                         }
                         _ => {}
                     }
@@ -428,7 +678,9 @@ impl Render for WorkspaceView {
                 }
 
                 if handled {
-                    this.state.sync_from_editor();
+                    if this.state.sync_from_editor() {
+                        this.schedule_parse(cx);
+                    }
                     this.trigger_auto_save(cx);
                     cx.notify();
                 }
@@ -475,17 +727,21 @@ impl Render for WorkspaceView {
                                 theme,
                                 render_folder_icon(theme.text_muted),
                                 cx.listener(|_this, _, _window, cx| {
+                                    let rx = cx.prompt_for_paths(PathPromptOptions {
+                                        files: true,
+                                        directories: false,
+                                        multiple: false,
+                                        prompt: None,
+                                    });
                                     cx.spawn(async move |this, app| {
-                                        let file = rfd::AsyncFileDialog::new()
-                                            .add_filter("Markdown", &["md", "markdown", "txt"])
-                                            .pick_file()
-                                            .await;
-                                        if let Some(file) = file {
-                                            let path = file.path().to_path_buf();
-                                            let _ = this.update(app, |this, cx| {
-                                                let _ = this.state.load_file(path);
-                                                cx.notify();
-                                            });
+                                        if let Ok(Ok(Some(mut paths))) = rx.await {
+                                            if let Some(path) = paths.pop() {
+                                                let _ = this.update(app, |this, cx| {
+                                                    let _ = this.state.load_file(path);
+                                                    this.on_document_swapped();
+                                                    cx.notify();
+                                                });
+                                            }
                                         }
                                     })
                                     .detach();
@@ -598,8 +854,7 @@ impl Render for WorkspaceView {
                                 theme,
                                 render_source_mode_icon(if view_mode == ViewMode::Source { theme.accent } else { theme.text_muted }),
                                 cx.listener(|this, _, _window, cx| {
-                                    this.state.set_view_mode(ViewMode::Source);
-                                    cx.notify();
+                                    this.set_view_mode(ViewMode::Source, cx);
                                 }),
                             ))
                             .child(render_mode_icon_tab(
@@ -609,8 +864,7 @@ impl Render for WorkspaceView {
                                 theme,
                                 render_split_mode_icon(if view_mode == ViewMode::Split { theme.accent } else { theme.text_muted }),
                                 cx.listener(|this, _, _window, cx| {
-                                    this.state.set_view_mode(ViewMode::Split);
-                                    cx.notify();
+                                    this.set_view_mode(ViewMode::Split, cx);
                                 }),
                             ))
                             .child(render_mode_icon_tab(
@@ -620,8 +874,7 @@ impl Render for WorkspaceView {
                                 theme,
                                 render_preview_mode_icon(if view_mode == ViewMode::Preview { theme.accent } else { theme.text_muted }),
                                 cx.listener(|this, _, _window, cx| {
-                                    this.state.set_view_mode(ViewMode::Preview);
-                                    cx.notify();
+                                    this.set_view_mode(ViewMode::Preview, cx);
                                 }),
                             )),
                     )
@@ -654,6 +907,7 @@ impl Render for WorkspaceView {
                                 theme,
                                 render_save_icon(if is_dirty { theme.accent } else { theme.text_muted }),
                                 cx.listener(|this, _, _window, cx| {
+                                    this.parse_now_and_refresh();
                                     let _ = this.state.save();
                                     cx.notify();
                                 }),
@@ -724,12 +978,53 @@ impl Render for WorkspaceView {
                                             cx.listener(|this, _, _window, cx| {
                                                 if let Some(path) = &this.state.doc.path.clone() {
                                                     let _ = this.state.load_file(path.clone());
+                                                    this.on_document_swapped();
                                                 }
                                                 cx.notify();
                                             }),
                                         )
                                         .child(strings.reload_disk),
                                 ),
+                        ),
+                )
+            })
+            // Large Document Parse Pause Banner
+            .when(parse_paused, |el| {
+                el.child(
+                    div()
+                        .h(px(36.))
+                        .px_4()
+                        .bg(theme.surface)
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(strings.parse_paused),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(theme.bg)
+                                .border_1()
+                                .border_color(theme.border)
+                                .text_xs()
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(theme.accent))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _window, cx| {
+                                        this.parse_now_and_refresh();
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(strings.refresh_preview),
                         ),
                 )
             })
@@ -760,6 +1055,7 @@ impl Render for WorkspaceView {
                                             self.state.drawer_tab,
                                             &self.state.sibling_files,
                                             self.state.doc.path.as_ref(),
+                                            self.state.workspace_folder.as_ref(),
                                             &self.state.doc.parsed.headings(),
                                             theme,
                                             strings,
@@ -767,6 +1063,7 @@ impl Render for WorkspaceView {
                                             on_select_tab,
                                             on_select_file,
                                             on_select_heading,
+                                            on_open_folder,
                                         )),
                                 )
                                 .with_animation(
@@ -787,108 +1084,117 @@ impl Render for WorkspaceView {
                             .min_h(px(0.))
                             .h_full()
                             .bg(theme.surface)
+                            .flex()
+                            .flex_col()
                             .overflow_hidden()
-                            .child(match view_mode {
-                                ViewMode::Source => div()
-                                    .size_full()
-                                    .child(render_editor_pane(
-                                        &self.state.editor.lines,
-                                        self.state.editor.cursor(),
-                                        theme,
-                                        self.state.preferences.font_size,
-                                        is_dirty,
-                                        strings.source_mode,
-                                        &self.editor_scroll_handle,
-                                        on_click_line,
-                                    ))
-                                    .into_any_element(),
-                                ViewMode::Preview => div()
-                                    .size_full()
+                            .when(self.state.open_docs.len() > 1, |center| {
+                                center.child(self.render_tab_strip(theme, cx))
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
                                     .min_w(px(0.))
-                                    .child(render_preview_pane(
-                                        &self.state.doc.parsed,
-                                        theme,
-                                        self.state.preferences.max_column_width,
-                                        self.state.preferences.font_size,
-                                        &self.preview_scroll_handle,
-                                        strings.preview_mode,
-                                    ))
-                                    .into_any_element(),
-                                ViewMode::Split => div()
+                                    .min_h(px(0.))
                                     .size_full()
-                                    .flex()
                                     .overflow_hidden()
-                                    // Left Editor Pane
-                                    .child(
-                                        div()
-                                            .w(relative(self.split_ratio))
-                                            .min_w(px(0.))
-                                            .min_h(px(0.))
-                                            .h_full()
-                                            .flex()
-                                            .flex_col()
-                                            .overflow_hidden()
+                                    .child(match view_mode {
+                                        ViewMode::Source => div()
+                                            .size_full()
                                             .child(render_editor_pane(
-                                                &self.state.editor.lines,
+                                                self.state.editor.lines.clone(),
                                                 self.state.editor.cursor(),
                                                 theme,
                                                 self.state.preferences.font_size,
                                                 is_dirty,
-                                                strings.source_mode,
                                                 &self.editor_scroll_handle,
                                                 on_click_line,
-                                            )),
-                                    )
-                                    // Draggable Resizable Divider: 5px hit zone with 1px hairline
-                                    .child(
-                                        div()
-                                            .w(px(5.))
-                                            .h_full()
-                                            .flex()
-                                            .justify_center()
-                                            .items_center()
-                                            .cursor_col_resize()
-                                            .bg(theme.surface)
-                                            .hover(|s| s.bg(theme.accent))
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                                                    if event.click_count == 2 {
-                                                        this.split_ratio = 0.5;
-                                                        cx.notify();
-                                                    } else {
-                                                        this.is_resizing_split = true;
-                                                    }
-                                                }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .w(px(1.))
-                                                    .h_full()
-                                                    .bg(theme.border),
-                                            ),
-                                    )
-                                    // Right Preview Pane
-                                    .child(
-                                        div()
-                                            .w(relative(1.0 - self.split_ratio))
+                                            ))
+                                            .into_any_element(),
+                                        ViewMode::Preview => div()
+                                            .size_full()
                                             .min_w(px(0.))
-                                            .min_h(px(0.))
-                                            .h_full()
-                                            .flex()
-                                            .flex_col()
-                                            .overflow_hidden()
                                             .child(render_preview_pane(
-                                                &self.state.doc.parsed,
+                                                self.state.doc.parsed.clone(),
                                                 theme,
                                                 self.state.preferences.max_column_width,
                                                 self.state.preferences.font_size,
-                                                &self.preview_scroll_handle,
-                                                strings.preview_mode,
-                                            )),
-                                    )
-                                    .into_any_element(),
-                            }),
+                                                &self.preview_list,
+                                            ))
+                                            .into_any_element(),
+                                        ViewMode::Split => div()
+                                            .size_full()
+                                            .flex()
+                                            .overflow_hidden()
+                                            // Left Editor Pane
+                                            .child(
+                                                div()
+                                                    .w(relative(self.split_ratio))
+                                                    .min_w(px(0.))
+                                                    .min_h(px(0.))
+                                                    .h_full()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .overflow_hidden()
+                                                    .child(render_editor_pane(
+                                                        self.state.editor.lines.clone(),
+                                                        self.state.editor.cursor(),
+                                                        theme,
+                                                        self.state.preferences.font_size,
+                                                        is_dirty,
+                                                        &self.editor_scroll_handle,
+                                                        on_click_line,
+                                                    )),
+                                            )
+                                            // Draggable Resizable Divider: 5px hit zone with 1px hairline
+                                            .child(
+                                                div()
+                                                    .w(px(5.))
+                                                    .h_full()
+                                                    .flex()
+                                                    .justify_center()
+                                                    .items_center()
+                                                    .cursor_col_resize()
+                                                    .bg(theme.surface)
+                                                    .hover(|s| s.bg(theme.accent))
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                                            if event.click_count == 2 {
+                                                                this.split_ratio = 0.5;
+                                                                cx.notify();
+                                                            } else {
+                                                                this.is_resizing_split = true;
+                                                            }
+                                                        }),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .w(px(1.))
+                                                            .h_full()
+                                                            .bg(theme.border),
+                                                    ),
+                                            )
+                                            // Right Preview Pane
+                                            .child(
+                                                div()
+                                                    .w(relative(1.0 - self.split_ratio))
+                                                    .min_w(px(0.))
+                                                    .min_h(px(0.))
+                                                    .h_full()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .overflow_hidden()
+                                                    .child(render_preview_pane(
+                                                        self.state.doc.parsed.clone(),
+                                                        theme,
+                                                        self.state.preferences.max_column_width,
+                                                        self.state.preferences.font_size,
+                                                        &self.preview_list,
+                                                    )),
+                                            )
+                                            .into_any_element(),
+                                    }),
+                            ),
                     ),
             )
     }

@@ -1,17 +1,21 @@
 use gpui::prelude::*;
 use gpui::*;
 use glidemark_core::ast::{BlockElement, InlineGroup, InlineItem, ParsedDocument};
+use std::sync::Arc;
 
 use crate::theme::ThemeColors;
 
 pub fn render_preview_pane(
-    parsed: &ParsedDocument,
+    parsed: Arc<ParsedDocument>,
     theme: &ThemeColors,
-    _max_column_width: f32,
+    max_column_width: f32,
     font_size: f32,
-    scroll_handle: &ScrollHandle,
-    title: &str,
+    list_state: &ListState,
 ) -> impl IntoElement {
+    let theme = theme.clone();
+    let item_theme = theme.clone();
+    let item_parsed = parsed.clone();
+
     div()
         .flex_1()
         .w_full()
@@ -22,55 +26,30 @@ pub fn render_preview_pane(
         .flex_col()
         .bg(theme.surface)
         .child(
-            div()
-                .h(px(32.))
-                .px_4()
-                .bg(theme.bg)
-                .border_b_1()
-                .border_color(theme.border)
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(title.to_string()),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(format!("{} blocks", parsed.blocks.len())),
-                ),
-        )
-        .child(
-            div()
-                .id("preview_scroll_container")
-                .track_scroll(scroll_handle)
-                .flex_1()
-                .w_full()
-                .min_w(px(0.))
-                .min_h(px(0.))
-                .overflow_y_scroll()
-                .overflow_x_hidden()
-                .px_8()
-                .py_6()
-                .child(
-                    div()
-                        .w_full()
-                        .min_w(px(0.))
-                        .flex()
-                        .flex_col()
-                        .gap_4()
-                        .children(
-                            parsed
-                                .blocks
-                                .iter()
-                                .map(|block| render_block_element(block, theme, font_size)),
-                        ),
-                ),
+            list(list_state.clone(), move |ix, _window, _cx| {
+                let Some(block) = item_parsed.blocks.get(ix) else {
+                    return div().into_any_element();
+                };
+
+                div()
+                    .w_full()
+                    .px_8()
+                    .pb_4()
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(max_column_width))
+                            .mx_auto()
+                            .child(render_block_element(block, &item_theme, font_size)),
+                    )
+                    .into_any_element()
+            })
+            .flex_1()
+            .w_full()
+            .min_w(px(0.))
+            .min_h(px(0.))
+            .pt_6()
+            .pb_6(),
         )
 }
 
@@ -396,9 +375,56 @@ fn render_styled_text_only(
     StyledText::new(text).with_highlights(highlights)
 }
 
-static DIAGRAM_CACHE: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<(u64, bool), std::path::PathBuf>>,
-> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+pub const MAX_DIAGRAM_CACHE: usize = 64;
+
+pub struct DiagramCache {
+    entries: std::collections::HashMap<(u64, bool), std::path::PathBuf>,
+    order: std::collections::VecDeque<(u64, bool)>,
+    max_size: usize,
+}
+
+impl DiagramCache {
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+            order: std::collections::VecDeque::new(),
+            max_size,
+        }
+    }
+
+    pub fn get(&mut self, key: &(u64, bool)) -> Option<std::path::PathBuf> {
+        let path = self.entries.get(key)?.clone();
+        if let Some(pos) = self.order.iter().position(|k| k == key) {
+            self.order.remove(pos);
+            self.order.push_back(*key);
+        }
+        Some(path)
+    }
+
+    pub fn insert(&mut self, key: (u64, bool), path: std::path::PathBuf) {
+        if self.entries.insert(key, path).is_none() {
+            self.order.push_back(key);
+            if self.order.len() > self.max_size {
+                if let Some(evicted_key) = self.order.pop_front() {
+                    if let Some(evicted_path) = self.entries.remove(&evicted_key) {
+                        let _ = std::fs::remove_file(evicted_path);
+                    }
+                }
+            }
+        } else if let Some(pos) = self.order.iter().position(|k| k == &key) {
+            self.order.remove(pos);
+            self.order.push_back(key);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+static DIAGRAM_CACHE: std::sync::LazyLock<std::sync::Mutex<DiagramCache>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(DiagramCache::new(MAX_DIAGRAM_CACHE)));
 
 fn render_mermaid_diagram(code: &str, theme: &ThemeColors, _base_font_size: f32) -> AnyElement {
     use std::hash::{Hash, Hasher};
@@ -409,8 +435,8 @@ fn render_mermaid_diagram(code: &str, theme: &ThemeColors, _base_font_size: f32)
 
     // Check in-memory memoized cache first (zero-cost on scroll)
     let cached_path = {
-        let cache = DIAGRAM_CACHE.lock().unwrap();
-        cache.get(&(code_hash, is_dark)).cloned()
+        let mut cache = DIAGRAM_CACHE.lock().unwrap();
+        cache.get(&(code_hash, is_dark))
     };
 
     if let Some(path) = cached_path {
@@ -532,8 +558,13 @@ fn render_code_block(
     theme: &ThemeColors,
     base_font_size: f32,
 ) -> AnyElement {
-    let line_count = code.lines().count().max(1);
+    let line_count = if code.is_empty() { 1 } else { code.lines().count() };
     let lang_display = lang.unwrap_or("text").to_uppercase();
+    let line_numbers = (1..=line_count)
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let code_text = if code.is_empty() { " ".to_string() } else { code.to_string() };
 
     div()
         .w_full()
@@ -545,8 +576,8 @@ fn render_code_block(
         .overflow_hidden()
         .child(
             div()
-                .h(px(32.))
-                .px_3()
+                .px_2p5()
+                .py_2p5()
                 .bg(theme.surface)
                 .border_b_1()
                 .border_color(theme.border)
@@ -601,41 +632,34 @@ fn render_code_block(
             div()
                 .id("fenced_code_scroll")
                 .p_3()
-                .overflow_x_scroll()
+                .w_full()
+                .min_w(px(0.))
                 .flex()
-                .gap_3()
-                // Line numbers
+                .items_start()
                 .child(
                     div()
+                        .w(px(32.))
+                        .flex_shrink_0()
                         .pr_2()
+                        .mr_2()
                         .border_r_1()
                         .border_color(theme.border)
-                        .flex()
-                        .flex_col()
-                        .items_end()
-                        .children((1..=line_count).map(|n| {
-                            div()
-                                .text_size(px(base_font_size * 0.85))
-                                .font_family("ui-monospace")
-                                .line_height(relative(1.5))
-                                .text_color(theme.text_muted)
-                                .child(n.to_string())
-                        })),
+                        .text_right()
+                        .text_size(px(base_font_size * 0.85))
+                        .font_family("ui-monospace")
+                        .line_height(relative(1.5))
+                        .text_color(theme.text_muted)
+                        .child(line_numbers),
                 )
-                // Code lines
                 .child(
                     div()
                         .flex_1()
-                        .flex()
-                        .flex_col()
-                        .children(code.lines().map(|line| {
-                            div()
-                                .text_size(px(base_font_size * 0.85))
-                                .font_family("ui-monospace")
-                                .line_height(relative(1.5))
-                                .text_color(theme.text_primary)
-                                .child(if line.is_empty() { " ".to_string() } else { line.to_string() })
-                        })),
+                        .min_w(px(0.))
+                        .text_size(px(base_font_size * 0.85))
+                        .font_family("ui-monospace")
+                        .line_height(relative(1.5))
+                        .text_color(theme.text_primary)
+                        .child(StyledText::new(code_text)),
                 ),
         )
         .into_any_element()

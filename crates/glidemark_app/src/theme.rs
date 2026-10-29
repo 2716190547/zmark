@@ -57,13 +57,13 @@ impl ThemeColors {
                 id: "default",
                 name: "Default",
                 is_dark: true,
-                bg: rgb(0x131315).into(),
-                surface: rgb(0x1e1e22).into(),
-                border: rgb(0x2d2d32).into(),
-                text_primary: rgb(0xf4f4f5).into(),
-                text_muted: rgb(0x8a8a93).into(),
-                accent: rgb(0xe26543).into(), // Warm terracotta matching logo
-                code_bg: rgb(0x25252a).into(),
+                bg: rgb(0x181716).into(),      // Warm deep espresso (#181716)
+                surface: rgb(0x21201e).into(), // Warm dark stone surface (#21201E)
+                border: rgb(0x32302d).into(),  // Warm dark hairline divider (#32302D)
+                text_primary: rgb(0xf3f1ed).into(), // Warm light stone text (#F3F1ED)
+                text_muted: rgb(0x938e86).into(),   // Warm muted secondary text (#938E86)
+                accent: rgb(0xe26543).into(),  // Warm terracotta coral highlight (#E26543)
+                code_bg: rgb(0x282623).into(),
                 conflict_bg: rgb(0x382218).into(),
                 conflict_border: rgb(0x5e3322).into(),
             }
@@ -72,15 +72,15 @@ impl ThemeColors {
                 id: "default",
                 name: "Default",
                 is_dark: false,
-                bg: rgb(0xf0f0f4).into(),      // Soft mist-gray for sidebar & window chrome (#F0F0F4)
-                surface: rgb(0xffffff).into(), // Crisp pure white paper canvas (#FFFFFF)
-                border: rgb(0xe2e2e8).into(),  // Delicate 1px hairline divider (#E2E2E8)
-                text_primary: rgb(0x1f2328).into(),
-                text_muted: rgb(0x71717a).into(),
-                accent: rgb(0xd9532f).into(),  // Warm Terracotta Coral matching Logo
-                code_bg: rgb(0xefeff2).into(),
-                conflict_bg: rgb(0xfef2f2).into(),
-                conflict_border: rgb(0xfecaca).into(),
+                bg: rgb(0xf5f4f0).into(),      // Warm stone paper for window & sidebar (#F5F4F0)
+                surface: rgb(0xffffff).into(), // Pure crisp white paper canvas (#FFFFFF)
+                border: rgb(0xe6e4de).into(),  // Delicate warm stone hairline divider (#E6E4DE)
+                text_primary: rgb(0x2c2a29).into(), // Warm deep charcoal text (#2C2A29)
+                text_muted: rgb(0x787571).into(),   // Warm neutral muted text (#787571)
+                accent: rgb(0xd9532f).into(),  // Warm Terracotta Coral matching Logo (#D9532F)
+                code_bg: rgb(0xeeece6).into(), // Warm light stone code block (#EEECE6)
+                conflict_bg: rgb(0xfef3e8).into(),
+                conflict_border: rgb(0xfcd9b8).into(),
             }
         }
     }

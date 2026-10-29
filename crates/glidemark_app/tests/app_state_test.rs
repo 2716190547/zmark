@@ -144,6 +144,8 @@ fn test_editor_typing_and_state_sync() {
 
     assert!(state.doc.buffer.contains("# Hello World"));
     assert!(state.doc.buffer.contains("120fps GPU editor"));
+    assert!(state.parse_is_stale());
+    state.parse_now();
     assert_eq!(state.doc.parsed.blocks.len(), 2);
 }
 
@@ -207,4 +209,205 @@ fn test_auto_save_and_settings_tabs() {
     assert!(!state.is_dirty());
     let saved_content = fs::read_to_string(&file).unwrap();
     assert!(saved_content.contains("updated"));
+}
+
+#[test]
+fn test_multi_tab_workflow() {
+    let dir = tempdir().unwrap();
+    let file1 = dir.path().join("first.md");
+    let file2 = dir.path().join("second.md");
+    fs::write(&file1, "# First Document").unwrap();
+    fs::write(&file2, "# Second Document").unwrap();
+
+    let doc = Document::from_file(file1.clone()).unwrap();
+    let mut state = AppState::new(doc);
+
+    assert_eq!(state.open_docs.len(), 1);
+    assert_eq!(state.active_doc_idx, 0);
+
+    // Open second file: should add tab, not close the first!
+    state.open_file(file2.clone()).unwrap();
+    assert_eq!(state.open_docs.len(), 2);
+    assert_eq!(state.active_doc_idx, 1);
+    assert_eq!(state.doc.path.as_ref(), Some(&file2));
+
+    // Switch back to tab 0
+    state.switch_tab(0);
+    assert_eq!(state.active_doc_idx, 0);
+    assert_eq!(state.doc.path.as_ref(), Some(&file1));
+
+    // Open a third scratch tab
+    state.new_tab();
+    assert_eq!(state.open_docs.len(), 3);
+    assert_eq!(state.active_doc_idx, 2);
+    assert!(state.doc.path.is_none());
+
+    // Close the scratch tab
+    state.close_tab(2);
+    assert_eq!(state.open_docs.len(), 2);
+    assert_eq!(state.active_doc_idx, 1);
+
+    // Re-opening an already open file should switch to it, not duplicate
+    state.open_file(file1.clone()).unwrap();
+    assert_eq!(state.open_docs.len(), 2);
+    assert_eq!(state.active_doc_idx, 0);
+}
+
+#[test]
+fn test_workspace_folder_and_tabs() {
+    let root = tempdir().unwrap();
+    let sub = root.path().join("subfolder");
+    fs::create_dir_all(&sub).unwrap();
+    let f1 = root.path().join("root.md");
+    let f2 = sub.join("nested.md");
+    fs::write(&f1, "# Root").unwrap();
+    fs::write(&f2, "# Nested").unwrap();
+
+    let doc = Document::new_scratch();
+    let mut state = AppState::new(doc);
+
+    // Set workspace folder to root
+    state.set_workspace_folder(root.path().to_path_buf());
+    assert_eq!(state.workspace_folder.as_ref(), Some(&root.path().to_path_buf()));
+    assert_eq!(state.sibling_files.len(), 2);
+    assert!(state.sibling_files.contains(&f1));
+    assert!(state.sibling_files.contains(&f2));
+}
+
+#[test]
+fn test_multi_tab_transitions_and_buffer_sync() {
+    let dir = tempdir().unwrap();
+    let file_a = dir.path().join("doc_a.md");
+    let file_b = dir.path().join("doc_b.md");
+    let file_c = dir.path().join("doc_c.md");
+    fs::write(&file_a, "# Doc A").unwrap();
+    fs::write(&file_b, "# Doc B").unwrap();
+    fs::write(&file_c, "# Doc C").unwrap();
+
+    let doc_a = Document::from_file(file_a.clone()).unwrap();
+    let mut state = AppState::new(doc_a);
+
+    state.open_file(file_b.clone()).unwrap();
+    state.open_file(file_c.clone()).unwrap();
+    assert_eq!(state.open_docs.len(), 3);
+    assert_eq!(state.active_doc_idx, 2);
+
+    // 1. Buffer synchronization when switching tabs
+    // Edit Doc C in editor
+    state.editor.insert_text("\nAdded to C");
+    // Switch to Doc A (index 0)
+    state.switch_tab(0);
+    assert_eq!(state.active_doc_idx, 0);
+    assert_eq!(state.doc.path.as_ref(), Some(&file_a));
+    assert!(state.open_docs[2].buffer.contains("Added to C"));
+
+    // Edit Doc A
+    state.editor.insert_text("\nAdded to A");
+    // Switch to Doc B (index 1)
+    state.switch_tab(1);
+    assert_eq!(state.active_doc_idx, 1);
+    assert_eq!(state.doc.path.as_ref(), Some(&file_b));
+    assert!(state.open_docs[0].buffer.contains("Added to A"));
+
+    // 2. Closing inactive tab before active: close index 0 (Doc A) while active is 1 (Doc B)
+    state.close_tab(0);
+    assert_eq!(state.open_docs.len(), 2);
+    // Active index should adjust from 1 to 0 (still pointing to Doc B)
+    assert_eq!(state.active_doc_idx, 0);
+    assert_eq!(state.doc.path.as_ref(), Some(&file_b));
+
+    // 3. Closing inactive tab after active: open Doc A again, active is 2
+    state.open_file(file_a.clone()).unwrap();
+    assert_eq!(state.open_docs.len(), 3); // [Doc B, Doc C, Doc A]
+    assert_eq!(state.active_doc_idx, 2);
+    state.switch_tab(0); // Active is 0 (Doc B)
+    state.close_tab(2); // Close Doc A (after active)
+    assert_eq!(state.open_docs.len(), 2); // [Doc B, Doc C]
+    assert_eq!(state.active_doc_idx, 0); // Stays 0 (Doc B)
+    assert_eq!(state.doc.path.as_ref(), Some(&file_b));
+
+    // 4. Closing the active tab at index 0: [Doc B, Doc C] -> close Doc B
+    state.close_tab(0);
+    assert_eq!(state.open_docs.len(), 1); // [Doc C]
+    assert_eq!(state.active_doc_idx, 0);
+    assert_eq!(state.doc.path.as_ref(), Some(&file_c));
+    assert!(state.doc.buffer.contains("Added to C"));
+
+    // 5. Closing the last remaining tab resets to a clean scratch document
+    state.close_tab(0);
+    assert_eq!(state.open_docs.len(), 1);
+    assert_eq!(state.active_doc_idx, 0);
+    assert!(state.doc.path.is_none());
+    assert_eq!(state.doc.buffer, "");
+
+    // 6. Out-of-bounds safety: switch_tab and close_tab with invalid indices
+    state.switch_tab(42);
+    assert_eq!(state.active_doc_idx, 0);
+    state.close_tab(42);
+    assert_eq!(state.open_docs.len(), 1);
+}
+
+#[test]
+fn test_workspace_folder_symlink_defense_and_robustness() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // 1. Regular markdown files with various casings
+    let f1 = root.join("test.md");
+    let f2 = root.join("UPPER.MD");
+    let f3 = root.join("Mixed.Markdown");
+    let non_md = root.join("notes.txt");
+    fs::write(&f1, "# Test 1").unwrap();
+    fs::write(&f2, "# Upper").unwrap();
+    fs::write(&f3, "# Mixed").unwrap();
+    fs::write(&non_md, "plain text").unwrap();
+
+    // 2. Symlink loop: root/loop -> root
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let loop_link = root.join("symlink_loop");
+        let _ = symlink(root, &loop_link);
+    }
+
+    // 3. Nested folder and hidden folder
+    let sub = root.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    let f_sub = sub.join("nested.md");
+    fs::write(&f_sub, "# Nested").unwrap();
+
+    let hidden = root.join(".hidden");
+    fs::create_dir_all(&hidden).unwrap();
+    let f_hidden = hidden.join("secret.md");
+    fs::write(&f_hidden, "# Secret").unwrap();
+
+    let node_modules = root.join("node_modules");
+    fs::create_dir_all(&node_modules).unwrap();
+    let f_nm = node_modules.join("package.md");
+    fs::write(&f_nm, "# Package").unwrap();
+
+    let mut state = AppState::new(Document::new_scratch());
+    state.set_workspace_folder(root.to_path_buf());
+
+    // Verified:
+    // - f1, f2, f3, f_sub are detected (4 markdown files)
+    // - .hidden and node_modules are ignored
+    // - symlink loop does not cause infinite recursion or duplicate f1/f2/f3
+    assert_eq!(state.sibling_files.len(), 4);
+    assert!(state.sibling_files.contains(&f1));
+    assert!(state.sibling_files.contains(&f2));
+    assert!(state.sibling_files.contains(&f3));
+    assert!(state.sibling_files.contains(&f_sub));
+    assert!(!state.sibling_files.contains(&f_hidden));
+    assert!(!state.sibling_files.contains(&f_nm));
+
+    // 4. Passing a file path to set_workspace_folder gracefully resolves to parent dir
+    state.set_workspace_folder(f1.clone());
+    assert_eq!(state.workspace_folder.as_ref(), Some(&root.to_path_buf()));
+    assert_eq!(state.sibling_files.len(), 4);
+
+    // 5. Empty folder / 0 markdown files
+    let empty_dir = tempdir().unwrap();
+    state.set_workspace_folder(empty_dir.path().to_path_buf());
+    assert_eq!(state.sibling_files.len(), 0);
 }

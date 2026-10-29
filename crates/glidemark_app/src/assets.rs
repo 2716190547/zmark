@@ -22,6 +22,7 @@ impl AssetSource for AppAssets {
             "icons/palette.svg" => Some(include_bytes!("../assets/icons/palette.svg")),
             "icons/languages.svg" => Some(include_bytes!("../assets/icons/languages.svg")),
             "icons/info.svg" => Some(include_bytes!("../assets/icons/info.svg")),
+            "icons/x.svg" => Some(include_bytes!("../assets/icons/x.svg")),
             _ => None,
         };
         Ok(bytes.map(Cow::Borrowed))
@@ -45,6 +46,25 @@ impl AssetSource for AppAssets {
             "icons/palette.svg".into(),
             "icons/languages.svg".into(),
             "icons/info.svg".into(),
+            "icons/x.svg".into(),
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_assets_load_and_list() {
+        let assets = AppAssets;
+        let list = assets.list("").expect("should list assets");
+        assert!(list.iter().any(|p| p.as_ref() == "icons/x.svg"));
+
+        for path in &list {
+            let loaded = assets.load(path.as_ref()).expect("load should succeed");
+            assert!(loaded.is_some(), "Asset {} failed to load", path);
+            assert!(!loaded.unwrap().is_empty(), "Asset {} is empty", path);
+        }
     }
 }
