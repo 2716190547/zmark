@@ -78,9 +78,13 @@ pub fn render_drawer(
                 ))
                 .child(
                     div()
+                        .id("drawer_header_drag_area")
                         .flex_1()
                         .h_full()
                         .window_control_area(WindowControlArea::Drag)
+                        .on_mouse_down(MouseButton::Left, |_e, window, _| {
+                            window.start_window_move();
+                        })
                 ),
         )
         // Scrollable Tab Body

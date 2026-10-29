@@ -10,6 +10,7 @@ use crate::actions::{
 use crate::state::{parse_debounce, AppState, ViewMode};
 use crate::views::drawer::render_drawer;
 use crate::views::editor::render_editor_pane;
+use crate::views::lightbox::{render_lightbox, LightboxState};
 use crate::views::preview::render_preview_pane;
 use crate::views::settings::SettingsWindowView;
 
@@ -37,6 +38,7 @@ pub struct WorkspaceView {
     pub settings_window: Option<WindowHandle<SettingsWindowView>>,
     pub copied_code_hash: Option<(u64, std::time::Instant)>,
     pub last_scroll_origin: Option<(ScrollOrigin, std::time::Instant)>,
+    pub lightbox: LightboxState,
 }
 
 impl WorkspaceView {
@@ -64,6 +66,7 @@ impl WorkspaceView {
             settings_window: None,
             copied_code_hash: None,
             last_scroll_origin: None,
+            lightbox: LightboxState::new(),
         }
     }
 
@@ -520,10 +523,14 @@ impl WorkspaceView {
             // Draggable Window Control Area in center between tabs and action tools
             .child(
                 div()
+                    .id("canvas_header_drag_area")
                     .flex_1()
                     .h_full()
                     .min_w(px(20.))
                     .window_control_area(WindowControlArea::Drag)
+                    .on_mouse_down(MouseButton::Left, |_e, window, _| {
+                        window.start_window_move();
+                    })
             )
             // Right Group: Segmented View Mode Switcher + Action Buttons (Save, Export, Settings)
             .child(
@@ -710,6 +717,14 @@ impl Render for WorkspaceView {
 
         let tree_rows = self.state.flatten_tree();
 
+        let view_lb = cx.entity().clone();
+        let on_open_lightbox = Arc::new(move |svg_path: std::path::PathBuf, hash: u64, _window: &mut Window, cx: &mut App| {
+            view_lb.update(cx, |this, cx| {
+                this.lightbox.open(svg_path, hash);
+                cx.notify();
+            });
+        });
+
         let show_drawer = self.state.drawer_open || self.drawer_closing;
         let is_drawer_closing = self.drawer_closing;
 
@@ -798,6 +813,14 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                if this.lightbox.is_open {
+                    if event.keystroke.key == "escape" {
+                        this.lightbox.close();
+                        cx.notify();
+                        return;
+                    }
+                }
+
                 if this.is_renaming {
                     match event.keystroke.key.as_str() {
                         "enter" => {
@@ -1168,6 +1191,7 @@ impl Render for WorkspaceView {
                                                 &self.preview_list,
                                                 copied_code_hash,
                                                 Some(on_copy.clone()),
+                                                Some(on_open_lightbox.clone()),
                                             ))
                                             .into_any_element(),
                                         ViewMode::Split => div()
@@ -1247,12 +1271,16 @@ impl Render for WorkspaceView {
                                                         &self.preview_list,
                                                         copied_code_hash,
                                                         Some(on_copy),
+                                                        Some(on_open_lightbox.clone()),
                                                     )),
                                             )
                                             .into_any_element(),
                                     })
                             }),
                     )
+                    .when(self.lightbox.is_open, |root| {
+                        root.child(render_lightbox(&self.lightbox, theme, cx))
+                    })
     }
 }
 

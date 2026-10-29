@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::theme::ThemeColors;
 
 pub type OnCopyCallback = Arc<dyn Fn(String, u64, &mut Window, &mut App) + Send + Sync>;
+pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, &mut Window, &mut App) + Send + Sync>;
 
 pub fn render_preview_pane(
     parsed: Arc<ParsedDocument>,
@@ -16,11 +17,13 @@ pub fn render_preview_pane(
     list_state: &ListState,
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<OnCopyCallback>,
+    on_open_lightbox: Option<OnOpenLightboxCallback>,
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
     let item_parsed = parsed.clone();
     let item_on_copy = on_copy.clone();
+    let item_on_lightbox = on_open_lightbox.clone();
 
     div()
         .flex_1()
@@ -52,6 +55,7 @@ pub fn render_preview_pane(
                                 font_size,
                                 copied_code_hash,
                                 item_on_copy.as_ref(),
+                                item_on_lightbox.as_ref(),
                             )),
                     )
                     .into_any_element()
@@ -71,6 +75,7 @@ fn render_block_element(
     base_font_size: f32,
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<&OnCopyCallback>,
+    on_open_lightbox: Option<&OnOpenLightboxCallback>,
 ) -> AnyElement {
     match block {
         BlockElement::Heading { level, content } => {
@@ -107,7 +112,7 @@ fn render_block_element(
             .into_any_element(),
         BlockElement::FencedCode { lang, code } => {
             if lang.as_deref() == Some("mermaid") {
-                render_mermaid_diagram(code, theme, base_font_size)
+                render_mermaid_diagram(code, theme, base_font_size, on_open_lightbox)
             } else {
                 render_code_block(
                     lang.as_deref(),
@@ -133,7 +138,7 @@ fn render_block_element(
             .children(
                 blocks
                     .iter()
-                    .map(|b| render_block_element(b, theme, base_font_size, copied_code_hash, on_copy)),
+                    .map(|b| render_block_element(b, theme, base_font_size, copied_code_hash, on_copy, on_open_lightbox)),
             )
             .into_any_element(),
         BlockElement::List { ordered, items } => render_list_element(
@@ -144,6 +149,7 @@ fn render_block_element(
             0,
             copied_code_hash,
             on_copy,
+            on_open_lightbox,
         ),
         BlockElement::Table { headers, rows } => div()
             .id("preview_table_scroll")
@@ -393,7 +399,68 @@ impl DiagramCache {
 static DIAGRAM_CACHE: std::sync::LazyLock<std::sync::Mutex<DiagramCache>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(DiagramCache::new(MAX_DIAGRAM_CACHE)));
 
-fn render_mermaid_diagram(code: &str, theme: &ThemeColors, _base_font_size: f32) -> AnyElement {
+fn render_mermaid_container(
+    path: std::path::PathBuf,
+    code_hash: u64,
+    theme: &ThemeColors,
+    on_open_lightbox: Option<&OnOpenLightboxCallback>,
+) -> AnyElement {
+    let mut container = div()
+        .id(("mermaid_diagram_container", code_hash))
+        .w_full()
+        .min_w(px(0.))
+        .my_3()
+        .rounded_xl()
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.surface)
+        .p_4()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .relative()
+        .overflow_x_scroll();
+
+    if let Some(cb) = on_open_lightbox {
+        let cb = (*cb).clone();
+        let p_click = path.clone();
+        container = container
+            .cursor(CursorStyle::PointingHand)
+            .hover(|s| s.border_color(theme.accent))
+            .on_mouse_down(MouseButton::Left, move |_event, window, app| {
+                cb(p_click.clone(), code_hash, window, app);
+            })
+            .child(
+                div()
+                    .absolute()
+                    .top(px(8.))
+                    .right(px(8.))
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(theme.warm_pill_bg())
+                    .text_color(theme.warm_pill_text())
+                    .text_size(px(10.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("🔍 点击全屏")
+            );
+    }
+
+    container
+        .child(
+            img(path)
+                .max_w_full()
+        )
+        .into_any_element()
+}
+
+fn render_mermaid_diagram(
+    code: &str,
+    theme: &ThemeColors,
+    _base_font_size: f32,
+    on_open_lightbox: Option<&OnOpenLightboxCallback>,
+) -> AnyElement {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     code.hash(&mut hasher);
@@ -408,25 +475,7 @@ fn render_mermaid_diagram(code: &str, theme: &ThemeColors, _base_font_size: f32)
 
     if let Some(path) = cached_path {
         if path.exists() {
-            return div()
-                .id("mermaid_diagram_scroll")
-                .w_full()
-                .min_w(px(0.))
-                .my_3()
-                .rounded_xl()
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.surface)
-                .p_4()
-                .flex()
-                .justify_center()
-                .items_center()
-                .overflow_x_scroll()
-                .child(
-                    img(path)
-                        .max_w_full()
-                )
-                .into_any_element();
+            return render_mermaid_container(path, code_hash, theme, on_open_lightbox);
         }
     }
 
@@ -446,25 +495,7 @@ fn render_mermaid_diagram(code: &str, theme: &ThemeColors, _base_font_size: f32)
                 cache.insert((code_hash, is_dark), path.clone());
             }
 
-            div()
-                .id("mermaid_diagram_scroll")
-                .w_full()
-                .min_w(px(0.))
-                .my_3()
-                .rounded_xl()
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.surface)
-                .p_4()
-                .flex()
-                .justify_center()
-                .items_center()
-                .overflow_x_scroll()
-                .child(
-                    img(path)
-                        .max_w_full()
-                )
-                .into_any_element()
+            render_mermaid_container(path, code_hash, theme, on_open_lightbox)
         }
         Err(err) => {
             div()
@@ -527,6 +558,7 @@ fn render_list_element(
     depth: usize,
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<&OnCopyCallback>,
+    on_open_lightbox: Option<&OnOpenLightboxCallback>,
 ) -> AnyElement {
     div()
         .w_full()
@@ -614,9 +646,10 @@ fn render_list_element(
                                 depth + 1,
                                 copied_code_hash,
                                 on_copy,
+                                on_open_lightbox,
                             )
                         } else {
-                            render_block_element(sub, theme, base_font_size, copied_code_hash, on_copy)
+                            render_block_element(sub, theme, base_font_size, copied_code_hash, on_copy, on_open_lightbox)
                         })
                 }))
         }))

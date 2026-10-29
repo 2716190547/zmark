@@ -173,6 +173,7 @@ fn test_auto_save_and_settings_tabs() {
 
     let doc = Document::from_file(file.clone()).unwrap();
     let mut state = AppState::new(doc);
+    state.preferences = glidemark_core::config::Preferences::default();
 
     // Verify auto_save defaults to true and tabs can be switched
     assert!(state.preferences.auto_save);
