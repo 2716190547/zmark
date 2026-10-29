@@ -1,7 +1,7 @@
 # GlideMark 架构决策记录 (ADR 索引)
 
 本文档是 GlideMark 架构演进与技术选型的唯一权威索引表。
-所有技术决策遵循轻量、务实、直面根因原则，已作废的中间态决策在下表标明去向，不保留冗余文件。
+所有技术决策遵循轻量、务实、直面根因原则，早期已被替代的中间态探索已并入下表所列去向，不保留冗余文件。
 
 ---
 
@@ -15,16 +15,16 @@
 | **0004** | [Core 与 App 双 Crate 解耦边界](0004-core-ui-crate-decoupling.md) | 已接受 (Accepted) | 逻辑解析（glidemark_core）与 GPU 渲染层（glidemark_app）严格隔离 |
 | **0005** | [自研编辑引擎与多调色板体系](0005-unified-topbar-custom-editor-and-palette-system.md) | 已接受 (Accepted) | 自研轻量纯文本行光标引擎，杜绝重型外部编辑器依赖 |
 | **0006** | [异步非阻塞文件选择与拖拽集成](0006-async-file-dialog-and-external-drop-handling.md) | 已接受 (Accepted) | 原生异步对话框杜绝 AppKit 主线程借用死锁，支持拖拽即开 |
-| **0007** | [Flexbox 滚动陷阱根因与布局约束](0007-miaoyan-palette-borderless-toolbar-and-flex-scroll-fix.md) | 已接受 (Accepted) | 明确 `min-h: 0` 与 `min-w: 0` 约束，彻底根治 Taffy 弹性盒溢出滚动卡死 |
+| **0007** | [Flexbox 滚动约束与布局根因修复](0007-flexbox-scroll-constraints.md) | 已接受 (Accepted) | 明确 `min-h: 0` 与 `min-w: 0` 约束，彻底根治 Taffy 弹性盒溢出滚动卡死 |
 | **0009** | [Tooltip 规范、去边线与平滑动效](0009-tooltips-borderless-minimalism-rename-fix-and-animations.md) | 已接受 (Accepted) | 全局无框化微胶囊、双击原地重命名与 180ms 原生平滑动效 |
-| **0013** | [解耦独立分栏设置窗口与防抖保存](0013-decoupled-split-settings-window-bidirectional-animations-and-fullbleed-icon.md) | 已接受 (Accepted) | 独立设置视窗、双向跨窗口即时同步、1s 防抖自动落盘（合并 0010/0011/0012） |
+| **0013** | [解耦独立分栏设置窗口与平滑动效](0013-decoupled-split-settings-window-bidirectional-animations-and-fullbleed-icon.md) | 已接受 (Accepted) | 独立设置视窗、双向跨窗口即时同步、1s 防抖自动落盘（合并 0010/0011/0012） |
 | **0015** | [Icon Composer 资产与 Squircle 规范](0015-icon-composer-iconimagestack-bypass-squircle-jail.md) | 已接受 (Accepted) | 编译标准 `Assets.car` 与 `IconImageStack`，彻底根治 macOS Dock 灰色托盘套娃 |
 | **0019** | [采用 100% 纯 Rust 图表渲染引擎](0019-pure-rust-mermaid-rendering-engine-adoption.md) | 已接受 (Accepted) | 选用 `rusty-mermaid` 替换 WebKit / JS 管道，彻底肃清外部通信与 JS 依赖 |
 | **0020** | [SVG 视口自适应几何归一化](0020-svg-bounding-box-normalization-and-void-elimination.md) | 已接受 (Accepted) | 计算图元最小包围盒并重写 viewBox，彻底消灭复杂子图顶部几何大空白 |
-| **0021** | [单窗口多标签页与暖石灰阶主题](0021-multi-tab-and-workspace-directory-architecture.md) | 已接受 (Accepted) | 单窗口轻量多标签页状态管理，默认切换为温润社论质感的暖石纸张灰阶 |
+| **0021** | [单窗口多标签页与工作区文件夹架构](0021-multi-tab-and-workspace-directory-architecture.md) | 已接受 (Accepted) | 单窗口轻量多标签页状态管理，默认切换为温润社论质感的暖石纸张灰阶 |
 | **0022** | [图表纹理预算与有界 LRU 缓存](0022-diagram-texture-budget-and-memory-optimization.md) | 已接受 (Accepted) | 建立 1000px 尺寸钳制与 LRU 显存逐出淘汰机制，彻底终结超大图表显存膨胀 |
 | **0024** | [图表 Panic 隔离与编辑器横向平滑滚动](0024-panic-isolation-native-dialogs-and-editor-horizontal-scroll.md) | 已接受 (Accepted) | 纯 Rust 图表 Panic 隔离屏障，编辑器长行采用 `nowrap` 与横向双向平滑滚动 |
-| **0026** | [大文档虚拟化与文件体积三级解析分档](0026-large-document-virtualization-parse-tiers-and-deferred-sync-scroll.md) | 已接受 (Accepted) | GPUI 原生 `list` 视口按需虚拟化，按 2MB/10MB 分级防抖，保障 120fps 流畅度 |
+| **0026** | [大文档虚拟化与文件体积三级解析分档](0026-large-document-virtualization-parse-tiers-and-deferred-sync-scroll.md) | 已接受 (Accepted) | GPUI 原生 `list` 视口按需虚拟化，按 2MB/10MB 分级防抖，大文档内存降至百 MB 级 |
 | **0027** | [双板块无界纸张画布与图表灯箱](0027-dual-pane-seamless-canvas-and-diagram-lightbox.md) | **提议 (Proposed)** | 待实施：去除全局通栏顶栏、红绿灯折叠自适应迁移、多级工作区树与矢量灯箱 |
 | **0028** | [双向同步滚动、嵌套列表与代码块交互](0028-bidirectional-sync-scroll-nested-lists-and-codeblock-ux.md) | 已接受 (Accepted) | 100ms 回声抑制双向同步滚动、递归嵌套列表多层富文本与代码块横向滚动复制 |
 

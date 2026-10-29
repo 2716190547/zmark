@@ -1,234 +1,88 @@
-# GlideMark
+# GlideMark 领域词汇模型 (Domain Glossary)
 
-A high-performance, GPU-accelerated single-document Markdown reader and editor designed for modern desktops.
+GlideMark 是一款基于 **Rust + GPUI** 的高性能单窗口多标签 GPU 加速 Markdown 阅读与编辑器。
+本文档定义统一的业务与架构术语，消灭交流歧义与冗余实现噪音。
 
-## Language
+---
 
-**Document**:
-A single local markdown file loaded into an active viewing and editing session.
-_Avoid_: Note, file, vault item, article
+## 核心领域术语 (Core Domain Terms)
 
-**View Mode**:
-The active presentation state of the document, toggled between Source (code editor), Preview (rendered document), and Split (side-by-side).
-_Avoid_: Layout mode, tab style, preview window
+### 1. Document (文档)
+- **定义**：加载到当前活跃阅读或编辑会话中的单一本地 Markdown 物理文件。
+- **避免叫法**：笔记 (Note)、卡片 (Card)、文章 (Article)、Vault Item
 
-**Buffer**:
-The in-memory text data structure holding the raw markdown source text with line and offset indexing.
-_Avoid_: Text store, string cache, content state
+### 2. View Mode (视图模式)
+- **定义**：文档内容的当前呈现形态，支持源码编辑（`Source`）、双栏分屏（`Split`）与纯排版阅读（`Preview`）三档切换。
+- **避免叫法**：布局模式 (Layout Mode)、预览窗口 (Preview Window)
 
-**Render Tree**:
-The GPU-accelerated GPUI element tree generated from the parsed Markdown AST for high-fps viewing.
-_Avoid_: DOM, webview layer, HTML output
+### 3. Buffer (文本缓冲区)
+- **定义**：内存中存储 Markdown 原始 UTF-8 源码的文本数据结构，维护物理行索引与光标偏移量。
+- **避免叫法**：文本框 (Textbox)、字符串缓存 (String Cache)
 
-**Block Element**:
-A discrete top-level markdown node (paragraph, heading, table, or fenced code block) rendered as an item within the virtualized preview list.
-_Avoid_: Widget, row, chunk, card
+### 4. Render Tree (GPU 渲染树)
+- **定义**：基于 Markdown 语法解析 AST 映射并实时提交给 GPUI/Metal 渲染管线的 GPU 原生元素树。
+- **避免叫法**：DOM 树、WebView 页面、HTML 渲染图层
 
-**Source Anchor**:
-The line-range metadata attached to each block element mapping its rendered height to source buffer line coordinates.
-_Avoid_: Line tag, offset mark, bookmark
+### 5. Block Element (块级图元)
+- **定义**：Markdown 语法的离散顶级图元（段落、各级标题、独立表格、代码块、列表或流程图卡片）。
+- **避免叫法**：小组件 (Widget)、卡片块 (Chunk)
 
-**Sync Scroll**:
-The piecewise linear interpolation mechanism that accurately locks the editor and preview viewports together using source anchors.
-_Avoid_: Auto scroll, scroll bind, sticky scroll
+### 6. Source Anchor (源码锚点)
+- **定义**：附加于各渲染块级图元上的源码行范围元数据（Line Range），用于正文与源码之间的精准映射。
+- **避免叫法**：行标记 (Line Tag)、书签 (Bookmark)
 
-**Drawer**:
-A collapsible navigation panel toggled on demand to switch among sibling markdown files in the document's working directory or recent history.
-_Avoid_: Sidebar, explorer, project tree, workspace pane
+### 7. Sync Scroll (双向同步滚动)
+- **定义**：分屏模式下基于源码锚点与分段线性插值、带有 100ms 回声抑制与输入防抖的双向平滑联动滚动机制。
+- **避免叫法**：自动滚动 (Auto Scroll)、滚动绑定 (Scroll Bind)
 
-**File Watcher**:
-A background filesystem notification listener detecting external changes to the opened document on disk.
-_Avoid_: File poll, disk sync, watcher daemon
+### 8. Drawer (侧边抽屉)
+- **定义**：承载同级工作区文件与文章大纲的可折叠侧边导航面板，支持 180ms 硬件加速平滑动效。
+- **避免叫法**：侧边栏 (Sidebar)、文件资源管理器 (File Explorer)、目录树弹窗
 
-**Asset Pipeline**:
-An asynchronous background decoding service resolving relative image paths against the document path into GPU textures.
-_Avoid_: Image loader, media cache, asset manager
+### 9. Outline Navigation (大纲目录导航)
+- **定义**：实时提取当前文档 H1–H6 标题构建的分级目录树，支持锚点平滑跳转与当前章节追踪。
+- **避免叫法**：TOC 菜单、书签列表 (Bookmark List)
 
-**Standalone Export**:
-A pipeline generating a self-contained single `.html` document bundling rendered content, typography styles, and syntax highlights.
-_Avoid_: PDF generator, print renderer, web exporter
+### 10. Document Tab (多标签页)
+- **定义**：单窗口内代表独立打开文档会话的轻量交互标签，支持一键切换、新建与快捷键关闭。
+- **避免叫法**：文件胶囊 (File Pill)、窗口按钮 (Window Tag)
 
-**Preferences**:
-User-defined layout, typography, and theme settings persisted in an OS-standard TOML configuration file.
-_Avoid_: Settings DB, registry, user state
+### 11. Workspace Folder (工作区文件夹)
+- **定义**：用户选定载入的本地根目录，系统自动扫描并索引其内部所有 Markdown 关联文档。
+- **避免叫法**：项目库 (Project Vault)、根仓库 (Root Repo)
 
-**Palette**:
-A curated semantic color scheme (e.g. MiaoYan Pure, Claude Warm, macOS Vibrant, Tokyo Night, Catppuccin, Nord, Gruvbox, GitHub Modern, Solarized) providing light and dark styling variants.
-_Avoid_: Theme file, skin, color pack
+### 12. Vector Diagram (矢量流程图)
+- **定义**：由 100% 纯 Rust 渲染管线（`rusty-mermaid`）在内存中解析并绘制的 GPU 原生 Mermaid 矢量图元。
+- **避免叫法**：WebKit 渲染图、外部 JS 视图、颜文字流程图
 
-**Editor Engine**:
-The responsive in-memory line buffer tracking cursor position, text selection, keystrokes, and undo/redo history.
-_Avoid_: Text box, input widget, textarea
+### 13. Preferences (偏好配置)
+- **定义**：用户自定义的外观、调色板、编辑排版、自动保存与语言设置，持久化保存在标准 TOML 文件中。
+- **避免叫法**：设置数据库 (Settings DB)、用户注册表
 
-**Window Inset**:
-Platform-specific layout padding reserving top-bar space for native window management controls (macOS traffic lights on the left, Windows caption buttons on the right).
-_Avoid_: Titlebar margin, top padding, button offset
+### 14. Palette (调色板)
+- **定义**：经过专业调和的语义化色彩方案（包含默认暖石、Claude Warm、macOS Vibrant、Tokyo Night、Nord、GitHub、Solarized、One Dark）。
+- **避免叫法**：皮肤 (Skin)、主题包 (Color Pack)
 
-**Locale**:
-The active regional language translation dictionary mapped across 10 supported languages (zh-CN, zh-TW, en, ja, ko, fr, de, es, ru, pt).
-_Avoid_: Language pack, string bundle, i18n file
+### 15. Editor Engine (自研编辑引擎)
+- **定义**：基于纯文本行缓冲区的轻量编辑核心，精确管理光标位置、文本选区、按键流与撤销重做栈。
+- **避免叫法**：IDE 插件、重型富文本框 (Rich Textarea)
 
-**Split Ratio**:
-The dynamic proportional divider coordinate (clamped between 0.20 and 0.80) that allocates horizontal viewport space between the Source Editor and Preview panes.
-_Avoid_: Split position, pane width, column size
+### 16. Standalone Export (独立单文件导出)
+- **定义**：将正文排版样式、矢量图表与代码块样式完全打包内联为自包含的单文件 `.html` 导出管线。
+- **避免叫法**：PDF 导出、网页截屏 (Web Exporter)
 
-**Inline Rename**:
-In-place document title editing state enabling file path renaming directly on disk without disrupting the active reading or editing session.
-_Avoid_: Save-as prompt, title edit dialog, rename modal
+### 17. Inline Rename (原地内联重命名)
+- **定义**：双击顶栏文件名直接进入编辑态并在确认后同步执行磁盘文件更名的无感操作。
+- **避免叫法**：另存为弹窗 (Save As Dialog)、重命名对话框
 
-**External Drop**:
-The operating system file drop mechanism delivering native path collections (`ExternalPaths`) to open dropped markdown documents directly.
-_Avoid_: Drag file, file import, drop listener
+### 18. External Drop (系统原生文件拖拽)
+- **定义**：捕获操作系统派发的文件拖放事件（`ExternalPaths`）并瞬时载入目标 Markdown 文档的原生通道。
+- **避免叫法**：拖拽导入 (File Import)、拖动侦听器
 
-**App Bundle**:
-The self-contained macOS desktop bundle (`.app`) containing native arm64 binary, document association metadata (`Info.plist`), and icon resources (`AppIcon.icns`).
-_Avoid_: Executable zip, dmg package, installer archive
+### 19. App Bundle (macOS 原生独立应用包)
+- **定义**：封装有 Universal/arm64 原生机器码、文件关联元数据（`Info.plist`）与官方多层资产（`Assets.car`）的标准桌面应用包。
+- **避免叫法**：Electron 套壳包、安装包镜像 (DMG)
 
-**Outline Navigation**:
-The hierarchical table of contents extracted from markdown headings (H1–H6), enabling instant anchor navigation and visual section tracking in the drawer panel.
-_Avoid_: TOC menu, header list, bookmark list
-
-**Vector Diagram**:
-A specialized visual element rendering Mermaid flowcharts and structural diagrams as GPU-native vector graphics via an in-memory memoized, 100% pure-Rust rendering pipeline (`rusty-mermaid`) with Sugiyama layered graph layout (`rusty-mermaid-dagre`), compound subgraphs, database shapes, and dark mode support.
-_Avoid_: WebKit iframe, external JS runner, emoji flowchart, kaomoji card, unmemoized render-loop diagram
-
-**Asset Catalog**:
-The compiled macOS asset container (`Assets.car`) compiled via `actool` specifying `CFBundleIconName` to provide native dock integration without fallback framing.
-_Avoid_: Raw icns, icon directory, tile wrapper
-
-**Default Palette**:
-The primary warm terracotta (`#D9532F`) and golden-amber color scheme with warm stone parchment (`#F5F4F0`) and delicate warm-gray dividers (`#E6E4DE`), harmonizing with the GlideMark brand identity.
-
-**Workspace Folder**:
-The root local directory selected by the user containing related markdown documents, scanned to populate the navigation drawer.
-_Avoid_: Project vault, root repo, workspace path
-
-**Document Tab**:
-An interactive horizontal tab element representing an active in-memory document session within the single-window multi-document workspace.
-_Avoid_: File pill, document button, window tag
-_Avoid_: MiaoYan theme, custom skin, orange theme
-
-**Tooltip**:
-A contextual floating micro-capsule surfaced on icon hover after a brief delay, detailing the action name and its keyboard shortcut.
-_Avoid_: Hint box, hover popup, title tag
-
-**Borderless Hierarchy**:
-A flattened, breathable visual design system removing redundant boundary borders and multi-level outlines in favor of clean whitespace and gentle background separation.
-_Avoid_: Frameless mode, line-free UI, flat theme
-
-**Micro-animations**:
-Short, hardware-accelerated transitions (150–200ms) with easing curves applied to drawer toggles, modal dialogues, and control highlights to deliver smooth tactile feedback.
-_Avoid_: Heavy animations, visual effects, transitions pack
-
-**Full-Bleed Icon**:
-A 1024x1024 edge-to-edge application icon artwork without baked-in padding or inner squircle cards, relying exclusively on macOS LaunchServices to apply the native system squircle mask.
-_Avoid_: Padded icon, card tile, framed icon
-
-**Segmented Control**:
-A concentric, borderless or hairline-pill multi-segment switcher (Source / Split / Preview) with uniform recessed track and flat active indicator capsule.
-_Avoid_: Tab bar, button row, toggle strip
-
-**Auto Save**:
-A silent, debounced background task automatically writing dirty document buffers to disk after 1000ms of user typing inactivity, alongside immediate saves on blur.
-_Avoid_: Auto sync, periodic save, timer poll
-
-**Split Settings Modal**:
-A two-column preferences dialog organizing configuration domains into a left category navigation sidebar (Appearance, Editor & Save, Language, About) and a right card panel.
-_Avoid_: Settings page, preferences window, config popover
-
-**Decoupled Settings Window**:
-A dedicated native macOS window opened asynchronously via `cx.defer` with two-column split layout (160px category nav + scrollable settings content) decoupled from WorkspaceView to eliminate borrow panics.
-_Avoid_: In-window drawer, settings popup, config modal
-
-**Continuous Surface**:
-An edge-to-edge, full-height writing and preview canvas separated by delicate 1px hairlines and tonal background distinction, eliminating floating card gutters for immersive drafting.
-_Avoid_: Floating card, dashboard box, rounded tile
-
-**Icon Composer Architecture**:
-Apple's modern `.icon` bundle format combining manifest declarations (`icon.json`) with asset layers, compiled via `actool` into multi-layer `IconImageStack` assets in `Assets.car`. This provides native squircle fill and liquid material handling in macOS Tahoe without falling into legacy "Squircle Jail" gray tiles.
-_Avoid_: Flat bitmap iconset, unlayered png, squircle jail workaround
-
-**Bidirectional Drawer Animation**:
-A smooth 180ms ease-in-out transition animating the directory drawer both when expanding and when collapsing.
-_Avoid_: Instant snap, zero-duration close, unmount flash
-
-**Diagram Texture Budget**:
-A clamped dimension bounding policy applied to rendered SVG diagrams so rasterized textures never exceed the display column width, preventing multi-megabyte uncompressed RGBA pixel buffers.
-_Avoid_: Arbitrary SVG scaling, unbounded bitmap rasterization
-
-**Bounded Image Cache**:
-A Least Recently Used (LRU) eviction pipeline restricting the number of active GPU textures in GPUI memory and actively dropping stale surfaces via `cx.drop_image`.
-_Avoid_: Retain-all cache, infinite texture pool, leaky image map
-
-**Diagram Panic Shield**:
-The runtime exception boundary wrapping third-party diagram engines in unwind assertions to intercept thread-level panics and downgrade them into non-fatal inline diagnostic cards without process termination.
-_Avoid_: Catch block, crash suppressor, silent drop
-
-**Physical Line**:
-An unsegmented, horizontally scrollable source line in the editor whose vertical row height is strictly uniform and whose character coordinate matches buffer offsets 1:1.
-_Avoid_: Soft-wrap line, visual row, editor line
-
-**Reading Column**:
-A centered typography column bounded by the user's maximum width preference, providing optimal character line lengths for ergonomic reading.
-_Avoid_: Centered box, reading container, preview margin
-
-**Syntax Highlighter**:
-A lightweight pure-Rust lexical tokenizer mapping language keywords, strings, comments, and numbers to semantic palette colors in code blocks without external binary syntax databases.
-_Avoid_: Colorizer, syntect wrapper, code parser
-
-**Nested List**:
-A hierarchical list structure supporting recursive indentations, preserved inline formatting (bold, italic, links, code), and tiered bullet markers (solid disc `•` to hollow ring `◦`).
-_Avoid_: Multi-level bullet, sublist, deep list
-
-**Parse Tier**:
-The size-based rule deciding when an edited Buffer is re-parsed: 100ms debounce below 2MB, 300ms from 2–10MB, and no automatic parse above 10MB.
-_Avoid_: Parse throttle, render debounce, auto-refresh policy
-
-**Large Document Pause**:
-The Preview state above 10MB where automatic re-parsing stops until the user renders manually, saves, or re-enters Preview/Split.
-_Avoid_: Read-only mode, frozen preview, disabled parsing
-
-**Virtualized Preview**:
-The preview renderer that lays out and paints only Block Elements near the viewport, keeping memory bounded on long documents.
-_Avoid_: Lazy list, windowed renderer, chunked HTML
-
-**Cursor Capsule**:
-A small floating indicator at the lower-right of the Source/Split editor showing the current line and column after the pane header is removed.
-_Avoid_: Status bar, footer, line badge
-
-**Dual-Pane Seamless Canvas**:
-A unified application window layout eliminating the global horizontal topbar and horizontal dividers, strictly separating the workspace into a left Navigation Pane (file tree & outline) and a right Content Canvas (header tabs, mode switcher, and editor/preview), connected by a single vertical hairline.
-_Avoid_: Topbar layout, divided window, tiled dashboard
-
-**Dynamic Window Inset**:
-The adaptive window control positioning system that places macOS traffic lights in the left sidebar header when open, and smoothly migrates traffic light padding (76px) and sidebar expand controls to the right canvas header when the sidebar is collapsed to 0px, with caption button padding reserved on Windows/Linux.
-_Avoid_: Fixed titlebar, hidden traffic lights, drifting controls
-
-**Subtle Warm Pill**:
-A low-contrast, muted warm-stone rounded rectangular indicator (`#EBE7DE` in light mode, `#2A2826` in dark mode) for active navigation and document items, preserving standard dark/light typography without solid saturated color blocks or high-contrast accent fills.
-_Avoid_: Solid accent highlight, saturated badge, colored button fill
-
-**Vector Lightbox**:
-A modal overlay with semi-transparent backdrop triggered on diagram click, rendering pure-vector SVG diagrams at 100% DPI with pan, zoom (0.2x–5.0x), reset controls, and Esc key dismissal.
-_Avoid_: Inline zoom, external image viewer, popup preview
-
-**Workspace Tree**:
-A hierarchical, collapsible filesystem tree in the navigation pane representing the active workspace folder and nested subdirectories with chevron disclosures, replacing flat folder buttons.
-_Avoid_: Flat file list, folder picker drawer, file browser
-
-**Bidirectional Sync Scroll**:
-The synchronized viewport movement between the Source editor and Preview virtual list in Split mode, driven by the last-interacted pane via piecewise linear anchor mapping, paused during stale typing and aligned to cursor block on debounce reparse completion.
-_Avoid_: Lockstep scrolling, editor-only drive, unanchored proportional sync
-
-**Echo Suppression**:
-A temporal filter window (100ms) that discards reflected scroll events emitted by the opposite pane during programmatic sync alignment, preventing feedback oscillation loops.
-_Avoid_: Debounced scroll loops, event cancellation flags, sync deadlocks
-
-**Recursive Nested List**:
-Hierarchical list item data structures supporting up to 8 nested levels of ordered and unordered sub-lists, preserving full inline formatting (bold, italic, strikethrough, code, links, images, task checkboxes) in AST, preview, and HTML export.
-_Avoid_: Flattened list items, plain text strip, unnested list parsing
-
-**Code Copy Feedback**:
-An ephemeral (~1.2s) visual checkmark and tooltip confirmation replacing the copy glyph upon clicking a code block copy button, after writing clean raw snippet text to the system clipboard.
-_Avoid_: Static copy button, alert dialog, persistent badge
-
+### 20. Auto Save (防抖自动落盘)
+- **定义**：打字停止 1000ms 或视窗失焦时，后台自动将脏缓冲区静默持久化至物理磁盘的安全机制。
+- **避免叫法**：定时轮询保存、云端同步

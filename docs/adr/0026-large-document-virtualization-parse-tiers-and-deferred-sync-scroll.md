@@ -1,7 +1,7 @@
 # ADR 0026: 大文档性能优先的虚拟化、解析分档与同步滚动延期
 
 ## 状态
-已接受 (Accepted)
+已接受 (Accepted) - 分屏双向同步滚动已在后续 ADR 0028 落地（本文第 6 条与后果中的“仍不同步”为当时状态记录）
 
 ## 上下文
 - 预览层实际把 `parsed.blocks` 全量展开为 GPUI 元素；1.5MB / 36,000 blocks 的 Markdown 实测约 4.7GB RSS、98% CPU。ADR 0002、MVP spec 与 tickets 均声称预览已虚拟化，但代码未接线。
@@ -11,7 +11,7 @@
 - ADR 0025 的副顶栏/版心部分获准本轮落地；语法高亮、智能抽屉、嵌套列表等继续后置。
 
 ## 决策
-1. 预览使用 GPUI `list(ListState)` 做可变高度虚拟化；编辑器使用 `uniform_list` 做固定行高虚拟化，只渲染视口与 overdraw 范围。
+1. 预览使用 GPUI `list(ListState)` 做可变高度虚拟化，段落与标题统一采用 GPUI `StyledText` 进行响应式排版折行；编辑器使用 `uniform_list` 做固定行高虚拟化，只渲染视口与 overdraw 范围。
 2. `Document.parsed` 改为 `Arc<ParsedDocument>`，让列表闭包廉价共享 AST；编辑器行缓冲使用可共享句柄，避免逐帧复制全部文本。
 3. 解析按体积分档：<2MB 使用 100ms 防抖；2–10MB 使用 300ms；>10MB 暂停自动解析，显示横幅，由按钮、保存或切换到 Preview/Split 触发一次解析。打开文件时先解析一次以显示内容。
 4. 代码块改为单个 `StyledText`（行号与代码分两列），避免单个超大代码块在一个列表项内展开逐行元素树。

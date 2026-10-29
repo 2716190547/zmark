@@ -1,6 +1,6 @@
 # Virtualized Block Rendering and Anchor-Based Sync Scrolling
 
-> **Status note (2026-10):** Preview virtualization is implemented with GPUI's `list`. Split view sync scrolling is not wired in the app yet; see ADR 0026.
+> **状态说明 (Status Note):** 预览区已基于 GPUI `list` 实施视口图元虚拟化（详见 ADR 0026）；分屏双向同步滚动已于 ADR 0028 完整落地（具备 100ms 回声抑制与输入防抖）。
 
 To guarantee 120fps scrolling on documents of any size and prevent scroll drift in Split mode, we render the preview as a virtualized list of top-level Block Elements and bind the editor and preview viewports using AST Source Anchors.
 

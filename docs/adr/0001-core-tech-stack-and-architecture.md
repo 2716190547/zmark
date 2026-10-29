@@ -1,15 +1,16 @@
-# Tech Stack and Interaction Paradigm: Rust + GPUI with Split/Toggle View
+# ADR 0001: 核心技术栈与交互范式：Rust + GPUI 与分屏/切换视图
 
-We need sub-second startup, 120fps smooth scrolling, and minimal memory (<50MB) for markdown editing and reading. We chose Rust with GPUI and `gpui-component`, using a Source / Preview / Split toggle interaction paradigm rather than in-place WYSIWYG or a Webview shell.
+## 状态
+已接受 (Accepted)
 
-## Considered Options
+## 上下文 (Context)
+我们需要亚秒级启动速度、120fps 平滑滚动以及极低的空闲驻留内存（实测见 ADR 0026），提供专业 Markdown 编辑与阅读体验。
 
-- **Tauri 2.0 + Webview (Svelte 5 / ProseMirror)**: Lower implementation cost for rich-text inline editing, but dependent on system WebKit/WebView2 (~60-90MB baseline memory) and non-GPU-native render latency.
-- **In-place WYSIWYG in GPUI (Typora-style)**: Highest implementation complexity; native inline mixed layout with cursor projection and CJK IME in Rust is currently immature and error-prone.
-- **Split / Toggle in Rust + GPUI**: Leverages Zed's proven GPU text buffer and Tree-sitter for editing, while rendering GFM directly to GPUI element trees, achieving sub-50MB memory and 120fps scrolling.
+## 方案评估
+- **Tauri 2.0 + Webview**: 富文本开发成本低，但依赖系统 WebKit/WebView2（基础内存 60-90MB），且并非 GPU 原生渲染管线。
+- **GPUI 原地所见即所得 (Typora 模式)**: 复杂度极高，目前在 GPU 原生层实现富文本与 CJK 输入法混合排版极易出现闪烁与光标脱节。
+- **Rust + GPUI 源码/预览/分屏三态切换**: 采用 GPUI 原生 GPU 渲染树与自研纯文本行编辑核心，既保障超低内存与 120fps 极速响应，又规避外部庞大依赖。
 
-## Consequences
-
-- Focuses initial effort on macOS desktop ergonomics and typography excellence.
-- Isolates Markdown AST parsing and rendering from GPUI windowing APIs to insulate against upstream framework breaking changes.
-- Deferred LaTeX/Mermaid support to modular post-launch extensions.
+## 结果 (Consequences)
+- 确立了 GlideMark 专注原生桌面交互体验与排版美学的基调。
+- AST 解析与 GPUI 视窗层严格解耦，保障架构稳定性。

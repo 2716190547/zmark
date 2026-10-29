@@ -28,9 +28,9 @@
 
 ## 决策 (Decision)
 1. **实施方案 A（推荐）**：
-   - 在 [`mermaid.rs`](crates/glidemark_core/src/mermaid.rs) 的 `normalize_svg_bounds` 中，对 `<svg ...>` 的 `width` 与 `height` 强制应用视口最大宽度约束（1000px），保留矢量 `viewBox` 与自适应纵横比，遏制无节制的高分辨率纹理光栅化。
-   - 在 [`preview.rs`](crates/glidemark_app/src/views/preview.rs) 中为预览区域配置有界 LRU 缓存（上限 8 张），释放过往不可见图表的 GPU 纹理。
-   - 在 [`state.rs`](crates/glidemark_app/src/state.rs) 中对 `scan_markdown_files` 设置目录扫描上限保护（最多 100 个文件），防止超大项目造成元素树内存溢出。
+   - 在 [`mermaid.rs`](../../crates/glidemark_core/src/mermaid.rs) 的 `normalize_svg_bounds` 中，对 `<svg ...>` 的 `width` 与 `height` 强制应用视口最大宽度约束（1000px），保留矢量 `viewBox` 与自适应纵横比，遏制无节制的高分辨率纹理光栅化。
+   - 在 [`preview.rs`](../../crates/glidemark_app/src/views/preview.rs) 中为预览区域配置有界 LRU 缓存（上限 8 张），释放过往不可见图表的 GPU 纹理。
+   - 在 [`state.rs`](../../crates/glidemark_app/src/state.rs) 中对 `scan_markdown_files` 设置目录扫描上限保护（最多 100 个文件），防止超大项目造成元素树内存溢出。
 
 ## 结果 (Consequences)
 - 彻底解决打开多图表文档时内存飙升至 700MB+ 的问题，单图光栅化内存缩减 97% 以上。

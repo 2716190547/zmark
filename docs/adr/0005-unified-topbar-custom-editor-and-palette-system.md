@@ -12,4 +12,4 @@ To resolve OS window control collisions, enable high-performance text editing, a
 
 - Completely eliminates UI overlap with macOS traffic light buttons and Windows window controls.
 - Enables native file open dialogs (`Cmd+O`), trackpad scrolling with `ScrollHandle`, and reliable keyboard text editing.
-- Embeds 8 curated design palettes (Claude Warm, macOS Vibrant, Tokyo Night, Catppuccin, Nord, Gruvbox, GitHub Modern, Solarized) with Auto/Light/Dark switching and zero-runtime-cost 10-language translations.
+- Embeds 8 curated design palettes (Default Warm Stone, Claude Warm, macOS Vibrant, Tokyo Night, Nord, GitHub, Solarized, One Dark) with Auto/Light/Dark switching and zero-runtime-cost 10-language translations.
