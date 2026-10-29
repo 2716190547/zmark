@@ -37,6 +37,24 @@ pub const ALL_PALETTES: &[PaletteDescriptor] = &[
 ];
 
 impl ThemeColors {
+    /// Low-contrast warm stone pill background: `#EBE7DE` (light) / `#2A2826` (dark)
+    pub fn warm_pill_bg(&self) -> Hsla {
+        if self.is_dark {
+            rgb(0x2a2826).into()
+        } else {
+            rgb(0xebe7de).into()
+        }
+    }
+
+    /// Primary text for subtle warm stone pill: `#1E1E1E` (light) / `#E5E2DC` (dark)
+    pub fn warm_pill_text(&self) -> Hsla {
+        if self.is_dark {
+            rgb(0xe5e2dc).into()
+        } else {
+            rgb(0x1e1e1e).into()
+        }
+    }
+
     pub fn resolve(palette_id: &str, is_dark: bool) -> Self {
         match palette_id {
             "default" | "miaoyan" => Self::default_palette(is_dark),

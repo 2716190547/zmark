@@ -290,140 +290,329 @@ impl WorkspaceView {
         }));
     }
 
-    fn render_tab_strip(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_canvas_header(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_macos = cfg!(target_os = "macos");
+        let drawer_open = self.state.drawer_open;
         let active_idx = self.state.active_doc_idx;
+        let view_mode = self.state.view_mode;
+        let strings = self.state.strings;
+        let is_renaming = self.is_renaming;
+        let rename_buffer = self.rename_buffer.clone();
+
+        // Left padding: on macOS when sidebar is collapsed, inject 76px safe area to avoid traffic lights.
+        let header_pl = if is_macos && !drawer_open { px(76.) } else { px(8.) };
+        // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
+        let header_pr = if !is_macos { px(138.) } else { px(12.) };
 
         div()
-            .id("tab_strip_scroll")
-            .h(px(34.))
+            .id("canvas_integrated_header")
+            .h(px(38.))
             .w_full()
-            .bg(theme.bg)
-            .border_b_1()
-            .border_color(theme.border)
+            .pl(header_pl)
+            .pr(header_pr)
+            .bg(theme.surface)
             .flex()
             .items_center()
-            .px_2()
-            .gap_1()
-            .overflow_x_scroll()
-            .children(self.state.open_docs.iter().enumerate().map(|(idx, doc)| {
-                let is_active = idx == active_idx;
-                let is_dirty = doc.status == DocumentStatus::Modified;
-                let title = doc.display_name();
-
-                let tab_item = div()
-                    .id(("tab_item", idx))
-                    .h(px(26.))
-                    .max_w(px(180.))
-                    .min_w(px(90.))
-                    .px_2p5()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_1p5()
-                    .text_xs();
-
-                let switch_handler = cx.listener(move |this, _, _window, cx| {
-                    this.state.switch_tab(idx);
-                    this.on_document_swapped();
-                    cx.notify();
-                });
-
-                let close_handler = cx.listener(move |this, _, _window, cx| {
-                    cx.stop_propagation();
-                    this.state.close_tab(idx);
-                    this.on_document_swapped();
-                    cx.notify();
-                });
-
-                let title_el = div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .truncate()
-                    .child(title);
-
-                let dirty_indicator = if is_dirty {
-                    Some(
-                        div()
-                            .w(px(6.))
-                            .h(px(6.))
-                            .rounded_full()
-                            .bg(theme.accent)
-                            .flex_shrink_0(),
-                    )
-                } else {
-                    None
-                };
-
-                let close_btn = div()
-                    .id(("tab_close_btn", idx))
-                    .w(px(18.))
-                    .h(px(18.))
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(theme.text_muted)
-                    .hover(|s| s.bg(theme.border).text_color(theme.text_primary))
-                    .tooltip(|_window, cx| {
-                        cx.new(|_| TooltipView { text: "关闭标签页 (⌘W)".to_string() }).into()
-                    })
-                    .on_mouse_down(MouseButton::Left, close_handler)
-                    .child(
-                        svg()
-                            .path("icons/x.svg")
-                            .size(px(11.))
-                    );
-
-                let mut tab = tab_item.child(title_el);
-                if let Some(dot) = dirty_indicator {
-                    tab = tab.child(dot);
-                }
-                tab = tab.child(close_btn);
-
-                if is_active {
-                    tab
-                        .bg(theme.surface)
-                        .border_1()
-                        .border_color(theme.border)
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.accent)
-                        .on_mouse_down(MouseButton::Left, switch_handler)
-                } else {
-                    tab
-                        .text_color(theme.text_muted)
-                        .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
-                        .on_mouse_down(MouseButton::Left, switch_handler)
-                }
-            }))
-            // "+" Button to open new scratch tab
+            .justify_between()
+            .gap_2()
+            // Left Group: Expand sidebar button (when collapsed) + Tab List + [+] New Tab
             .child(
                 div()
-                    .id("tab_new_btn")
-                    .w(px(24.))
-                    .h(px(24.))
-                    .rounded_md()
-                    .cursor_pointer()
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .text_color(theme.text_muted)
-                    .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
-                    .tooltip(|_window, cx| {
-                        cx.new(|_| TooltipView { text: "新建标签页 (⌘T)".to_string() }).into()
+                    .gap_1()
+                    .min_w(px(0.))
+                    .when(!drawer_open, |el| {
+                        el.child(render_icon_button(
+                            "btn_expand_drawer",
+                            format!("{} (⌘B)", strings.directory_drawer),
+                            false,
+                            theme,
+                            render_sidebar_icon(theme.text_muted),
+                            cx.listener(|this, _, _window, cx| {
+                                this.toggle_drawer(cx);
+                            }),
+                        ))
                     })
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-                        this.state.new_tab();
-                        this.on_document_swapped();
-                        cx.notify();
-                    }))
                     .child(
                         div()
-                            .text_size(px(16.))
-                            .line_height(relative(1.0))
-                            .child("+")
+                            .id("tab_strip_scroll")
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .min_w(px(0.))
+                            .overflow_x_scroll()
+                            .children(self.state.open_docs.iter().enumerate().map(|(idx, doc)| {
+                                let is_active = idx == active_idx;
+                                let is_dirty = doc.status == DocumentStatus::Modified;
+                                let title = doc.display_name();
+
+                                let tab_item = div()
+                                    .id(("tab_item", idx))
+                                    .h(px(26.))
+                                    .max_w(px(180.))
+                                    .min_w(px(80.))
+                                    .px_2()
+                                    .rounded(px(6.))
+                                    .cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_1p5()
+                                    .text_xs();
+
+                                let switch_handler = cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                    if event.click_count == 2 && idx == this.state.active_doc_idx {
+                                        let name = this
+                                            .state
+                                            .doc
+                                            .path
+                                            .as_ref()
+                                            .and_then(|p| p.file_name())
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or("Untitled.md");
+                                        this.rename_buffer = name.to_string();
+                                        this.is_renaming = true;
+                                        window.focus(&this.focus_handle);
+                                        cx.notify();
+                                    } else {
+                                        this.state.switch_tab(idx);
+                                        this.on_document_swapped();
+                                        cx.notify();
+                                    }
+                                });
+
+                                let close_handler = cx.listener(move |this, _, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.state.close_tab(idx);
+                                    this.on_document_swapped();
+                                    cx.notify();
+                                });
+
+                                let title_content: AnyElement = if is_renaming && is_active {
+                                    div()
+                                        .id("tab_rename_box")
+                                        .px_1()
+                                        .py_0p5()
+                                        .bg(theme.bg)
+                                        .border_1()
+                                        .border_color(theme.accent)
+                                        .rounded_sm()
+                                        .flex()
+                                        .items_center()
+                                        .cursor_text()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme.text_primary)
+                                                .child(if rename_buffer.is_empty() {
+                                                    "Untitled.md".to_string()
+                                                } else {
+                                                    rename_buffer.clone()
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(1.5))
+                                                .h(px(12.))
+                                                .ml_0p5()
+                                                .bg(theme.accent)
+                                                .with_animation(
+                                                    "rename_cursor_blink",
+                                                    Animation::new(std::time::Duration::from_millis(600)).repeat(),
+                                                    |el, delta| el.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
+                                                ),
+                                        )
+                                        .into_any_element()
+                                } else {
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .truncate()
+                                        .child(title)
+                                        .into_any_element()
+                                };
+
+                                let dirty_indicator = if is_dirty {
+                                    Some(
+                                        div()
+                                            .w(px(6.))
+                                            .h(px(6.))
+                                            .rounded_full()
+                                            .bg(theme.accent)
+                                            .flex_shrink_0(),
+                                    )
+                                } else {
+                                    None
+                                };
+
+                                let close_btn = div()
+                                    .id(("tab_close_btn", idx))
+                                    .w(px(16.))
+                                    .h(px(16.))
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_color(if is_active { theme.warm_pill_text() } else { theme.text_muted })
+                                    .hover(|s| s.bg(theme.border).text_color(theme.text_primary))
+                                    .tooltip(|_window, cx| {
+                                        cx.new(|_| TooltipView { text: "关闭标签页 (⌘W)".to_string() }).into()
+                                    })
+                                    .on_mouse_down(MouseButton::Left, close_handler)
+                                    .child(
+                                        svg()
+                                            .path("icons/x.svg")
+                                            .size(px(10.))
+                                    );
+
+                                let mut tab = tab_item.child(title_content);
+                                if let Some(dot) = dirty_indicator {
+                                    tab = tab.child(dot);
+                                }
+                                tab = tab.child(close_btn);
+
+                                if is_active {
+                                    tab
+                                        .bg(theme.warm_pill_bg())
+                                        .text_color(theme.warm_pill_text())
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .on_mouse_down(MouseButton::Left, switch_handler)
+                                } else {
+                                    tab
+                                        .text_color(theme.text_muted)
+                                        .hover(|s| s.bg(theme.bg).text_color(theme.text_primary))
+                                        .on_mouse_down(MouseButton::Left, switch_handler)
+                                }
+                            }))
+                    )
+                    // "+" Button to open new tab
+                    .child(
+                        div()
+                            .id("tab_new_btn")
+                            .w(px(24.))
+                            .h(px(24.))
+                            .rounded_md()
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(theme.text_muted)
+                            .hover(|s| s.bg(theme.bg).text_color(theme.text_primary))
+                            .tooltip(|_window, cx| {
+                                cx.new(|_| TooltipView { text: "新建标签页 (⌘T)".to_string() }).into()
+                            })
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
+                                this.state.new_tab();
+                                this.on_document_swapped();
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .line_height(relative(1.0))
+                                    .child("+")
+                            )
+                    )
+            )
+            // Draggable Window Control Area in center between tabs and action tools
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .min_w(px(20.))
+                    .window_control_area(WindowControlArea::Drag)
+            )
+            // Right Group: Segmented View Mode Switcher + Action Buttons (Save, Export, Settings)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .bg(theme.bg)
+                            .p(px(2.))
+                            .rounded(px(7.))
+                            .gap(px(2.))
+                            .border_1()
+                            .border_color(theme.border)
+                            .child(render_mode_icon_tab(
+                                "btn_mode_source",
+                                format!("{} (⌘1)", strings.source_mode),
+                                view_mode == ViewMode::Source,
+                                theme,
+                                render_source_mode_icon(if view_mode == ViewMode::Source { theme.warm_pill_text() } else { theme.text_muted }),
+                                cx.listener(|this, _, _window, cx| {
+                                    this.set_view_mode(ViewMode::Source, cx);
+                                }),
+                            ))
+                            .child(render_mode_icon_tab(
+                                "btn_mode_split",
+                                format!("{} (⌘2)", strings.split_mode),
+                                view_mode == ViewMode::Split,
+                                theme,
+                                render_split_mode_icon(if view_mode == ViewMode::Split { theme.warm_pill_text() } else { theme.text_muted }),
+                                cx.listener(|this, _, _window, cx| {
+                                    this.set_view_mode(ViewMode::Split, cx);
+                                }),
+                            ))
+                            .child(render_mode_icon_tab(
+                                "btn_mode_preview",
+                                format!("{} (⌘3)", strings.preview_mode),
+                                view_mode == ViewMode::Preview,
+                                theme,
+                                render_preview_mode_icon(if view_mode == ViewMode::Preview { theme.warm_pill_text() } else { theme.text_muted }),
+                                cx.listener(|this, _, _window, cx| {
+                                    this.set_view_mode(ViewMode::Preview, cx);
+                                }),
+                            ))
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(render_icon_button(
+                                "btn_save",
+                                format!("{} (⌘S)", strings.save_file),
+                                false,
+                                theme,
+                                render_save_icon(theme.text_muted),
+                                cx.listener(|this, _, _window, cx| {
+                                    this.parse_now_and_refresh();
+                                    let _ = this.state.save();
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(render_icon_button(
+                                "btn_export",
+                                format!("{} (⇧⌘E)", strings.export_html),
+                                false,
+                                theme,
+                                render_export_icon(theme.text_muted),
+                                cx.listener(|this, _, _window, _cx| {
+                                    let html = this.state.export_standalone_html();
+                                    if let Some(path) = &this.state.doc.path {
+                                        let out_path = path.with_extension("html");
+                                        let _ = std::fs::write(&out_path, html);
+                                    }
+                                }),
+                            ))
+                            .child(render_icon_button(
+                                "btn_settings",
+                                format!("{} (⌘,)", strings.settings),
+                                self.settings_window.is_some(),
+                                theme,
+                                render_settings_icon(theme.text_muted),
+                                cx.listener(|this, _, _window, cx| {
+                                    this.open_settings_window(cx);
+                                }),
+                            ))
                     )
             )
     }
@@ -444,26 +633,6 @@ impl Render for WorkspaceView {
         let is_dirty = self.state.is_dirty();
         let has_conflict = self.state.has_conflict();
         let parse_paused = self.parse_paused;
-
-        let file_title = self
-            .state
-            .doc
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or(strings.untitled)
-            .to_string();
-
-        #[cfg(target_os = "macos")]
-        let topbar_pl = px(80.);
-        #[cfg(not(target_os = "macos"))]
-        let topbar_pl = px(12.);
-
-        #[cfg(target_os = "windows")]
-        let topbar_pr = px(140.);
-        #[cfg(not(target_os = "windows"))]
-        let topbar_pr = px(12.);
 
         let view_click = cx.entity().clone();
         let on_click_line = Arc::new(move |line: usize, col: usize, _window: &mut Window, cx: &mut App| {
@@ -521,6 +690,13 @@ impl Render for WorkspaceView {
                     }
                 })
                 .detach();
+            });
+        });
+
+        let view_toggle = cx.entity().clone();
+        let on_toggle_drawer = Arc::new(move |_window: &mut Window, cx: &mut App| {
+            view_toggle.update(cx, |this, cx| {
+                this.toggle_drawer(cx);
             });
         });
 
@@ -767,409 +943,165 @@ impl Render for WorkspaceView {
             }))
             .size_full()
             .flex()
-            .flex_col()
+            .flex_row()
             .bg(theme.bg)
             .text_color(theme.text_primary)
-            // Top Toolbar (Pure icon-driven, safe native insets)
-            .child(
-                div()
-                    .h(px(42.))
-                    .pl(topbar_pl)
-                    .pr(topbar_pr)
-                    .bg(theme.bg)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    // Left area: Drawer icon + Open icon + Title (Double-click to rename)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1p5()
-                            // Sidebar Drawer icon button
-                            .child(render_icon_button(
-                                "btn_drawer",
-                                format!("{} (⌘B)", strings.directory_drawer),
-                                self.state.drawer_open,
-                                theme,
-                                render_sidebar_icon(if self.state.drawer_open { theme.accent } else { theme.text_muted }),
-                                cx.listener(|this, _, _window, cx| {
-                                    this.toggle_drawer(cx);
-                                }),
-                            ))
-                            // Open file icon button
-                            .child(render_icon_button(
-                                "btn_open",
-                                format!("{} (⌘O)", strings.open_file),
-                                false,
-                                theme,
-                                render_folder_icon(theme.text_muted),
-                                cx.listener(|_this, _, _window, cx| {
-                                    let rx = cx.prompt_for_paths(PathPromptOptions {
-                                        files: true,
-                                        directories: false,
-                                        multiple: false,
-                                        prompt: None,
-                                    });
-                                    cx.spawn(async move |this, app| {
-                                        if let Ok(Ok(Some(mut paths))) = rx.await {
-                                            if let Some(path) = paths.pop() {
-                                                let _ = this.update(app, |this, cx| {
-                                                    let _ = this.state.load_file(path);
-                                                    this.on_document_swapped();
-                                                    cx.notify();
-                                                });
-                                            }
-                                        }
-                                    })
-                                    .detach();
-                                }),
-                            ))
-                            // Document Title & Double-click Rename
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .ml_2()
-                                    .child(if self.is_renaming {
-                                        div()
-                                            .id("title_rename_box")
-                                            .px_2()
-                                            .py_0p5()
-                                            .bg(theme.bg)
-                                            .border_1()
-                                            .border_color(theme.accent)
-                                            .rounded_sm()
-                                            .shadow_sm()
-                                            .flex()
-                                            .items_center()
-                                            .cursor_text()
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, _cx| {
-                                                window.focus(&this.focus_handle);
-                                            }))
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.text_primary)
-                                                    .child(if self.rename_buffer.is_empty() {
-                                                        "Untitled.md".to_string()
-                                                    } else {
-                                                        self.rename_buffer.clone()
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .w(px(1.5))
-                                                    .h(px(12.))
-                                                    .ml_0p5()
-                                                    .bg(theme.accent)
-                                                    .with_animation(
-                                                        "rename_cursor_blink",
-                                                        Animation::new(std::time::Duration::from_millis(600)).repeat(),
-                                                        |el, delta| el.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
-                                                    ),
-                                            )
-                                            .into_any_element()
-                                    } else {
-                                        div()
-                                            .cursor_pointer()
-                                            .hover(|s| s.text_color(theme.accent))
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                                                    if event.click_count == 2 {
-                                                        let name = this
-                                                            .state
-                                                            .doc
-                                                            .path
-                                                            .as_ref()
-                                                            .and_then(|p| p.file_name())
-                                                            .and_then(|n| n.to_str())
-                                                            .unwrap_or("Untitled.md");
-                                                        this.rename_buffer = name.to_string();
-                                                        this.is_renaming = true;
-                                                        window.focus(&this.focus_handle);
-                                                        cx.notify();
-                                                    }
-                                                }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .child(file_title),
-                                            )
-                                            .into_any_element()
-                                    })
-                                    .when(is_dirty, |el| {
-                                        el.child(
-                                            div()
-                                                .w(px(7.))
-                                                .h(px(7.))
-                                                .rounded_full()
-                                                .bg(theme.accent),
-                                        )
-                                    }),
-                            ),
-                    )
-                    // Center area: View Mode Switcher Icons (Mac-style Segmented Control)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .bg(theme.bg)
-                            .p(px(2.))
-                            .rounded(px(7.))
-                            .gap(px(2.))
-                            .border_1()
-                            .border_color(theme.border)
-                            .child(render_mode_icon_tab(
-                                "btn_mode_source",
-                                format!("{} (⌘1)", strings.source_mode),
-                                view_mode == ViewMode::Source,
-                                theme,
-                                render_source_mode_icon(if view_mode == ViewMode::Source { theme.accent } else { theme.text_muted }),
-                                cx.listener(|this, _, _window, cx| {
-                                    this.set_view_mode(ViewMode::Source, cx);
-                                }),
-                            ))
-                            .child(render_mode_icon_tab(
-                                "btn_mode_split",
-                                format!("{} (⌘2)", strings.split_mode),
-                                view_mode == ViewMode::Split,
-                                theme,
-                                render_split_mode_icon(if view_mode == ViewMode::Split { theme.accent } else { theme.text_muted }),
-                                cx.listener(|this, _, _window, cx| {
-                                    this.set_view_mode(ViewMode::Split, cx);
-                                }),
-                            ))
-                            .child(render_mode_icon_tab(
-                                "btn_mode_preview",
-                                format!("{} (⌘3)", strings.preview_mode),
-                                view_mode == ViewMode::Preview,
-                                theme,
-                                render_preview_mode_icon(if view_mode == ViewMode::Preview { theme.accent } else { theme.text_muted }),
-                                cx.listener(|this, _, _window, cx| {
-                                    this.set_view_mode(ViewMode::Preview, cx);
-                                }),
-                            )),
-                    )
-                    // Right area: Action Icon Buttons
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1p5()
-                            // Export HTML icon button
-                            .child(render_icon_button(
-                                "btn_export",
-                                format!("{} (⇧⌘E)", strings.export_html),
-                                false,
-                                theme,
-                                render_export_icon(theme.text_muted),
-                                cx.listener(|this, _, _window, _cx| {
-                                    let html = this.state.export_standalone_html();
-                                    if let Some(path) = &this.state.doc.path {
-                                        let out_path = path.with_extension("html");
-                                        let _ = std::fs::write(&out_path, html);
-                                    }
-                                }),
-                            ))
-                            // Save file icon button
-                            .child(render_icon_button(
-                                "btn_save",
-                                format!("{} (⌘S)", strings.save_file),
-                                false,
-                                theme,
-                                render_save_icon(if is_dirty { theme.accent } else { theme.text_muted }),
-                                cx.listener(|this, _, _window, cx| {
-                                    this.parse_now_and_refresh();
-                                    let _ = this.state.save();
-                                    cx.notify();
-                                }),
-                            ))
-                            // Settings icon button
-                            .child(render_icon_button(
-                                "btn_settings",
-                                format!("{} (⌘,)", strings.settings),
-                                self.settings_window.is_some(),
-                                theme,
-                                render_settings_icon(theme.text_muted),
-                                cx.listener(|this, _, _window, cx| {
-                                    this.open_settings_window(cx);
-                                }),
-                            )),
-                    ),
-            )
-            // Conflict Warning Banner
-            .when(has_conflict, |el| {
-                el.child(
+            // 1. Left Drawer (Files & TOC) with Bidirectional 180ms Animation
+            .when(show_drawer, |body| {
+                body.child(
                     div()
-                        .h(px(36.))
-                        .px_4()
-                        .bg(theme.conflict_bg)
-                        .border_b_1()
-                        .border_color(theme.conflict_border)
-                        .flex()
-                        .items_center()
-                        .justify_between()
+                        .id(if is_drawer_closing { "animated_drawer_closing" } else { "animated_drawer_opening" })
+                        .h_full()
+                        .overflow_hidden()
                         .child(
                             div()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(0xfef08a))
-                                .child(strings.conflict_warning),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded_sm()
-                                        .bg(theme.surface)
-                                        .text_xs()
-                                        .cursor_pointer()
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, _window, cx| {
-                                                this.state.doc.resolve_conflict_keep_local();
-                                                cx.notify();
-                                            }),
-                                        )
-                                        .child(strings.keep_local),
-                                )
-                                .child(
-                                    div()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded_sm()
-                                        .bg(theme.surface)
-                                        .text_xs()
-                                        .cursor_pointer()
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, _window, cx| {
-                                                if let Some(path) = &this.state.doc.path.clone() {
-                                                    let _ = this.state.load_file(path.clone());
-                                                    this.on_document_swapped();
-                                                }
-                                                cx.notify();
-                                            }),
-                                        )
-                                        .child(strings.reload_disk),
-                                ),
-                        ),
-                )
-            })
-            // Large Document Parse Pause Banner
-            .when(parse_paused, |el| {
-                el.child(
-                    div()
-                        .h(px(36.))
-                        .px_4()
-                        .bg(theme.surface)
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.text_muted)
-                                .child(strings.parse_paused),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .py_0p5()
-                                .rounded_sm()
-                                .bg(theme.bg)
-                                .border_1()
+                                .w(px(250.))
+                                .h_full()
+                                .border_r_1()
                                 .border_color(theme.border)
-                                .text_xs()
-                                .cursor_pointer()
-                                .hover(|s| s.text_color(theme.accent))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _window, cx| {
-                                        this.parse_now_and_refresh();
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(strings.refresh_preview),
+                                .bg(theme.bg)
+                                .overflow_hidden()
+                                .child(render_drawer(
+                                    self.state.drawer_tab,
+                                    &self.state.sibling_files,
+                                    self.state.doc.path.as_ref(),
+                                    self.state.workspace_folder.as_ref(),
+                                    &self.state.doc.parsed.headings(),
+                                    theme,
+                                    strings,
+                                    &self.drawer_scroll_handle,
+                                    on_select_tab,
+                                    on_select_file,
+                                    on_select_heading,
+                                    on_open_folder,
+                                    on_toggle_drawer,
+                                )),
+                        )
+                        .with_animation(
+                            if is_drawer_closing { "drawer_slide_out" } else { "drawer_slide_in" },
+                            Animation::new(std::time::Duration::from_millis(180)).with_easing(ease_in_out),
+                            move |el, delta| {
+                                let factor = if is_drawer_closing { 1.0 - delta } else { delta };
+                                el.w(px(250.0 * factor)).opacity(factor.clamp(0.0, 1.0))
+                            },
                         ),
                 )
             })
-            // Main workspace content layout: edge-to-edge, continuous surface with clean hairlines
+            // 2. Center Content Canvas (Seamless edge-to-edge surface with integrated 38px header)
             .child(
                 div()
                     .flex_1()
-                    .min_h(px(0.))
                     .min_w(px(0.))
+                    .min_h(px(0.))
+                    .h_full()
+                    .bg(theme.surface)
                     .flex()
+                    .flex_col()
                     .overflow_hidden()
-                    // 1. Left Drawer (Files & TOC) with Bidirectional 180ms Animation
-                    .when(show_drawer, |body| {
-                        body.child(
+                    .child(self.render_canvas_header(theme, cx))
+                    // Conflict Warning Banner
+                    .when(has_conflict, |el| {
+                        el.child(
                             div()
-                                .id(if is_drawer_closing { "animated_drawer_closing" } else { "animated_drawer_opening" })
-                                .h_full()
-                                .overflow_hidden()
+                                .h(px(36.))
+                                .px_4()
+                                .bg(theme.conflict_bg)
+                                .border_b_1()
+                                .border_color(theme.conflict_border)
+                                .flex()
+                                .items_center()
+                                .justify_between()
                                 .child(
                                     div()
-                                        .w(px(250.))
-                                        .h_full()
-                                        .border_r_1()
-                                        .border_color(theme.border)
-                                        .bg(theme.bg)
-                                        .overflow_hidden()
-                                        .child(render_drawer(
-                                            self.state.drawer_tab,
-                                            &self.state.sibling_files,
-                                            self.state.doc.path.as_ref(),
-                                            self.state.workspace_folder.as_ref(),
-                                            &self.state.doc.parsed.headings(),
-                                            theme,
-                                            strings,
-                                            &self.drawer_scroll_handle,
-                                            on_select_tab,
-                                            on_select_file,
-                                            on_select_heading,
-                                            on_open_folder,
-                                        )),
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(rgb(0xfef08a))
+                                        .child(strings.conflict_warning),
                                 )
-                                .with_animation(
-                                    if is_drawer_closing { "drawer_slide_out" } else { "drawer_slide_in" },
-                                    Animation::new(std::time::Duration::from_millis(180)).with_easing(ease_in_out),
-                                    move |el, delta| {
-                                        let factor = if is_drawer_closing { 1.0 - delta } else { delta };
-                                        el.w(px(250.0 * factor)).opacity(factor.clamp(0.0, 1.0))
-                                    },
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .bg(theme.surface)
+                                                .text_xs()
+                                                .cursor_pointer()
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, _window, cx| {
+                                                        this.state.doc.resolve_conflict_keep_local();
+                                                        cx.notify();
+                                                    }),
+                                                )
+                                                .child(strings.keep_local),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .bg(theme.surface)
+                                                .text_xs()
+                                                .cursor_pointer()
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, _window, cx| {
+                                                        if let Some(path) = &this.state.doc.path.clone() {
+                                                            let _ = this.state.load_file(path.clone());
+                                                            this.on_document_swapped();
+                                                        }
+                                                        cx.notify();
+                                                    }),
+                                                )
+                                                .child(strings.reload_disk),
+                                        ),
                                 ),
                         )
                     })
-                    // 2. Center Content Area (Editor / Preview / Split)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .min_h(px(0.))
-                            .h_full()
-                            .bg(theme.surface)
-                            .flex()
-                            .flex_col()
-                            .overflow_hidden()
-                            .when(self.state.open_docs.len() > 1, |center| {
-                                center.child(self.render_tab_strip(theme, cx))
-                            })
+                    // Large Document Parse Pause Banner
+                    .when(parse_paused, |el| {
+                        el.child(
+                            div()
+                                .h(px(36.))
+                                .px_4()
+                                .bg(theme.surface)
+                                .border_b_1()
+                                .border_color(theme.border)
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.text_muted)
+                                        .child(strings.parse_paused),
+                                )
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .bg(theme.bg)
+                                        .border_1()
+                                        .border_color(theme.border)
+                                        .text_xs()
+                                        .cursor_pointer()
+                                        .hover(|s| s.text_color(theme.accent))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _window, cx| {
+                                                this.parse_now_and_refresh();
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(strings.refresh_preview),
+                                ),
+                        )
+                    })
                             .child({
                                 let copied_code_hash = self.copied_code_hash;
                                 let on_copy = {
@@ -1309,8 +1241,7 @@ impl Render for WorkspaceView {
                                             .into_any_element(),
                                     })
                             }),
-                    ),
-            )
+                    )
     }
 }
 
@@ -1401,10 +1332,8 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        base.bg(theme.surface)
-            .border_1()
-            .border_color(theme.border)
-            .text_color(theme.accent)
+        base.bg(theme.warm_pill_bg())
+            .text_color(theme.warm_pill_text())
             .child(icon)
     } else {
         base.text_color(theme.text_muted)
@@ -1416,10 +1345,6 @@ where
 // Standard Lucide SVG icons rendered natively by GPUI
 fn render_sidebar_icon(color: Hsla) -> impl IntoElement {
     svg().path("icons/panel-left.svg").size(px(20.)).text_color(color)
-}
-
-fn render_folder_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/folder.svg").size(px(20.)).text_color(color)
 }
 
 fn render_source_mode_icon(color: Hsla) -> impl IntoElement {

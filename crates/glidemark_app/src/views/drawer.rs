@@ -21,10 +21,17 @@ pub fn render_drawer(
     on_select_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_select_heading: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_open_folder: Arc<dyn Fn(&mut Window, &mut App)>,
+    on_toggle_drawer: Arc<dyn Fn(&mut Window, &mut App)>,
 ) -> impl IntoElement {
     let t1 = on_select_tab.clone();
     let t2 = on_select_tab.clone();
     let t_folder = on_open_folder.clone();
+    let t_toggle = on_toggle_drawer.clone();
+
+    #[cfg(target_os = "macos")]
+    let drawer_header_pl = px(76.);
+    #[cfg(not(target_os = "macos"))]
+    let drawer_header_pl = px(8.);
 
     div()
         .w(px(250.))
@@ -34,17 +41,24 @@ pub fn render_drawer(
         .border_color(theme.border)
         .flex()
         .flex_col()
-        // Top Header: Left-aligned icon-only buttons with hover tooltips
+        // Top Header: 38px matching right canvas header, seamless with no horizontal bottom border
         .child(
             div()
-                .h(px(36.))
-                .px_2()
-                .border_b_1()
-                .border_color(theme.border)
+                .h(px(38.))
+                .pl(drawer_header_pl)
+                .pr_2()
                 .flex()
                 .items_center()
-                .justify_start()
+                .justify_between()
                 .gap_1()
+                .child(render_icon_btn(
+                    "drawer_collapse_btn",
+                    "收起侧栏 (⌘B)",
+                    "icons/panel-left.svg",
+                    false,
+                    theme,
+                    move |_, window, cx| t_toggle(window, cx),
+                ))
                 .child(render_icon_btn(
                     "drawer_tab_files",
                     strings.tab_files,
@@ -61,6 +75,12 @@ pub fn render_drawer(
                     theme,
                     move |_, window, cx| t2(DrawerTab::Outline, window, cx),
                 ))
+                .child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .window_control_area(WindowControlArea::Drag)
+                )
                 .child(render_icon_btn(
                     "drawer_open_folder",
                     "打开文件夹...",
@@ -174,9 +194,10 @@ pub fn render_drawer(
                                 if is_active {
                                     content = content.child(
                                         interactive_item
-                                            .bg(theme.accent)
-                                            .text_color(rgb(0xffffff))
+                                            .bg(theme.warm_pill_bg())
+                                            .text_color(theme.warm_pill_text())
                                             .font_weight(FontWeight::MEDIUM)
+                                            .rounded(px(6.))
                                             .child(
                                                 div()
                                                     .w_full()
@@ -189,6 +210,7 @@ pub fn render_drawer(
                                     content = content.child(
                                         interactive_item
                                             .text_color(theme.text_primary)
+                                            .rounded(px(6.))
                                             .hover(|s| s.bg(theme.surface))
                                             .child(
                                                 div()
@@ -327,16 +349,16 @@ where
         .justify_center()
         .on_mouse_down(MouseButton::Left, handler);
 
-    let color = if active { theme.accent } else { theme.text_muted };
+    let color = if active { theme.warm_pill_text() } else { theme.text_muted };
     let icon_el = svg().path(icon_path).size(px(16.)).text_color(color);
 
     if active {
-        base.bg(theme.surface)
-            .border_1()
-            .border_color(theme.border)
+        base.bg(theme.warm_pill_bg())
+            .rounded(px(6.))
             .child(icon_el)
     } else {
-        base.hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
+        base.rounded(px(6.))
+            .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
             .child(icon_el)
     }
 }

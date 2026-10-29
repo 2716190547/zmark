@@ -89,7 +89,7 @@ Enjoy writing and reading with pure speed!
             titlebar: Some(TitlebarOptions {
                 title: Some("GlideMark".into()),
                 appears_transparent: true,
-                traffic_light_position: Some(point(px(12.), px(12.))),
+                traffic_light_position: Some(point(px(14.), px(12.))),
             }),
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
