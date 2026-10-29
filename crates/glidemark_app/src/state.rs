@@ -49,6 +49,24 @@ pub enum SettingsTab {
     About,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileTreeNode {
+    pub path: PathBuf,
+    pub name: String,
+    pub is_dir: bool,
+    pub is_expanded: bool,
+    pub children: Vec<FileTreeNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisibleTreeRow {
+    pub path: PathBuf,
+    pub name: String,
+    pub is_dir: bool,
+    pub is_expanded: bool,
+    pub depth: usize,
+}
+
 pub struct AppState {
     pub doc: Document,
     pub open_docs: Vec<Document>,
@@ -63,6 +81,7 @@ pub struct AppState {
     pub theme: ThemeColors,
     pub strings: &'static I18nStrings,
     pub sibling_files: Vec<PathBuf>,
+    pub file_tree: Vec<FileTreeNode>,
     pub is_system_dark: bool,
 }
 
@@ -82,10 +101,12 @@ impl AppState {
         let strings = get_strings(preferences.locale);
         let editor = EditorEngine::new(&doc.buffer);
 
+        let workspace_folder = doc.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+
         let mut state = Self {
             open_docs: vec![doc.clone()],
             active_doc_idx: 0,
-            workspace_folder: None,
+            workspace_folder,
             doc,
             editor,
             view_mode: ViewMode::Split,
@@ -96,6 +117,7 @@ impl AppState {
             theme,
             strings,
             sibling_files: Vec::new(),
+            file_tree: Vec::new(),
             is_system_dark: false,
         };
         state.refresh_sibling_files();
@@ -207,6 +229,89 @@ impl AppState {
             scan_markdown_files(&dir, &mut self.sibling_files, 0, &mut scanned);
         }
         self.sibling_files.sort();
+        self.refresh_workspace_tree();
+    }
+
+    pub fn refresh_workspace_tree(&mut self) {
+        let target_dir = if let Some(ref folder) = self.workspace_folder {
+            Some(folder.clone())
+        } else if let Some(ref path) = self.doc.path {
+            path.parent().map(|p| p.to_path_buf())
+        } else {
+            None
+        };
+
+        if let Some(dir) = target_dir {
+            let mut expanded_paths = std::collections::HashSet::new();
+            collect_expanded_paths(&self.file_tree, &mut expanded_paths);
+            let mut scanned = 0;
+            self.file_tree = scan_tree_dir(&dir, 0, &mut scanned, &expanded_paths);
+        } else {
+            self.file_tree.clear();
+        }
+    }
+
+    pub fn toggle_tree_folder(&mut self, target: &std::path::Path) {
+        fn toggle_node(nodes: &mut [FileTreeNode], target: &std::path::Path) -> bool {
+            for node in nodes.iter_mut() {
+                if node.path == target {
+                    if node.is_dir {
+                        node.is_expanded = !node.is_expanded;
+                        if node.is_expanded && node.children.is_empty() {
+                            let mut scanned = 0;
+                            let empty_set = std::collections::HashSet::new();
+                            node.children = scan_tree_dir(&node.path, 0, &mut scanned, &empty_set);
+                        }
+                    }
+                    return true;
+                }
+                if node.is_dir && toggle_node(&mut node.children, target) {
+                    return true;
+                }
+            }
+            false
+        }
+        toggle_node(&mut self.file_tree, target);
+    }
+
+    pub fn expand_to_file(&mut self, file_path: &std::path::Path) {
+        fn expand_ancestors(nodes: &mut [FileTreeNode], target: &std::path::Path) -> bool {
+            let mut found = false;
+            for node in nodes.iter_mut() {
+                if node.is_dir && target.starts_with(&node.path) {
+                    node.is_expanded = true;
+                    if node.children.is_empty() {
+                        let mut scanned = 0;
+                        let empty_set = std::collections::HashSet::new();
+                        node.children = scan_tree_dir(&node.path, 0, &mut scanned, &empty_set);
+                    }
+                    expand_ancestors(&mut node.children, target);
+                    found = true;
+                }
+            }
+            found
+        }
+        expand_ancestors(&mut self.file_tree, file_path);
+    }
+
+    pub fn flatten_tree(&self) -> Vec<VisibleTreeRow> {
+        let mut rows = Vec::new();
+        fn collect(nodes: &[FileTreeNode], depth: usize, rows: &mut Vec<VisibleTreeRow>) {
+            for node in nodes {
+                rows.push(VisibleTreeRow {
+                    path: node.path.clone(),
+                    name: node.name.clone(),
+                    is_dir: node.is_dir,
+                    is_expanded: node.is_expanded,
+                    depth,
+                });
+                if node.is_dir && node.is_expanded {
+                    collect(&node.children, depth + 1, rows);
+                }
+            }
+        }
+        collect(&self.file_tree, 0, &mut rows);
+        rows
     }
 
     pub fn set_workspace_folder(&mut self, folder: PathBuf) {
@@ -225,13 +330,25 @@ impl AppState {
             self.open_docs[self.active_doc_idx] = self.doc.clone();
         }
 
+        // Automatic workspace root fallback: if unopened or outside current workspace, set parent as root
+        if let Some(parent) = path.parent() {
+            let should_switch = match &self.workspace_folder {
+                Some(folder) => !path.starts_with(folder),
+                None => true,
+            };
+            if should_switch {
+                self.workspace_folder = Some(parent.to_path_buf());
+            }
+        }
+
         // Check if already open
         if let Some(pos) = self.open_docs.iter().position(|d| d.path.as_ref() == Some(&path)) {
             self.switch_tab(pos);
+            self.expand_to_file(&path);
             return Ok(());
         }
 
-        let new_doc = Document::from_file(path)?;
+        let new_doc = Document::from_file(path.clone())?;
         // If single empty scratch document, replace it
         if self.open_docs.len() == 1
             && self.open_docs[0].path.is_none()
@@ -247,6 +364,7 @@ impl AppState {
         self.doc = new_doc;
         self.editor.reset_text(&self.doc.buffer);
         self.refresh_sibling_files();
+        self.expand_to_file(&path);
         Ok(())
     }
 
@@ -408,4 +526,90 @@ fn scan_markdown_files(dir: &std::path::Path, list: &mut Vec<PathBuf>, depth: us
             }
         }
     }
+}
+
+fn collect_expanded_paths(nodes: &[FileTreeNode], set: &mut std::collections::HashSet<PathBuf>) {
+    for n in nodes {
+        if n.is_dir {
+            if n.is_expanded {
+                set.insert(n.path.clone());
+            }
+            collect_expanded_paths(&n.children, set);
+        }
+    }
+}
+
+fn scan_tree_dir(
+    dir: &std::path::Path,
+    depth: usize,
+    scanned: &mut usize,
+    expanded_set: &std::collections::HashSet<PathBuf>,
+) -> Vec<FileTreeNode> {
+    if depth > 4 || *scanned >= 1000 {
+        return Vec::new();
+    }
+    let mut nodes = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            *scanned += 1;
+            if *scanned >= 1000 {
+                break;
+            }
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            let p = entry.path();
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            if name.starts_with('.')
+                || name == "target"
+                || name == "node_modules"
+                || name == "build"
+                || name == "dist"
+                || name == "dev"
+                || name == "proc"
+                || name == "sys"
+            {
+                continue;
+            }
+
+            if file_type.is_dir() {
+                let is_expanded = expanded_set.contains(&p);
+                let children = if is_expanded || depth < 1 {
+                    scan_tree_dir(&p, depth + 1, scanned, expanded_set)
+                } else {
+                    Vec::new()
+                };
+                nodes.push(FileTreeNode {
+                    path: p,
+                    name,
+                    is_dir: true,
+                    is_expanded,
+                    children,
+                });
+            } else if file_type.is_file() {
+                if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+                    if ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown") {
+                        nodes.push(FileTreeNode {
+                            path: p,
+                            name,
+                            is_dir: false,
+                            is_expanded: false,
+                            children: Vec::new(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    nodes.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
+
+    nodes
 }

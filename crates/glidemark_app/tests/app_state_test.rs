@@ -411,3 +411,140 @@ fn test_workspace_folder_symlink_defense_and_robustness() {
     state.set_workspace_folder(empty_dir.path().to_path_buf());
     assert_eq!(state.sibling_files.len(), 0);
 }
+
+#[test]
+fn test_workspace_tree_recursive_scan() {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path();
+
+    // Create structure:
+    // root/
+    //   guide.md
+    //   docs/
+    //     api.md
+    //     internal/
+    //       arch.md
+    //   node_modules/
+    //     ignored.md
+    let docs = root.join("docs");
+    let internal = docs.join("internal");
+    let nm = root.join("node_modules");
+    fs::create_dir_all(&internal).unwrap();
+    fs::create_dir_all(&nm).unwrap();
+
+    let f_guide = root.join("guide.md");
+    let f_api = docs.join("api.md");
+    let f_arch = internal.join("arch.md");
+    let f_ignored = nm.join("ignored.md");
+    fs::write(&f_guide, "# Guide").unwrap();
+    fs::write(&f_api, "# API").unwrap();
+    fs::write(&f_arch, "# Arch").unwrap();
+    fs::write(&f_ignored, "# Ignored").unwrap();
+
+    let mut state = AppState::new(Document::new_scratch());
+    state.set_workspace_folder(root.to_path_buf());
+
+    // Directory comes before file in root
+    assert_eq!(state.file_tree.len(), 2);
+    assert_eq!(state.file_tree[0].name, "docs");
+    assert!(state.file_tree[0].is_dir);
+    assert_eq!(state.file_tree[1].name, "guide.md");
+    assert!(!state.file_tree[1].is_dir);
+
+    // node_modules is ignored
+    assert!(!state.file_tree.iter().any(|n| n.name == "node_modules"));
+
+    // docs children are scanned (api.md and internal directory)
+    assert!(state.file_tree[0].children.iter().any(|n| n.name == "api.md"));
+    assert!(state.file_tree[0].children.iter().any(|n| n.name == "internal"));
+}
+
+#[test]
+fn test_workspace_tree_expand_and_collapse() {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path();
+    let docs = root.join("docs");
+    fs::create_dir_all(&docs).unwrap();
+
+    let f_root = root.join("index.md");
+    let f_doc = docs.join("doc1.md");
+    fs::write(&f_root, "# Index").unwrap();
+    fs::write(&f_doc, "# Doc1").unwrap();
+
+    let mut state = AppState::new(Document::new_scratch());
+    state.set_workspace_folder(root.to_path_buf());
+
+    // Initially subdirectories are collapsed
+    let rows_init = state.flatten_tree();
+    // Only "docs" and "index.md" visible at depth 0
+    assert_eq!(rows_init.len(), 2);
+    assert_eq!(rows_init[0].name, "docs");
+    assert!(!rows_init[0].is_expanded);
+    assert_eq!(rows_init[0].depth, 0);
+    assert_eq!(rows_init[1].name, "index.md");
+    assert_eq!(rows_init[1].depth, 0);
+
+    // Expand "docs"
+    state.toggle_tree_folder(&docs);
+    let rows_expanded = state.flatten_tree();
+    assert_eq!(rows_expanded.len(), 3);
+    assert_eq!(rows_expanded[0].name, "docs");
+    assert!(rows_expanded[0].is_expanded);
+    assert_eq!(rows_expanded[1].name, "doc1.md");
+    assert_eq!(rows_expanded[1].depth, 1);
+    assert_eq!(rows_expanded[2].name, "index.md");
+    assert_eq!(rows_expanded[2].depth, 0);
+
+    // Collapse "docs"
+    state.toggle_tree_folder(&docs);
+    let rows_collapsed = state.flatten_tree();
+    assert_eq!(rows_collapsed.len(), 2);
+    assert!(!rows_collapsed[0].is_expanded);
+}
+
+#[test]
+fn test_workspace_tree_switch_folder() {
+    let tmp1 = tempdir().unwrap();
+    let f1 = tmp1.path().join("a.md");
+    fs::write(&f1, "# A").unwrap();
+
+    let tmp2 = tempdir().unwrap();
+    let f2 = tmp2.path().join("b.md");
+    fs::write(&f2, "# B").unwrap();
+
+    let mut state = AppState::new(Document::new_scratch());
+    state.set_workspace_folder(tmp1.path().to_path_buf());
+    assert_eq!(state.file_tree.len(), 1);
+    assert_eq!(state.file_tree[0].name, "a.md");
+
+    // Switch to folder 2
+    state.set_workspace_folder(tmp2.path().to_path_buf());
+    assert_eq!(state.workspace_folder.as_ref(), Some(&tmp2.path().to_path_buf()));
+    assert_eq!(state.file_tree.len(), 1);
+    assert_eq!(state.file_tree[0].name, "b.md");
+}
+
+#[test]
+fn test_single_file_open_parent_fallback() {
+    let tmp = tempdir().unwrap();
+    let nested = tmp.path().join("projects").join("sample");
+    fs::create_dir_all(&nested).unwrap();
+    let f_single = nested.join("readme.md");
+    let f_other = nested.join("spec.md");
+    fs::write(&f_single, "# Sample Readme").unwrap();
+    fs::write(&f_other, "# Spec").unwrap();
+
+    // Start with empty scratch doc with no workspace folder
+    let mut state = AppState::new(Document::new_scratch());
+    assert!(state.workspace_folder.is_none());
+
+    // Open single file
+    state.open_file(f_single.clone()).unwrap();
+
+    // Automatically falls back to parent directory as workspace folder
+    assert_eq!(state.workspace_folder.as_ref(), Some(&nested));
+    let rows = state.flatten_tree();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|r| r.name == "readme.md"));
+    assert!(rows.iter().any(|r| r.name == "spec.md"));
+}

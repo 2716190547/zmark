@@ -700,6 +700,16 @@ impl Render for WorkspaceView {
             });
         });
 
+        let view_tree = cx.entity().clone();
+        let on_toggle_folder = Arc::new(move |path: &std::path::PathBuf, _window: &mut Window, cx: &mut App| {
+            view_tree.update(cx, |this, cx| {
+                this.state.toggle_tree_folder(path);
+                cx.notify();
+            });
+        });
+
+        let tree_rows = self.state.flatten_tree();
+
         let show_drawer = self.state.drawer_open || self.drawer_closing;
         let is_drawer_closing = self.drawer_closing;
 
@@ -963,7 +973,7 @@ impl Render for WorkspaceView {
                                 .overflow_hidden()
                                 .child(render_drawer(
                                     self.state.drawer_tab,
-                                    &self.state.sibling_files,
+                                    &tree_rows,
                                     self.state.doc.path.as_ref(),
                                     self.state.workspace_folder.as_ref(),
                                     &self.state.doc.parsed.headings(),
@@ -971,6 +981,7 @@ impl Render for WorkspaceView {
                                     strings,
                                     &self.drawer_scroll_handle,
                                     on_select_tab,
+                                    on_toggle_folder,
                                     on_select_file,
                                     on_select_heading,
                                     on_open_folder,
