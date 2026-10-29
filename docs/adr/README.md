@@ -25,8 +25,9 @@
 | **0022** | [图表纹理预算与有界 LRU 缓存](0022-diagram-texture-budget-and-memory-optimization.md) | 已接受 (Accepted) | 建立 1000px 尺寸钳制与 LRU 显存逐出淘汰机制，彻底终结超大图表显存膨胀 |
 | **0024** | [图表 Panic 隔离与编辑器横向平滑滚动](0024-panic-isolation-native-dialogs-and-editor-horizontal-scroll.md) | 已接受 (Accepted) | 纯 Rust 图表 Panic 隔离屏障，编辑器长行采用 `nowrap` 与横向双向平滑滚动 |
 | **0026** | [大文档虚拟化与文件体积三级解析分档](0026-large-document-virtualization-parse-tiers-and-deferred-sync-scroll.md) | 已接受 (Accepted) | GPUI 原生 `list` 视口按需虚拟化，按 2MB/10MB 分级防抖，大文档内存降至百 MB 级 |
-| **0027** | [双板块无界纸张画布与图表灯箱](0027-dual-pane-seamless-canvas-and-diagram-lightbox.md) | **提议 (Proposed)** | 待实施：去除全局通栏顶栏、红绿灯折叠自适应迁移、多级工作区树与矢量灯箱 |
+| **0027** | [双板块无界纸张画布与图表灯箱](0027-dual-pane-seamless-canvas-and-diagram-lightbox.md) | 已接受 (Accepted) | 去除全局通栏顶栏、双板块画布、工作区树与矢量灯箱；红绿灯为静态位置 + 76px 安全区（见 0029） |
 | **0028** | [双向同步滚动、嵌套列表与代码块交互](0028-bidirectional-sync-scroll-nested-lists-and-codeblock-ux.md) | 已接受 (Accepted) | 100ms 回声抑制双向同步滚动、递归嵌套列表多层富文本与代码块横向滚动复制 |
+| **0029** | [GPUI 0.2 窗口装饰与图层变换约束](0029-gpui-window-chrome-and-overlay-constraints.md) | 已接受 (Accepted) | 红绿灯静态位置 + 折叠安全区；拖拽区显式 `start_window_move()`；灯箱缩放/平移用尺寸与偏移 |
 
 ---
 
