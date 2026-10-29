@@ -133,3 +133,45 @@ fn test_parse_links_and_images() {
         _ => panic!("Expected Paragraph with Image"),
     }
 }
+
+#[test]
+fn test_parse_nested_lists_and_inline_styles() {
+    let source = "- Parent item with **bold** and `code`\n  - Sub item 1\n  - Sub item 2 with [Link](https://example.com)\n    1. Deep ordered item\n- Second parent";
+    let doc = parse_markdown(source);
+    assert_eq!(doc.blocks.len(), 1);
+
+    match &doc.blocks[0] {
+        BlockElement::List { ordered, items } => {
+            assert!(!*ordered);
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0].content.plain_text(), "Parent item with bold and code");
+            assert!(items[0].content.0.iter().any(|i| matches!(i, InlineItem::Bold(_))));
+            assert!(items[0].content.0.iter().any(|i| matches!(i, InlineItem::Code(_))));
+
+            let sub = items[0].sub_list.as_ref().expect("sub_list expected");
+            match sub.as_ref() {
+                BlockElement::List { ordered: sub_ord, items: sub_items } => {
+                    assert!(!*sub_ord);
+                    assert_eq!(sub_items.len(), 2);
+                    assert_eq!(sub_items[0].content.plain_text(), "Sub item 1");
+                    assert!(sub_items[1].content.0.iter().any(|i| matches!(i, InlineItem::Link { .. })));
+
+                    let deep = sub_items[1].sub_list.as_ref().expect("deep sub_list expected");
+                    match deep.as_ref() {
+                        BlockElement::List { ordered: deep_ord, items: deep_items } => {
+                            assert!(*deep_ord);
+                            assert_eq!(deep_items.len(), 1);
+                            assert_eq!(deep_items[0].content.plain_text(), "Deep ordered item");
+                        }
+                        _ => panic!("Expected deep ordered List"),
+                    }
+                }
+                _ => panic!("Expected sub List"),
+            }
+
+            assert_eq!(items[1].content.plain_text(), "Second parent");
+            assert!(items[1].sub_list.is_none());
+        }
+        _ => panic!("Expected List"),
+    }
+}

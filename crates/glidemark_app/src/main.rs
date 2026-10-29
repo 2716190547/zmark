@@ -32,10 +32,10 @@ GlideMark is a **high-performance**, GPU-accelerated Markdown reader and editor 
 
 ## Key Features
 
-- **Blazing Fast**: Sub-200ms cold start, <50MB RAM, locked 120fps scrolling.
+- **Blazing Fast**: Virtualized editor and preview keep a 1.5MB document under 150MB of RAM.
 - **Three View Modes**: 
   - `Cmd+1` Source Editor
-  - `Cmd+2` Synchronized Split View
+  - `Cmd+2` Split View
   - `Cmd+3` Typography Reading View
 - **GFM Compliant**: Tables, task lists, code blocks, blockquotes.
 
@@ -43,14 +43,14 @@ GlideMark is a **high-performance**, GPU-accelerated Markdown reader and editor 
 
 ```rust
 fn main() {
-    println!("GlideMark: 120fps GPU Markdown Editor");
+    println!("GlideMark: GPU Markdown Editor");
 }
 ```
 
 ### Task Checklist
 
 - [x] High precision AST parsing
-- [x] Piecewise linear sync scrolling
+- [x] Virtualized preview and editor
 - [x] Standalone single-file HTML export
 - [ ] Modular KaTeX / LaTeX plugins
 
@@ -58,7 +58,7 @@ fn main() {
 
 | Editor | Engine | Memory (Idle) | Scroll FPS |
 |---|---|---|---|
-| GlideMark | Rust + GPUI | ~35 MB | 120 fps |
+| GlideMark | Rust + GPUI | ~140 MB (1.5MB doc) | GPU-paced |
 | Typora | Electron | ~220 MB | 60 fps |
 | Obsidian | Electron | ~350 MB | 60 fps |
 

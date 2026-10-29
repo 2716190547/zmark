@@ -1,5 +1,7 @@
 # Spec: GlideMark Core Architecture and MVP
 
+> **Status note (2026-10):** The memory, 120fps, and synchronized-scroll figures below were original targets, not current measurements. See `docs/adr/0026-large-document-virtualization-parse-tiers-and-deferred-sync-scroll.md` and the performance baseline in `README.md` for implemented behavior.
+
 ## Problem Statement
 
 Existing Markdown editors and viewers force users into severe compromises:

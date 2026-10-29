@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 glidemark_core = { path = "../glidemark_core" }
 gpui = "0.2.2"
-rfd = "0.15"
 
 [dev-dependencies]
 tempfile = "3.17"
