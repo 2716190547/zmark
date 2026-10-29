@@ -83,6 +83,9 @@ rm -rf "$APP_DEST"
 cp -R "$BUNDLE_DIR" "$APP_DEST"
 touch "$APP_DEST"
 
+echo "==> Applying local Ad-Hoc code signature (zero-fee self-signed)..."
+codesign --force --deep --sign - "$APP_DEST"
+
 echo "==> Registering with macOS LaunchServices and resetting Dock cache..."
 if [ -x "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" ]; then
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DEST" || true

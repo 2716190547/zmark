@@ -28,6 +28,7 @@
 | **0027** | [双板块无界纸张画布与图表灯箱](0027-dual-pane-seamless-canvas-and-diagram-lightbox.md) | 已接受 (Accepted) | 去除全局通栏顶栏、双板块画布、工作区树与矢量灯箱；红绿灯为静态位置 + 76px 安全区（见 0029） |
 | **0028** | [双向同步滚动、嵌套列表与代码块交互](0028-bidirectional-sync-scroll-nested-lists-and-codeblock-ux.md) | 已接受 (Accepted) | 100ms 回声抑制双向同步滚动、递归嵌套列表多层富文本与代码块横向滚动复制 |
 | **0029** | [GPUI 0.2 窗口装饰与图层变换约束](0029-gpui-window-chrome-and-overlay-constraints.md) | 已接受 (Accepted) | 红绿灯静态位置 + 折叠安全区；拖拽区显式 `start_window_move()`；灯箱缩放/平移用尺寸与偏移 |
+| **0030** | [macOS 研发工具链分工、Instruments 性能诊断与零成本 Ad-Hoc 签名](0030-macos-toolchain-profiling-and-adhoc-signing.md) | 已接受 (Accepted) | 工具链轻重解耦；Instruments 一键追踪掉帧；打包脚本集成零费用本地 Ad-Hoc 签名 |
 
 ---
 

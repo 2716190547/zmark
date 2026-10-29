@@ -75,6 +75,6 @@ cargo test --workspace
 
 ## 架构演进与领域词汇
 
-- 架构决策记录权威总索引：[`docs/adr/README.md`](docs/adr/README.md)（收录 18 篇有效 ADR 与作废去向）
+- 架构决策记录权威总索引：[`docs/adr/README.md`](docs/adr/README.md)（收录有效 ADR 与作废去向映射）
 - 统一领域模型词汇表：[`GLOSSARY.md`](GLOSSARY.md)（严格定义 20 条核心业务概念）
 - 执行窗口约定：[`AGENTS.md`](AGENTS.md)（分支、测试、子代理并行与交付门槛）
