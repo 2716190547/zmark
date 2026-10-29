@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{parse_markdown, ParsedDocument};
@@ -18,35 +19,48 @@ pub struct Document {
     pub path: Option<PathBuf>,
     pub buffer: String,
     pub status: DocumentStatus,
-    pub parsed: ParsedDocument,
+    pub parsed: Arc<ParsedDocument>,
     last_saved_content: String,
+    parse_stale: bool,
 }
 
 impl Document {
     /// Creates an empty scratchpad document.
     pub fn new_scratch() -> Self {
         let buffer = String::new();
-        let parsed = parse_markdown(&buffer);
+        let parsed = Arc::new(parse_markdown(&buffer));
         Self {
             path: None,
             buffer,
             status: DocumentStatus::Clean,
             parsed,
             last_saved_content: String::new(),
+            parse_stale: false,
         }
     }
 
     /// Loads a document from the local filesystem.
     pub fn from_file(path: PathBuf) -> Result<Self, std::io::Error> {
         let buffer = fs::read_to_string(&path)?;
-        let parsed = parse_markdown(&buffer);
+        let parsed = Arc::new(parse_markdown(&buffer));
         Ok(Self {
             path: Some(path),
             last_saved_content: buffer.clone(),
             buffer,
             status: DocumentStatus::Clean,
             parsed,
+            parse_stale: false,
         })
+    }
+
+    /// User-friendly display name (file name or "未命名").
+    pub fn display_name(&self) -> String {
+        self.path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "未命名".to_string())
     }
 
     /// Updates the buffer from user editing, recalculating AST and dirty state.
@@ -55,7 +69,8 @@ impl Document {
             return;
         }
         self.buffer = new_text;
-        self.parsed = parse_markdown(&self.buffer);
+        self.parsed = Arc::new(parse_markdown(&self.buffer));
+        self.parse_stale = false;
         if self.status != DocumentStatus::ConflictOnDisk {
             if self.buffer == self.last_saved_content {
                 self.status = DocumentStatus::Clean;
@@ -63,6 +78,37 @@ impl Document {
                 self.status = DocumentStatus::Modified;
             }
         }
+    }
+
+    /// Updates the buffer without parsing; call [`Self::reparse`] to refresh the AST.
+    pub fn set_buffer(&mut self, new_text: String) -> bool {
+        if self.buffer == new_text {
+            return false;
+        }
+        self.buffer = new_text;
+        self.parse_stale = true;
+        if self.status != DocumentStatus::ConflictOnDisk {
+            if self.buffer == self.last_saved_content {
+                self.status = DocumentStatus::Clean;
+            } else {
+                self.status = DocumentStatus::Modified;
+            }
+        }
+        true
+    }
+
+    /// Refreshes the AST if the buffer changed since the last parse.
+    pub fn reparse(&mut self) -> bool {
+        if !self.parse_stale {
+            return false;
+        }
+        self.parsed = Arc::new(parse_markdown(&self.buffer));
+        self.parse_stale = false;
+        true
+    }
+
+    pub fn is_parse_stale(&self) -> bool {
+        self.parse_stale
     }
 
     /// Saves the current buffer to the existing file path.
@@ -101,7 +147,8 @@ impl Document {
             DocumentStatus::Clean => {
                 self.buffer = new_disk_content.clone();
                 self.last_saved_content = new_disk_content;
-                self.parsed = parse_markdown(&self.buffer);
+                self.parsed = Arc::new(parse_markdown(&self.buffer));
+                self.parse_stale = false;
                 self.status = DocumentStatus::Clean;
             }
             DocumentStatus::Modified | DocumentStatus::ConflictOnDisk => {
@@ -119,7 +166,8 @@ impl Document {
     pub fn resolve_conflict_reload_disk(&mut self, disk_content: String) {
         self.buffer = disk_content.clone();
         self.last_saved_content = disk_content;
-        self.parsed = parse_markdown(&self.buffer);
+        self.parsed = Arc::new(parse_markdown(&self.buffer));
+        self.parse_stale = false;
         self.status = DocumentStatus::Clean;
     }
 }

@@ -1,4 +1,5 @@
 use std::fs;
+use std::sync::Arc;
 use tempfile::tempdir;
 use glidemark_core::document::{Document, DocumentStatus};
 
@@ -12,6 +13,27 @@ fn test_scratch_document_lifecycle() {
     doc.update_buffer("# Hello World\n\nNew note.".into());
     assert_eq!(doc.status, DocumentStatus::Modified);
     assert_eq!(doc.parsed.blocks.len(), 2);
+}
+
+#[test]
+fn test_cloned_document_shares_parsed_ast() {
+    let doc = Document::new_scratch();
+    let clone = doc.clone();
+    assert!(Arc::ptr_eq(&doc.parsed, &clone.parsed));
+}
+
+#[test]
+fn test_set_buffer_defers_parse_until_reparse() {
+    let mut doc = Document::new_scratch();
+    assert!(doc.set_buffer("# One".into()));
+    assert!(doc.is_parse_stale());
+    assert!(doc.parsed.blocks.is_empty());
+
+    assert!(doc.reparse());
+    assert!(!doc.is_parse_stale());
+    assert_eq!(doc.parsed.blocks.len(), 1);
+
+    assert!(!doc.reparse());
 }
 
 #[test]
