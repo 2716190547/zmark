@@ -216,3 +216,19 @@ _Avoid_: Inline zoom, external image viewer, popup preview
 A hierarchical, collapsible filesystem tree in the navigation pane representing the active workspace folder and nested subdirectories with chevron disclosures, replacing flat folder buttons.
 _Avoid_: Flat file list, folder picker drawer, file browser
 
+**Bidirectional Sync Scroll**:
+The synchronized viewport movement between the Source editor and Preview virtual list in Split mode, driven by the last-interacted pane via piecewise linear anchor mapping, paused during stale typing and aligned to cursor block on debounce reparse completion.
+_Avoid_: Lockstep scrolling, editor-only drive, unanchored proportional sync
+
+**Echo Suppression**:
+A temporal filter window (100ms) that discards reflected scroll events emitted by the opposite pane during programmatic sync alignment, preventing feedback oscillation loops.
+_Avoid_: Debounced scroll loops, event cancellation flags, sync deadlocks
+
+**Recursive Nested List**:
+Hierarchical list item data structures supporting up to 8 nested levels of ordered and unordered sub-lists, preserving full inline formatting (bold, italic, strikethrough, code, links, images, task checkboxes) in AST, preview, and HTML export.
+_Avoid_: Flattened list items, plain text strip, unnested list parsing
+
+**Code Copy Feedback**:
+An ephemeral (~1.2s) visual checkmark and tooltip confirmation replacing the copy glyph upon clicking a code block copy button, after writing clean raw snippet text to the system clipboard.
+_Avoid_: Static copy button, alert dialog, persistent badge
+

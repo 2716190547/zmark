@@ -1,9 +1,12 @@
 use gpui::prelude::*;
 use gpui::*;
 use glidemark_core::ast::{BlockElement, InlineGroup, InlineItem, ParsedDocument};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::theme::ThemeColors;
+
+pub type OnCopyCallback = Arc<dyn Fn(String, u64, &mut Window, &mut App) + Send + Sync>;
 
 pub fn render_preview_pane(
     parsed: Arc<ParsedDocument>,
@@ -11,10 +14,13 @@ pub fn render_preview_pane(
     max_column_width: f32,
     font_size: f32,
     list_state: &ListState,
+    copied_code_hash: Option<(u64, std::time::Instant)>,
+    on_copy: Option<OnCopyCallback>,
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
     let item_parsed = parsed.clone();
+    let item_on_copy = on_copy.clone();
 
     div()
         .flex_1()
@@ -40,7 +46,13 @@ pub fn render_preview_pane(
                             .w_full()
                             .max_w(px(max_column_width))
                             .mx_auto()
-                            .child(render_block_element(block, &item_theme, font_size)),
+                            .child(render_block_element(
+                                block,
+                                &item_theme,
+                                font_size,
+                                copied_code_hash,
+                                item_on_copy.as_ref(),
+                            )),
                     )
                     .into_any_element()
             })
@@ -57,6 +69,8 @@ fn render_block_element(
     block: &BlockElement,
     theme: &ThemeColors,
     base_font_size: f32,
+    copied_code_hash: Option<(u64, std::time::Instant)>,
+    on_copy: Option<&OnCopyCallback>,
 ) -> AnyElement {
     match block {
         BlockElement::Heading { level, content } => {
@@ -95,7 +109,14 @@ fn render_block_element(
             if lang.as_deref() == Some("mermaid") {
                 render_mermaid_diagram(code, theme, base_font_size)
             } else {
-                render_code_block(lang.as_deref(), code, theme, base_font_size)
+                render_code_block(
+                    lang.as_deref(),
+                    code,
+                    theme,
+                    base_font_size,
+                    copied_code_hash,
+                    on_copy,
+                )
             }
         }
         BlockElement::BlockQuote(blocks) => div()
@@ -112,72 +133,18 @@ fn render_block_element(
             .children(
                 blocks
                     .iter()
-                    .map(|b| render_block_element(b, theme, base_font_size)),
+                    .map(|b| render_block_element(b, theme, base_font_size, copied_code_hash, on_copy)),
             )
             .into_any_element(),
-        BlockElement::List { ordered, items } => div()
-            .w_full()
-            .min_w(px(0.))
-            .flex()
-            .flex_col()
-            .gap_1p5()
-            .children(items.iter().enumerate().map(|(idx, item)| {
-                div()
-                    .w_full()
-                    .min_w(px(0.))
-                    .flex()
-                    .items_start()
-                    .gap_2()
-                    .child(if let Some(checked) = item.checked {
-                        div()
-                            .mt_1()
-                            .w(px(14.))
-                            .h(px(14.))
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(theme.accent)
-                            .bg(if checked { theme.accent } else { theme.bg })
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(if checked {
-                                svg()
-                                    .path("icons/check.svg")
-                                    .size(px(9.))
-                                    .text_color(rgb(0xffffff))
-                                    .into_any_element()
-                            } else {
-                                div().into_any_element()
-                            })
-                    } else if *ordered {
-                        div()
-                            .flex_shrink_0()
-                            .w(px(20.))
-                            .text_right()
-                            .text_size(px(base_font_size))
-                            .font_family("ui-monospace")
-                            .text_color(theme.text_muted)
-                            .child(format!("{}.", idx + 1))
-                    } else {
-                        div()
-                            .flex_shrink_0()
-                            .w(px(12.))
-                            .text_center()
-                            .text_size(px(base_font_size))
-                            .text_color(theme.accent)
-                            .child("–")
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .text_size(px(base_font_size))
-                            .line_height(relative(1.6))
-                            .text_color(theme.text_primary)
-                            .child(render_styled_inlines(&item.content, theme, base_font_size)),
-                    )
-            }))
-            .into_any_element(),
+        BlockElement::List { ordered, items } => render_list_element(
+            *ordered,
+            items,
+            theme,
+            base_font_size,
+            0,
+            copied_code_hash,
+            on_copy,
+        ),
         BlockElement::Table { headers, rows } => div()
             .id("preview_table_scroll")
             .w_full()
@@ -552,11 +519,117 @@ impl Render for CodeTooltipView {
     }
 }
 
+fn render_list_element(
+    ordered: bool,
+    items: &[glidemark_core::ast::ListItem],
+    theme: &ThemeColors,
+    base_font_size: f32,
+    depth: usize,
+    copied_code_hash: Option<(u64, std::time::Instant)>,
+    on_copy: Option<&OnCopyCallback>,
+) -> AnyElement {
+    div()
+        .w_full()
+        .min_w(px(0.))
+        .flex()
+        .flex_col()
+        .gap_1p5()
+        .children(items.iter().enumerate().map(|(idx, item)| {
+            div()
+                .w_full()
+                .min_w(px(0.))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .w_full()
+                        .min_w(px(0.))
+                        .flex()
+                        .items_start()
+                        .gap_2()
+                        .child(if let Some(checked) = item.checked {
+                            div()
+                                .mt_1()
+                                .w(px(14.))
+                                .h(px(14.))
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(theme.accent)
+                                .bg(if checked { theme.accent } else { theme.bg })
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(if checked {
+                                    svg()
+                                        .path("icons/check.svg")
+                                        .size(px(9.))
+                                        .text_color(rgb(0xffffff))
+                                        .into_any_element()
+                                } else {
+                                    div().into_any_element()
+                                })
+                        } else if ordered {
+                            div()
+                                .flex_shrink_0()
+                                .w(px(20.))
+                                .text_right()
+                                .text_size(px(base_font_size))
+                                .font_family("ui-monospace")
+                                .text_color(theme.text_muted)
+                                .child(format!("{}.", idx + 1))
+                        } else {
+                            let bullet = match depth % 3 {
+                                0 => "–",
+                                1 => "◦",
+                                _ => "▪",
+                            };
+                            div()
+                                .flex_shrink_0()
+                                .w(px(12.))
+                                .text_center()
+                                .text_size(px(base_font_size))
+                                .text_color(theme.accent)
+                                .child(bullet)
+                        })
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .text_size(px(base_font_size))
+                                .line_height(relative(1.6))
+                                .text_color(theme.text_primary)
+                                .child(render_styled_inlines(&item.content, theme, base_font_size)),
+                        ),
+                )
+                .children(item.sub_list.as_ref().map(|sub| {
+                    div()
+                        .pl_5()
+                        .pt_1()
+                        .child(if let BlockElement::List { ordered: sub_ordered, items: sub_items } = sub.as_ref() {
+                            render_list_element(
+                                *sub_ordered,
+                                sub_items,
+                                theme,
+                                base_font_size,
+                                depth + 1,
+                                copied_code_hash,
+                                on_copy,
+                            )
+                        } else {
+                            render_block_element(sub, theme, base_font_size, copied_code_hash, on_copy)
+                        })
+                }))
+        }))
+        .into_any_element()
+}
+
 fn render_code_block(
     lang: Option<&str>,
     code: &str,
     theme: &ThemeColors,
     base_font_size: f32,
+    copied_code_hash: Option<(u64, std::time::Instant)>,
+    on_copy: Option<&OnCopyCallback>,
 ) -> AnyElement {
     let line_count = if code.is_empty() { 1 } else { code.lines().count() };
     let lang_display = lang.unwrap_or("text").to_uppercase();
@@ -565,6 +638,16 @@ fn render_code_block(
         .collect::<Vec<_>>()
         .join("\n");
     let code_text = if code.is_empty() { " ".to_string() } else { code.to_string() };
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut hasher);
+    let hash = hasher.finish();
+    let is_copied = copied_code_hash
+        .map(|(h, t)| h == hash && t.elapsed() < std::time::Duration::from_millis(1200))
+        .unwrap_or(false);
+
+    let on_copy_cb = on_copy.cloned();
+    let code_to_copy = code.to_string();
 
     div()
         .w_full()
@@ -613,18 +696,29 @@ fn render_code_block(
                 )
                 .child(
                     div()
-                        .id(SharedString::from(format!("copy_code_btn_{}", code.len())))
-                        .tooltip(|_window, cx| {
-                            cx.new(|_| CodeTooltipView { text: "复制代码".to_string() }).into()
+                        .id(SharedString::from(format!("copy_code_btn_{}", hash)))
+                        .tooltip({
+                            let is_copied = is_copied;
+                            move |_window, cx| {
+                                cx.new(|_| CodeTooltipView {
+                                    text: if is_copied { "已复制".to_string() } else { "复制代码".to_string() },
+                                })
+                                .into()
+                            }
                         })
                         .cursor_pointer()
                         .flex()
                         .items_center()
+                        .on_click(move |_, window, cx| {
+                            if let Some(ref cb) = on_copy_cb {
+                                cb(code_to_copy.clone(), hash, window, cx);
+                            }
+                        })
                         .child(
                             svg()
-                                .path("icons/copy.svg")
+                                .path(if is_copied { "icons/check.svg" } else { "icons/copy.svg" })
                                 .size(px(13.))
-                                .text_color(theme.text_muted),
+                                .text_color(if is_copied { theme.accent } else { theme.text_muted }),
                         ),
                 ),
         )
@@ -653,8 +747,11 @@ fn render_code_block(
                 )
                 .child(
                     div()
+                        .id(SharedString::from(format!("code_content_scroll_{}", hash)))
                         .flex_1()
                         .min_w(px(0.))
+                        .overflow_x_scroll()
+                        .whitespace_nowrap()
                         .text_size(px(base_font_size * 0.85))
                         .font_family("ui-monospace")
                         .line_height(relative(1.5))

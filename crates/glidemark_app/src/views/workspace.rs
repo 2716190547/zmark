@@ -13,6 +13,12 @@ use crate::views::editor::render_editor_pane;
 use crate::views::preview::render_preview_pane;
 use crate::views::settings::SettingsWindowView;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollOrigin {
+    Editor,
+    Preview,
+}
+
 pub struct WorkspaceView {
     pub state: AppState,
     pub focus_handle: FocusHandle,
@@ -29,6 +35,8 @@ pub struct WorkspaceView {
     pub parse_paused: bool,
     pub drawer_closing: bool,
     pub settings_window: Option<WindowHandle<SettingsWindowView>>,
+    pub copied_code_hash: Option<(u64, std::time::Instant)>,
+    pub last_scroll_origin: Option<(ScrollOrigin, std::time::Instant)>,
 }
 
 impl WorkspaceView {
@@ -54,6 +62,8 @@ impl WorkspaceView {
             parse_paused: false,
             drawer_closing: false,
             settings_window: None,
+            copied_code_hash: None,
+            last_scroll_origin: None,
         }
     }
 
@@ -86,6 +96,9 @@ impl WorkspaceView {
                 let _ = this.update(app, |this, cx| {
                     this.state.parse_now();
                     this.invalidate_preview_list();
+                    if this.state.view_mode == ViewMode::Split {
+                        this.align_preview_to_cursor();
+                    }
                     cx.notify();
                 });
             }));
@@ -100,7 +113,74 @@ impl WorkspaceView {
         self.state.sync_from_editor();
         if self.state.parse_now() {
             self.invalidate_preview_list();
+            if self.state.view_mode == ViewMode::Split {
+                self.align_preview_to_cursor();
+            }
         }
+    }
+
+    /// Aligns preview virtual list position to current editor cursor block.
+    pub fn align_preview_to_cursor(&mut self) {
+        if self.state.doc.is_parse_stale() || self.state.doc.parsed.anchors.is_empty() {
+            return;
+        }
+        let cursor_line = self.state.editor.cursor().0 + 1;
+        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc.parsed.anchors.clone());
+        let (block_index, _) = map.source_line_to_preview_progress(cursor_line);
+        self.preview_list.scroll_to(ListOffset {
+            item_ix: block_index,
+            offset_in_item: px(0.),
+        });
+    }
+
+    /// Synchronizes editor wheel scrolling to the preview pane with 100ms echo suppression.
+    pub fn handle_editor_scroll_wheel(&mut self, _event: &ScrollWheelEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.view_mode != ViewMode::Split || self.state.doc.is_parse_stale() || self.state.doc.parsed.anchors.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if let Some((origin, time)) = self.last_scroll_origin {
+            if origin == ScrollOrigin::Preview && now.duration_since(time) < std::time::Duration::from_millis(100) {
+                return;
+            }
+        }
+        self.last_scroll_origin = Some((ScrollOrigin::Editor, now));
+
+        let scroll_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
+        let line_height = (self.state.preferences.font_size * 1.5).max(1.0);
+        let top_line_index = (scroll_y / line_height).floor() as usize;
+        let line = top_line_index + 1;
+
+        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc.parsed.anchors.clone());
+        let (block_index, _) = map.source_line_to_preview_progress(line);
+        self.preview_list.scroll_to(ListOffset {
+            item_ix: block_index,
+            offset_in_item: px(0.),
+        });
+        cx.notify();
+    }
+
+    /// Synchronizes preview wheel scrolling to the editor pane with 100ms echo suppression.
+    pub fn handle_preview_scroll_wheel(&mut self, _event: &ScrollWheelEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.view_mode != ViewMode::Split || self.state.doc.is_parse_stale() || self.state.doc.parsed.anchors.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if let Some((origin, time)) = self.last_scroll_origin {
+            if origin == ScrollOrigin::Editor && now.duration_since(time) < std::time::Duration::from_millis(100) {
+                return;
+            }
+        }
+        self.last_scroll_origin = Some((ScrollOrigin::Preview, now));
+
+        let top_block = self.preview_list.logical_scroll_top().item_ix;
+        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc.parsed.anchors.clone());
+        let target_line = map.preview_to_source_line(top_block, 0.0);
+        self.editor_scroll_handle.scroll_to_item_strict(
+            target_line.saturating_sub(1),
+            ScrollStrategy::Top,
+        );
+        cx.notify();
     }
 
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
@@ -1090,7 +1170,31 @@ impl Render for WorkspaceView {
                             .when(self.state.open_docs.len() > 1, |center| {
                                 center.child(self.render_tab_strip(theme, cx))
                             })
-                            .child(
+                            .child({
+                                let copied_code_hash = self.copied_code_hash;
+                                let on_copy = {
+                                    let view_entity = cx.entity().clone();
+                                    Arc::new(move |code_text: String, hash: u64, _window: &mut Window, app: &mut App| {
+                                        app.write_to_clipboard(ClipboardItem::new_string(code_text));
+                                        let view_entity = view_entity.clone();
+                                        view_entity.update(app, |view, cx| {
+                                            view.copied_code_hash = Some((hash, std::time::Instant::now()));
+                                            cx.notify();
+                                            cx.spawn(async move |this, app| {
+                                                app.background_executor().timer(std::time::Duration::from_millis(1200)).await;
+                                                let _ = this.update(app, |view, cx| {
+                                                    if let Some((curr_h, _)) = view.copied_code_hash {
+                                                        if curr_h == hash {
+                                                            view.copied_code_hash = None;
+                                                            cx.notify();
+                                                        }
+                                                    }
+                                                });
+                                            }).detach();
+                                        });
+                                    })
+                                };
+
                                 div()
                                     .flex_1()
                                     .min_w(px(0.))
@@ -1119,6 +1223,8 @@ impl Render for WorkspaceView {
                                                 self.state.preferences.max_column_width,
                                                 self.state.preferences.font_size,
                                                 &self.preview_list,
+                                                copied_code_hash,
+                                                Some(on_copy.clone()),
                                             ))
                                             .into_any_element(),
                                         ViewMode::Split => div()
@@ -1135,6 +1241,9 @@ impl Render for WorkspaceView {
                                                     .flex()
                                                     .flex_col()
                                                     .overflow_hidden()
+                                                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                                                        this.handle_editor_scroll_wheel(event, window, cx);
+                                                    }))
                                                     .child(render_editor_pane(
                                                         self.state.editor.lines.clone(),
                                                         self.state.editor.cursor(),
@@ -1184,17 +1293,22 @@ impl Render for WorkspaceView {
                                                     .flex()
                                                     .flex_col()
                                                     .overflow_hidden()
+                                                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                                                        this.handle_preview_scroll_wheel(event, window, cx);
+                                                    }))
                                                     .child(render_preview_pane(
                                                         self.state.doc.parsed.clone(),
                                                         theme,
                                                         self.state.preferences.max_column_width,
                                                         self.state.preferences.font_size,
                                                         &self.preview_list,
+                                                        copied_code_hash,
+                                                        Some(on_copy),
                                                     )),
                                             )
                                             .into_any_element(),
-                                    }),
-                            ),
+                                    })
+                            }),
                     ),
             )
     }

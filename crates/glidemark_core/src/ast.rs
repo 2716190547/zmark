@@ -66,6 +66,8 @@ pub struct HeadingItem {
 pub struct ListItem {
     pub checked: Option<bool>,
     pub content: InlineGroup,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_list: Option<Box<BlockElement>>,
 }
 
 /// A top-level Markdown block element.
@@ -233,7 +235,7 @@ pub fn parse_markdown(source: &str) -> ParsedDocument {
             Event::Start(Tag::List(first_num)) => {
                 let start_line = line_index.line_number(range.start);
                 let ordered = first_num.is_some();
-                let (items, end_offset) = collect_list_items(&mut iter, range.end);
+                let (items, end_offset) = collect_list_items(&mut iter, range.end, 1);
                 let end_line = line_index
                     .line_number(end_offset.saturating_sub(1))
                     .max(start_line);
@@ -305,6 +307,71 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
     }
 }
 
+fn handle_inline_event<'a, I>(
+    ev: Event<'a>,
+    iter: &mut std::iter::Peekable<I>,
+    inlines: &mut InlineGroup,
+) -> bool
+where
+    I: Iterator<Item = (Event<'a>, std::ops::Range<usize>)>,
+{
+    match ev {
+        Event::Text(t) => {
+            inlines.push(InlineItem::Text(t.into_string()));
+            true
+        }
+        Event::Code(c) => {
+            inlines.push(InlineItem::Code(c.into_string()));
+            true
+        }
+        Event::Start(Tag::Strong) => {
+            let (sub, _) = collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Strong)));
+            let text = sub.0.into_iter().map(inline_to_string).collect();
+            inlines.push(InlineItem::Bold(text));
+            true
+        }
+        Event::Start(Tag::Emphasis) => {
+            let (sub, _) = collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Emphasis)));
+            let text = sub.0.into_iter().map(inline_to_string).collect();
+            inlines.push(InlineItem::Italic(text));
+            true
+        }
+        Event::Start(Tag::Strikethrough) => {
+            let (sub, _) = collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Strikethrough)));
+            let text = sub.0.into_iter().map(inline_to_string).collect();
+            inlines.push(InlineItem::Strikethrough(text));
+            true
+        }
+        Event::Start(Tag::Link { dest_url, title, .. }) => {
+            let (sub, _) = collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Link)));
+            let text = sub.0.into_iter().map(inline_to_string).collect();
+            let title = if title.is_empty() { None } else { Some(title.into_string()) };
+            inlines.push(InlineItem::Link {
+                text,
+                url: dest_url.into_string(),
+                title,
+            });
+            true
+        }
+        Event::Start(Tag::Image { dest_url, title, .. }) => {
+            let (sub, _) = collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Image)));
+            let alt = sub.0.into_iter().map(inline_to_string).collect();
+            let title = if title.is_empty() { None } else { Some(title.into_string()) };
+            inlines.push(InlineItem::Image {
+                alt,
+                url: dest_url.into_string(),
+                title,
+            });
+            true
+        }
+        Event::SoftBreak | Event::HardBreak => {
+            inlines.push(InlineItem::Text(" ".to_string()));
+            true
+        }
+        _ => false,
+    }
+}
+
 fn collect_inlines_until<'a, I>(
     iter: &mut std::iter::Peekable<I>,
     is_end: &mut dyn FnMut(&Event<'_>) -> bool,
@@ -320,50 +387,7 @@ where
             return (inlines, Some(range));
         }
         last_range = Some(range);
-
-        match ev {
-            Event::Text(t) => inlines.push(InlineItem::Text(t.into_string())),
-            Event::Code(c) => inlines.push(InlineItem::Code(c.into_string())),
-            Event::Start(Tag::Strong) => {
-                let (sub, _) = collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Strong)));
-                let text = sub.0.into_iter().map(inline_to_string).collect();
-                inlines.push(InlineItem::Bold(text));
-            }
-            Event::Start(Tag::Emphasis) => {
-                let (sub, _) = collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Emphasis)));
-                let text = sub.0.into_iter().map(inline_to_string).collect();
-                inlines.push(InlineItem::Italic(text));
-            }
-            Event::Start(Tag::Strikethrough) => {
-                let (sub, _) = collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Strikethrough)));
-                let text = sub.0.into_iter().map(inline_to_string).collect();
-                inlines.push(InlineItem::Strikethrough(text));
-            }
-            Event::Start(Tag::Link { dest_url, title, .. }) => {
-                let (sub, _) = collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Link)));
-                let text = sub.0.into_iter().map(inline_to_string).collect();
-                let title = if title.is_empty() { None } else { Some(title.into_string()) };
-                inlines.push(InlineItem::Link {
-                    text,
-                    url: dest_url.into_string(),
-                    title,
-                });
-            }
-            Event::Start(Tag::Image { dest_url, title, .. }) => {
-                let (sub, _) = collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Image)));
-                let alt = sub.0.into_iter().map(inline_to_string).collect();
-                let title = if title.is_empty() { None } else { Some(title.into_string()) };
-                inlines.push(InlineItem::Image {
-                    alt,
-                    url: dest_url.into_string(),
-                    title,
-                });
-            }
-            Event::SoftBreak | Event::HardBreak => {
-                inlines.push(InlineItem::Text(" ".to_string()));
-            }
-            _ => {}
-        }
+        handle_inline_event(ev, iter, &mut inlines);
     }
 
     (inlines, last_range)
@@ -384,6 +408,7 @@ fn inline_to_string(item: InlineItem) -> String {
 fn collect_list_items<'a, I>(
     iter: &mut std::iter::Peekable<I>,
     default_end: usize,
+    depth: usize,
 ) -> (Vec<ListItem>, usize)
 where
     I: Iterator<Item = (Event<'a>, std::ops::Range<usize>)>,
@@ -400,6 +425,8 @@ where
             Event::Start(Tag::Item) => {
                 let mut checked = None;
                 let mut content = InlineGroup::new();
+                let mut sub_list = None;
+
                 while let Some((sub_ev, sub_range)) = iter.peek() {
                     match sub_ev {
                         Event::End(TagEnd::Item) => {
@@ -411,28 +438,44 @@ where
                             checked = Some(*chk);
                             iter.next();
                         }
-                        Event::Text(t) => {
-                            content.push(InlineItem::Text(t.clone().into_string()));
-                            end_offset = sub_range.end;
+                        Event::Start(Tag::List(first_num)) => {
+                            let ordered = first_num.is_some();
+                            let start_range = sub_range.clone();
                             iter.next();
+                            if depth < 8 {
+                                let (sub_items, sub_end) = collect_list_items(iter, start_range.end, depth + 1);
+                                end_offset = sub_end;
+                                sub_list = Some(Box::new(BlockElement::List {
+                                    ordered,
+                                    items: sub_items,
+                                }));
+                            } else {
+                                let mut d = 1;
+                                while let Some((deep_ev, _)) = iter.next() {
+                                    match deep_ev {
+                                        Event::Start(Tag::List(_)) => d += 1,
+                                        Event::End(TagEnd::List(_)) => {
+                                            d -= 1;
+                                            if d == 0 {
+                                                break;
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                         }
-                        Event::Code(c) => {
-                            content.push(InlineItem::Code(c.clone().into_string()));
-                            end_offset = sub_range.end;
-                            iter.next();
-                        }
-                        Event::Start(Tag::Paragraph) => {
-                            iter.next();
-                        }
-                        Event::End(TagEnd::Paragraph) => {
+                        Event::Start(Tag::Paragraph) | Event::End(TagEnd::Paragraph) => {
                             iter.next();
                         }
                         _ => {
-                            iter.next();
+                            let (item_ev, r) = iter.next().unwrap();
+                            end_offset = r.end;
+                            handle_inline_event(item_ev, iter, &mut content);
                         }
                     }
                 }
-                items.push(ListItem { checked, content });
+                items.push(ListItem { checked, content, sub_list });
             }
             _ => {}
         }

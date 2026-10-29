@@ -78,6 +78,10 @@ fn render_block(block: &BlockElement, out: &mut String) {
                     }
                 }
                 render_inline_group(&item.content, out);
+                if let Some(ref sub) = item.sub_list {
+                    out.push('\n');
+                    render_block(sub, out);
+                }
                 out.push_str("</li>\n");
             }
             out.push_str(&format!("</{}>\n", tag));
