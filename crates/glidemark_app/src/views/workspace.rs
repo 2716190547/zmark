@@ -39,6 +39,7 @@ pub struct WorkspaceView {
     pub copied_code_hash: Option<(u64, std::time::Instant)>,
     pub last_scroll_origin: Option<(ScrollOrigin, std::time::Instant)>,
     pub lightbox: LightboxState,
+    pub window_handle: Option<AnyWindowHandle>,
 }
 
 impl WorkspaceView {
@@ -67,6 +68,7 @@ impl WorkspaceView {
             copied_code_hash: None,
             last_scroll_origin: None,
             lightbox: LightboxState::new(),
+            window_handle: None,
         }
     }
 
@@ -338,6 +340,45 @@ impl WorkspaceView {
     pub fn trigger_close_active(&mut self, cx: &mut Context<Self>) {
         if let Some(key) = self.state.active.clone() {
             self.trigger_close_doc(&key, cx);
+        }
+    }
+
+    pub fn handle_modal_cancel(&mut self, cx: &mut Context<Self>) {
+        self.state.cancel_close();
+        cx.notify();
+    }
+
+    pub fn handle_modal_discard(&mut self, key: &crate::state::DocKey, window: &mut Window, cx: &mut Context<Self>) {
+        self.state.confirm_close_discard(key);
+        self.on_document_swapped();
+        self.after_dirty_doc_resolved(Some(window), cx);
+    }
+
+    pub fn handle_modal_save(&mut self, key: &crate::state::DocKey, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = self.state.confirm_close_save(key);
+        self.on_document_swapped();
+        self.after_dirty_doc_resolved(Some(window), cx);
+    }
+
+    pub fn after_dirty_doc_resolved(&mut self, mut window_opt: Option<&mut Window>, cx: &mut Context<Self>) {
+        if self.state.is_quitting {
+            if let Some(next_dirty) = self.state.next_dirty_doc_key() {
+                self.state.request_close(&next_dirty);
+                self.on_document_swapped();
+                cx.notify();
+            } else {
+                // All dirty documents resolved! Close window per ADR 0031.
+                self.state.is_quitting = false;
+                if let Some(window) = window_opt.as_deref_mut() {
+                    window.remove_window();
+                } else if let Some(h) = self.window_handle {
+                    let _ = h.update(cx, |_view, window, _cx| {
+                        window.remove_window();
+                    });
+                }
+            }
+        } else {
+            cx.notify();
         }
     }
 
@@ -674,8 +715,7 @@ impl WorkspaceView {
                                     .text_color(theme.text_primary)
                                     .hover(|s| s.bg(theme.bg))
                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-                                        this.state.cancel_close();
-                                        cx.notify();
+                                        this.handle_modal_cancel(cx);
                                     }))
                                     .child("取消 (Esc)"),
                             )
@@ -692,10 +732,8 @@ impl WorkspaceView {
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(0xef4444))
                                     .hover(|s| s.bg(rgba(0xef444433)))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _window, cx| {
-                                        this.state.confirm_close_discard(&key_discard);
-                                        this.on_document_swapped();
-                                        cx.notify();
+                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                                        this.handle_modal_discard(&key_discard, window, cx);
                                     }))
                                     .child("不保存 (D)"),
                             )
@@ -712,11 +750,9 @@ impl WorkspaceView {
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(0xffffff))
                                     .hover(|s| s.opacity(0.9))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _window, cx| {
+                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                         if has_path {
-                                            let _ = this.state.confirm_close_save(&key_save);
-                                            this.on_document_swapped();
-                                            cx.notify();
+                                            this.handle_modal_save(&key_save, window, cx);
                                         } else {
                                             this.state.cancel_close();
                                             let suggested_dir = this.state.workspace_folder.clone().unwrap_or_else(|| {
@@ -730,6 +766,11 @@ impl WorkspaceView {
                                                         let _ = this.state.save_doc_as(&close_key, path);
                                                         this.state.close_document_forced(&close_key);
                                                         this.on_document_swapped();
+                                                        this.after_dirty_doc_resolved(None, cx);
+                                                    });
+                                                } else {
+                                                    let _ = this.update(app, |this, cx| {
+                                                        this.state.is_quitting = false;
                                                         cx.notify();
                                                     });
                                                 }
@@ -752,6 +793,7 @@ impl Render for WorkspaceView {
         );
         self.state.update_appearance(is_sys_dark);
         self.workspace_width = f32::from(window.viewport_size().width);
+        self.window_handle = Some(window.window_handle());
 
         let theme = &self.state.theme;
         let strings = self.state.strings;
@@ -952,7 +994,7 @@ impl Render for WorkspaceView {
                     let _ = std::fs::write(&out_path, html);
                 }
             }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.lightbox.is_open {
                     if event.keystroke.key == "escape" {
                         this.lightbox.close();
@@ -964,21 +1006,16 @@ impl Render for WorkspaceView {
                 if let Some(pending) = this.state.pending_close.clone() {
                     match event.keystroke.key.as_str() {
                         "escape" => {
-                            this.state.cancel_close();
-                            cx.notify();
+                            this.handle_modal_cancel(cx);
                             return;
                         }
                         "d" | "D" => {
-                            this.state.confirm_close_discard(&pending.key);
-                            this.on_document_swapped();
-                            cx.notify();
+                            this.handle_modal_discard(&pending.key, window, cx);
                             return;
                         }
                         "enter" | "s" | "S" => {
                             if pending.has_path {
-                                let _ = this.state.confirm_close_save(&pending.key);
-                                this.on_document_swapped();
-                                cx.notify();
+                                this.handle_modal_save(&pending.key, window, cx);
                             } else {
                                 this.state.cancel_close();
                                 let suggested_dir = this.state.workspace_folder.clone().unwrap_or_else(|| {
@@ -992,6 +1029,11 @@ impl Render for WorkspaceView {
                                             let _ = this.state.save_doc_as(&close_key, path);
                                             this.state.close_document_forced(&close_key);
                                             this.on_document_swapped();
+                                            this.after_dirty_doc_resolved(None, cx);
+                                        });
+                                    } else {
+                                        let _ = this.update(app, |this, cx| {
+                                            this.state.is_quitting = false;
                                             cx.notify();
                                         });
                                     }

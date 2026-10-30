@@ -452,7 +452,7 @@ fn test_draft_save_as_decision() {
     let scratch_key = state.active.clone().unwrap();
     assert!(scratch_key.is_scratch());
 
-    // Save As target path
+    // Save As target path: in-place promotion from DocKey::Scratch to DocKey::Path
     state.save_doc_as(&scratch_key, target.clone()).unwrap();
 
     // Check disk content
@@ -460,9 +460,16 @@ fn test_draft_save_as_decision() {
     let content = fs::read_to_string(&target).unwrap();
     assert!(content.contains("# Brand New Draft Content"));
 
-    // Key transitioned to Path
+    // Key transitioned to Path; no old Scratch key left
     assert_eq!(state.active, Some(DocKey::Path(target.clone())));
     assert_eq!(state.open_docs[0].key, DocKey::Path(target));
+    assert!(state.open_docs.iter().all(|od| !od.key.is_scratch()));
+    assert_eq!(state.open_docs.len(), 1);
+
+    // Because previous scratch became a path file, Cmd+N can create a new scratch
+    state.focus_or_create_draft();
+    assert_eq!(state.open_docs.len(), 2);
+    assert!(state.active.as_ref().map_or(false, |k| k.is_scratch()));
 }
 
 #[test]
@@ -507,12 +514,22 @@ fn test_exit_window_dirty_save_strategy() {
     state.sync_from_editor();
     assert!(state.is_dirty());
 
-    // Calling handle_window_should_close auto-saves pathed doc and returns true
+    // When dirty, handle_window_should_close returns false synchronously, sets is_quitting, and opens prompt modal
     let can_close = state.handle_window_should_close();
-    assert!(can_close);
+    assert!(!can_close);
+    assert!(state.is_quitting);
+    assert!(state.pending_close.is_some());
+
+    // User confirms save for pending dirty doc
+    let pending_key = state.pending_close.as_ref().unwrap().key.clone();
+    let save_ok = state.confirm_close_save(&pending_key).unwrap();
+    assert!(save_ok);
 
     let disk = fs::read_to_string(&f1).unwrap();
     assert!(disk.contains("Edited"));
+
+    // Now clean, next dirty check has no dirty docs
+    assert!(state.next_dirty_doc_key().is_none());
 }
 
 #[test]

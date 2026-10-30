@@ -128,6 +128,7 @@ pub struct AppState {
     pub sibling_files: Vec<PathBuf>,
     pub file_tree: Vec<FileTreeNode>,
     pub is_system_dark: bool,
+    pub is_quitting: bool,
 }
 
 impl AppState {
@@ -176,6 +177,7 @@ impl AppState {
             sibling_files: Vec::new(),
             file_tree: Vec::new(),
             is_system_dark: false,
+            is_quitting: false,
         };
         state.refresh_sibling_files();
         state
@@ -539,33 +541,35 @@ impl AppState {
         }
     }
 
+    pub fn next_dirty_doc_key(&mut self) -> Option<DocKey> {
+        self.sync_from_editor();
+        if self.is_dirty() {
+            return self.active.clone();
+        }
+        self.open_docs.iter().find(|od| {
+            od.doc.status == DocumentStatus::Modified
+                || (od.key.is_scratch() && !od.doc.buffer.trim().is_empty())
+        }).map(|od| od.key.clone())
+    }
+
     /// Evaluates window exit strategy:
-    /// - If any unpathed draft is modified, switch to it, trigger close prompt, and block exit.
-    /// - Otherwise, auto-save all modified documents with paths and allow exit.
+    /// - If any document is modified, mark is_quitting = true, switch to it, trigger close prompt, and return false.
+    /// - Otherwise, allow immediate exit (returns true).
     pub fn handle_window_should_close(&mut self) -> bool {
         self.sync_from_editor();
 
-        let dirty_unpathed_scratch = self.open_docs.iter().find(|d| {
-            d.key.is_scratch()
-                && (d.doc.status == DocumentStatus::Modified || !d.doc.buffer.trim().is_empty())
-        });
-
-        if let Some(scratch) = dirty_unpathed_scratch {
-            let key = scratch.key.clone();
+        if let Some(key) = self.next_dirty_doc_key() {
+            self.is_quitting = true;
             self.request_close(&key);
-            return false;
+            false
+        } else {
+            self.is_quitting = false;
+            true
         }
-
-        for od in self.open_docs.iter_mut() {
-            if od.doc.path.is_some() && od.doc.status == DocumentStatus::Modified {
-                let _ = od.doc.save();
-            }
-        }
-
-        true
     }
 
     pub fn cancel_close(&mut self) {
+        self.is_quitting = false;
         self.pending_close = None;
     }
 
