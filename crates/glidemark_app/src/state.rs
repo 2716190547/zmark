@@ -233,7 +233,11 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(doc: Document) -> Self {
-        let mut preferences = Preferences::load_or_default();
+        let preferences = Preferences::load_or_default();
+        Self::new_with_preferences(doc, preferences)
+    }
+
+    pub fn new_with_preferences(doc: Document, mut preferences: Preferences) -> Self {
         if !crate::theme::ALL_PALETTES.iter().any(|p| p.id == preferences.palette) {
             preferences.palette = "default".to_string();
             let _ = preferences.save();

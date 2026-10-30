@@ -2,7 +2,25 @@ use std::fs;
 use tempfile::tempdir;
 
 use glidemark_app::state::{root_label, AppState, RootAddError, WorkspaceRoot};
+use glidemark_core::config::Preferences;
 use glidemark_core::document::Document;
+
+struct TestGuard;
+impl Drop for TestGuard {
+    fn drop(&mut self) {
+        let mut p = Preferences::load_or_default();
+        p.workspace_roots.clear();
+        let _ = p.save();
+    }
+}
+
+fn clean_test_state() -> (AppState, TestGuard) {
+    let guard = TestGuard;
+    let mut p = Preferences::default();
+    p.workspace_roots.clear();
+    let state = AppState::new_with_preferences(Document::new_scratch(), p);
+    (state, guard)
+}
 
 #[test]
 fn test_workspace_root_add_canonicalize_and_dedup() {
@@ -15,8 +33,7 @@ fn test_workspace_root_add_canonicalize_and_dedup() {
 
     let nonexistent = tmp.path().join("does_not_exist");
 
-    let doc = Document::new_scratch();
-    let mut state = AppState::new(doc);
+    let (mut state, _guard) = clean_test_state();
 
     // 1. Non-existent directory returns NotFound
     assert_eq!(
@@ -64,7 +81,7 @@ fn test_workspace_root_nested_and_parent_rejection() {
 
     // Case 1: Existing parent rejects child (NestedInExisting)
     {
-        let mut state = AppState::new(Document::new_scratch());
+        let (mut state, _guard) = clean_test_state();
         state.add_workspace_root(parent.clone()).unwrap();
         let err = state.add_workspace_root(child.clone()).unwrap_err();
         assert_eq!(err, RootAddError::NestedInExisting(canonical_parent.clone()));
@@ -72,7 +89,7 @@ fn test_workspace_root_nested_and_parent_rejection() {
 
     // Case 2: Existing child rejects parent (ContainsExisting)
     {
-        let mut state = AppState::new(Document::new_scratch());
+        let (mut state, _guard) = clean_test_state();
         state.add_workspace_root(child.clone()).unwrap();
         let err = state.add_workspace_root(parent.clone()).unwrap_err();
         assert_eq!(err, RootAddError::ContainsExisting(canonical_child.clone()));
@@ -84,7 +101,7 @@ fn test_workspace_root_missing_recovery() {
     let tmp = tempdir().unwrap();
     let missing_path = tmp.path().join("revived_project");
 
-    let mut state = AppState::new(Document::new_scratch());
+    let (mut state, _guard) = clean_test_state();
     // Simulate a missing workspace root loaded from preferences
     state.workspace_roots.push(WorkspaceRoot {
         path: missing_path.clone(),
@@ -194,7 +211,7 @@ fn test_workspace_root_remove_preserves_docs() {
     let file_path = root_path.join("readme.md");
     fs::write(&file_path, "# Preserved Document").unwrap();
 
-    let mut state = AppState::new(Document::new_scratch());
+    let (mut state, _guard) = clean_test_state();
     let root_idx = state.add_workspace_root(root_path.clone()).unwrap();
     assert_eq!(root_idx, 0);
 
