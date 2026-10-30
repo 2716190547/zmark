@@ -1,5 +1,6 @@
+use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use glidemark_core::config::{Preferences, ThemeMode};
 use glidemark_core::document::{Document, DocumentStatus};
@@ -117,6 +118,58 @@ pub struct WorkspaceRoot {
     pub is_expanded: bool,
     pub is_missing: bool,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanBudget {
+    pub entries_left: usize,
+    pub files_left: usize,
+}
+
+impl Default for ScanBudget {
+    fn default() -> Self {
+        Self {
+            entries_left: 2000,
+            files_left: 400,
+        }
+    }
+}
+
+impl ScanBudget {
+    pub const PER_ROOT_ENTRY_CAP: usize = 800;
+    pub const PER_ROOT_FILE_CAP: usize = 150;
+    pub const FIRST_LAYER_FLOOR_ENTRIES: usize = 100;
+    pub const FIRST_LAYER_FLOOR_FILES: usize = 30;
+
+    pub fn new(entries: usize, files: usize) -> Self {
+        Self {
+            entries_left: entries,
+            files_left: files,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn can_scan_entry(&self) -> bool {
+        self.entries_left > 0
+    }
+
+    pub fn consume_entry(&mut self) -> bool {
+        if self.entries_left > 0 {
+            self.entries_left -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn consume_file(&mut self) -> bool {
+        if self.files_left > 0 {
+            self.files_left -= 1;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -430,6 +483,7 @@ impl AppState {
             is_quitting: false,
         };
         state.refresh_sibling_files();
+        state.refresh_all_roots();
         state
     }
 
@@ -590,6 +644,11 @@ impl AppState {
             false
         }
         toggle_node(&mut self.file_tree, target);
+        for i in 0..self.workspace_roots.len() {
+            if self.toggle_root_folder(i, target) {
+                break;
+            }
+        }
     }
 
     pub fn expand_to_file(&mut self, file_path: &std::path::Path) {
@@ -684,6 +743,7 @@ impl AppState {
                         self.workspace_roots.iter().map(|root| root.path.clone()).collect();
                     return Err(RootAddError::SaveFailed(e.to_string()));
                 }
+                self.refresh_root(idx);
                 return Ok(idx);
             } else {
                 return Err(RootAddError::AlreadyExists);
@@ -719,7 +779,139 @@ impl AppState {
                 self.workspace_roots.iter().map(|root| root.path.clone()).collect();
             return Err(RootAddError::SaveFailed(e.to_string()));
         }
+        self.refresh_root(idx);
         Ok(idx)
+    }
+
+    #[allow(dead_code)]
+    pub fn refresh_root(&mut self, root_idx: usize) {
+        if root_idx >= self.workspace_roots.len() {
+            return;
+        }
+        if self.workspace_roots[root_idx].is_missing {
+            return;
+        }
+        let mut expanded_paths = HashSet::new();
+        collect_expanded_paths(&self.workspace_roots[root_idx].tree, &mut expanded_paths);
+
+        let mut budget = ScanBudget::new(
+            ScanBudget::PER_ROOT_ENTRY_CAP,
+            ScanBudget::PER_ROOT_FILE_CAP,
+        );
+        let root_path = self.workspace_roots[root_idx].path.clone();
+        let (tree, truncated) = scan_root_layer(&root_path, 0, &mut budget, &expanded_paths, 4);
+
+        self.workspace_roots[root_idx].tree = tree;
+        self.workspace_roots[root_idx].truncated = truncated;
+    }
+
+    pub fn refresh_all_roots(&mut self) {
+        self.refresh_all_roots_with_budget(ScanBudget::default());
+    }
+
+    #[allow(dead_code)]
+    pub fn refresh_all_roots_with_budget(&mut self, mut global_budget: ScanBudget) {
+        let non_missing_count = self.workspace_roots.iter().filter(|r| !r.is_missing).count();
+        let mut non_missing_seen = 0;
+
+        for idx in 0..self.workspace_roots.len() {
+            if self.workspace_roots[idx].is_missing {
+                continue;
+            }
+            let remaining_after = non_missing_count.saturating_sub(non_missing_seen + 1);
+            non_missing_seen += 1;
+
+            let reserved_entries = remaining_after * ScanBudget::FIRST_LAYER_FLOOR_ENTRIES;
+            let reserved_files = remaining_after * ScanBudget::FIRST_LAYER_FLOOR_FILES;
+
+            let available_entries = global_budget.entries_left.saturating_sub(reserved_entries);
+            let available_files = global_budget.files_left.saturating_sub(reserved_files);
+
+            let root_entries = available_entries.min(ScanBudget::PER_ROOT_ENTRY_CAP);
+            let root_files = available_files.min(ScanBudget::PER_ROOT_FILE_CAP);
+
+            let mut root_budget = ScanBudget::new(root_entries, root_files);
+
+            let mut expanded_paths = HashSet::new();
+            collect_expanded_paths(&self.workspace_roots[idx].tree, &mut expanded_paths);
+
+            let root_path = self.workspace_roots[idx].path.clone();
+            let (tree, truncated) = scan_root_layer(&root_path, 0, &mut root_budget, &expanded_paths, 4);
+
+            let consumed_entries = root_entries.saturating_sub(root_budget.entries_left);
+            let consumed_files = root_files.saturating_sub(root_budget.files_left);
+
+            global_budget.entries_left = global_budget.entries_left.saturating_sub(consumed_entries);
+            global_budget.files_left = global_budget.files_left.saturating_sub(consumed_files);
+
+            self.workspace_roots[idx].tree = tree;
+            self.workspace_roots[idx].truncated = truncated;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn toggle_root_folder(&mut self, root_idx: usize, target: &Path) -> bool {
+        if root_idx >= self.workspace_roots.len() {
+            return false;
+        }
+        if self.workspace_roots[root_idx].is_missing {
+            return false;
+        }
+
+        if self.workspace_roots[root_idx].path == target {
+            self.workspace_roots[root_idx].is_expanded = !self.workspace_roots[root_idx].is_expanded;
+            return true;
+        }
+
+        let (used_entries, used_files) = count_tree_usage(&self.workspace_roots[root_idx].tree);
+        let remaining_entries = ScanBudget::PER_ROOT_ENTRY_CAP.saturating_sub(used_entries);
+        let remaining_files = ScanBudget::PER_ROOT_FILE_CAP.saturating_sub(used_files);
+        let mut budget = ScanBudget::new(remaining_entries, remaining_files);
+        let mut is_truncated = self.workspace_roots[root_idx].truncated;
+
+        fn toggle_in_nodes(
+            nodes: &mut [FileTreeNode],
+            target: &Path,
+            depth: usize,
+            budget: &mut ScanBudget,
+            is_truncated: &mut bool,
+        ) -> bool {
+            for node in nodes.iter_mut() {
+                if node.path == target {
+                    if node.is_dir {
+                        node.is_expanded = !node.is_expanded;
+                        if node.is_expanded && node.children.is_empty() {
+                            let empty_set = HashSet::new();
+                            let (children, child_trunc) =
+                                scan_root_layer(&node.path, depth + 1, budget, &empty_set, 4);
+                            node.children = children;
+                            if child_trunc {
+                                *is_truncated = true;
+                            }
+                        }
+                    }
+                    return true;
+                }
+                if node.is_dir && toggle_in_nodes(&mut node.children, target, depth + 1, budget, is_truncated) {
+                    return true;
+                }
+            }
+            false
+        }
+
+        let found = toggle_in_nodes(
+            &mut self.workspace_roots[root_idx].tree,
+            target,
+            0,
+            &mut budget,
+            &mut is_truncated,
+        );
+
+        if found {
+            self.workspace_roots[root_idx].truncated = is_truncated;
+        }
+
+        found
     }
 
     #[allow(dead_code)]
@@ -1259,4 +1451,127 @@ fn scan_tree_dir(
     });
 
     nodes
+}
+
+#[allow(dead_code)]
+pub fn count_tree_usage(nodes: &[FileTreeNode]) -> (usize, usize) {
+    let mut entries = 0;
+    let mut files = 0;
+    for node in nodes {
+        if node.is_dir {
+            entries += 1;
+            let (sub_e, sub_f) = count_tree_usage(&node.children);
+            entries += sub_e;
+            files += sub_f;
+        } else {
+            files += 1;
+        }
+    }
+    (entries, files)
+}
+
+#[allow(dead_code)]
+pub fn scan_root_layer(
+    dir: &Path,
+    depth: usize,
+    budget: &mut ScanBudget,
+    expanded_paths: &HashSet<PathBuf>,
+    max_depth: usize,
+) -> (Vec<FileTreeNode>, bool) {
+    if depth > max_depth {
+        return (Vec::new(), false);
+    }
+    let read_res = fs::read_dir(dir);
+    let entries = match read_res {
+        Ok(e) => e,
+        Err(_) => return (Vec::new(), false),
+    };
+
+    let mut dir_entries = Vec::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let name = match p.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if name.starts_with('.')
+            || name == "target"
+            || name == "node_modules"
+            || name == "build"
+            || name == "dist"
+            || name == "dev"
+            || name == "proc"
+            || name == "sys"
+        {
+            continue;
+        }
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        dir_entries.push((p, name, file_type));
+    }
+
+    dir_entries.sort_by(|a, b| {
+        match (a.2.is_dir(), b.2.is_dir()) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.1.to_lowercase().cmp(&b.1.to_lowercase()),
+        }
+    });
+
+    let mut nodes = Vec::new();
+    let mut truncated = false;
+
+    for (p, name, file_type) in dir_entries {
+        if file_type.is_dir() {
+            if !budget.consume_entry() {
+                truncated = true;
+                break;
+            }
+            let is_expanded = expanded_paths.contains(&p);
+            let (children, child_truncated) = if is_expanded && depth < max_depth {
+                scan_root_layer(&p, depth + 1, budget, expanded_paths, max_depth)
+            } else {
+                (Vec::new(), false)
+            };
+            if child_truncated {
+                truncated = true;
+            }
+            nodes.push(FileTreeNode {
+                path: p,
+                name,
+                is_dir: true,
+                is_expanded,
+                children,
+            });
+        } else if file_type.is_file() {
+            let is_markdown = p.extension()
+                .and_then(|e| e.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+                .unwrap_or(false);
+
+            if is_markdown {
+                if !budget.consume_file() {
+                    truncated = true;
+                    break;
+                }
+                nodes.push(FileTreeNode {
+                    path: p,
+                    name,
+                    is_dir: false,
+                    is_expanded: false,
+                    children: Vec::new(),
+                });
+            } else {
+                // Ordinary non-markdown file: consumes entry quota
+                if !budget.consume_entry() {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    (nodes, truncated)
 }
