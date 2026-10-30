@@ -21,7 +21,7 @@
 | **0015** | [Icon Composer 资产与 Squircle 规范](0015-icon-composer-iconimagestack-bypass-squircle-jail.md) | 已接受 (Accepted) | 编译标准 `Assets.car` 与 `IconImageStack`，彻底根治 macOS Dock 灰色托盘套娃 |
 | **0019** | [采用 100% 纯 Rust 图表渲染引擎](0019-pure-rust-mermaid-rendering-engine-adoption.md) | 已接受 (Accepted) | 选用 `rusty-mermaid` 替换 WebKit / JS 管道，彻底肃清外部通信与 JS 依赖 |
 | **0020** | [SVG 视口自适应几何归一化](0020-svg-bounding-box-normalization-and-void-elimination.md) | 已接受 (Accepted) | 计算图元最小包围盒并重写 viewBox，彻底消灭复杂子图顶部几何大空白 |
-| **0021** | [单窗口多标签页与工作区文件夹架构](0021-multi-tab-and-workspace-directory-architecture.md) | 已接受 (Accepted) | 单窗口轻量多标签页状态管理，默认切换为温润社论质感的暖石纸张灰阶 |
+| **0021** | [单窗口多标签页与工作区文件夹架构](0021-multi-tab-and-workspace-directory-architecture.md) | 已接受 (Accepted) | 多标签资源模型保留；Tab Strip 由 ADR 0031 取代，暖石主题仍有效 |
 | **0022** | [图表纹理预算与有界 LRU 缓存](0022-diagram-texture-budget-and-memory-optimization.md) | 已接受 (Accepted) | 建立 1000px 尺寸钳制与 LRU 显存逐出淘汰机制，彻底终结超大图表显存膨胀 |
 | **0024** | [图表 Panic 隔离与编辑器横向平滑滚动](0024-panic-isolation-native-dialogs-and-editor-horizontal-scroll.md) | 已接受 (Accepted) | 纯 Rust 图表 Panic 隔离屏障，编辑器长行采用 `nowrap` 与横向双向平滑滚动 |
 | **0026** | [大文档虚拟化与文件体积三级解析分档](0026-large-document-virtualization-parse-tiers-and-deferred-sync-scroll.md) | 已接受 (Accepted) | GPUI 原生 `list` 视口按需虚拟化，按 2MB/10MB 分级防抖，大文档内存降至百 MB 级 |
@@ -29,6 +29,7 @@
 | **0028** | [双向同步滚动、嵌套列表与代码块交互](0028-bidirectional-sync-scroll-nested-lists-and-codeblock-ux.md) | 已接受 (Accepted) | 100ms 回声抑制双向同步滚动、递归嵌套列表多层富文本与代码块横向滚动复制 |
 | **0029** | [GPUI 0.2 窗口装饰与图层变换约束](0029-gpui-window-chrome-and-overlay-constraints.md) | 已接受 (Accepted) | 红绿灯静态位置 + 折叠安全区；拖拽区显式 `start_window_move()`；灯箱缩放/平移用尺寸与偏移 |
 | **0030** | [macOS 研发工具链分工、Instruments 性能诊断与零成本 Ad-Hoc 签名](0030-macos-toolchain-profiling-and-adhoc-signing.md) | 已接受 (Accepted) | 工具链轻重解耦；Instruments 一键追踪掉帧；打包脚本集成零费用本地 Ad-Hoc 签名 |
+| **0031** | [侧栏中心导航、无 Tab 头部与多根工作区](0031-sidebar-centric-navigation-and-multi-root-workspace.md) | **提议 (Proposed)** | 移除 Tab Strip、标题改名、DocKey 生命周期、显式多根 + 外部文件 + 懒扫描；A/B 两期落地 |
 
 ---
 
