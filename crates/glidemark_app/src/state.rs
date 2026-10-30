@@ -125,6 +125,8 @@ pub enum RootAddError {
     NotFound,
     NotADirectory,
     AlreadyExists,
+    CanonicalizeFailed(PathBuf, String),
+    SaveFailed(String),
     NestedInExisting(PathBuf),
     ContainsExisting(PathBuf),
 }
@@ -135,6 +137,10 @@ impl std::fmt::Display for RootAddError {
             RootAddError::NotFound => write!(f, "Directory not found"),
             RootAddError::NotADirectory => write!(f, "Path is not a directory"),
             RootAddError::AlreadyExists => write!(f, "Workspace root already exists"),
+            RootAddError::CanonicalizeFailed(p, msg) => {
+                write!(f, "Failed to canonicalize path {}: {}", p.display(), msg)
+            }
+            RootAddError::SaveFailed(msg) => write!(f, "Failed to save preferences: {}", msg),
             RootAddError::NestedInExisting(p) => {
                 write!(f, "Directory is nested within existing root: {}", p.display())
             }
@@ -146,6 +152,97 @@ impl std::fmt::Display for RootAddError {
 }
 
 impl std::error::Error for RootAddError {}
+
+/// Helper to resolve a path for lexical nesting comparison.
+/// Walks up to the nearest existing ancestor to canonicalize symlinks on platforms like macOS.
+fn resolve_cmp_path(path: &std::path::Path) -> PathBuf {
+    if let Ok(c) = std::fs::canonicalize(path) {
+        return c;
+    }
+    let mut suffix = Vec::new();
+    let mut curr = path;
+    while let Some(parent) = curr.parent() {
+        if let Some(name) = curr.file_name() {
+            suffix.push(name);
+        }
+        if parent.exists() {
+            if let Ok(mut base) = std::fs::canonicalize(parent) {
+                while let Some(comp) = suffix.pop() {
+                    base.push(comp);
+                }
+                return base;
+            }
+        }
+        curr = parent;
+    }
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
+/// Normalizes a list of configured workspace roots:
+/// - Deduplicates paths;
+/// - Discards nested subpaths;
+/// - Canonicalizes physically existing directories (is_missing = false, is_expanded = true);
+/// - Marks nonexistent paths as is_missing = true, is_expanded = false.
+#[allow(dead_code)]
+pub fn normalize_loaded_roots(paths: &[PathBuf]) -> Vec<WorkspaceRoot> {
+    let mut roots: Vec<WorkspaceRoot> = Vec::new();
+
+    for raw_path in paths {
+        let (path, is_missing) = if raw_path.exists() && raw_path.is_dir() {
+            match std::fs::canonicalize(raw_path) {
+                Ok(c) => (c, false),
+                Err(_) => (raw_path.clone(), true),
+            }
+        } else {
+            (raw_path.clone(), true)
+        };
+
+        let path_cmp = resolve_cmp_path(&path);
+
+        // Deduplication
+        if roots.iter().any(|r| {
+            r.path == path || &r.path == raw_path || resolve_cmp_path(&r.path) == path_cmp
+        }) {
+            continue;
+        }
+
+        // Nesting check: discard nested subpaths
+        let mut is_nested = false;
+        roots.retain(|r| {
+            let r_cmp = resolve_cmp_path(&r.path);
+            if path_cmp.starts_with(&r_cmp) {
+                // New path is nested within existing root -> discard new path
+                is_nested = true;
+                true
+            } else if r_cmp.starts_with(&path_cmp) {
+                // Existing root is nested within new path -> discard existing root
+                false
+            } else {
+                true
+            }
+        });
+
+        if is_nested {
+            continue;
+        }
+
+        roots.push(WorkspaceRoot {
+            path,
+            tree: Vec::new(),
+            is_expanded: !is_missing,
+            is_missing,
+            truncated: false,
+        });
+    }
+
+    roots
+}
 
 /// Derives a disambiguated display label for a workspace root.
 /// Returns the folder name if unique among valid roots;
@@ -217,6 +314,8 @@ pub struct AppState {
     pub workspace_folder: Option<PathBuf>,
     #[allow(dead_code)]
     pub workspace_roots: Vec<WorkspaceRoot>,
+    #[allow(dead_code)]
+    pub preferences_path: PathBuf,
     pub editor: EditorEngine,
     pub view_mode: ViewMode,
     pub drawer_open: bool,
@@ -234,13 +333,23 @@ pub struct AppState {
 impl AppState {
     pub fn new(doc: Document) -> Self {
         let preferences = Preferences::load_or_default();
-        Self::new_with_preferences(doc, preferences)
+        Self::new_with_preferences_at(doc, preferences, Preferences::default_config_path())
     }
 
-    pub fn new_with_preferences(doc: Document, mut preferences: Preferences) -> Self {
+    #[allow(dead_code)]
+    pub fn new_with_preferences(doc: Document, preferences: Preferences) -> Self {
+        Self::new_with_preferences_at(doc, preferences, Preferences::default_config_path())
+    }
+
+    #[allow(dead_code)]
+    pub fn new_with_preferences_at(
+        doc: Document,
+        mut preferences: Preferences,
+        preferences_path: PathBuf,
+    ) -> Self {
         if !crate::theme::ALL_PALETTES.iter().any(|p| p.id == preferences.palette) {
             preferences.palette = "default".to_string();
-            let _ = preferences.save();
+            let _ = preferences.save_to_path(&preferences_path);
         }
         let is_dark = match preferences.theme {
             ThemeMode::Light => false,
@@ -252,42 +361,7 @@ impl AppState {
         let editor = EditorEngine::new(&doc.buffer);
 
         let workspace_folder = doc.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf());
-        let mut workspace_roots = Vec::new();
-        for p in &preferences.workspace_roots {
-            if p.exists() && p.is_dir() {
-                let canonical = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-                workspace_roots.push(WorkspaceRoot {
-                    path: canonical,
-                    tree: Vec::new(),
-                    is_expanded: true,
-                    is_missing: false,
-                    truncated: false,
-                });
-            } else {
-                workspace_roots.push(WorkspaceRoot {
-                    path: p.clone(),
-                    tree: Vec::new(),
-                    is_expanded: false,
-                    is_missing: true,
-                    truncated: false,
-                });
-            }
-        }
-
-        if workspace_roots.is_empty() {
-            if let Some(parent) = doc.path.as_ref().and_then(|p| p.parent()) {
-                if parent.exists() && parent.is_dir() {
-                    let canonical = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
-                    workspace_roots.push(WorkspaceRoot {
-                        path: canonical,
-                        tree: Vec::new(),
-                        is_expanded: true,
-                        is_missing: false,
-                        truncated: false,
-                    });
-                }
-            }
-        }
+        let workspace_roots = normalize_loaded_roots(&preferences.workspace_roots);
 
         let key = if let Some(ref p) = doc.path {
             DocKey::Path(p.clone())
@@ -307,6 +381,7 @@ impl AppState {
             pending_close: None,
             workspace_folder,
             workspace_roots,
+            preferences_path,
             doc,
             editor,
             view_mode: ViewMode::Split,
@@ -348,34 +423,34 @@ impl AppState {
 
     pub fn set_auto_save(&mut self, enabled: bool) {
         self.preferences.auto_save = enabled;
-        let _ = self.preferences.save();
+        let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
     pub fn set_auto_save_on_blur(&mut self, enabled: bool) {
         self.preferences.auto_save_on_blur = enabled;
-        let _ = self.preferences.save();
+        let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
     pub fn set_tab_size(&mut self, tab_size: usize) {
         self.preferences.tab_size = tab_size;
-        let _ = self.preferences.save();
+        let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
     pub fn set_theme_mode(&mut self, mode: ThemeMode) {
         self.preferences.theme = mode;
-        let _ = self.preferences.save();
+        let _ = self.preferences.save_to_path(&self.preferences_path);
         self.recompute_theme();
     }
 
     pub fn set_palette(&mut self, palette_id: &str) {
         self.preferences.palette = palette_id.to_string();
-        let _ = self.preferences.save();
+        let _ = self.preferences.save_to_path(&self.preferences_path);
         self.recompute_theme();
     }
 
     pub fn set_locale(&mut self, locale: SupportedLocale) {
         self.preferences.locale = locale;
-        let _ = self.preferences.save();
+        let _ = self.preferences.save_to_path(&self.preferences_path);
         self.strings = get_strings(locale);
     }
 
@@ -542,7 +617,10 @@ impl AppState {
         if !path.is_dir() {
             return Err(RootAddError::NotADirectory);
         }
-        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let canonical = match std::fs::canonicalize(&path) {
+            Ok(c) => c,
+            Err(e) => return Err(RootAddError::CanonicalizeFailed(path, e.to_string())),
+        };
 
         // Check if already in workspace_roots
         for (idx, r) in self.workspace_roots.iter_mut().enumerate() {
@@ -556,7 +634,9 @@ impl AppState {
                     r.is_expanded = true;
                     self.preferences.workspace_roots =
                         self.workspace_roots.iter().map(|root| root.path.clone()).collect();
-                    let _ = self.preferences.save();
+                    if let Err(e) = self.preferences.save_to_path(&self.preferences_path) {
+                        return Err(RootAddError::SaveFailed(e.to_string()));
+                    }
                     return Ok(idx);
                 } else {
                     return Err(RootAddError::AlreadyExists);
@@ -564,15 +644,14 @@ impl AppState {
             }
         }
 
-        // Check nesting relationships with non-missing roots
+        // Check nesting relationships (missing roots MUST participate in nesting check)
         for r in &self.workspace_roots {
-            if r.is_missing {
-                continue;
-            }
-            if canonical.starts_with(&r.path) {
+            let r_cmp = resolve_cmp_path(&r.path);
+
+            if canonical.starts_with(&r_cmp) {
                 return Err(RootAddError::NestedInExisting(r.path.clone()));
             }
-            if r.path.starts_with(&canonical) {
+            if r_cmp.starts_with(&canonical) {
                 return Err(RootAddError::ContainsExisting(r.path.clone()));
             }
         }
@@ -587,7 +666,9 @@ impl AppState {
         });
         self.preferences.workspace_roots =
             self.workspace_roots.iter().map(|root| root.path.clone()).collect();
-        let _ = self.preferences.save();
+        if let Err(e) = self.preferences.save_to_path(&self.preferences_path) {
+            return Err(RootAddError::SaveFailed(e.to_string()));
+        }
         Ok(idx)
     }
 
@@ -599,7 +680,7 @@ impl AppState {
         let removed = self.workspace_roots.remove(idx);
         self.preferences.workspace_roots =
             self.workspace_roots.iter().map(|root| root.path.clone()).collect();
-        let _ = self.preferences.save();
+        let _ = self.preferences.save_to_path(&self.preferences_path);
         Some(removed)
     }
 

@@ -1,25 +1,19 @@
 use std::fs;
 use tempfile::tempdir;
 
-use glidemark_app::state::{root_label, AppState, RootAddError, WorkspaceRoot};
+use glidemark_app::state::{
+    normalize_loaded_roots, root_label, AppState, RootAddError, WorkspaceRoot,
+};
 use glidemark_core::config::Preferences;
 use glidemark_core::document::Document;
 
-struct TestGuard;
-impl Drop for TestGuard {
-    fn drop(&mut self) {
-        let mut p = Preferences::load_or_default();
-        p.workspace_roots.clear();
-        let _ = p.save();
-    }
-}
-
-fn clean_test_state() -> (AppState, TestGuard) {
-    let guard = TestGuard;
-    let mut p = Preferences::default();
-    p.workspace_roots.clear();
-    let state = AppState::new_with_preferences(Document::new_scratch(), p);
-    (state, guard)
+fn clean_test_state(tmp: &tempfile::TempDir) -> AppState {
+    let config_path = tmp.path().join("test_config.toml");
+    AppState::new_with_preferences_at(
+        Document::new_scratch(),
+        Preferences::default(),
+        config_path,
+    )
 }
 
 #[test]
@@ -33,7 +27,7 @@ fn test_workspace_root_add_canonicalize_and_dedup() {
 
     let nonexistent = tmp.path().join("does_not_exist");
 
-    let (mut state, _guard) = clean_test_state();
+    let mut state = clean_test_state(&tmp);
 
     // 1. Non-existent directory returns NotFound
     assert_eq!(
@@ -81,7 +75,7 @@ fn test_workspace_root_nested_and_parent_rejection() {
 
     // Case 1: Existing parent rejects child (NestedInExisting)
     {
-        let (mut state, _guard) = clean_test_state();
+        let mut state = clean_test_state(&tmp);
         state.add_workspace_root(parent.clone()).unwrap();
         let err = state.add_workspace_root(child.clone()).unwrap_err();
         assert_eq!(err, RootAddError::NestedInExisting(canonical_parent.clone()));
@@ -89,7 +83,7 @@ fn test_workspace_root_nested_and_parent_rejection() {
 
     // Case 2: Existing child rejects parent (ContainsExisting)
     {
-        let (mut state, _guard) = clean_test_state();
+        let mut state = clean_test_state(&tmp);
         state.add_workspace_root(child.clone()).unwrap();
         let err = state.add_workspace_root(parent.clone()).unwrap_err();
         assert_eq!(err, RootAddError::ContainsExisting(canonical_child.clone()));
@@ -101,7 +95,7 @@ fn test_workspace_root_missing_recovery() {
     let tmp = tempdir().unwrap();
     let missing_path = tmp.path().join("revived_project");
 
-    let (mut state, _guard) = clean_test_state();
+    let mut state = clean_test_state(&tmp);
     // Simulate a missing workspace root loaded from preferences
     state.workspace_roots.push(WorkspaceRoot {
         path: missing_path.clone(),
@@ -211,7 +205,7 @@ fn test_workspace_root_remove_preserves_docs() {
     let file_path = root_path.join("readme.md");
     fs::write(&file_path, "# Preserved Document").unwrap();
 
-    let (mut state, _guard) = clean_test_state();
+    let mut state = clean_test_state(&tmp);
     let root_idx = state.add_workspace_root(root_path.clone()).unwrap();
     assert_eq!(root_idx, 0);
 
@@ -236,4 +230,104 @@ fn test_workspace_root_remove_preserves_docs() {
 
     // Out of bounds remove returns None
     assert!(state.remove_workspace_root(0).is_none());
+}
+
+#[test]
+fn test_workspace_root_host_config_untouched() {
+    let host_config_path = Preferences::default_config_path();
+    let host_content_before = fs::read_to_string(&host_config_path).ok();
+
+    let tmp = tempdir().unwrap();
+    let project = tmp.path().join("isolated_project");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut state = clean_test_state(&tmp);
+    state.add_workspace_root(project.clone()).unwrap();
+    state.remove_workspace_root(0).unwrap();
+
+    let host_content_after = fs::read_to_string(&host_config_path).ok();
+    assert_eq!(host_content_before, host_content_after);
+}
+
+#[test]
+fn test_normalize_loaded_roots_dedup_and_nesting() {
+    let tmp = tempdir().unwrap();
+    let parent = tmp.path().join("norm_parent");
+    let child = parent.join("norm_child");
+    let sibling = tmp.path().join("norm_sibling");
+    let missing_parent = tmp.path().join("missing_parent");
+    let missing_child = missing_parent.join("missing_child");
+
+    fs::create_dir_all(&child).unwrap();
+    fs::create_dir_all(&sibling).unwrap();
+
+    let canonical_parent = fs::canonicalize(&parent).unwrap();
+    let canonical_sibling = fs::canonicalize(&sibling).unwrap();
+
+    let configured_paths = vec![
+        parent.clone(),
+        child.clone(),                  // Should be dropped (nested inside parent)
+        parent.clone(),                 // Should be dropped (duplicate)
+        sibling.clone(),                // Valid sibling
+        missing_parent.clone(),         // Missing parent
+        missing_child.clone(),          // Should be dropped (nested inside missing parent)
+        missing_parent.clone(),         // Should be dropped (duplicate missing)
+    ];
+
+    let normalized = normalize_loaded_roots(&configured_paths);
+    assert_eq!(normalized.len(), 3);
+
+    // 1. Parent is valid and canonicalized
+    assert_eq!(normalized[0].path, canonical_parent);
+    assert!(!normalized[0].is_missing);
+    assert!(normalized[0].is_expanded);
+
+    // 2. Sibling is valid and canonicalized
+    assert_eq!(normalized[1].path, canonical_sibling);
+    assert!(!normalized[1].is_missing);
+    assert!(normalized[1].is_expanded);
+
+    // 3. Missing parent is preserved and marked missing
+    assert_eq!(normalized[2].path, missing_parent);
+    assert!(normalized[2].is_missing);
+    assert!(!normalized[2].is_expanded);
+}
+
+#[test]
+fn test_workspace_root_missing_root_blocks_nesting() {
+    let tmp = tempdir().unwrap();
+    let missing_parent = tmp.path().join("missing_parent");
+    let real_child = missing_parent.join("real_child");
+    fs::create_dir_all(&real_child).unwrap();
+
+    let mut state = clean_test_state(&tmp);
+    state.workspace_roots.push(WorkspaceRoot {
+        path: missing_parent.clone(),
+        tree: Vec::new(),
+        is_expanded: false,
+        is_missing: true,
+        truncated: false,
+    });
+
+    // Attempting to add a real subdirectory under a missing root is rejected
+    let err = state.add_workspace_root(real_child.clone()).unwrap_err();
+    assert_eq!(err, RootAddError::NestedInExisting(missing_parent.clone()));
+
+    // Attempting to add the parent of a missing child is also rejected
+    let tmp_nested = tempdir().unwrap();
+    let real_parent = tmp_nested.path().join("real_parent");
+    let missing_child = real_parent.join("missing_child");
+    fs::create_dir_all(&real_parent).unwrap();
+
+    let mut state2 = clean_test_state(&tmp_nested);
+    state2.workspace_roots.push(WorkspaceRoot {
+        path: missing_child.clone(),
+        tree: Vec::new(),
+        is_expanded: false,
+        is_missing: true,
+        truncated: false,
+    });
+
+    let err2 = state2.add_workspace_root(real_parent.clone()).unwrap_err();
+    assert_eq!(err2, RootAddError::ContainsExisting(missing_child.clone()));
 }
