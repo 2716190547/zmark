@@ -106,7 +106,36 @@ impl Preferences {
             fs::create_dir_all(parent)?;
         }
         let serialized = toml::to_string_pretty(self)?;
-        fs::write(path, serialized)?;
+
+        let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("config");
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("toml");
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_path = parent_dir.join(format!("{}.tmp.{}_{}.{}", file_stem, pid, nanos, ext));
+
+        // Write to temporary file in the same directory
+        if let Err(err) = fs::write(&tmp_path, serialized) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(ConfigError::Io(err));
+        }
+
+        #[cfg(windows)]
+        {
+            if path.exists() {
+                let _ = fs::remove_file(path);
+            }
+        }
+
+        // Atomically replace the destination file
+        if let Err(err) = fs::rename(&tmp_path, path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(ConfigError::Io(err));
+        }
+
         Ok(())
     }
 
