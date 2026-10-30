@@ -1,7 +1,7 @@
 # ADR 0031: 侧栏中心导航、无 Tab 头部与多根工作区
 
 ## 状态
-已接受 (Accepted) - A 期已交付验证；B 期（多根工作区与外部文件）规划达成审查共识并冻结，进入分步实施
+已接受 (Accepted) - A/B 两期均已落地；B1–B5 全部通过审查验收，多根工作区、外部文件组、共享扫描预算与多语言侧栏已交付
 
 ## 上下文 (Context)
 现有实现把“文档切换”放在右侧 Tab Strip 上，工作区只支持一个根目录，`open_file` 遇到根外文件还会自动替换根。实际使用中暴露出三个问题：
@@ -84,12 +84,12 @@
 
 ### 5. 分期与 Ticket 落地规划
 - **A 期（已交付）**：无 Tab、纯大标题、DocKey 状态模型、脏关闭/退出保护、草稿组、侧栏 active/open/dirty 状态；单根内部过渡。
-- **B 期（分步实施 Ticket）**：
-  - **Ticket B1 (Root Model & Persistence)**：`WorkspaceRoot`、`Preferences.workspace_roots`、路径 canonicalize、嵌套/包含校验、missing 恢复、添加/移除根方法及全量独立单元测试。
-  - **Ticket B2 (Scan Budget & Lazy Tree)**：`ScanBudget`、首层保底、懒展开续扫、truncated 状态、局部刷新机制及测试。
-  - **Ticket B3 (State Integration)**：删除 `workspace_folder` / `sibling_files`、解耦 `open_file` / `save_doc_as` 换根副作用、外部文件动态派生、移除根保文档测试。
-  - **Ticket B4 (Drawer UI & i18n)**：工作区 Header（[+] 添加）、多根折叠/展开/移除/missing 渲染、外部文件组渲染、新增多语言收敛至 `I18nStrings`。
-  - **Ticket B5 (Integration & Polish)**：深层文件定位自动展开、重命名/保存失败错误提示、README 与 ADR 最终更新、打包 `/Applications/GlideMark.app` 终验。
+- **B 期（已全部交付）**：
+  - **Ticket B1 ✅ (Root Model & Persistence)**：`WorkspaceRoot`、`Preferences.workspace_roots`、路径 canonicalize、嵌套/包含校验、missing 恢复、添加/移除根方法及全量独立单元测试。
+  - **Ticket B2 ✅ (Scan Budget & Lazy Tree)**：`ScanBudget`、首层保底、懒展开续扫、truncated 状态、局部刷新机制及测试。
+  - **Ticket B3 ✅ (State Integration)**：删除 `workspace_folder` / `sibling_files`、解耦 `open_file` / `save_doc_as` 换根副作用、外部文件动态派生、移除根保文档测试。
+  - **Ticket B4 ✅ (Drawer UI & i18n)**：工作区 Header（[+] 添加）、多根折叠/展开/移除/missing 渲染、外部文件组渲染、新增多语言收敛至 `I18nStrings`。
+  - **Ticket B5 ✅ (Integration & Polish)**：深层文件定位自动展开、重命名/保存失败错误提示、README 与 ADR 最终更新、打包 `/Applications/GlideMark.app` 终验。
 
 ## 结果 (Consequences)
 
