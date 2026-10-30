@@ -62,7 +62,7 @@ pub fn render_drawer(
                 .gap_1()
                 .child(render_icon_btn(
                     "drawer_collapse_btn",
-                    "收起侧栏 (⌘B)",
+                    &format!("{} (⌘B)", strings.collapse_sidebar),
                     "icons/panel-left.svg",
                     false,
                     theme,
@@ -134,7 +134,7 @@ pub fn render_drawer(
                         };
 
                         let draft_title = draft_doc.map_or_else(
-                            || format!("{} (未打开)", strings.drafts_group),
+                            || strings.draft_unopened.to_string(),
                             |d| d.doc.display_name(),
                         );
                         let draft_key_opt = draft_doc.map(|d| d.key.clone());
@@ -158,9 +158,9 @@ pub fn render_drawer(
                             .font_weight(FontWeight::NORMAL)
                             .tooltip(move |_window, cx| {
                                 let t = if has_open_draft {
-                                    format!("{} (⌘N 聚焦)", strings.drafts_group)
+                                    format!("{} (⌘N)", strings.draft_focus_hint)
                                 } else {
-                                    format!("点击新建{} (⌘N)", strings.drafts_group)
+                                    format!("{} (⌘N)", strings.draft_create_hint)
                                 };
                                 cx.new(|_| DrawerTooltipView { text: t }).into()
                             })
@@ -292,7 +292,7 @@ pub fn render_drawer(
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::NORMAL)
                                     .text_color(theme.text_muted)
-                                    .child("暂无工作区文件夹"),
+                                    .child(strings.workspace_empty),
                             );
                         } else {
                             for (root_idx, root) in workspace_roots.iter().enumerate() {
@@ -423,7 +423,7 @@ pub fn render_drawer(
                                                 .py_1()
                                                 .text_size(px(11.))
                                                 .text_color(theme.text_muted)
-                                                .child("无 Markdown 文件"),
+                                                .child(strings.no_markdown_files),
                                         );
                                     } else {
                                         let mut tree_elements = Vec::new();
@@ -504,7 +504,7 @@ pub fn render_drawer(
                                 let file_name = p
                                     .file_name()
                                     .and_then(|n| n.to_str())
-                                    .unwrap_or("未命名")
+                                    .unwrap_or(strings.untitled_file)
                                     .to_string();
                                 let tooltip_path = p.to_string_lossy().to_string();
                                 let on_select = on_select_doc.clone();

@@ -973,8 +973,9 @@ fn test_remove_workspace_root_preserves_open_docs_in_loose_docs() {
 
     assert_eq!(state.open_docs.len(), 2);
     let loose_before = state.loose_docs();
-    assert!(loose_before.contains(&scratch_key));
+    assert!(!loose_before.contains(&scratch_key));
     assert!(!loose_before.contains(&doc_a_key));
+    assert!(loose_before.is_empty());
 
     // 4. Call remove_workspace_root(0)
     let removed = state.remove_workspace_root(0).unwrap();
@@ -999,11 +1000,11 @@ fn test_remove_workspace_root_preserves_open_docs_in_loose_docs() {
     assert!(open_scratch.doc.buffer.contains("Dirty draft content"));
     assert_eq!(open_scratch.doc.status, DocumentStatus::Modified);
 
-    // 6. Verify: state.loose_docs() smoothly includes both doc_a and scratch
+    // 6. Verify: state.loose_docs() natively excludes scratch and contains doc_a
     let loose_after = state.loose_docs();
-    assert_eq!(loose_after.len(), 2);
+    assert_eq!(loose_after.len(), 1);
     assert!(loose_after.contains(&doc_a_key));
-    assert!(loose_after.contains(&scratch_key));
+    assert!(!loose_after.contains(&scratch_key));
 }
 
 #[test]
@@ -1248,5 +1249,30 @@ fn test_expand_to_file_in_multi_root() {
     let file_opt = sub2.children.iter().find(|n| n.name == "test.md");
     assert!(file_opt.is_some(), "test.md should be found in sub2");
 }
+
+#[test]
+fn test_expand_to_file_truncation_syncs_root_truncated() {
+    let tmp = tempdir().unwrap();
+    let root_a = tmp.path().join("proj_trunc");
+    let nested_dir = root_a.join("sub_trunc");
+    fs::create_dir_all(&nested_dir).unwrap();
+    let nested_file = nested_dir.join("doc.md");
+    fs::write(&nested_file, "# Truncated Doc").unwrap();
+
+    let mut state = clean_test_state(&tmp);
+    let root_idx = state.add_workspace_root(root_a).expect("Add root");
+    assert!(!state.workspace_roots[root_idx].truncated);
+
+    // Deplete global scan budget
+    state.scan_budget.files_left = 0;
+
+    // Call expand_to_file - expanding sub_trunc with 0 budget sets truncated
+    state.expand_to_file(&nested_file);
+    assert!(
+        state.workspace_roots[root_idx].truncated,
+        "root.truncated must be set to true when budget exhausted during expand"
+    );
+}
+
 
 

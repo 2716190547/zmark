@@ -128,6 +128,13 @@ pub struct I18nStrings {
     pub truncated_hint: &'static str,
     pub deferred_hint: &'static str,
     pub remove_root: &'static str,
+    pub draft_unopened: &'static str,
+    pub draft_focus_hint: &'static str,
+    pub draft_create_hint: &'static str,
+    pub workspace_empty: &'static str,
+    pub no_markdown_files: &'static str,
+    pub untitled_file: &'static str,
+    pub collapse_sidebar: &'static str,
 }
 
 pub fn localize_palette_name<'a>(id: &'a str, strings: &'a I18nStrings) -> &'a str {
@@ -216,6 +223,13 @@ static ZH_CN: I18nStrings = I18nStrings {
     truncated_hint: "部分文件已截断",
     deferred_hint: "未扫描，点击加载",
     remove_root: "移除工作区",
+    draft_unopened: "草稿 (未打开)",
+    draft_focus_hint: "聚焦草稿",
+    draft_create_hint: "新建草稿",
+    workspace_empty: "暂无工作区文件夹",
+    no_markdown_files: "无 Markdown 文件",
+    untitled_file: "未命名",
+    collapse_sidebar: "收起侧栏",
 };
 
 static ZH_TW: I18nStrings = I18nStrings {
@@ -275,6 +289,13 @@ static ZH_TW: I18nStrings = I18nStrings {
     truncated_hint: "部分檔案已截斷",
     deferred_hint: "未掃描，點擊載入",
     remove_root: "移除工作區",
+    draft_unopened: "草稿 (未開啟)",
+    draft_focus_hint: "聚焦草稿",
+    draft_create_hint: "新增草稿",
+    workspace_empty: "暫無工作區資料夾",
+    no_markdown_files: "無 Markdown 檔案",
+    untitled_file: "未命名",
+    collapse_sidebar: "收起側欄",
 };
 
 static EN: I18nStrings = I18nStrings {
@@ -334,6 +355,13 @@ static EN: I18nStrings = I18nStrings {
     truncated_hint: "Partially truncated",
     deferred_hint: "Not scanned, click to load",
     remove_root: "Remove Workspace",
+    draft_unopened: "Draft (Not opened)",
+    draft_focus_hint: "Focus Draft",
+    draft_create_hint: "New Draft",
+    workspace_empty: "No workspace folders",
+    no_markdown_files: "No Markdown files",
+    untitled_file: "Untitled",
+    collapse_sidebar: "Collapse Sidebar",
 };
 
 static JA: I18nStrings = I18nStrings {
@@ -393,6 +421,13 @@ static JA: I18nStrings = I18nStrings {
     truncated_hint: "一部のファイルが切り詰められました",
     deferred_hint: "未スキャン、クリックして読み込む",
     remove_root: "ワークスペースを削除",
+    draft_unopened: "下書き (未開封)",
+    draft_focus_hint: "下書きにフォーカス",
+    draft_create_hint: "新規下書き",
+    workspace_empty: "ワークスペースフォルダーがありません",
+    no_markdown_files: "Markdown ファイルがありません",
+    untitled_file: "名称未設定",
+    collapse_sidebar: "サイドバーを折りたたむ",
 };
 
 static KO: I18nStrings = I18nStrings {
@@ -452,6 +487,13 @@ static KO: I18nStrings = I18nStrings {
     truncated_hint: "일부 파일이 생략됨",
     deferred_hint: "스캔되지 않음, 클릭하여 로드",
     remove_root: "작업 공간 제거",
+    draft_unopened: "임시 보관 (열리지 않음)",
+    draft_focus_hint: "임시 보관 포커스",
+    draft_create_hint: "새 임시 보관",
+    workspace_empty: "작업 공간 폴더 없음",
+    no_markdown_files: "Markdown 파일 없음",
+    untitled_file: "제목 없음",
+    collapse_sidebar: "사이드바 접기",
 };
 
 static FR: I18nStrings = I18nStrings {
@@ -511,6 +553,13 @@ static FR: I18nStrings = I18nStrings {
     truncated_hint: "Partiellement tronqué",
     deferred_hint: "Non scanné, cliquer pour charger",
     remove_root: "Supprimer l'espace de travail",
+    draft_unopened: "Brouillon (Non ouvert)",
+    draft_focus_hint: "Activer le brouillon",
+    draft_create_hint: "Nouveau brouillon",
+    workspace_empty: "Aucun dossier d'espace de travail",
+    no_markdown_files: "Aucun fichier Markdown",
+    untitled_file: "Sans titre",
+    collapse_sidebar: "Réduire la barre latérale",
 };
 
 static DE: I18nStrings = I18nStrings {
@@ -570,6 +619,13 @@ static DE: I18nStrings = I18nStrings {
     truncated_hint: "Teilweise abgeschnitten",
     deferred_hint: "Nicht gescannt, zum Laden klicken",
     remove_root: "Arbeitsbereich entfernen",
+    draft_unopened: "Entwurf (Nicht geöffnet)",
+    draft_focus_hint: "Entwurf fokussieren",
+    draft_create_hint: "Neuer Entwurf",
+    workspace_empty: "Keine Arbeitsbereich-Ordner",
+    no_markdown_files: "Keine Markdown-Dateien",
+    untitled_file: "Ohne Titel",
+    collapse_sidebar: "Seitenleiste einklappen",
 };
 
 static ES: I18nStrings = I18nStrings {
@@ -629,6 +685,13 @@ static ES: I18nStrings = I18nStrings {
     truncated_hint: "Parcialmente truncado",
     deferred_hint: "No escaneado, clic para cargar",
     remove_root: "Eliminar espacio de trabajo",
+    draft_unopened: "Borrador (No abierto)",
+    draft_focus_hint: "Enfocar borrador",
+    draft_create_hint: "Nuevo borrador",
+    workspace_empty: "Sin carpetas de espacio de trabajo",
+    no_markdown_files: "Sin archivos Markdown",
+    untitled_file: "Sin título",
+    collapse_sidebar: "Contraer barra lateral",
 };
 
 static RU: I18nStrings = I18nStrings {
@@ -688,6 +751,13 @@ static RU: I18nStrings = I18nStrings {
     truncated_hint: "Частично усечено",
     deferred_hint: "Не сканировано, нажмите для загрузки",
     remove_root: "Удалить рабочую область",
+    draft_unopened: "Черновик (Не открыт)",
+    draft_focus_hint: "Фокус на черновик",
+    draft_create_hint: "Новый черновик",
+    workspace_empty: "Нет папок рабочей области",
+    no_markdown_files: "Нет файлов Markdown",
+    untitled_file: "Без названия",
+    collapse_sidebar: "Свернуть боковую панель",
 };
 
 static PT: I18nStrings = I18nStrings {
@@ -747,4 +817,11 @@ static PT: I18nStrings = I18nStrings {
     truncated_hint: "Parcialmente truncado",
     deferred_hint: "Não verificado, clique para carregar",
     remove_root: "Remover espaço de trabalho",
+    draft_unopened: "Rascunho (Não aberto)",
+    draft_focus_hint: "Focar rascunho",
+    draft_create_hint: "Novo rascunho",
+    workspace_empty: "Nenhuma pasta de espaço de trabalho",
+    no_markdown_files: "Nenhum arquivo Markdown",
+    untitled_file: "Sem título",
+    collapse_sidebar: "Recolher barra lateral",
 };

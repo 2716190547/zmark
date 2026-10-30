@@ -611,11 +611,16 @@ impl AppState {
     pub fn loose_docs(&self) -> Vec<DocKey> {
         self.open_docs
             .iter()
-            .filter(|od| match &od.key {
-                DocKey::Scratch(_) => true,
-                DocKey::Path(p) => self.find_root_index_for_path(p).is_none(),
+            .filter_map(|od| match &od.key {
+                DocKey::Scratch(_) => None,
+                DocKey::Path(p) => {
+                    if self.find_root_index_for_path(p).is_none() {
+                        Some(od.key.clone())
+                    } else {
+                        None
+                    }
+                }
             })
-            .map(|od| od.key.clone())
             .collect()
     }
 
@@ -635,6 +640,9 @@ impl AppState {
                 budget: &mut ScanBudget,
                 entries_used: &mut usize,
                 files_used: &mut usize,
+                is_truncated: &mut bool,
+                avail_entries: usize,
+                avail_files: usize,
             ) -> bool {
                 let mut found = false;
                 for node in nodes.iter_mut() {
@@ -642,15 +650,32 @@ impl AppState {
                     if node.is_dir && (target.starts_with(&node.path) || target_cmp.starts_with(&node_cmp)) {
                         node.is_expanded = true;
                         if node.children.is_empty() {
+                            if avail_entries == 0 || avail_files == 0 {
+                                *is_truncated = true;
+                            }
                             let empty_set = HashSet::new();
                             let prev_e = budget.entries_left;
                             let prev_f = budget.files_left;
-                            let (children, _) = scan_root_layer(&node.path, depth + 1, budget, &empty_set, 4);
+                            let (children, child_trunc) = scan_root_layer(&node.path, depth + 1, budget, &empty_set, 4);
                             *entries_used += prev_e.saturating_sub(budget.entries_left);
                             *files_used += prev_f.saturating_sub(budget.files_left);
                             node.children = children;
+                            if child_trunc {
+                                *is_truncated = true;
+                            }
                         }
-                        expand_in_nodes(&mut node.children, target, target_cmp, depth + 1, budget, entries_used, files_used);
+                        expand_in_nodes(
+                            &mut node.children,
+                            target,
+                            target_cmp,
+                            depth + 1,
+                            budget,
+                            entries_used,
+                            files_used,
+                            is_truncated,
+                            avail_entries,
+                            avail_files,
+                        );
                         found = true;
                     }
                 }
@@ -666,6 +691,7 @@ impl AppState {
             let mut budget = ScanBudget::new(avail_entries, avail_files);
             let mut e_used = 0;
             let mut f_used = 0;
+            let mut is_truncated = self.workspace_roots[root_idx].truncated;
 
             expand_in_nodes(
                 &mut self.workspace_roots[root_idx].tree,
@@ -675,8 +701,12 @@ impl AppState {
                 &mut budget,
                 &mut e_used,
                 &mut f_used,
+                &mut is_truncated,
+                avail_entries,
+                avail_files,
             );
 
+            self.workspace_roots[root_idx].truncated = is_truncated;
             self.workspace_roots[root_idx].entries_used += e_used;
             self.workspace_roots[root_idx].files_used += f_used;
             self.scan_budget.entries_left = self.scan_budget.entries_left.saturating_sub(e_used);
