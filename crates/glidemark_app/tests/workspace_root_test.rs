@@ -2,11 +2,11 @@ use std::fs;
 use tempfile::tempdir;
 
 use glidemark_app::state::{
-    normalize_loaded_roots, root_label, scan_root_layer, AppState, RootAddError, ScanBudget,
-    WorkspaceRoot,
+    normalize_loaded_roots, root_label, scan_root_layer, AppState, DocKey, RootAddError,
+    ScanBudget, WorkspaceRoot,
 };
 use glidemark_core::config::Preferences;
-use glidemark_core::document::Document;
+use glidemark_core::document::{Document, DocumentStatus};
 
 fn clean_test_state(tmp: &tempfile::TempDir) -> AppState {
     let config_path = tmp.path().join("test_config.toml");
@@ -937,5 +937,274 @@ fn test_refresh_root_refunds_quota_before_check_preventing_accidental_deferred()
     assert!(!state.workspace_roots[0].truncated);
     assert_eq!(state.scan_budget.files_left, 0);
     assert_eq!(state.scan_budget.entries_left, 0);
+}
+
+#[test]
+fn test_remove_workspace_root_preserves_open_docs_in_loose_docs() {
+    let tmp = tempdir().unwrap();
+    let root_a = tmp.path().join("root_a");
+    fs::create_dir_all(&root_a).unwrap();
+    let file_a = root_a.join("doc_a.md");
+    fs::write(&file_a, "# Doc A initial").unwrap();
+
+    let mut state = clean_test_state(&tmp);
+
+    // 1. Add workspace root root_a
+    let idx = state.add_workspace_root(root_a.clone()).expect("add root_a");
+    assert_eq!(idx, 0);
+
+    // 2. Open doc_a inside root_a
+    state.open_file(file_a.clone()).unwrap();
+    let doc_a_key = DocKey::Path(file_a.clone());
+    assert_eq!(state.active, Some(doc_a_key.clone()));
+
+    // Make doc_a dirty
+    state.editor.insert_text("\nDirty edit in doc_a");
+    state.sync_from_editor();
+    assert!(state.is_dirty());
+
+    // 3. Open an unnamed draft (scratch) and make it dirty
+    state.focus_or_create_draft();
+    let scratch_key = state.active.clone().expect("Draft slot active");
+    assert!(scratch_key.is_scratch());
+    state.editor.insert_text("Dirty draft content");
+    state.sync_from_editor();
+    assert!(state.is_dirty());
+
+    assert_eq!(state.open_docs.len(), 2);
+    let loose_before = state.loose_docs();
+    assert!(loose_before.contains(&scratch_key));
+    assert!(!loose_before.contains(&doc_a_key));
+
+    // 4. Call remove_workspace_root(0)
+    let removed = state.remove_workspace_root(0).unwrap();
+    assert!(removed.is_some());
+    assert!(state.workspace_roots.is_empty());
+
+    // 5. Verify: open_docs still contains doc_a and scratch; dirty status intact
+    assert_eq!(state.open_docs.len(), 2);
+    let open_doc_a = state
+        .open_docs
+        .iter()
+        .find(|d| d.key == doc_a_key)
+        .expect("doc_a preserved");
+    assert!(open_doc_a.doc.buffer.contains("Dirty edit in doc_a"));
+    assert_eq!(open_doc_a.doc.status, DocumentStatus::Modified);
+
+    let open_scratch = state
+        .open_docs
+        .iter()
+        .find(|d| d.key == scratch_key)
+        .expect("scratch preserved");
+    assert!(open_scratch.doc.buffer.contains("Dirty draft content"));
+    assert_eq!(open_scratch.doc.status, DocumentStatus::Modified);
+
+    // 6. Verify: state.loose_docs() smoothly includes both doc_a and scratch
+    let loose_after = state.loose_docs();
+    assert_eq!(loose_after.len(), 2);
+    assert!(loose_after.contains(&doc_a_key));
+    assert!(loose_after.contains(&scratch_key));
+}
+
+#[test]
+fn test_open_external_file_does_not_pollute_roots_and_enters_loose_docs() {
+    let tmp = tempdir().unwrap();
+    let root_a = tmp.path().join("root_a");
+    fs::create_dir_all(&root_a).unwrap();
+    let file_inside = root_a.join("inside.md");
+    fs::write(&file_inside, "# Inside root").unwrap();
+
+    let external_dir = tmp.path().join("external_folder");
+    fs::create_dir_all(&external_dir).unwrap();
+    let external_file = external_dir.join("external.md");
+    fs::write(&external_file, "# External Document").unwrap();
+
+    let mut state = clean_test_state(&tmp);
+
+    // 1. Add root_a
+    let idx = state.add_workspace_root(root_a.clone()).expect("add root_a");
+    assert_eq!(idx, 0);
+    assert_eq!(state.workspace_roots.len(), 1);
+
+    let tree_len_before = state.workspace_roots[0].tree.len();
+    let files_used_before = state.workspace_roots[0].files_used;
+
+    // 2. Open external file
+    state.open_file(external_file.clone()).expect("open external file");
+
+    // 3. Verify: state.workspace_roots.len() remains 1, no pollution
+    assert_eq!(
+        state.workspace_roots.len(),
+        1,
+        "Workspace roots must not be polluted by opening external file"
+    );
+    let canonical_root_a = fs::canonicalize(&root_a).unwrap();
+    assert_eq!(state.workspace_roots[0].path, canonical_root_a);
+
+    // 4. Verify: state.active switched to external.md
+    let external_key = DocKey::Path(external_file.clone());
+    assert_eq!(state.active, Some(external_key.clone()));
+
+    // 5. Verify: state.loose_docs() contains external.md
+    let loose = state.loose_docs();
+    assert!(
+        loose.contains(&external_key),
+        "External document must enter loose_docs"
+    );
+
+    // 6. Verify: root_a tree and quota usage are untouched
+    assert_eq!(
+        state.workspace_roots[0].tree.len(),
+        tree_len_before,
+        "Root tree must remain unchanged"
+    );
+    assert_eq!(
+        state.workspace_roots[0].files_used,
+        files_used_before,
+        "Files used quota must remain unchanged"
+    );
+    assert!(
+        !state.workspace_roots[0]
+            .tree
+            .iter()
+            .any(|n| n.name == "external.md"),
+        "External file must not appear in root_a tree"
+    );
+}
+
+#[test]
+fn test_root_label_disambiguation_hierarchical() {
+    // 1. Single root: displays short folder name
+    let single_root = vec![WorkspaceRoot {
+        path: std::path::PathBuf::from("/path1/shared/notes"),
+        tree: Vec::new(),
+        is_expanded: true,
+        is_missing: false,
+        truncated: false,
+        entries_used: 0,
+        files_used: 0,
+        deferred: false,
+    }];
+    assert_eq!(root_label(&single_root, 0), "notes");
+
+    // 2. Colliding folder names with distinct parent directories: disambiguates via parent directory
+    let colliding_different_parents = vec![
+        WorkspaceRoot {
+            path: std::path::PathBuf::from("/work/shared/notes"),
+            tree: Vec::new(),
+            is_expanded: true,
+            is_missing: false,
+            truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
+        },
+        WorkspaceRoot {
+            path: std::path::PathBuf::from("/home/personal/notes"),
+            tree: Vec::new(),
+            is_expanded: true,
+            is_missing: false,
+            truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
+        },
+    ];
+    assert_eq!(
+        root_label(&colliding_different_parents, 0),
+        "notes \u{2014} shared"
+    );
+    assert_eq!(
+        root_label(&colliding_different_parents, 1),
+        "notes \u{2014} personal"
+    );
+
+    // 3. Colliding folder names AND identical parent directories: fallback to full path
+    let colliding_same_parents = vec![
+        WorkspaceRoot {
+            path: std::path::PathBuf::from("/path1/shared/notes"),
+            tree: Vec::new(),
+            is_expanded: true,
+            is_missing: false,
+            truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
+        },
+        WorkspaceRoot {
+            path: std::path::PathBuf::from("/path2/shared/notes"),
+            tree: Vec::new(),
+            is_expanded: true,
+            is_missing: false,
+            truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
+        },
+    ];
+    assert_eq!(
+        root_label(&colliding_same_parents, 0),
+        "/path1/shared/notes"
+    );
+    assert_eq!(
+        root_label(&colliding_same_parents, 1),
+        "/path2/shared/notes"
+    );
+
+    // 4. Missing root vs normal root disambiguation:
+    // A normal root does not see a missing root as a collision (keeps short name),
+    // but the missing root disambiguates against the normal root.
+    let normal_and_missing = vec![
+        WorkspaceRoot {
+            path: std::path::PathBuf::from("/path1/shared/notes"),
+            tree: Vec::new(),
+            is_expanded: true,
+            is_missing: false,
+            truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
+        },
+        WorkspaceRoot {
+            path: std::path::PathBuf::from("/path2/backup/notes"),
+            tree: Vec::new(),
+            is_expanded: false,
+            is_missing: true,
+            truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
+        },
+    ];
+    // Normal root 0 does not conflict with missing root 1 -> short name
+    assert_eq!(root_label(&normal_and_missing, 0), "notes");
+    // Missing root 1 conflicts with normal root 0 -> parent disambiguated
+    assert_eq!(root_label(&normal_and_missing, 1), "notes \u{2014} backup");
+
+    // Missing roots colliding with each other both disambiguate
+    let two_missing = vec![
+        WorkspaceRoot {
+            path: std::path::PathBuf::from("/path1/shared/notes"),
+            tree: Vec::new(),
+            is_expanded: false,
+            is_missing: true,
+            truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
+        },
+        WorkspaceRoot {
+            path: std::path::PathBuf::from("/path2/backup/notes"),
+            tree: Vec::new(),
+            is_expanded: false,
+            is_missing: true,
+            truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
+        },
+    ];
+    assert_eq!(root_label(&two_missing, 0), "notes \u{2014} shared");
+    assert_eq!(root_label(&two_missing, 1), "notes \u{2014} backup");
 }
 

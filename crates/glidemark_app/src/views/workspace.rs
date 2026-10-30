@@ -304,9 +304,14 @@ impl WorkspaceView {
             let _ = self.state.save();
             cx.notify();
         } else {
-            let suggested_dir = self.state.workspace_folder.clone().unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-            });
+            let suggested_dir = self
+                .state
+                .workspace_roots
+                .first()
+                .map(|r| r.path.clone())
+                .unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                });
             let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
             cx.spawn(async move |this, app| {
                 if let Ok(Ok(Some(path))) = rx.await {
@@ -375,9 +380,14 @@ impl WorkspaceView {
         self.state.pending_close = None;
         cx.notify();
 
-        let suggested_dir = self.state.workspace_folder.clone().unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        });
+        let suggested_dir = self
+            .state
+            .workspace_roots
+            .first()
+            .map(|r| r.path.clone())
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            });
         let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
 
         cx.spawn(async move |this, app| {
@@ -906,7 +916,7 @@ impl Render for WorkspaceView {
                     if let Ok(Ok(Some(mut paths))) = rx.await {
                         if let Some(path) = paths.pop() {
                             let _ = this.update(app, |this, cx| {
-                                this.state.set_workspace_folder(path);
+                                let _ = this.state.add_workspace_root(path);
                                 cx.notify();
                             });
                         }
@@ -1059,7 +1069,7 @@ impl Render for WorkspaceView {
                             let new_name = this.rename_buffer.trim();
                             if !new_name.is_empty() {
                                 let _ = this.state.rename_file(new_name);
-                                this.state.refresh_sibling_files();
+                                this.state.refresh_all_roots();
                             }
                             this.is_renaming = false;
                             cx.notify();
@@ -1226,7 +1236,7 @@ impl Render for WorkspaceView {
                                     &self.state.open_docs,
                                     self.state.active.as_ref(),
                                     is_dirty,
-                                    self.state.workspace_folder.as_ref(),
+                                    self.state.workspace_roots.first().map(|r| &r.path),
                                     &self.state.doc.parsed.headings(),
                                     theme,
                                     strings,

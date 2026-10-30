@@ -1,4 +1,4 @@
-use glidemark_app::state::{AppState, CloseDecision, DocKey, ViewMode};
+use glidemark_app::state::{AppState, CloseDecision, DocKey, RootAddError, ViewMode};
 use glidemark_core::config::ThemeMode;
 use glidemark_core::document::Document;
 use glidemark_core::i18n::SupportedLocale;
@@ -45,11 +45,14 @@ fn test_drawer_and_sibling_files_detection() {
 
     // Initially drawer closed
     assert!(!state.drawer_open);
-    // Sibling files detected
-    assert_eq!(state.sibling_files.len(), 2);
-    assert!(state.sibling_files.contains(&file1));
-    assert!(state.sibling_files.contains(&file2));
-    assert!(!state.sibling_files.contains(&other));
+
+    // Add workspace root and verify file tree is loaded correctly
+    let idx = state.add_workspace_root(dir.path().to_path_buf()).unwrap();
+    assert_eq!(idx, 0);
+    assert_eq!(state.workspace_roots[0].tree.len(), 2);
+    assert!(state.workspace_roots[0].tree.iter().any(|node| node.name == "doc1.md"));
+    assert!(state.workspace_roots[0].tree.iter().any(|node| node.name == "doc2.md"));
+    assert!(!state.workspace_roots[0].tree.iter().any(|node| node.name == "ignored.txt"));
 
     // Toggle drawer
     state.toggle_drawer();
@@ -269,12 +272,16 @@ fn test_workspace_folder_and_tabs() {
     let doc = Document::new_scratch();
     let mut state = AppState::new_isolated(doc);
 
-    // Set workspace folder to root
-    state.set_workspace_folder(root.path().to_path_buf());
-    assert_eq!(state.workspace_folder.as_ref(), Some(&root.path().to_path_buf()));
-    assert_eq!(state.sibling_files.len(), 2);
-    assert!(state.sibling_files.contains(&f1));
-    assert!(state.sibling_files.contains(&f2));
+    let canonical_root = fs::canonicalize(root.path()).unwrap();
+    let idx = state.add_workspace_root(root.path().to_path_buf()).unwrap();
+    assert_eq!(idx, 0);
+    assert_eq!(state.workspace_roots.len(), 1);
+    assert_eq!(state.workspace_roots[0].path, canonical_root);
+    assert!(state.preferences.workspace_roots.contains(&canonical_root));
+
+    let label = glidemark_app::state::root_label(&state.workspace_roots, 0);
+    let expected_name = canonical_root.file_name().unwrap().to_str().unwrap();
+    assert_eq!(label, expected_name);
 }
 
 #[test]
@@ -748,29 +755,45 @@ fn test_workspace_folder_symlink_defense_and_robustness() {
     fs::write(&f_nm, "# Package").unwrap();
 
     let mut state = AppState::new_isolated(Document::new_scratch());
-    state.set_workspace_folder(root.to_path_buf());
+    let canonical_root = fs::canonicalize(root).unwrap();
 
-    // Verified:
-    // - f1, f2, f3, f_sub are detected (4 markdown files)
-    // - .hidden and node_modules are ignored
-    // - symlink loop does not cause infinite recursion or duplicate f1/f2/f3
-    assert_eq!(state.sibling_files.len(), 4);
-    assert!(state.sibling_files.contains(&f1));
-    assert!(state.sibling_files.contains(&f2));
-    assert!(state.sibling_files.contains(&f3));
-    assert!(state.sibling_files.contains(&f_sub));
-    assert!(!state.sibling_files.contains(&f_hidden));
-    assert!(!state.sibling_files.contains(&f_nm));
+    // Adding valid root canonicalizes path and scans tree safely without infinite loop
+    let idx = state.add_workspace_root(root.to_path_buf()).unwrap();
+    assert_eq!(idx, 0);
+    assert_eq!(state.workspace_roots[0].path, canonical_root);
 
-    // 4. Passing a file path to set_workspace_folder gracefully resolves to parent dir
-    state.set_workspace_folder(f1.clone());
-    assert_eq!(state.workspace_folder.as_ref(), Some(&root.to_path_buf()));
-    assert_eq!(state.sibling_files.len(), 4);
+    // .hidden and node_modules are ignored in the scanned tree
+    let tree = &state.workspace_roots[0].tree;
+    assert!(!tree.iter().any(|node| node.name == ".hidden"));
+    assert!(!tree.iter().any(|node| node.name == "node_modules"));
+    assert!(tree.iter().any(|node| node.name == "sub"));
+    assert!(tree.iter().any(|node| node.name == "test.md"));
 
-    // 5. Empty folder / 0 markdown files
+    // Passing a file path returns NotADirectory
+    assert_eq!(
+        state.add_workspace_root(f1.clone()),
+        Err(RootAddError::NotADirectory)
+    );
+
+    // Adding a nested child directory is rejected with NestedInExisting
+    assert_eq!(
+        state.add_workspace_root(sub.clone()),
+        Err(RootAddError::NestedInExisting(canonical_root.clone()))
+    );
+
+    // Duplicate addition is rejected with AlreadyExists
+    assert_eq!(
+        state.add_workspace_root(root.to_path_buf()),
+        Err(RootAddError::AlreadyExists)
+    );
+
+    // Adding an empty directory works cleanly
     let empty_dir = tempdir().unwrap();
-    state.set_workspace_folder(empty_dir.path().to_path_buf());
-    assert_eq!(state.sibling_files.len(), 0);
+    let empty_canonical = fs::canonicalize(empty_dir.path()).unwrap();
+    let empty_idx = state.add_workspace_root(empty_dir.path().to_path_buf()).unwrap();
+    assert_eq!(empty_idx, 1);
+    assert_eq!(state.workspace_roots[1].path, empty_canonical);
+    assert!(state.workspace_roots[1].tree.is_empty());
 }
 
 #[test]
@@ -803,21 +826,25 @@ fn test_workspace_tree_recursive_scan() {
     fs::write(&f_ignored, "# Ignored").unwrap();
 
     let mut state = AppState::new_isolated(Document::new_scratch());
-    state.set_workspace_folder(root.to_path_buf());
+    let idx = state.add_workspace_root(root.to_path_buf()).unwrap();
 
     // Directory comes before file in root
-    assert_eq!(state.file_tree.len(), 2);
-    assert_eq!(state.file_tree[0].name, "docs");
-    assert!(state.file_tree[0].is_dir);
-    assert_eq!(state.file_tree[1].name, "guide.md");
-    assert!(!state.file_tree[1].is_dir);
+    let tree = &state.workspace_roots[idx].tree;
+    assert_eq!(tree.len(), 2);
+    assert_eq!(tree[0].name, "docs");
+    assert!(tree[0].is_dir);
+    assert_eq!(tree[1].name, "guide.md");
+    assert!(!tree[1].is_dir);
 
     // node_modules is ignored
-    assert!(!state.file_tree.iter().any(|n| n.name == "node_modules"));
+    assert!(!tree.iter().any(|n| n.name == "node_modules"));
 
-    // docs children are scanned (api.md and internal directory)
-    assert!(state.file_tree[0].children.iter().any(|n| n.name == "api.md"));
-    assert!(state.file_tree[0].children.iter().any(|n| n.name == "internal"));
+    // Expanding docs populates children (api.md and internal directory)
+    let canonical_docs = fs::canonicalize(&docs).unwrap();
+    state.toggle_root_folder(idx, &canonical_docs);
+    let docs_node = &state.workspace_roots[idx].tree[0];
+    assert!(docs_node.children.iter().any(|n| n.name == "api.md"));
+    assert!(docs_node.children.iter().any(|n| n.name == "internal"));
 }
 
 #[test]
@@ -833,34 +860,32 @@ fn test_workspace_tree_expand_and_collapse() {
     fs::write(&f_doc, "# Doc1").unwrap();
 
     let mut state = AppState::new_isolated(Document::new_scratch());
-    state.set_workspace_folder(root.to_path_buf());
+    let idx = state.add_workspace_root(root.to_path_buf()).unwrap();
+
+    let canonical_docs = fs::canonicalize(&docs).unwrap();
 
     // Initially subdirectories are collapsed
-    let rows_init = state.flatten_tree();
-    // Only "docs" and "index.md" visible at depth 0
-    assert_eq!(rows_init.len(), 2);
-    assert_eq!(rows_init[0].name, "docs");
-    assert!(!rows_init[0].is_expanded);
-    assert_eq!(rows_init[0].depth, 0);
-    assert_eq!(rows_init[1].name, "index.md");
-    assert_eq!(rows_init[1].depth, 0);
+    let tree_init = &state.workspace_roots[idx].tree;
+    assert_eq!(tree_init.len(), 2);
+    assert_eq!(tree_init[0].name, "docs");
+    assert!(!tree_init[0].is_expanded);
+    assert!(tree_init[0].children.is_empty());
+    assert_eq!(tree_init[1].name, "index.md");
 
     // Expand "docs"
-    state.toggle_tree_folder(&docs);
-    let rows_expanded = state.flatten_tree();
-    assert_eq!(rows_expanded.len(), 3);
-    assert_eq!(rows_expanded[0].name, "docs");
-    assert!(rows_expanded[0].is_expanded);
-    assert_eq!(rows_expanded[1].name, "doc1.md");
-    assert_eq!(rows_expanded[1].depth, 1);
-    assert_eq!(rows_expanded[2].name, "index.md");
-    assert_eq!(rows_expanded[2].depth, 0);
+    let toggled = state.toggle_root_folder(idx, &canonical_docs);
+    assert!(toggled);
+    let tree_expanded = &state.workspace_roots[idx].tree;
+    assert!(tree_expanded[0].is_expanded);
+    assert_eq!(tree_expanded[0].children.len(), 1);
+    assert_eq!(tree_expanded[0].children[0].name, "doc1.md");
 
     // Collapse "docs"
-    state.toggle_tree_folder(&docs);
-    let rows_collapsed = state.flatten_tree();
-    assert_eq!(rows_collapsed.len(), 2);
-    assert!(!rows_collapsed[0].is_expanded);
+    let toggled_again = state.toggle_root_folder(idx, &canonical_docs);
+    assert!(toggled_again);
+    let tree_collapsed = &state.workspace_roots[idx].tree;
+    assert!(!tree_collapsed[0].is_expanded);
+    assert_eq!(tree_collapsed[0].children.len(), 1);
 }
 
 #[test]
@@ -874,15 +899,21 @@ fn test_workspace_tree_switch_folder() {
     fs::write(&f2, "# B").unwrap();
 
     let mut state = AppState::new_isolated(Document::new_scratch());
-    state.set_workspace_folder(tmp1.path().to_path_buf());
-    assert_eq!(state.file_tree.len(), 1);
-    assert_eq!(state.file_tree[0].name, "a.md");
+    let idx1 = state.add_workspace_root(tmp1.path().to_path_buf()).unwrap();
+    assert_eq!(idx1, 0);
+    assert_eq!(state.workspace_roots[0].tree.len(), 1);
+    assert_eq!(state.workspace_roots[0].tree[0].name, "a.md");
 
-    // Switch to folder 2
-    state.set_workspace_folder(tmp2.path().to_path_buf());
-    assert_eq!(state.workspace_folder.as_ref(), Some(&tmp2.path().to_path_buf()));
-    assert_eq!(state.file_tree.len(), 1);
-    assert_eq!(state.file_tree[0].name, "b.md");
+    // Add root 2 alongside root 1
+    let idx2 = state.add_workspace_root(tmp2.path().to_path_buf()).unwrap();
+    assert_eq!(idx2, 1);
+    assert_eq!(state.workspace_roots[1].tree.len(), 1);
+    assert_eq!(state.workspace_roots[1].tree[0].name, "b.md");
+
+    // Remove root 1, leaving root 2
+    state.remove_workspace_root(0).unwrap();
+    assert_eq!(state.workspace_roots.len(), 1);
+    assert_eq!(state.workspace_roots[0].tree[0].name, "b.md");
 }
 
 #[test]
@@ -895,17 +926,18 @@ fn test_single_file_open_parent_fallback() {
     fs::write(&f_single, "# Sample Readme").unwrap();
     fs::write(&f_other, "# Spec").unwrap();
 
-    // Start with empty scratch doc with no workspace folder
+    // Start with empty scratch doc with no workspace roots
     let mut state = AppState::new_isolated(Document::new_scratch());
-    assert!(state.workspace_folder.is_none());
+    assert!(state.workspace_roots.is_empty());
 
     // Open single file
     state.open_file(f_single.clone()).unwrap();
 
-    // Automatically falls back to parent directory as workspace folder
-    assert_eq!(state.workspace_folder.as_ref(), Some(&nested));
-    let rows = state.flatten_tree();
-    assert_eq!(rows.len(), 2);
-    assert!(rows.iter().any(|r| r.name == "readme.md"));
-    assert!(rows.iter().any(|r| r.name == "spec.md"));
+    // Decoupled: Opening a file does NOT automatically add its parent to workspace_roots
+    assert!(state.workspace_roots.is_empty());
+    assert_eq!(state.active, Some(DocKey::Path(f_single.clone())));
+
+    // The opened external file enters loose_docs
+    let loose = state.loose_docs();
+    assert!(loose.contains(&DocKey::Path(f_single)));
 }

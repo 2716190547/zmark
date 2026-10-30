@@ -147,13 +147,15 @@ pub struct ScanBudget {
 impl Default for ScanBudget {
     fn default() -> Self {
         Self {
-            entries_left: 2000,
-            files_left: 400,
+            entries_left: Self::MAX_GLOBAL_ENTRIES,
+            files_left: Self::MAX_GLOBAL_FILES,
         }
     }
 }
 
 impl ScanBudget {
+    pub const MAX_GLOBAL_ENTRIES: usize = 2000;
+    pub const MAX_GLOBAL_FILES: usize = 400;
     pub const PER_ROOT_ENTRY_CAP: usize = 800;
     pub const PER_ROOT_FILE_CAP: usize = 150;
     pub const FIRST_LAYER_FLOOR_ENTRIES: usize = 100;
@@ -399,7 +401,6 @@ pub struct AppState {
     pub active: Option<DocKey>,
     pub next_scratch_id: u64,
     pub pending_close: Option<PendingClose>,
-    pub workspace_folder: Option<PathBuf>,
     #[allow(dead_code)]
     pub workspace_roots: Vec<WorkspaceRoot>,
     #[allow(dead_code)]
@@ -416,7 +417,6 @@ pub struct AppState {
     pub preferences: Preferences,
     pub theme: ThemeColors,
     pub strings: &'static I18nStrings,
-    pub sibling_files: Vec<PathBuf>,
     pub file_tree: Vec<FileTreeNode>,
     pub is_system_dark: bool,
     pub is_quitting: bool,
@@ -466,7 +466,6 @@ impl AppState {
         let strings = get_strings(preferences.locale);
         let editor = EditorEngine::new(&doc.buffer);
 
-        let workspace_folder = doc.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf());
         let normalized = normalize_loaded_roots(&preferences.workspace_roots);
         let workspace_roots = normalized.roots;
         let discarded_roots = normalized.discarded;
@@ -487,7 +486,6 @@ impl AppState {
             active,
             next_scratch_id: 2,
             pending_close: None,
-            workspace_folder,
             workspace_roots,
             scan_budget: ScanBudget::default(),
             discarded_roots,
@@ -501,12 +499,10 @@ impl AppState {
             preferences,
             theme,
             strings,
-            sibling_files: Vec::new(),
             file_tree: Vec::new(),
             is_system_dark: false,
             is_quitting: false,
         };
-        state.refresh_sibling_files();
         state.refresh_all_roots();
         state
     }
@@ -518,9 +514,6 @@ impl AppState {
     #[allow(dead_code)]
     pub fn toggle_drawer(&mut self) {
         self.drawer_open = !self.drawer_open;
-        if self.drawer_open {
-            self.refresh_sibling_files();
-        }
     }
 
     pub fn set_drawer_tab(&mut self, tab: DrawerTab) {
@@ -610,32 +603,13 @@ impl AppState {
         self.doc.is_parse_stale()
     }
 
-    pub fn refresh_sibling_files(&mut self) {
-        self.sibling_files.clear();
-        let target_dir = if let Some(ref folder) = self.workspace_folder {
-            Some(folder.clone())
-        } else if let Some(ref path) = self.doc.path {
-            path.parent().map(|p| p.to_path_buf())
-        } else {
-            None
-        };
-
-        if let Some(dir) = target_dir {
-            let mut scanned = 0;
-            scan_markdown_files(&dir, &mut self.sibling_files, 0, &mut scanned);
-        }
-        self.sibling_files.sort();
-        self.refresh_workspace_tree();
-    }
-
+    #[allow(dead_code)]
     pub fn refresh_workspace_tree(&mut self) {
-        let target_dir = if let Some(ref folder) = self.workspace_folder {
-            Some(folder.clone())
-        } else if let Some(ref path) = self.doc.path {
-            path.parent().map(|p| p.to_path_buf())
-        } else {
-            None
-        };
+        let target_dir = self
+            .workspace_roots
+            .first()
+            .map(|r| r.path.clone())
+            .or_else(|| self.doc.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf()));
 
         if let Some(dir) = target_dir {
             let mut expanded_paths = std::collections::HashSet::new();
@@ -645,6 +619,33 @@ impl AppState {
         } else {
             self.file_tree.clear();
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn find_root_index_for_path(&self, path: &Path) -> Option<usize> {
+        let cmp_path = resolve_cmp_path(path);
+        for (idx, r) in self.workspace_roots.iter().enumerate() {
+            if r.is_missing {
+                continue;
+            }
+            let r_cmp = resolve_cmp_path(&r.path);
+            if cmp_path.starts_with(&r_cmp) || path.starts_with(&r.path) {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    #[allow(dead_code)]
+    pub fn loose_docs(&self) -> Vec<DocKey> {
+        self.open_docs
+            .iter()
+            .filter(|od| match &od.key {
+                DocKey::Scratch(_) => true,
+                DocKey::Path(p) => self.find_root_index_for_path(p).is_none(),
+            })
+            .map(|od| od.key.clone())
+            .collect()
     }
 
     pub fn toggle_tree_folder(&mut self, target: &std::path::Path) {
@@ -713,16 +714,6 @@ impl AppState {
         }
         collect(&self.file_tree, 0, &mut rows);
         rows
-    }
-
-    pub fn set_workspace_folder(&mut self, folder: PathBuf) {
-        let dir = if folder.is_file() {
-            folder.parent().map(|p| p.to_path_buf()).unwrap_or(folder)
-        } else {
-            folder
-        };
-        self.workspace_folder = Some(dir);
-        self.refresh_sibling_files();
     }
 
     #[allow(dead_code)]
@@ -822,8 +813,8 @@ impl AppState {
         let refund_e = self.workspace_roots[root_idx].entries_used;
         let refund_f = self.workspace_roots[root_idx].files_used;
 
-        let total_e = (self.scan_budget.entries_left + refund_e).min(2000);
-        let total_f = (self.scan_budget.files_left + refund_f).min(400);
+        let total_e = (self.scan_budget.entries_left + refund_e).min(ScanBudget::MAX_GLOBAL_ENTRIES);
+        let total_f = (self.scan_budget.files_left + refund_f).min(ScanBudget::MAX_GLOBAL_FILES);
 
         if total_f == 0 {
             self.workspace_roots[root_idx].deferred = true;
@@ -893,7 +884,7 @@ impl AppState {
 
             if root_files == 0 {
                 self.workspace_roots[idx].deferred = true;
-                self.workspace_roots[idx].tree.clear();
+                self.workspace_roots[idx].truncated = false;
                 self.workspace_roots[idx].entries_used = 0;
                 self.workspace_roots[idx].files_used = 0;
                 continue;
@@ -1040,9 +1031,11 @@ impl AppState {
             return Err(format!("Failed to save preferences: {}", e));
         }
         self.scan_budget.entries_left =
-            (self.scan_budget.entries_left.saturating_add(removed.entries_used)).min(2000);
+            (self.scan_budget.entries_left.saturating_add(removed.entries_used))
+                .min(ScanBudget::MAX_GLOBAL_ENTRIES);
         self.scan_budget.files_left =
-            (self.scan_budget.files_left.saturating_add(removed.files_used)).min(400);
+            (self.scan_budget.files_left.saturating_add(removed.files_used))
+                .min(ScanBudget::MAX_GLOBAL_FILES);
         Ok(Some(removed))
     }
 
@@ -1059,17 +1052,6 @@ impl AppState {
 
     pub fn open_file(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
         self.sync_from_editor();
-
-        // Automatic workspace root fallback: if outside current workspace, set parent as root
-        if let Some(parent) = path.parent() {
-            let should_switch = match &self.workspace_folder {
-                Some(folder) => !path.starts_with(folder),
-                None => true,
-            };
-            if should_switch {
-                self.workspace_folder = Some(parent.to_path_buf());
-            }
-        }
 
         let target_key = DocKey::Path(path.clone());
 
@@ -1101,7 +1083,9 @@ impl AppState {
         self.active = Some(target_key);
         self.doc = new_doc;
         self.editor.reset_text(&self.doc.buffer);
-        self.refresh_sibling_files();
+        if let Some(idx) = self.find_root_index_for_path(&path) {
+            self.refresh_root(idx);
+        }
         self.expand_to_file(&path);
         Ok(())
     }
@@ -1119,7 +1103,6 @@ impl AppState {
             if let DocKey::Path(ref p) = key {
                 self.expand_to_file(p);
             }
-            self.refresh_sibling_files();
         }
     }
 
@@ -1144,7 +1127,6 @@ impl AppState {
         self.active = Some(key);
         self.doc = scratch;
         self.editor.reset_text("");
-        self.refresh_sibling_files();
     }
 
     pub fn plan_close(&self, key: &DocKey) -> Option<CloseDecision> {
@@ -1280,7 +1262,6 @@ impl AppState {
                 }
             }
         }
-        self.refresh_sibling_files();
     }
 
     pub fn load_file(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
@@ -1343,7 +1324,16 @@ impl AppState {
             od.doc = self.doc.clone();
         }
         self.active = Some(new_key);
-        self.refresh_sibling_files();
+        let old_root_idx = self.find_root_index_for_path(&old_path);
+        let new_root_idx = self.find_root_index_for_path(&new_path);
+        if let Some(idx) = old_root_idx {
+            self.refresh_root(idx);
+        }
+        if let Some(idx) = new_root_idx {
+            if Some(idx) != old_root_idx {
+                self.refresh_root(idx);
+            }
+        }
         self.expand_to_file(&new_path);
         Ok(())
     }
@@ -1400,17 +1390,9 @@ impl AppState {
             self.doc = candidate_doc;
         }
 
-        if let Some(parent) = path.parent() {
-            let should_switch = match &self.workspace_folder {
-                Some(folder) => !path.starts_with(folder),
-                None => true,
-            };
-            if should_switch {
-                self.workspace_folder = Some(parent.to_path_buf());
-            }
+        if let Some(idx) = self.find_root_index_for_path(&path) {
+            self.refresh_root(idx);
         }
-
-        self.refresh_sibling_files();
         self.expand_to_file(&path);
         Ok(())
     }
@@ -1438,46 +1420,6 @@ impl AppState {
             return false;
         }
         self.doc.status == DocumentStatus::ConflictOnDisk
-    }
-}
-
-fn scan_markdown_files(dir: &std::path::Path, list: &mut Vec<PathBuf>, depth: usize, scanned: &mut usize) {
-    if depth > 2 || list.len() >= 100 || *scanned >= 1000 {
-        return;
-    }
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            *scanned += 1;
-            if list.len() >= 100 || *scanned >= 1000 {
-                break;
-            }
-            let file_type = match entry.file_type() {
-                Ok(ft) => ft,
-                Err(_) => continue,
-            };
-            let p = entry.path();
-            let name = p.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-            if name.starts_with('.')
-                || name == "target"
-                || name == "node_modules"
-                || name == "build"
-                || name == "dist"
-                || name == "dev"
-                || name == "proc"
-                || name == "sys"
-            {
-                continue;
-            }
-            if file_type.is_file() {
-                if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-                    if ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown") {
-                        list.push(p);
-                    }
-                }
-            } else if file_type.is_dir() {
-                scan_markdown_files(&p, list, depth + 1, scanned);
-            }
-        }
     }
 }
 
