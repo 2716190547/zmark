@@ -120,6 +120,14 @@ pub struct I18nStrings {
     pub auto_save_on_blur_label: &'static str,
     pub tab_size_label: &'static str,
     pub shortcuts_label: &'static str,
+    pub add_folder: &'static str,
+    pub loose_files: &'static str,
+    pub drafts_group: &'static str,
+    pub workspace_group: &'static str,
+    pub missing_root: &'static str,
+    pub truncated_hint: &'static str,
+    pub deferred_hint: &'static str,
+    pub remove_root: &'static str,
 }
 
 pub fn localize_palette_name<'a>(id: &'a str, strings: &'a I18nStrings) -> &'a str {
@@ -200,6 +208,14 @@ static ZH_CN: I18nStrings = I18nStrings {
     auto_save_on_blur_label: "窗口失焦时立即保存",
     tab_size_label: "Tab 缩进空格数",
     shortcuts_label: "快捷键指南",
+    add_folder: "添加文件夹",
+    loose_files: "外部文件",
+    drafts_group: "草稿",
+    workspace_group: "工作区",
+    missing_root: "路径不可用",
+    truncated_hint: "部分文件已截断",
+    deferred_hint: "未扫描，点击加载",
+    remove_root: "移除工作区",
 };
 
 static ZH_TW: I18nStrings = I18nStrings {
@@ -251,6 +267,14 @@ static ZH_TW: I18nStrings = I18nStrings {
     auto_save_on_blur_label: "視窗失焦時立即儲存",
     tab_size_label: "Tab 縮排空格數",
     shortcuts_label: "快速鍵指南",
+    add_folder: "新增資料夾",
+    loose_files: "外部檔案",
+    drafts_group: "草稿",
+    workspace_group: "工作區",
+    missing_root: "路徑不可用",
+    truncated_hint: "部分檔案已截斷",
+    deferred_hint: "未掃描，點擊載入",
+    remove_root: "移除工作區",
 };
 
 static EN: I18nStrings = I18nStrings {
@@ -302,6 +326,14 @@ static EN: I18nStrings = I18nStrings {
     auto_save_on_blur_label: "Save immediately when window loses focus",
     tab_size_label: "Tab Size (Spaces)",
     shortcuts_label: "Keyboard Shortcuts",
+    add_folder: "Add Folder",
+    loose_files: "External Files",
+    drafts_group: "Drafts",
+    workspace_group: "Workspaces",
+    missing_root: "Path Unavailable",
+    truncated_hint: "Partially truncated",
+    deferred_hint: "Not scanned, click to load",
+    remove_root: "Remove Workspace",
 };
 
 static JA: I18nStrings = I18nStrings {
@@ -353,6 +385,14 @@ static JA: I18nStrings = I18nStrings {
     auto_save_on_blur_label: "フォーカス喪失時に即時保存",
     tab_size_label: "タブ幅 (スペース)",
     shortcuts_label: "キーボードショートカット",
+    add_folder: "フォルダーを追加",
+    loose_files: "外部ファイル",
+    drafts_group: "下書き",
+    workspace_group: "ワークスペース",
+    missing_root: "パスが無効です",
+    truncated_hint: "一部のファイルが切り詰められました",
+    deferred_hint: "未スキャン、クリックして読み込む",
+    remove_root: "ワークスペースを削除",
 };
 
 static KO: I18nStrings = I18nStrings {
@@ -404,6 +444,14 @@ static KO: I18nStrings = I18nStrings {
     auto_save_on_blur_label: "창 포커스를 잃을 때 즉시 저장",
     tab_size_label: "탭 크기 (공백)",
     shortcuts_label: "키보드 단축키",
+    add_folder: "폴더 추가",
+    loose_files: "외부 파일",
+    drafts_group: "임시 보관",
+    workspace_group: "작업 공간",
+    missing_root: "경로를 사용할 수 없음",
+    truncated_hint: "일부 파일이 생략됨",
+    deferred_hint: "스캔되지 않음, 클릭하여 로드",
+    remove_root: "작업 공간 제거",
 };
 
 static FR: I18nStrings = I18nStrings {
@@ -455,6 +503,14 @@ static FR: I18nStrings = I18nStrings {
     auto_save_on_blur_label: "Enregistrer à la perte de focus",
     tab_size_label: "Taille des tabulations",
     shortcuts_label: "Raccourcis clavier",
+    add_folder: "Ajouter un dossier",
+    loose_files: "Fichiers externes",
+    drafts_group: "Brouillons",
+    workspace_group: "Espaces de travail",
+    missing_root: "Chemin indisponible",
+    truncated_hint: "Partiellement tronqué",
+    deferred_hint: "Non scanné, cliquer pour charger",
+    remove_root: "Supprimer l'espace de travail",
 };
 
 static DE: I18nStrings = I18nStrings {
@@ -506,6 +562,14 @@ static DE: I18nStrings = I18nStrings {
     auto_save_on_blur_label: "Sofort speichern beim Fokusverlust",
     tab_size_label: "Tabulatorgröße",
     shortcuts_label: "Tastatur-Kurzbefehle",
+    add_folder: "Ordner hinzufügen",
+    loose_files: "Externe Dateien",
+    drafts_group: "Entwürfe",
+    workspace_group: "Arbeitsbereiche",
+    missing_root: "Pfad nicht verfügbar",
+    truncated_hint: "Teilweise abgeschnitten",
+    deferred_hint: "Nicht gescannt, zum Laden klicken",
+    remove_root: "Arbeitsbereich entfernen",
 };
 
 static ES: I18nStrings = I18nStrings {
@@ -557,6 +621,14 @@ static ES: I18nStrings = I18nStrings {
     auto_save_on_blur_label: "Guardar inmediatamente al perder el foco",
     tab_size_label: "Tamaño de tabulación",
     shortcuts_label: "Atajos de teclado",
+    add_folder: "Añadir carpeta",
+    loose_files: "Archivos externos",
+    drafts_group: "Borradores",
+    workspace_group: "Espacios de trabajo",
+    missing_root: "Ruta no disponible",
+    truncated_hint: "Parcialmente truncado",
+    deferred_hint: "No escaneado, clic para cargar",
+    remove_root: "Eliminar espacio de trabajo",
 };
 
 static RU: I18nStrings = I18nStrings {
@@ -608,6 +680,14 @@ static RU: I18nStrings = I18nStrings {
     auto_save_on_blur_label: "Сохранять при потере фокуса",
     tab_size_label: "Размер табуляции",
     shortcuts_label: "Сочетания клавиш",
+    add_folder: "Добавить папку",
+    loose_files: "Внешние файлы",
+    drafts_group: "Черновики",
+    workspace_group: "Рабочие области",
+    missing_root: "Путь недоступен",
+    truncated_hint: "Частично усечено",
+    deferred_hint: "Не сканировано, нажмите для загрузки",
+    remove_root: "Удалить рабочую область",
 };
 
 static PT: I18nStrings = I18nStrings {
@@ -659,4 +739,12 @@ static PT: I18nStrings = I18nStrings {
     auto_save_on_blur_label: "Salvar ao perder o foco",
     tab_size_label: "Tamanho da tabulação",
     shortcuts_label: "Atalhos de teclado",
+    add_folder: "Adicionar pasta",
+    loose_files: "Arquivos externos",
+    drafts_group: "Rascunhos",
+    workspace_group: "Espaços de trabalho",
+    missing_root: "Caminho indisponível",
+    truncated_hint: "Parcialmente truncado",
+    deferred_hint: "Não verificado, clique para carregar",
+    remove_root: "Remover espaço de trabalho",
 };

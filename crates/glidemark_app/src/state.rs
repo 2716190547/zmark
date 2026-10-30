@@ -103,15 +103,6 @@ pub struct FileTreeNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VisibleTreeRow {
-    pub path: PathBuf,
-    pub name: String,
-    pub is_dir: bool,
-    pub is_expanded: bool,
-    pub depth: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceRoot {
     pub path: PathBuf,
     pub tree: Vec<FileTreeNode>,
@@ -417,7 +408,6 @@ pub struct AppState {
     pub preferences: Preferences,
     pub theme: ThemeColors,
     pub strings: &'static I18nStrings,
-    pub file_tree: Vec<FileTreeNode>,
     pub is_system_dark: bool,
     pub is_quitting: bool,
 }
@@ -499,7 +489,6 @@ impl AppState {
             preferences,
             theme,
             strings,
-            file_tree: Vec::new(),
             is_system_dark: false,
             is_quitting: false,
         };
@@ -604,24 +593,6 @@ impl AppState {
     }
 
     #[allow(dead_code)]
-    pub fn refresh_workspace_tree(&mut self) {
-        let target_dir = self
-            .workspace_roots
-            .first()
-            .map(|r| r.path.clone())
-            .or_else(|| self.doc.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf()));
-
-        if let Some(dir) = target_dir {
-            let mut expanded_paths = std::collections::HashSet::new();
-            collect_expanded_paths(&self.file_tree, &mut expanded_paths);
-            let mut scanned = 0;
-            self.file_tree = scan_tree_dir(&dir, 0, &mut scanned, &expanded_paths);
-        } else {
-            self.file_tree.clear();
-        }
-    }
-
-    #[allow(dead_code)]
     pub fn find_root_index_for_path(&self, path: &Path) -> Option<usize> {
         let cmp_path = resolve_cmp_path(path);
         for (idx, r) in self.workspace_roots.iter().enumerate() {
@@ -648,72 +619,69 @@ impl AppState {
             .collect()
     }
 
-    pub fn toggle_tree_folder(&mut self, target: &std::path::Path) {
-        fn toggle_node(nodes: &mut [FileTreeNode], target: &std::path::Path) -> bool {
-            for node in nodes.iter_mut() {
-                if node.path == target {
-                    if node.is_dir {
-                        node.is_expanded = !node.is_expanded;
-                        if node.is_expanded && node.children.is_empty() {
-                            let mut scanned = 0;
-                            let empty_set = std::collections::HashSet::new();
-                            node.children = scan_tree_dir(&node.path, 0, &mut scanned, &empty_set);
-                        }
-                    }
-                    return true;
-                }
-                if node.is_dir && toggle_node(&mut node.children, target) {
-                    return true;
-                }
-            }
-            false
-        }
-        toggle_node(&mut self.file_tree, target);
-        for i in 0..self.workspace_roots.len() {
-            if self.toggle_root_folder(i, target) {
-                break;
-            }
-        }
-    }
-
     pub fn expand_to_file(&mut self, file_path: &std::path::Path) {
-        fn expand_ancestors(nodes: &mut [FileTreeNode], target: &std::path::Path) -> bool {
-            let mut found = false;
-            for node in nodes.iter_mut() {
-                if node.is_dir && target.starts_with(&node.path) {
-                    node.is_expanded = true;
-                    if node.children.is_empty() {
-                        let mut scanned = 0;
-                        let empty_set = std::collections::HashSet::new();
-                        node.children = scan_tree_dir(&node.path, 0, &mut scanned, &empty_set);
-                    }
-                    expand_ancestors(&mut node.children, target);
-                    found = true;
-                }
+        if let Some(root_idx) = self.find_root_index_for_path(file_path) {
+            if self.workspace_roots[root_idx].deferred && self.workspace_roots[root_idx].tree.is_empty() {
+                self.refresh_root(root_idx);
             }
-            found
-        }
-        expand_ancestors(&mut self.file_tree, file_path);
-    }
+            self.workspace_roots[root_idx].is_expanded = true;
+            let target_cmp = resolve_cmp_path(file_path);
 
-    pub fn flatten_tree(&self) -> Vec<VisibleTreeRow> {
-        let mut rows = Vec::new();
-        fn collect(nodes: &[FileTreeNode], depth: usize, rows: &mut Vec<VisibleTreeRow>) {
-            for node in nodes {
-                rows.push(VisibleTreeRow {
-                    path: node.path.clone(),
-                    name: node.name.clone(),
-                    is_dir: node.is_dir,
-                    is_expanded: node.is_expanded,
-                    depth,
-                });
-                if node.is_dir && node.is_expanded {
-                    collect(&node.children, depth + 1, rows);
+            fn expand_in_nodes(
+                nodes: &mut [FileTreeNode],
+                target: &std::path::Path,
+                target_cmp: &std::path::Path,
+                depth: usize,
+                budget: &mut ScanBudget,
+                entries_used: &mut usize,
+                files_used: &mut usize,
+            ) -> bool {
+                let mut found = false;
+                for node in nodes.iter_mut() {
+                    let node_cmp = resolve_cmp_path(&node.path);
+                    if node.is_dir && (target.starts_with(&node.path) || target_cmp.starts_with(&node_cmp)) {
+                        node.is_expanded = true;
+                        if node.children.is_empty() {
+                            let empty_set = HashSet::new();
+                            let prev_e = budget.entries_left;
+                            let prev_f = budget.files_left;
+                            let (children, _) = scan_root_layer(&node.path, depth + 1, budget, &empty_set, 4);
+                            *entries_used += prev_e.saturating_sub(budget.entries_left);
+                            *files_used += prev_f.saturating_sub(budget.files_left);
+                            node.children = children;
+                        }
+                        expand_in_nodes(&mut node.children, target, target_cmp, depth + 1, budget, entries_used, files_used);
+                        found = true;
+                    }
                 }
+                found
             }
+
+            let root_rem_entries =
+                ScanBudget::PER_ROOT_ENTRY_CAP.saturating_sub(self.workspace_roots[root_idx].entries_used);
+            let root_rem_files =
+                ScanBudget::PER_ROOT_FILE_CAP.saturating_sub(self.workspace_roots[root_idx].files_used);
+            let avail_entries = root_rem_entries.min(self.scan_budget.entries_left);
+            let avail_files = root_rem_files.min(self.scan_budget.files_left);
+            let mut budget = ScanBudget::new(avail_entries, avail_files);
+            let mut e_used = 0;
+            let mut f_used = 0;
+
+            expand_in_nodes(
+                &mut self.workspace_roots[root_idx].tree,
+                file_path,
+                &target_cmp,
+                0,
+                &mut budget,
+                &mut e_used,
+                &mut f_used,
+            );
+
+            self.workspace_roots[root_idx].entries_used += e_used;
+            self.workspace_roots[root_idx].files_used += f_used;
+            self.scan_budget.entries_left = self.scan_budget.entries_left.saturating_sub(e_used);
+            self.scan_budget.files_left = self.scan_budget.files_left.saturating_sub(f_used);
         }
-        collect(&self.file_tree, 0, &mut rows);
-        rows
     }
 
     #[allow(dead_code)]
@@ -1432,81 +1400,6 @@ fn collect_expanded_paths(nodes: &[FileTreeNode], set: &mut std::collections::Ha
             collect_expanded_paths(&n.children, set);
         }
     }
-}
-
-fn scan_tree_dir(
-    dir: &std::path::Path,
-    depth: usize,
-    scanned: &mut usize,
-    expanded_set: &std::collections::HashSet<PathBuf>,
-) -> Vec<FileTreeNode> {
-    if depth > 4 || *scanned >= 1000 {
-        return Vec::new();
-    }
-    let mut nodes = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            *scanned += 1;
-            if *scanned >= 1000 {
-                break;
-            }
-            let file_type = match entry.file_type() {
-                Ok(ft) => ft,
-                Err(_) => continue,
-            };
-            let p = entry.path();
-            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            if name.starts_with('.')
-                || name == "target"
-                || name == "node_modules"
-                || name == "build"
-                || name == "dist"
-                || name == "dev"
-                || name == "proc"
-                || name == "sys"
-            {
-                continue;
-            }
-
-            if file_type.is_dir() {
-                let is_expanded = expanded_set.contains(&p);
-                let children = if is_expanded || depth < 1 {
-                    scan_tree_dir(&p, depth + 1, scanned, expanded_set)
-                } else {
-                    Vec::new()
-                };
-                nodes.push(FileTreeNode {
-                    path: p,
-                    name,
-                    is_dir: true,
-                    is_expanded,
-                    children,
-                });
-            } else if file_type.is_file() {
-                if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-                    if ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown") {
-                        nodes.push(FileTreeNode {
-                            path: p,
-                            name,
-                            is_dir: false,
-                            is_expanded: false,
-                            children: Vec::new(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    nodes.sort_by(|a, b| {
-        match (a.is_dir, b.is_dir) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        }
-    });
-
-    nodes
 }
 
 #[allow(dead_code)]

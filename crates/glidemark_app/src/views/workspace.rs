@@ -933,15 +933,44 @@ impl Render for WorkspaceView {
             });
         });
 
-        let view_tree = cx.entity().clone();
-        let on_toggle_folder = Arc::new(move |path: &std::path::PathBuf, _window: &mut Window, cx: &mut App| {
-            view_tree.update(cx, |this, cx| {
-                this.state.toggle_tree_folder(path);
+        let view_toggle_root = cx.entity().clone();
+        let on_toggle_root = Arc::new(move |root_idx: usize, _window: &mut Window, cx: &mut App| {
+            view_toggle_root.update(cx, |this, cx| {
+                if root_idx < this.state.workspace_roots.len() {
+                    let path = this.state.workspace_roots[root_idx].path.clone();
+                    this.state.toggle_root_folder(root_idx, &path);
+                    cx.notify();
+                }
+            });
+        });
+
+        let view_remove_root = cx.entity().clone();
+        let on_remove_root = Arc::new(move |root_idx: usize, _window: &mut Window, cx: &mut App| {
+            view_remove_root.update(cx, |this, cx| {
+                let _ = this.state.remove_workspace_root(root_idx);
                 cx.notify();
             });
         });
 
-        let tree_rows = self.state.flatten_tree();
+        let view_refresh_root = cx.entity().clone();
+        let on_refresh_root = Arc::new(move |root_idx: usize, _window: &mut Window, cx: &mut App| {
+            view_refresh_root.update(cx, |this, cx| {
+                this.state.refresh_root(root_idx);
+                cx.notify();
+            });
+        });
+
+        let view_tree = cx.entity().clone();
+        let on_toggle_folder = Arc::new(
+            move |root_idx: usize, path: &std::path::PathBuf, _window: &mut Window, cx: &mut App| {
+                view_tree.update(cx, |this, cx| {
+                    this.state.toggle_root_folder(root_idx, path);
+                    cx.notify();
+                });
+            },
+        );
+
+        let loose_docs = self.state.loose_docs();
 
         let view_lb = cx.entity().clone();
         let on_open_lightbox = Arc::new(move |svg_path: std::path::PathBuf, hash: u64, _window: &mut Window, cx: &mut App| {
@@ -1069,7 +1098,6 @@ impl Render for WorkspaceView {
                             let new_name = this.rename_buffer.trim();
                             if !new_name.is_empty() {
                                 let _ = this.state.rename_file(new_name);
-                                this.state.refresh_all_roots();
                             }
                             this.is_renaming = false;
                             cx.notify();
@@ -1232,16 +1260,19 @@ impl Render for WorkspaceView {
                                 .overflow_hidden()
                                 .child(render_drawer(
                                     self.state.drawer_tab,
-                                    &tree_rows,
+                                    &self.state.workspace_roots,
+                                    &loose_docs,
                                     &self.state.open_docs,
                                     self.state.active.as_ref(),
                                     is_dirty,
-                                    self.state.workspace_roots.first().map(|r| &r.path),
                                     &self.state.doc.parsed.headings(),
                                     theme,
                                     strings,
                                     &self.drawer_scroll_handle,
                                     on_select_tab,
+                                    on_toggle_root,
+                                    on_remove_root,
+                                    on_refresh_root,
                                     on_toggle_folder,
                                     on_select_file,
                                     on_select_doc,

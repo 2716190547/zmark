@@ -5,22 +5,25 @@ use std::sync::Arc;
 use glidemark_core::ast::HeadingItem;
 use glidemark_core::i18n::I18nStrings;
 
-use crate::state::{DocKey, DrawerTab, OpenDoc, VisibleTreeRow};
+use crate::state::{root_label, DocKey, DrawerTab, FileTreeNode, OpenDoc, WorkspaceRoot};
 use crate::theme::ThemeColors;
 
 pub fn render_drawer(
     active_tab: DrawerTab,
-    tree_rows: &[VisibleTreeRow],
+    workspace_roots: &[WorkspaceRoot],
+    loose_docs: &[DocKey],
     open_docs: &[OpenDoc],
     active_key: Option<&DocKey>,
     is_active_dirty: bool,
-    workspace_folder: Option<&PathBuf>,
     headings: &[HeadingItem],
     theme: &ThemeColors,
-    strings: &I18nStrings,
+    strings: &'static I18nStrings,
     scroll_handle: &ScrollHandle,
     on_select_tab: Arc<dyn Fn(DrawerTab, &mut Window, &mut App)>,
-    on_toggle_folder: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
+    on_toggle_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
+    on_remove_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
+    on_refresh_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
+    on_toggle_folder: Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
     on_select_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_select_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
     on_close_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
@@ -81,6 +84,14 @@ pub fn render_drawer(
                     theme,
                     move |_, window, cx| t2(DrawerTab::Outline, window, cx),
                 ))
+                .child(render_icon_btn(
+                    "drawer_add_folder_btn",
+                    strings.add_folder,
+                    "icons/folder-plus.svg",
+                    false,
+                    theme,
+                    move |_, window, cx| t_folder(window, cx),
+                ))
                 .child(
                     div()
                         .id("drawer_header_drag_area")
@@ -89,7 +100,7 @@ pub fn render_drawer(
                         .window_control_area(WindowControlArea::Drag)
                         .on_mouse_down(MouseButton::Left, |_e, window, _| {
                             window.start_window_move();
-                        })
+                        }),
                 ),
         )
         // Scrollable Tab Body
@@ -108,75 +119,9 @@ pub fn render_drawer(
                     DrawerTab::Files => {
                         let mut content = div().flex().flex_col().gap_1();
 
-                        let folder_name = workspace_folder
-                            .and_then(|f| f.file_name())
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("工作区")
-                            .to_string();
-                        let folder_path_str = workspace_folder
-                            .map(|f| f.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        let t_switch_folder = t_folder.clone();
-
-                        content = content.child(
-                            div()
-                                .id("drawer_workspace_folder_header")
-                                .w_full()
-                                .px_2()
-                                .py_1()
-                                .rounded_sm()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    div()
-                                        .id("drawer_folder_info")
-                                        .flex()
-                                        .items_center()
-                                        .gap_1p5()
-                                        .min_w(px(0.))
-                                        .text_color(theme.text_muted)
-                                        .tooltip(move |_window, cx| {
-                                            let t = folder_path_str.clone();
-                                            cx.new(|_| DrawerTooltipView { text: t }).into()
-                                        })
-                                        .child(
-                                            svg()
-                                                .path("icons/folder.svg")
-                                                .size(px(14.))
-                                                .text_color(theme.text_muted),
-                                        )
-                                        .child(
-                                            div()
-                                                .min_w(px(0.))
-                                                .truncate()
-                                                .text_size(px(12.))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_color(theme.text_primary)
-                                                .child(folder_name),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .id("btn_switch_workspace")
-                                        .px_1p5()
-                                        .py_0p5()
-                                        .rounded(px(4.))
-                                        .cursor_pointer()
-                                        .text_size(px(10.))
-                                        .text_color(theme.text_muted)
-                                        .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
-                                        .tooltip(|_window, cx| {
-                                            cx.new(|_| DrawerTooltipView { text: "切换工作区文件夹...".to_string() }).into()
-                                        })
-                                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                            t_switch_folder(window, cx);
-                                        })
-                                        .child("切换"),
-                                ),
-                        );
-
-                        // Draft Virtual Group (Fixed at the top of Files view)
+                        // ==========================================
+                        // 1. Section 1: Drafts Group (草稿组)
+                        // ==========================================
                         let draft_doc = open_docs.iter().find(|d| d.key.is_scratch());
                         let has_open_draft = draft_doc.is_some();
                         let is_draft_active = draft_doc.map_or(false, |d| active_key == Some(&d.key));
@@ -188,7 +133,10 @@ pub fn render_drawer(
                             false
                         };
 
-                        let draft_title = draft_doc.map_or_else(|| "草稿 (未打开)".to_string(), |d| d.doc.display_name());
+                        let draft_title = draft_doc.map_or_else(
+                            || format!("{} (未打开)", strings.drafts_group),
+                            |d| d.doc.display_name(),
+                        );
                         let draft_key_opt = draft_doc.map(|d| d.key.clone());
 
                         let t_switch_draft = on_select_doc.clone();
@@ -206,12 +154,13 @@ pub fn render_drawer(
                             .flex()
                             .items_center()
                             .justify_between()
-                            .text_xs()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::NORMAL)
                             .tooltip(move |_window, cx| {
                                 let t = if has_open_draft {
-                                    "草稿 (⌘N 聚焦)".to_string()
+                                    format!("{} (⌘N 聚焦)", strings.drafts_group)
                                 } else {
-                                    "点击新建草稿 (⌘N)".to_string()
+                                    format!("点击新建{} (⌘N)", strings.drafts_group)
                                 };
                                 cx.new(|_| DrawerTooltipView { text: t }).into()
                             })
@@ -280,10 +229,10 @@ pub fn render_drawer(
                                     .px_2()
                                     .pt_1()
                                     .pb_0p5()
-                                    .text_size(px(10.))
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text_muted)
-                                    .child("草稿")
+                                    .child(strings.drafts_group),
                             )
                             .child(
                                 draft_item
@@ -297,208 +246,364 @@ pub fn render_drawer(
                                                 svg()
                                                     .path("icons/files.svg")
                                                     .size(px(13.))
-                                                    .text_color(if is_draft_active { theme.warm_pill_text() } else { theme.text_muted })
+                                                    .text_color(if is_draft_active {
+                                                        theme.warm_pill_text()
+                                                    } else {
+                                                        theme.text_muted
+                                                    }),
                                             )
                                             .child(
                                                 div()
                                                     .min_w(px(0.))
                                                     .truncate()
-                                                    .child(draft_title)
-                                            )
+                                                    .child(draft_title),
+                                            ),
                                     )
-                                    .child(draft_right)
+                                    .child(draft_right),
                             );
 
                         content = content.child(draft_section);
 
-                        // File Tree Section
-                        if tree_rows.is_empty() {
-                            content = content.child(
-                                div()
-                                    .p_4()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_xs()
-                                    .text_color(theme.text_muted)
-                                    .child("无 Markdown 文件"),
-                            );
-                        } else {
-                            let mut tree_container = div().flex().flex_col().gap_0p5().child(
+                        // ==========================================
+                        // 2. Section 2: Workspace Roots Group (工作区多根组)
+                        // ==========================================
+                        let mut roots_section = div()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(
                                 div()
                                     .px_2()
-                                    .pt_1()
+                                    .pt_2p5()
                                     .pb_0p5()
-                                    .text_size(px(10.))
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text_muted)
-                                    .child("工作区文件")
+                                    .child(strings.workspace_group),
                             );
 
-                            for (idx, row) in tree_rows.iter().enumerate() {
-                                let depth_indent = (row.depth as f32) * 12.0;
-                                if row.is_dir {
-                                    let p = row.path.clone();
-                                    let on_toggle = on_toggle_folder.clone();
-                                    let is_expanded = row.is_expanded;
-                                    let folder_name = row.name.clone();
+                        if workspace_roots.is_empty() {
+                            roots_section = roots_section.child(
+                                div()
+                                    .px_2()
+                                    .py_2()
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::NORMAL)
+                                    .text_color(theme.text_muted)
+                                    .child("暂无工作区文件夹"),
+                            );
+                        } else {
+                            for (root_idx, root) in workspace_roots.iter().enumerate() {
+                                let root_path_str = root.path.to_string_lossy().to_string();
+                                let root_name = root_label(workspace_roots, root_idx);
+                                let is_missing = root.is_missing;
+                                let is_deferred = root.deferred;
+                                let is_expanded = root.is_expanded;
+                                let is_truncated = root.truncated;
+                                let on_toggle_r = on_toggle_root.clone();
+                                let on_refresh_r = on_refresh_root.clone();
+                                let on_remove_r = on_remove_root.clone();
 
-                                    tree_container = tree_container.child(
+                                let mut root_header = div()
+                                    .id(SharedString::from(format!("drawer_root_header_{}", root_idx)))
+                                    .group("drawer_root_row")
+                                    .w_full()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(6.))
+                                    .cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .hover(|s| s.bg(theme.surface))
+                                    .tooltip(move |_window, cx| {
+                                        let t = root_path_str.clone();
+                                        cx.new(|_| DrawerTooltipView { text: t }).into()
+                                    })
+                                    .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                                        if is_missing {
+                                            return;
+                                        }
+                                        if is_deferred {
+                                            on_refresh_r(root_idx, window, cx);
+                                        } else {
+                                            on_toggle_r(root_idx, window, cx);
+                                        }
+                                    });
+
+                                let left_part = div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .min_w(px(0.))
+                                    .child(
                                         div()
-                                            .id(("drawer_tree_dir", idx))
-                                            .w_full()
-                                            .pl(px(depth_indent + 4.0))
-                                            .pr_2()
-                                            .py_1()
-                                            .rounded(px(5.))
-                                            .cursor_pointer()
+                                            .w(px(12.))
+                                            .h(px(12.))
                                             .flex()
                                             .items_center()
-                                            .gap_1p5()
-                                            .text_xs()
+                                            .justify_center()
+                                            .text_size(px(10.))
                                             .text_color(theme.text_muted)
-                                            .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
-                                            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                                                on_toggle(&p, window, cx);
-                                            })
-                                            .child(
-                                                div()
-                                                    .w(px(12.))
-                                                    .h(px(12.))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .text_size(px(10.))
-                                                    .child(if is_expanded { "▾" } else { "▸" }),
-                                            )
-                                            .child(
-                                                svg()
-                                                    .path("icons/folder.svg")
-                                                    .size(px(13.))
-                                                    .text_color(theme.text_muted),
-                                            )
-                                            .child(
-                                                div()
-                                                    .min_w(px(0.))
-                                                    .truncate()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child(folder_name),
-                                            ),
-                                    );
-                                } else {
-                                    let p = row.path.clone();
-                                    let target_key = DocKey::Path(p.clone());
-                                    let is_active = active_key == Some(&target_key);
-                                    let open_doc = open_docs.iter().find(|d| d.key == target_key);
-                                    let is_open = open_doc.is_some();
-                                    let is_dirty = if is_active {
-                                        is_active_dirty
-                                    } else if let Some(od) = open_doc {
-                                        od.doc.status == glidemark_core::document::DocumentStatus::Modified
-                                    } else {
-                                        false
-                                    };
-
-                                    let file_name = row.name.clone();
-                                    let tooltip_name = file_name.clone();
-                                    let on_select = on_select_file.clone();
-                                    let on_close = on_close_doc.clone();
-                                    let close_key = target_key.clone();
-
-                                    let mut item = div()
-                                        .id(("drawer_tree_file", idx))
-                                        .group("drawer_file_row")
-                                        .w_full()
-                                        .pl(px(depth_indent + 8.0))
-                                        .pr_1p5()
-                                        .py_1()
-                                        .rounded(px(6.))
-                                        .cursor_pointer()
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .text_xs()
-                                        .tooltip(move |_window, cx| {
-                                            let t = tooltip_name.clone();
-                                            cx.new(|_| DrawerTooltipView { text: t }).into()
-                                        })
-                                        .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                                            on_select(&p, window, cx);
-                                        });
-
-                                    if is_active {
-                                        item = item
-                                            .bg(theme.warm_pill_bg())
-                                            .text_color(theme.warm_pill_text())
-                                            .font_weight(FontWeight::MEDIUM);
-                                    } else {
-                                        item = item
-                                            .text_color(theme.text_primary)
-                                            .hover(|s| s.bg(theme.surface));
-                                    }
-
-                                    let left_part = div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_1p5()
-                                        .min_w(px(0.))
-                                        .child(
-                                            if is_open && !is_active {
-                                                div()
-                                                    .w(px(5.))
-                                                    .h(px(5.))
-                                                    .rounded_full()
-                                                    .bg(theme.text_muted)
-                                            } else {
-                                                div().w(px(5.)).h(px(5.))
-                                            }
-                                        )
-                                        .child(
+                                            .child(if is_missing { " " } else if is_expanded { "▾" } else { "▸" }),
+                                    )
+                                    .child(
+                                        svg()
+                                            .path("icons/folder.svg")
+                                            .size(px(14.))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child(
+                                        div()
+                                            .min_w(px(0.))
+                                            .truncate()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(if is_missing { theme.text_muted } else { theme.text_primary })
+                                            .child(root_name),
+                                    )
+                                    .when(is_missing, |d| {
+                                        d.child(
                                             div()
-                                                .min_w(px(0.))
-                                                .truncate()
-                                                .child(file_name)
-                                        );
-
-                                    let mut right_part = div().flex().items_center().gap_1();
-                                    if is_dirty {
-                                        right_part = right_part.child(
-                                            div()
-                                                .w(px(6.))
-                                                .h(px(6.))
-                                                .rounded_full()
-                                                .bg(theme.accent)
-                                        );
-                                    }
-
-                                    if is_open {
-                                        right_part = right_part.child(
-                                            div()
-                                                .id(("btn_close_file", idx))
-                                                .w(px(16.))
-                                                .h(px(16.))
-                                                .rounded(px(3.))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .text_size(px(12.))
+                                                .text_size(px(10.))
                                                 .text_color(theme.text_muted)
-                                                .opacity(0.0)
-                                                .group_hover("drawer_file_row", |s| s.opacity(1.0))
-                                                .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
-                                                .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
-                                                    cx.stop_propagation();
-                                                    on_close(&close_key, window, cx);
-                                                })
-                                                .child("×")
+                                                .child(format!("({})", strings.missing_root)),
+                                        )
+                                    })
+                                    .when(is_deferred, |d| {
+                                        d.child(
+                                            div()
+                                                .text_size(px(10.))
+                                                .text_color(theme.accent)
+                                                .child(format!("({})", strings.deferred_hint)),
+                                        )
+                                    });
+
+                                let right_part = div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .id(SharedString::from(format!("btn_remove_root_{}", root_idx)))
+                                            .w(px(16.))
+                                            .h(px(16.))
+                                            .rounded(px(3.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(12.))
+                                            .text_color(theme.text_muted)
+                                            .opacity(0.0)
+                                            .group_hover("drawer_root_row", |s| s.opacity(1.0))
+                                            .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
+                                            .tooltip(move |_window, cx| {
+                                                let t = strings.remove_root.to_string();
+                                                cx.new(|_| DrawerTooltipView { text: t }).into()
+                                            })
+                                            .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                                                cx.stop_propagation();
+                                                on_remove_r(root_idx, window, cx);
+                                            })
+                                            .child("×"),
+                                    );
+
+                                root_header = root_header.child(left_part).child(right_part);
+                                roots_section = roots_section.child(root_header);
+
+                                if is_expanded && !is_missing {
+                                    let mut root_children_container = div().flex().flex_col().gap_0p5();
+
+                                    if root.tree.is_empty() && !is_deferred {
+                                        root_children_container = root_children_container.child(
+                                            div()
+                                                .pl(px(24.))
+                                                .py_1()
+                                                .text_size(px(11.))
+                                                .text_color(theme.text_muted)
+                                                .child("无 Markdown 文件"),
+                                        );
+                                    } else {
+                                        let mut tree_elements = Vec::new();
+                                        render_file_tree_nodes(
+                                            &root.tree,
+                                            0,
+                                            root_idx,
+                                            open_docs,
+                                            active_key,
+                                            is_active_dirty,
+                                            theme,
+                                            strings,
+                                            &on_toggle_folder,
+                                            &on_select_file,
+                                            &on_close_doc,
+                                            &mut tree_elements,
+                                        );
+                                        root_children_container = root_children_container.children(tree_elements);
+                                    }
+
+                                    if is_truncated {
+                                        root_children_container = root_children_container.child(
+                                            div()
+                                                .pl(px(24.))
+                                                .py_1()
+                                                .text_size(px(11.))
+                                                .text_color(theme.text_muted)
+                                                .child(format!("({})", strings.truncated_hint)),
                                         );
                                     }
 
-                                    tree_container = tree_container.child(item.child(left_part).child(right_part));
+                                    roots_section = roots_section.child(root_children_container);
                                 }
                             }
-                            content = content.child(tree_container);
                         }
+
+                        content = content.child(roots_section);
+
+                        // ==========================================
+                        // 3. Section 3: Loose Files Group (外部文件组)
+                        // ==========================================
+                        let loose_file_paths: Vec<&PathBuf> = loose_docs
+                            .iter()
+                            .filter_map(|k| match k {
+                                DocKey::Path(p) => Some(p),
+                                DocKey::Scratch(_) => None,
+                            })
+                            .collect();
+
+                        if !loose_file_paths.is_empty() {
+                            let mut loose_section = div()
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .pt_3()
+                                        .pb_0p5()
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text_muted)
+                                        .child(strings.loose_files),
+                                );
+
+                            for (idx, p) in loose_file_paths.iter().enumerate() {
+                                let target_key = DocKey::Path((*p).clone());
+                                let is_active = active_key == Some(&target_key);
+                                let open_doc = open_docs.iter().find(|d| d.key == target_key);
+                                let is_dirty = if is_active {
+                                    is_active_dirty
+                                } else if let Some(od) = open_doc {
+                                    od.doc.status == glidemark_core::document::DocumentStatus::Modified
+                                } else {
+                                    false
+                                };
+
+                                let file_name = p
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("未命名")
+                                    .to_string();
+                                let tooltip_path = p.to_string_lossy().to_string();
+                                let on_select = on_select_doc.clone();
+                                let on_close = on_close_doc.clone();
+                                let sel_key = target_key.clone();
+                                let close_key = target_key.clone();
+
+                                let mut item = div()
+                                    .id(SharedString::from(format!("drawer_loose_file_{}", idx)))
+                                    .group("drawer_loose_file_row")
+                                    .w_full()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(6.))
+                                    .cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::NORMAL)
+                                    .tooltip(move |_window, cx| {
+                                        let t = tooltip_path.clone();
+                                        cx.new(|_| DrawerTooltipView { text: t }).into()
+                                    })
+                                    .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                                        on_select(&sel_key, window, cx);
+                                    });
+
+                                if is_active {
+                                    item = item
+                                        .bg(theme.warm_pill_bg())
+                                        .text_color(theme.warm_pill_text())
+                                        .font_weight(FontWeight::MEDIUM);
+                                } else {
+                                    item = item
+                                        .text_color(theme.text_primary)
+                                        .hover(|s| s.bg(theme.surface));
+                                }
+
+                                let left_part = div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .min_w(px(0.))
+                                    .child(
+                                        svg()
+                                            .path("icons/files.svg")
+                                            .size(px(13.))
+                                            .text_color(if is_active {
+                                                theme.warm_pill_text()
+                                            } else {
+                                                theme.text_muted
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .min_w(px(0.))
+                                            .truncate()
+                                            .child(file_name),
+                                    );
+
+                                let mut right_part = div().flex().items_center().gap_1();
+                                if is_dirty {
+                                    right_part = right_part.child(
+                                        div()
+                                            .w(px(6.))
+                                            .h(px(6.))
+                                            .rounded_full()
+                                            .bg(theme.accent),
+                                    );
+                                }
+
+                                right_part = right_part.child(
+                                    div()
+                                        .id(SharedString::from(format!("btn_close_loose_file_{}", idx)))
+                                        .w(px(16.))
+                                        .h(px(16.))
+                                        .rounded(px(3.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(px(12.))
+                                        .text_color(theme.text_muted)
+                                        .opacity(0.0)
+                                        .group_hover("drawer_loose_file_row", |s| s.opacity(1.0))
+                                        .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
+                                        .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                                            cx.stop_propagation();
+                                            on_close(&close_key, window, cx);
+                                        })
+                                        .child("×"),
+                                );
+
+                                loose_section = loose_section.child(item.child(left_part).child(right_part));
+                            }
+
+                            content = content.child(loose_section);
+                        }
+
                         content.into_any_element()
                     }
                     DrawerTab::Outline => {
@@ -564,6 +669,203 @@ pub fn render_drawer(
                     }
                 }),
         )
+}
+
+fn render_file_tree_nodes(
+    nodes: &[FileTreeNode],
+    depth: usize,
+    root_idx: usize,
+    open_docs: &[OpenDoc],
+    active_key: Option<&DocKey>,
+    is_active_dirty: bool,
+    theme: &ThemeColors,
+    strings: &'static I18nStrings,
+    on_toggle_folder: &Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
+    on_select_file: &Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
+    on_close_doc: &Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
+    out: &mut Vec<AnyElement>,
+) {
+    for (node_idx, node) in nodes.iter().enumerate() {
+        let depth_indent = (depth as f32 + 1.0) * 12.0;
+        if node.is_dir {
+            let p = node.path.clone();
+            let on_toggle = on_toggle_folder.clone();
+            let is_expanded = node.is_expanded;
+            let folder_name = node.name.clone();
+
+            out.push(
+                div()
+                    .id(SharedString::from(format!("drawer_tree_dir_{}_{}_{}", root_idx, depth, node_idx)))
+                    .w_full()
+                    .pl(px(depth_indent + 4.0))
+                    .pr_2()
+                    .py_1()
+                    .rounded(px(5.))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::NORMAL)
+                    .text_color(theme.text_muted)
+                    .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
+                    .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                        on_toggle(root_idx, &p, window, cx);
+                    })
+                    .child(
+                        div()
+                            .w(px(12.))
+                            .h(px(12.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(10.))
+                            .child(if is_expanded { "▾" } else { "▸" }),
+                    )
+                    .child(
+                        svg()
+                            .path("icons/folder.svg")
+                            .size(px(13.))
+                            .text_color(theme.text_muted),
+                    )
+                    .child(
+                        div()
+                            .min_w(px(0.))
+                            .truncate()
+                            .child(folder_name),
+                    )
+                    .into_any_element(),
+            );
+
+            if is_expanded {
+                render_file_tree_nodes(
+                    &node.children,
+                    depth + 1,
+                    root_idx,
+                    open_docs,
+                    active_key,
+                    is_active_dirty,
+                    theme,
+                    strings,
+                    on_toggle_folder,
+                    on_select_file,
+                    on_close_doc,
+                    out,
+                );
+            }
+        } else {
+            let p = node.path.clone();
+            let target_key = DocKey::Path(p.clone());
+            let is_active = active_key == Some(&target_key);
+            let open_doc = open_docs.iter().find(|d| d.key == target_key);
+            let is_open = open_doc.is_some();
+            let is_dirty = if is_active {
+                is_active_dirty
+            } else if let Some(od) = open_doc {
+                od.doc.status == glidemark_core::document::DocumentStatus::Modified
+            } else {
+                false
+            };
+
+            let file_name = node.name.clone();
+            let tooltip_name = file_name.clone();
+            let on_select = on_select_file.clone();
+            let on_close = on_close_doc.clone();
+            let close_key = target_key.clone();
+
+            let mut item = div()
+                .id(SharedString::from(format!("drawer_tree_file_{}_{}_{}", root_idx, depth, node_idx)))
+                .group("drawer_file_row")
+                .w_full()
+                .pl(px(depth_indent + 8.0))
+                .pr_1p5()
+                .py_1()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_between()
+                .text_size(px(12.))
+                .font_weight(FontWeight::NORMAL)
+                .tooltip(move |_window, cx| {
+                    let t = tooltip_name.clone();
+                    cx.new(|_| DrawerTooltipView { text: t }).into()
+                })
+                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                    on_select(&p, window, cx);
+                });
+
+            if is_active {
+                item = item
+                    .bg(theme.warm_pill_bg())
+                    .text_color(theme.warm_pill_text())
+                    .font_weight(FontWeight::MEDIUM);
+            } else {
+                item = item
+                    .text_color(theme.text_primary)
+                    .hover(|s| s.bg(theme.surface));
+            }
+
+            let left_part = div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .min_w(px(0.))
+                .child(
+                    if is_open && !is_active {
+                        div()
+                            .w(px(5.))
+                            .h(px(5.))
+                            .rounded_full()
+                            .bg(theme.text_muted)
+                    } else {
+                        div().w(px(5.)).h(px(5.))
+                    },
+                )
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .truncate()
+                        .child(file_name),
+                );
+
+            let mut right_part = div().flex().items_center().gap_1();
+            if is_dirty {
+                right_part = right_part.child(
+                    div()
+                        .w(px(6.))
+                        .h(px(6.))
+                        .rounded_full()
+                        .bg(theme.accent),
+                );
+            }
+
+            if is_open {
+                right_part = right_part.child(
+                    div()
+                        .id(SharedString::from(format!("btn_close_file_{}_{}_{}", root_idx, depth, node_idx)))
+                        .w(px(16.))
+                        .h(px(16.))
+                        .rounded(px(3.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(12.))
+                        .text_color(theme.text_muted)
+                        .opacity(0.0)
+                        .group_hover("drawer_file_row", |s| s.opacity(1.0))
+                        .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
+                        .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                            cx.stop_propagation();
+                            on_close(&close_key, window, cx);
+                        })
+                        .child("×"),
+                );
+            }
+
+            out.push(item.child(left_part).child(right_part).into_any_element());
+        }
+    }
 }
 
 struct DrawerTooltipView {

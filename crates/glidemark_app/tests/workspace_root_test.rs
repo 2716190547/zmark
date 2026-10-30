@@ -1208,3 +1208,45 @@ fn test_root_label_disambiguation_hierarchical() {
     assert_eq!(root_label(&two_missing, 1), "notes \u{2014} backup");
 }
 
+#[test]
+fn test_expand_to_file_in_multi_root() {
+    let tmp = tempdir().unwrap();
+    let root_a = tmp.path().join("proj_a");
+    let nested_dir = root_a.join("sub1").join("sub2");
+    fs::create_dir_all(&nested_dir).unwrap();
+    let nested_file = nested_dir.join("test.md");
+    fs::write(&nested_file, "# Nested File").unwrap();
+
+    let mut state = clean_test_state(&tmp);
+    let root_idx = state.add_workspace_root(root_a).expect("Add root");
+
+    // Initially collapsed
+    state.workspace_roots[root_idx].is_expanded = false;
+
+    // Call expand_to_file
+    state.expand_to_file(&nested_file);
+
+    // Root should be expanded
+    assert!(state.workspace_roots[root_idx].is_expanded);
+
+    // sub1 should be expanded
+    let sub1_opt = state.workspace_roots[root_idx]
+        .tree
+        .iter()
+        .find(|n| n.name == "sub1");
+    assert!(sub1_opt.is_some(), "sub1 should exist");
+    let sub1 = sub1_opt.unwrap();
+    assert!(sub1.is_expanded, "sub1 should be expanded");
+
+    // sub2 should be expanded
+    let sub2_opt = sub1.children.iter().find(|n| n.name == "sub2");
+    assert!(sub2_opt.is_some(), "sub2 should exist");
+    let sub2 = sub2_opt.unwrap();
+    assert!(sub2.is_expanded, "sub2 should be expanded");
+
+    // test.md should be in sub2.children
+    let file_opt = sub2.children.iter().find(|n| n.name == "test.md");
+    assert!(file_opt.is_some(), "test.md should be found in sub2");
+}
+
+
