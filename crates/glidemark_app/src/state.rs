@@ -110,6 +110,104 @@ pub struct VisibleTreeRow {
     pub depth: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceRoot {
+    pub path: PathBuf,
+    pub tree: Vec<FileTreeNode>,
+    pub is_expanded: bool,
+    pub is_missing: bool,
+    pub truncated: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootAddError {
+    NotFound,
+    NotADirectory,
+    AlreadyExists,
+    NestedInExisting(PathBuf),
+    ContainsExisting(PathBuf),
+}
+
+impl std::fmt::Display for RootAddError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RootAddError::NotFound => write!(f, "Directory not found"),
+            RootAddError::NotADirectory => write!(f, "Path is not a directory"),
+            RootAddError::AlreadyExists => write!(f, "Workspace root already exists"),
+            RootAddError::NestedInExisting(p) => {
+                write!(f, "Directory is nested within existing root: {}", p.display())
+            }
+            RootAddError::ContainsExisting(p) => {
+                write!(f, "Directory contains existing root: {}", p.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for RootAddError {}
+
+/// Derives a disambiguated display label for a workspace root.
+/// Returns the folder name if unique among valid roots;
+/// traces parent directory name if duplicated (`docs — projA`);
+/// falls back to canonicalized full path if parent is also duplicated or absent.
+#[allow(dead_code)]
+pub fn root_label(roots: &[WorkspaceRoot], idx: usize) -> String {
+    if idx >= roots.len() {
+        return String::new();
+    }
+    let target = &roots[idx];
+    let folder_name = match target.path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => name.to_string(),
+        None => target.path.to_string_lossy().to_string(),
+    };
+
+    let has_duplicate = if target.is_missing {
+        roots.iter().enumerate().any(|(i, r)| {
+            i != idx && r.path.file_name().and_then(|n| n.to_str()).unwrap_or("/") == folder_name
+        })
+    } else {
+        roots.iter().enumerate().any(|(i, r)| {
+            i != idx && !r.is_missing && r.path.file_name().and_then(|n| n.to_str()).unwrap_or("/") == folder_name
+        })
+    };
+
+    if !has_duplicate {
+        return folder_name;
+    }
+
+    if let Some(parent) = target.path.parent() {
+        if let Some(parent_name) = parent.file_name().and_then(|n| n.to_str()) {
+            let candidate = format!("{} \u{2014} {}", folder_name, parent_name);
+            let candidate_duplicate = roots.iter().enumerate().any(|(i, r)| {
+                if i == idx {
+                    return false;
+                }
+                if !target.is_missing && r.is_missing {
+                    return false;
+                }
+                let r_folder = r.path.file_name().and_then(|n| n.to_str()).unwrap_or("/");
+                if r_folder != folder_name {
+                    return false;
+                }
+                let r_parent = r
+                    .path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                r_parent == parent_name
+            });
+
+            if !candidate_duplicate {
+                return candidate;
+            }
+        }
+    }
+
+    target.path.to_string_lossy().to_string()
+}
+
 pub struct AppState {
     pub doc: Document,
     pub open_docs: Vec<OpenDoc>,
@@ -117,6 +215,8 @@ pub struct AppState {
     pub next_scratch_id: u64,
     pub pending_close: Option<PendingClose>,
     pub workspace_folder: Option<PathBuf>,
+    #[allow(dead_code)]
+    pub workspace_roots: Vec<WorkspaceRoot>,
     pub editor: EditorEngine,
     pub view_mode: ViewMode,
     pub drawer_open: bool,
@@ -148,6 +248,43 @@ impl AppState {
         let editor = EditorEngine::new(&doc.buffer);
 
         let workspace_folder = doc.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+        let mut workspace_roots = Vec::new();
+        for p in &preferences.workspace_roots {
+            if p.exists() && p.is_dir() {
+                let canonical = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+                workspace_roots.push(WorkspaceRoot {
+                    path: canonical,
+                    tree: Vec::new(),
+                    is_expanded: true,
+                    is_missing: false,
+                    truncated: false,
+                });
+            } else {
+                workspace_roots.push(WorkspaceRoot {
+                    path: p.clone(),
+                    tree: Vec::new(),
+                    is_expanded: false,
+                    is_missing: true,
+                    truncated: false,
+                });
+            }
+        }
+
+        if workspace_roots.is_empty() {
+            if let Some(parent) = doc.path.as_ref().and_then(|p| p.parent()) {
+                if parent.exists() && parent.is_dir() {
+                    let canonical = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+                    workspace_roots.push(WorkspaceRoot {
+                        path: canonical,
+                        tree: Vec::new(),
+                        is_expanded: true,
+                        is_missing: false,
+                        truncated: false,
+                    });
+                }
+            }
+        }
+
         let key = if let Some(ref p) = doc.path {
             DocKey::Path(p.clone())
         } else {
@@ -165,6 +302,7 @@ impl AppState {
             next_scratch_id: 2,
             pending_close: None,
             workspace_folder,
+            workspace_roots,
             doc,
             editor,
             view_mode: ViewMode::Split,
@@ -390,6 +528,75 @@ impl AppState {
         };
         self.workspace_folder = Some(dir);
         self.refresh_sibling_files();
+    }
+
+    #[allow(dead_code)]
+    pub fn add_workspace_root(&mut self, path: PathBuf) -> Result<usize, RootAddError> {
+        if !path.exists() {
+            return Err(RootAddError::NotFound);
+        }
+        if !path.is_dir() {
+            return Err(RootAddError::NotADirectory);
+        }
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+
+        // Check if already in workspace_roots
+        for (idx, r) in self.workspace_roots.iter_mut().enumerate() {
+            let matches = r.path == canonical
+                || r.path == path
+                || std::fs::canonicalize(&r.path).map(|c| c == canonical).unwrap_or(false);
+            if matches {
+                if r.is_missing {
+                    r.path = canonical.clone();
+                    r.is_missing = false;
+                    r.is_expanded = true;
+                    self.preferences.workspace_roots =
+                        self.workspace_roots.iter().map(|root| root.path.clone()).collect();
+                    let _ = self.preferences.save();
+                    return Ok(idx);
+                } else {
+                    return Err(RootAddError::AlreadyExists);
+                }
+            }
+        }
+
+        // Check nesting relationships with non-missing roots
+        for r in &self.workspace_roots {
+            if r.is_missing {
+                continue;
+            }
+            if canonical.starts_with(&r.path) {
+                return Err(RootAddError::NestedInExisting(r.path.clone()));
+            }
+            if r.path.starts_with(&canonical) {
+                return Err(RootAddError::ContainsExisting(r.path.clone()));
+            }
+        }
+
+        let idx = self.workspace_roots.len();
+        self.workspace_roots.push(WorkspaceRoot {
+            path: canonical,
+            tree: Vec::new(),
+            is_expanded: true,
+            is_missing: false,
+            truncated: false,
+        });
+        self.preferences.workspace_roots =
+            self.workspace_roots.iter().map(|root| root.path.clone()).collect();
+        let _ = self.preferences.save();
+        Ok(idx)
+    }
+
+    #[allow(dead_code)]
+    pub fn remove_workspace_root(&mut self, idx: usize) -> Option<WorkspaceRoot> {
+        if idx >= self.workspace_roots.len() {
+            return None;
+        }
+        let removed = self.workspace_roots.remove(idx);
+        self.preferences.workspace_roots =
+            self.workspace_roots.iter().map(|root| root.path.clone()).collect();
+        let _ = self.preferences.save();
+        Some(removed)
     }
 
     #[allow(dead_code)]

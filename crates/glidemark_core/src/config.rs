@@ -48,6 +48,8 @@ pub struct Preferences {
     pub auto_save_delay_ms: u64,
     #[serde(default = "default_true")]
     pub auto_save_on_blur: bool,
+    #[serde(default)]
+    pub workspace_roots: Vec<PathBuf>,
 }
 
 impl Default for Preferences {
@@ -64,6 +66,7 @@ impl Default for Preferences {
             auto_save: true,
             auto_save_delay_ms: 1000,
             auto_save_on_blur: true,
+            workspace_roots: Vec::new(),
         }
     }
 }
