@@ -104,6 +104,9 @@ fn test_workspace_root_missing_recovery() {
         is_expanded: false,
         is_missing: true,
         truncated: false,
+        entries_used: 0,
+        files_used: 0,
+        deferred: false,
     });
     assert_eq!(state.workspace_roots.len(), 1);
     assert!(state.workspace_roots[0].is_missing);
@@ -151,6 +154,9 @@ fn test_workspace_root_disambiguation_labels() {
             is_expanded: true,
             is_missing: false,
             truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
         },
         WorkspaceRoot {
             path: docs_b.clone(),
@@ -158,6 +164,9 @@ fn test_workspace_root_disambiguation_labels() {
             is_expanded: true,
             is_missing: false,
             truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
         },
         WorkspaceRoot {
             path: unique.clone(),
@@ -165,6 +174,9 @@ fn test_workspace_root_disambiguation_labels() {
             is_expanded: true,
             is_missing: false,
             truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
         },
     ];
 
@@ -183,6 +195,9 @@ fn test_workspace_root_disambiguation_labels() {
             is_expanded: true,
             is_missing: false,
             truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
         },
         WorkspaceRoot {
             path: docs_b.clone(),
@@ -190,6 +205,9 @@ fn test_workspace_root_disambiguation_labels() {
             is_expanded: false,
             is_missing: true,
             truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
         },
     ];
     assert_eq!(root_label(&roots_with_missing, 0), "docs");
@@ -309,6 +327,9 @@ fn test_workspace_root_missing_root_blocks_nesting() {
         is_expanded: false,
         is_missing: true,
         truncated: false,
+        entries_used: 0,
+        files_used: 0,
+        deferred: false,
     });
 
     // Attempting to add a real subdirectory under a missing root is rejected
@@ -328,6 +349,9 @@ fn test_workspace_root_missing_root_blocks_nesting() {
         is_expanded: false,
         is_missing: true,
         truncated: false,
+        entries_used: 0,
+        files_used: 0,
+        deferred: false,
     });
 
     let err2 = state2.add_workspace_root(real_parent.clone()).unwrap_err();
@@ -379,6 +403,9 @@ fn test_root_label_root_path_and_full_path_fallback() {
         is_expanded: true,
         is_missing: false,
         truncated: false,
+        entries_used: 0,
+        files_used: 0,
+        deferred: false,
     }];
     assert_eq!(root_label(&root_slash, 0), "/");
 
@@ -390,6 +417,9 @@ fn test_root_label_root_path_and_full_path_fallback() {
             is_expanded: true,
             is_missing: false,
             truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
         },
         WorkspaceRoot {
             path: std::path::PathBuf::from("/b/shared/docs"),
@@ -397,6 +427,9 @@ fn test_root_label_root_path_and_full_path_fallback() {
             is_expanded: true,
             is_missing: false,
             truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
         },
     ];
 
@@ -477,14 +510,14 @@ fn test_scan_budget_fairness_guarantee() {
     state.add_workspace_root(root_a).unwrap();
     state.add_workspace_root(root_b).unwrap();
 
-    // Global budget of 35 files total.
-    // Because Root B is remaining after Root A, Root B reserves FIRST_LAYER_FLOOR_FILES (30).
-    // Therefore, Root A is allowed at most 35 - 30 = 5 files.
-    // Root B then receives up to 30 files, successfully scanning all its 5 files without starvation.
+    // Global budget of 35 files total across 2 roots.
+    // Under dynamic floor scaling, floor_files = min(30, 35 / 2) = 17 files.
+    // Root B reserves 17 files, so Root A is allowed at most 35 - 17 = 18 files.
+    // Root B then receives remaining 17 files, successfully scanning all its 5 files without starvation.
     state.refresh_all_roots_with_budget(ScanBudget::new(500, 35));
 
-    // Root A truncated at 5 files
-    assert_eq!(state.workspace_roots[0].tree.len(), 5);
+    // Root A truncated at 18 files
+    assert_eq!(state.workspace_roots[0].tree.len(), 18);
     assert!(state.workspace_roots[0].truncated);
 
     // Root B scanned all 5 files thanks to floor reservation
@@ -637,4 +670,221 @@ fn test_root_truncated_flag_set_on_limit() {
     state2.refresh_all_roots_with_budget(ScanBudget::new(2, 50));
     assert_eq!(state2.workspace_roots[idx2].tree.len(), 2);
     assert!(state2.workspace_roots[idx2].truncated);
+}
+
+#[test]
+fn test_global_budget_enforced_across_multiple_adds() {
+    let tmp = tempdir().unwrap();
+    let root_1 = tmp.path().join("bulk_1");
+    let root_2 = tmp.path().join("bulk_2");
+    let root_3 = tmp.path().join("bulk_3");
+    fs::create_dir_all(&root_1).unwrap();
+    fs::create_dir_all(&root_2).unwrap();
+    fs::create_dir_all(&root_3).unwrap();
+
+    // 200 files in each root (total 600 files > global budget 400)
+    for i in 0..200 {
+        fs::write(root_1.join(format!("doc_{:03}.md", i)), "content").unwrap();
+        fs::write(root_2.join(format!("doc_{:03}.md", i)), "content").unwrap();
+        fs::write(root_3.join(format!("doc_{:03}.md", i)), "content").unwrap();
+    }
+
+    let mut state = clean_test_state(&tmp);
+    let initial_files = state.scan_budget.files_left;
+    let initial_entries = state.scan_budget.entries_left;
+    assert_eq!(initial_files, 400);
+    assert_eq!(initial_entries, 2000);
+
+    let idx1 = state.add_workspace_root(root_1).expect("add root 1");
+    assert_eq!(idx1, 0);
+
+    let idx2 = state.add_workspace_root(root_2).expect("add root 2");
+    assert_eq!(idx2, 1);
+
+    let idx3 = state.add_workspace_root(root_3).expect("add root 3");
+    assert_eq!(idx3, 2);
+
+    let total_files_used: usize = state.workspace_roots.iter().map(|r| r.files_used).sum();
+    let total_entries_used: usize = state.workspace_roots.iter().map(|r| r.entries_used).sum();
+
+    // Total files used across all roots must strictly not exceed global budget 400
+    assert!(
+        total_files_used <= 400,
+        "Total files used ({}) exceeds global cap 400",
+        total_files_used
+    );
+    assert!(
+        total_entries_used <= 2000,
+        "Total entries used ({}) exceeds global cap 2000",
+        total_entries_used
+    );
+
+    // Global budget left must match remaining
+    assert_eq!(state.scan_budget.files_left + total_files_used, initial_files);
+    assert_eq!(state.scan_budget.entries_left + total_entries_used, initial_entries);
+
+    // Total files used is 400, files_left reaches 0
+    assert_eq!(total_files_used, 400);
+    assert_eq!(state.scan_budget.files_left, 0);
+
+    // Later roots are truncated
+    assert!(state.workspace_roots[0].truncated);
+    assert!(state.workspace_roots[1].truncated);
+    assert!(state.workspace_roots[2].truncated);
+
+    // Adding another root when budget is exhausted results in deferred
+    let root_4 = tmp.path().join("bulk_4");
+    fs::create_dir_all(&root_4).unwrap();
+    fs::write(root_4.join("doc_000.md"), "content").unwrap();
+    let idx4 = state.add_workspace_root(root_4).expect("add root 4");
+    assert_eq!(idx4, 3);
+    assert!(state.workspace_roots[3].deferred);
+    assert!(state.workspace_roots[3].tree.is_empty());
+}
+
+#[test]
+fn test_lazy_expand_deducts_from_global_budget() {
+    let tmp = tempdir().unwrap();
+    let root_dir = tmp.path().join("lazy_budget_project");
+    let docs_dir = root_dir.join("docs");
+    let extra_dir = root_dir.join("extra");
+    fs::create_dir_all(&docs_dir).unwrap();
+    fs::create_dir_all(&extra_dir).unwrap();
+
+    for i in 0..5 {
+        fs::write(docs_dir.join(format!("doc_{}.md", i)), "doc").unwrap();
+    }
+    fs::write(extra_dir.join("e1.md"), "extra").unwrap();
+    fs::write(extra_dir.join("e2.md"), "extra").unwrap();
+
+    let mut state = clean_test_state(&tmp);
+    let idx = state.add_workspace_root(root_dir.clone()).unwrap();
+
+    let budget_after_add = state.scan_budget.clone();
+    let root_files_after_add = state.workspace_roots[idx].files_used;
+
+    let canonical_docs = fs::canonicalize(&docs_dir).unwrap();
+    let toggled = state.toggle_root_folder(idx, &canonical_docs);
+    assert!(toggled);
+
+    // files_left decreased by 5, files_used increased by 5
+    assert_eq!(
+        state.scan_budget.files_left,
+        budget_after_add.files_left - 5
+    );
+    assert_eq!(
+        state.workspace_roots[idx].files_used,
+        root_files_after_add + 5
+    );
+
+    // Artificially deplete scan budget
+    state.scan_budget = ScanBudget::new(0, 0);
+
+    let canonical_extra = fs::canonicalize(&extra_dir).unwrap();
+    let toggled_extra = state.toggle_root_folder(idx, &canonical_extra);
+    assert!(toggled_extra);
+
+    // Root marked truncated due to 0 budget remaining
+    assert!(state.workspace_roots[idx].truncated);
+}
+
+#[test]
+fn test_dynamic_fair_floor_scaling_with_many_roots() {
+    let tmp = tempdir().unwrap();
+    let mut root_paths = Vec::new();
+
+    for i in 0..25 {
+        let root_dir = tmp.path().join(format!("root_{:02}", i));
+        fs::create_dir_all(&root_dir).unwrap();
+        fs::write(root_dir.join("a.md"), "a").unwrap();
+        fs::write(root_dir.join("b.md"), "b").unwrap();
+        root_paths.push(root_dir);
+    }
+
+    let mut state = clean_test_state(&tmp);
+    for path in root_paths {
+        state.add_workspace_root(path).expect("add root");
+    }
+
+    // Refresh all roots with global budget (which uses dynamic fair floor scaling)
+    state.refresh_all_roots();
+
+    // Verify root 0 was not starved to empty (would have been 0 under static 30-file floor reservation!)
+    assert_eq!(state.workspace_roots[0].tree.len(), 2);
+    assert!(!state.workspace_roots[0].deferred);
+
+    // Verify all 25 roots received floor quota and scanned their 2 files
+    assert_eq!(state.workspace_roots.len(), 25);
+    for (i, root) in state.workspace_roots.iter().enumerate() {
+        assert_eq!(
+            root.tree.len(),
+            2,
+            "Root {} should have scanned both files, got {}",
+            i,
+            root.tree.len()
+        );
+        assert!(!root.deferred, "Root {} should not be deferred", i);
+    }
+}
+
+#[test]
+fn test_truncated_vs_deferred_distinction() {
+    let tmp = tempdir().unwrap();
+    let root_a = tmp.path().join("dist_a");
+    let root_b = tmp.path().join("dist_b");
+    let root_c = tmp.path().join("dist_c");
+    fs::create_dir_all(&root_a).unwrap();
+    fs::create_dir_all(&root_b).unwrap();
+    fs::create_dir_all(&root_c).unwrap();
+
+    for i in 0..5 {
+        fs::write(root_a.join(format!("a_{}.md", i)), "a").unwrap();
+    }
+    for i in 0..3 {
+        fs::write(root_b.join(format!("b_{}.md", i)), "b").unwrap();
+    }
+    for i in 0..10 {
+        fs::write(root_c.join(format!("c_{}.md", i)), "c").unwrap();
+    }
+
+    let mut state = clean_test_state(&tmp);
+
+    // 1. Root A added with ample budget
+    let idx_a = state.add_workspace_root(root_a).unwrap();
+    assert_eq!(idx_a, 0);
+    assert_eq!(state.workspace_roots[0].tree.len(), 5);
+    assert!(!state.workspace_roots[0].truncated);
+    assert!(!state.workspace_roots[0].deferred);
+    assert!(state.scan_budget.files_left > 0);
+
+    // 2. Set scan_budget to zero: Root B must be deferred, not truncated
+    state.scan_budget = ScanBudget::new(0, 0);
+    let idx_b = state.add_workspace_root(root_b).unwrap();
+    assert_eq!(idx_b, 1);
+    assert!(
+        state.workspace_roots[1].deferred,
+        "Zero-budget root must be marked deferred"
+    );
+    assert!(
+        state.workspace_roots[1].tree.is_empty(),
+        "Deferred root tree must be empty"
+    );
+    assert!(
+        !state.workspace_roots[1].truncated,
+        "Deferred root was not scanned, so truncated must be false"
+    );
+
+    // 3. Partial budget (quota of 2 files for 10 files): Root C must be truncated, not deferred
+    state.scan_budget = ScanBudget::new(100, 2);
+    let idx_c = state.add_workspace_root(root_c).unwrap();
+    assert_eq!(idx_c, 2);
+    assert!(
+        state.workspace_roots[2].truncated,
+        "Partially scanned root hitting limit must be marked truncated"
+    );
+    assert!(
+        !state.workspace_roots[2].deferred,
+        "Partially scanned root must NOT be deferred"
+    );
+    assert_eq!(state.workspace_roots[2].tree.len(), 2);
 }

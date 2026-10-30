@@ -118,6 +118,24 @@ pub struct WorkspaceRoot {
     pub is_expanded: bool,
     pub is_missing: bool,
     pub truncated: bool,
+    pub entries_used: usize,
+    pub files_used: usize,
+    pub deferred: bool,
+}
+
+impl Default for WorkspaceRoot {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::new(),
+            tree: Vec::new(),
+            is_expanded: false,
+            is_missing: false,
+            truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,6 +323,9 @@ pub fn normalize_loaded_roots(paths: &[PathBuf]) -> NormalizedRoots {
             is_expanded: !is_missing,
             is_missing,
             truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
         });
     }
 
@@ -381,6 +402,8 @@ pub struct AppState {
     pub workspace_folder: Option<PathBuf>,
     #[allow(dead_code)]
     pub workspace_roots: Vec<WorkspaceRoot>,
+    #[allow(dead_code)]
+    pub scan_budget: ScanBudget,
     #[allow(dead_code)]
     pub discarded_roots: Vec<(PathBuf, String)>,
     #[allow(dead_code)]
@@ -466,6 +489,7 @@ impl AppState {
             pending_close: None,
             workspace_folder,
             workspace_roots,
+            scan_budget: ScanBudget::default(),
             discarded_roots,
             preferences_path,
             doc,
@@ -769,6 +793,9 @@ impl AppState {
             is_expanded: true,
             is_missing: false,
             truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
         });
         self.preferences.workspace_roots =
             self.workspace_roots.iter().map(|root| root.path.clone()).collect();
@@ -791,18 +818,45 @@ impl AppState {
         if self.workspace_roots[root_idx].is_missing {
             return;
         }
+
+        if self.scan_budget.entries_left == 0 || self.scan_budget.files_left == 0 {
+            self.workspace_roots[root_idx].deferred = true;
+            self.workspace_roots[root_idx].tree.clear();
+            return;
+        }
+
+        self.scan_budget.entries_left =
+            (self.scan_budget.entries_left.saturating_add(self.workspace_roots[root_idx].entries_used)).min(2000);
+        self.scan_budget.files_left =
+            (self.scan_budget.files_left.saturating_add(self.workspace_roots[root_idx].files_used)).min(400);
+
+        let root_entries = self.scan_budget.entries_left.min(ScanBudget::PER_ROOT_ENTRY_CAP);
+        let root_files = self.scan_budget.files_left.min(ScanBudget::PER_ROOT_FILE_CAP);
+
+        if root_entries == 0 || root_files == 0 {
+            self.workspace_roots[root_idx].deferred = true;
+            self.workspace_roots[root_idx].tree.clear();
+            return;
+        }
+
+        let mut root_budget = ScanBudget::new(root_entries, root_files);
         let mut expanded_paths = HashSet::new();
         collect_expanded_paths(&self.workspace_roots[root_idx].tree, &mut expanded_paths);
 
-        let mut budget = ScanBudget::new(
-            ScanBudget::PER_ROOT_ENTRY_CAP,
-            ScanBudget::PER_ROOT_FILE_CAP,
-        );
         let root_path = self.workspace_roots[root_idx].path.clone();
-        let (tree, truncated) = scan_root_layer(&root_path, 0, &mut budget, &expanded_paths, 4);
+        let (tree, truncated) = scan_root_layer(&root_path, 0, &mut root_budget, &expanded_paths, 4);
 
-        self.workspace_roots[root_idx].tree = tree;
+        let consumed_entries = root_entries.saturating_sub(root_budget.entries_left);
+        let consumed_files = root_files.saturating_sub(root_budget.files_left);
+
+        self.workspace_roots[root_idx].entries_used = consumed_entries;
+        self.workspace_roots[root_idx].files_used = consumed_files;
+        self.scan_budget.entries_left = self.scan_budget.entries_left.saturating_sub(consumed_entries);
+        self.scan_budget.files_left = self.scan_budget.files_left.saturating_sub(consumed_files);
+
+        self.workspace_roots[root_idx].deferred = false;
         self.workspace_roots[root_idx].truncated = truncated;
+        self.workspace_roots[root_idx].tree = tree;
     }
 
     pub fn refresh_all_roots(&mut self) {
@@ -818,17 +872,30 @@ impl AppState {
             if self.workspace_roots[idx].is_missing {
                 continue;
             }
-            let remaining_after = non_missing_count.saturating_sub(non_missing_seen + 1);
-            non_missing_seen += 1;
-
-            let reserved_entries = remaining_after * ScanBudget::FIRST_LAYER_FLOOR_ENTRIES;
-            let reserved_files = remaining_after * ScanBudget::FIRST_LAYER_FLOOR_FILES;
-
+            let slots = non_missing_count.saturating_sub(non_missing_seen);
+            if slots == 0 {
+                break;
+            }
+            let floor_entries =
+                ScanBudget::FIRST_LAYER_FLOOR_ENTRIES.min(global_budget.entries_left / slots);
+            let floor_files =
+                ScanBudget::FIRST_LAYER_FLOOR_FILES.min(global_budget.files_left / slots);
+            let reserved_entries = floor_entries * (slots - 1);
+            let reserved_files = floor_files * (slots - 1);
             let available_entries = global_budget.entries_left.saturating_sub(reserved_entries);
             let available_files = global_budget.files_left.saturating_sub(reserved_files);
-
             let root_entries = available_entries.min(ScanBudget::PER_ROOT_ENTRY_CAP);
             let root_files = available_files.min(ScanBudget::PER_ROOT_FILE_CAP);
+
+            non_missing_seen += 1;
+
+            if root_entries == 0 || root_files == 0 {
+                self.workspace_roots[idx].deferred = true;
+                self.workspace_roots[idx].tree.clear();
+                self.workspace_roots[idx].entries_used = 0;
+                self.workspace_roots[idx].files_used = 0;
+                continue;
+            }
 
             let mut root_budget = ScanBudget::new(root_entries, root_files);
 
@@ -836,17 +903,22 @@ impl AppState {
             collect_expanded_paths(&self.workspace_roots[idx].tree, &mut expanded_paths);
 
             let root_path = self.workspace_roots[idx].path.clone();
-            let (tree, truncated) = scan_root_layer(&root_path, 0, &mut root_budget, &expanded_paths, 4);
+            let (tree, truncated) =
+                scan_root_layer(&root_path, 0, &mut root_budget, &expanded_paths, 4);
 
             let consumed_entries = root_entries.saturating_sub(root_budget.entries_left);
             let consumed_files = root_files.saturating_sub(root_budget.files_left);
 
-            global_budget.entries_left = global_budget.entries_left.saturating_sub(consumed_entries);
-            global_budget.files_left = global_budget.files_left.saturating_sub(consumed_files);
-
+            self.workspace_roots[idx].entries_used = consumed_entries;
+            self.workspace_roots[idx].files_used = consumed_files;
+            self.workspace_roots[idx].deferred = false;
             self.workspace_roots[idx].tree = tree;
             self.workspace_roots[idx].truncated = truncated;
+
+            global_budget.entries_left = global_budget.entries_left.saturating_sub(consumed_entries);
+            global_budget.files_left = global_budget.files_left.saturating_sub(consumed_files);
         }
+        self.scan_budget = global_budget;
     }
 
     #[allow(dead_code)]
@@ -863,11 +935,16 @@ impl AppState {
             return true;
         }
 
-        let (used_entries, used_files) = count_tree_usage(&self.workspace_roots[root_idx].tree);
-        let remaining_entries = ScanBudget::PER_ROOT_ENTRY_CAP.saturating_sub(used_entries);
-        let remaining_files = ScanBudget::PER_ROOT_FILE_CAP.saturating_sub(used_files);
-        let mut budget = ScanBudget::new(remaining_entries, remaining_files);
+        let root_rem_entries =
+            ScanBudget::PER_ROOT_ENTRY_CAP.saturating_sub(self.workspace_roots[root_idx].entries_used);
+        let root_rem_files =
+            ScanBudget::PER_ROOT_FILE_CAP.saturating_sub(self.workspace_roots[root_idx].files_used);
+        let avail_entries = root_rem_entries.min(self.scan_budget.entries_left);
+        let avail_files = root_rem_files.min(self.scan_budget.files_left);
+
+        let mut budget = ScanBudget::new(avail_entries, avail_files);
         let mut is_truncated = self.workspace_roots[root_idx].truncated;
+        let mut did_expand = false;
 
         fn toggle_in_nodes(
             nodes: &mut [FileTreeNode],
@@ -875,12 +952,19 @@ impl AppState {
             depth: usize,
             budget: &mut ScanBudget,
             is_truncated: &mut bool,
+            did_expand: &mut bool,
+            avail_entries: usize,
+            avail_files: usize,
         ) -> bool {
             for node in nodes.iter_mut() {
                 if node.path == target {
                     if node.is_dir {
                         node.is_expanded = !node.is_expanded;
                         if node.is_expanded && node.children.is_empty() {
+                            *did_expand = true;
+                            if avail_entries == 0 || avail_files == 0 {
+                                *is_truncated = true;
+                            }
                             let empty_set = HashSet::new();
                             let (children, child_trunc) =
                                 scan_root_layer(&node.path, depth + 1, budget, &empty_set, 4);
@@ -892,7 +976,18 @@ impl AppState {
                     }
                     return true;
                 }
-                if node.is_dir && toggle_in_nodes(&mut node.children, target, depth + 1, budget, is_truncated) {
+                if node.is_dir
+                    && toggle_in_nodes(
+                        &mut node.children,
+                        target,
+                        depth + 1,
+                        budget,
+                        is_truncated,
+                        did_expand,
+                        avail_entries,
+                        avail_files,
+                    )
+                {
                     return true;
                 }
             }
@@ -905,10 +1000,23 @@ impl AppState {
             0,
             &mut budget,
             &mut is_truncated,
+            &mut did_expand,
+            avail_entries,
+            avail_files,
         );
 
         if found {
             self.workspace_roots[root_idx].truncated = is_truncated;
+            if did_expand {
+                let consumed_entries = avail_entries.saturating_sub(budget.entries_left);
+                let consumed_files = avail_files.saturating_sub(budget.files_left);
+                self.workspace_roots[root_idx].entries_used =
+                    self.workspace_roots[root_idx].entries_used.saturating_add(consumed_entries);
+                self.workspace_roots[root_idx].files_used =
+                    self.workspace_roots[root_idx].files_used.saturating_add(consumed_files);
+                self.scan_budget.entries_left = self.scan_budget.entries_left.saturating_sub(consumed_entries);
+                self.scan_budget.files_left = self.scan_budget.files_left.saturating_sub(consumed_files);
+            }
         }
 
         found
@@ -929,6 +1037,10 @@ impl AppState {
                 self.workspace_roots.iter().map(|r| r.path.clone()).collect();
             return Err(format!("Failed to save preferences: {}", e));
         }
+        self.scan_budget.entries_left =
+            (self.scan_budget.entries_left.saturating_add(removed.entries_used)).min(2000);
+        self.scan_budget.files_left =
+            (self.scan_budget.files_left.saturating_add(removed.files_used)).min(400);
         Ok(Some(removed))
     }
 
