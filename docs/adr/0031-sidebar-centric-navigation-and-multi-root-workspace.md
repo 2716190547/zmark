@@ -1,7 +1,7 @@
 # ADR 0031: 侧栏中心导航、无 Tab 头部与多根工作区
 
 ## 状态
-已接受 (Accepted) - A 期已落地（无 Tab、纯标题、DocKey、脏关闭/退出保护、草稿组）；B 期多根待实施
+已接受 (Accepted) - A 期已交付验证；B 期（多根工作区与外部文件）规划达成审查共识并冻结，进入分步实施
 
 ## 上下文 (Context)
 现有实现把“文档切换”放在右侧 Tab Strip 上，工作区只支持一个根目录，`open_file` 遇到根外文件还会自动替换根。实际使用中暴露出三个问题：
@@ -29,28 +29,59 @@
 - 关闭后台 dirty 文档前，先将其切换为当前文档再弹出确认，避免用户在看不到内容时盲选。
 - 草稿进入侧栏“草稿”虚拟组；无路径草稿保存时走原生 Save As，保存成功后 `DocKey::Scratch` 原地升格为 `DocKey::Path`，并按路径归入对应根或外部文件组。
 
-### 3. 显式多根工作区 + 外部文件
-- `workspace_roots: Vec<WorkspaceRoot>` 取代单个 `workspace_folder`；根由用户显式添加，可同时存在多个。
-- 打开不属于任何根的文件时，不自动加根，放入“外部文件”虚拟组。
-- 添加根前先 canonicalize；与已有根存在父子/重叠关系时拒绝并提示，避免同一文件重复展示。
-- 两个同名根（如 `projA/docs` 与 `projB/docs`）在根节点右侧显示浅灰父目录后缀。
-- 移除根不关闭其下文档；已打开文档（含 dirty）转入“外部文件”并标注“已移除工作区”，禁止随根丢弃。
-- 根目录跨启动持久化；缺失目录保留并标记 `missing`，扫描时跳过且不 panic。
+### 3. 显式多根工作区 + 外部文件 (B 期深化)
+- **精简数据模型（Ponytail 极简）**：
+  ```rust
+  pub struct WorkspaceRoot {
+      pub path: PathBuf,           // canonicalized 绝对物理路径
+      pub tree: Vec<FileTreeNode>, // 扫描得到的一级及展开子节点树
+      pub is_expanded: bool,      // 是否折叠
+      pub is_missing: bool,       // 磁盘路径不存在（断开/删除）
+      pub truncated: bool,        // 是否触碰预算上限被截断
+  }
+  ```
+- **派生状态替代冗余存储**：
+  - `display_name`：由辅助函数 `root_label(&roots, idx)` 动态计算。同名根向上提取父目录名（如 `docs — repoA` 与 `docs — repoB`），无重名直接展示文件夹名。
+  - `loose_docs`：侧栏“外部文件”列表由 `open_docs` 动态计算（过滤出路径不属于任何非 missing 根的文档），不单独设存储字段。
+  - 侧栏树项的 `is_open` / `is_active` / `is_dirty` 均在渲染层根据 `open_docs` 动态派生。
+- **根目录边界与安全**：
+  - 添加根前执行 `canonicalize` 物理路径规范化。
+  - 双向嵌套拒绝：若新路径为已有根的子目录，或新路径包含已有根，拒绝添加并报错。
+  - 缺失根恢复：跨启动加载不存在的根标记 `is_missing = true`（置灰、不 panic、允许悬停 `×` 移除）；用户重新添加一个已存在但处于 `is_missing` 状态的根时，直接复活并重新扫描，不报 `AlreadyExists`。
+  - missing 根下已打开的文档自动流转至“外部文件”虚拟组。
+- **移除根绝不丢数据**：
+  - 移除根只改变工作区根列表，**严禁强制关闭其下打开的文档**；
+  - 所有已打开的文档（包含未保存的 dirty 文档）自动转入“外部文件”虚拟组继续保持编辑。
+- **打开与保存行为纠偏**：
+  - 彻底移除 `open_file` 与 `save_doc_as` 中“自动切换工作区根”的副作用；
+  - 打开或另存为到根外文件时，作为外部文件保留，绝不篡改用户的 `workspace_roots`。
 
-### 4. 扫描预算与刷新
-- 初始只扫描根 + 第一层，展开目录时按需扫描下一层。
-- 全局预算 2,000 entries / 400 Markdown files；单根 800 / 150；超限显示“已截断”。
-- 切换文档不重扫所有根；文件操作或显式刷新只刷新对应根。
-- 保留 symlink 不跟随、隐藏目录/`target`/`node_modules` 跳过。
+### 4. 扫描预算与事件驱动刷新 (B 期深化)
+- **彻底删除旧扫描管道**：
+  - 物理删除 `sibling_files` 与 `scan_markdown_files`；
+  - 删除 `refresh_sibling_files` 复合函数，彻底消除切换/打开文档时的双重扫描与 N 倍放大。
+- **共享 ScanBudget 与公平性保底**：
+  - 引入共享预算结构体 `ScanBudget`（默认上限 2000 entries / 400 markdown files；单根 800 / 150）；
+  - 实施**首层公平保底**：每个根预分配首层保底额度（100 entries / 30 files），避免前序大根吃满全局预算导致后续根饥饿空白；
+  - 预算用尽的根标记 `truncated = true`，未分配到预算的子项显示“已截断”；
+  - 懒展开仅在用户点击折叠箭头时对该子目录续扫，继续消耗剩余预算，不重置预算池。
+- **事件驱动局部刷新**：
+  - `switch_document` 与 `close_document` **禁止触发任何文件树扫描**；
+  - `open_file`、`rename_file`、`save_doc_as` 仅刷新目标文件所在的单一工作区根（`refresh_root(idx)`）；
+  - 仅在添加/移除根、或用户主动触发时才执行全局扫描。
 
-### 5. 分期落地
-- **A 期**：无 Tab、标题重命名、DocKey、脏关闭/退出保护、草稿组、侧栏 active/open/dirty 状态；内部使用单根。
-- **B 期**：多根添加/移除、外部文件组、根持久化、缺失根、懒加载扫描、i18n 与 README 收尾。
+### 5. 分期与 Ticket 落地规划
+- **A 期（已交付）**：无 Tab、纯大标题、DocKey 状态模型、脏关闭/退出保护、草稿组、侧栏 active/open/dirty 状态；单根内部过渡。
+- **B 期（分步实施 Ticket）**：
+  - **Ticket B1 (Root Model & Persistence)**：`WorkspaceRoot`、`Preferences.workspace_roots`、路径 canonicalize、嵌套/包含校验、missing 恢复、添加/移除根方法及全量独立单元测试。
+  - **Ticket B2 (Scan Budget & Lazy Tree)**：`ScanBudget`、首层保底、懒展开续扫、truncated 状态、局部刷新机制及测试。
+  - **Ticket B3 (State Integration)**：删除 `workspace_folder` / `sibling_files`、解耦 `open_file` / `save_doc_as` 换根副作用、外部文件动态派生、移除根保文档测试。
+  - **Ticket B4 (Drawer UI & i18n)**：工作区 Header（[+] 添加）、多根折叠/展开/移除/missing 渲染、外部文件组渲染、新增多语言收敛至 `I18nStrings`。
+  - **Ticket B5 (Integration & Polish)**：深层文件定位自动展开、重命名/保存失败错误提示、README 与 ADR 最终更新、打包 `/Applications/GlideMark.app` 终验。
 
 ## 结果 (Consequences)
 
-- 右侧头部更纯粹，文档切换统一由侧栏承担；代价是侧栏成为主入口，必须清晰展示 active/open/dirty 状态。
-- 多根让相关目录可以并排浏览；代价是根去重、嵌套拒绝、移除后文档归属、扫描预算都需要显式规则。
-- 关闭/退出的 dirty 保护会打断“快速关闭”的操作，但避免隐藏文档丢改动。
-- ADR 0021 的 Tab Strip 部分被本文取代；`open_docs` 资源模型保留。ADR 0027 的右侧头部“标签页”描述同步失效一部分。
-- 新增术语：`Active Document`、`Workspace Root`、`Loose File`、`Scratch Document`；`Document Tab` 废弃。
+- 右侧头部更纯粹，文档切换统一由侧栏承担；侧栏清晰展示 active/open/dirty 状态与多根层级。
+- 多根让相关目录可以并排浏览；通过派生状态与 ScanBudget 保障了多根下的内存占用与秒级响应。
+- 去除 `sibling_files` 彻底消除了无谓的重复扫描，编辑与切换文档零磁盘 I/O 抖动。
+- 移除根保文档与退出保护形成严密的数据安全护栏。

@@ -88,7 +88,7 @@ GlideMark 是一款基于 **Rust + GPUI** 的高性能、侧栏驱动的多文�
 - **避免叫法**：定时轮询保存、云端同步
 
 ### 21. Loose File (外部文件)
-- **定义**：已打开但不属于任何 Workspace Root 的 Markdown 文件，归入侧栏“外部文件”虚拟组。
+- **定义**：已打开但不属于任何有效（非 missing）Workspace Root 的物理 Markdown 文件，归入侧栏“外部文件”虚拟组。
 - **避免叫法**：游离文件、临时文件、未归档文件
 
 ### 22. Scratch Document (草稿文档)
