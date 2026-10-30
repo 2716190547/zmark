@@ -507,15 +507,57 @@ fn test_exit_window_dirty_save_strategy() {
     state.sync_from_editor();
     assert!(state.is_dirty());
 
-    // Exit window strategy: all modified docs with paths are saved
-    for od in state.open_docs.iter_mut() {
-        if od.doc.status == glidemark_core::document::DocumentStatus::Modified && od.doc.path.is_some() {
-            od.doc.save().unwrap();
-        }
-    }
+    // Calling handle_window_should_close auto-saves pathed doc and returns true
+    let can_close = state.handle_window_should_close();
+    assert!(can_close);
 
     let disk = fs::read_to_string(&f1).unwrap();
     assert!(disk.contains("Edited"));
+}
+
+#[test]
+fn test_window_should_close_blocks_on_dirty_draft() {
+    let mut state = AppState::new(Document::new_scratch());
+    state.editor.insert_text("Unsaved notes in draft");
+    state.sync_from_editor();
+    assert!(state.is_dirty());
+
+    // Because there is a dirty unpathed draft, window closing is blocked
+    let can_close = state.handle_window_should_close();
+    assert!(!can_close);
+    assert!(state.pending_close.is_some());
+}
+
+#[test]
+fn test_background_dirty_document_switches_on_close_request() {
+    let dir = tempdir().unwrap();
+    let f1 = dir.path().join("doc1.md");
+    let f2 = dir.path().join("doc2.md");
+    fs::write(&f1, "Doc 1").unwrap();
+    fs::write(&f2, "Doc 2").unwrap();
+
+    let doc1 = Document::from_file(f1.clone()).unwrap();
+    let mut state = AppState::new(doc1);
+    state.open_file(f2.clone()).unwrap();
+
+    // Now f2 is active. Switch to f1, edit it, then switch back to f2
+    let k1 = DocKey::Path(f1.clone());
+    let k2 = DocKey::Path(f2.clone());
+
+    state.switch_document(&k1);
+    state.editor.insert_text(" modified");
+    state.sync_from_editor();
+
+    state.switch_document(&k2);
+    assert_eq!(state.active, Some(k2));
+
+    // Request closing background dirty doc k1
+    let decision = state.request_close(&k1);
+    assert!(matches!(decision, CloseDecision::PromptDirty { .. }));
+
+    // Automatically switched to k1 before presenting prompt
+    assert_eq!(state.active, Some(k1));
+    assert!(state.pending_close.is_some());
 }
 
 #[test]

@@ -521,6 +521,10 @@ impl AppState {
 
         match &decision {
             CloseDecision::PromptDirty { key, title, has_path } => {
+                // If closing a background dirty document, switch to it first so user sees what is being closed
+                if self.active.as_ref() != Some(key) {
+                    self.switch_document(key);
+                }
                 self.pending_close = Some(PendingClose {
                     key: key.clone(),
                     title: title.clone(),
@@ -533,6 +537,32 @@ impl AppState {
                 decision
             }
         }
+    }
+
+    /// Evaluates window exit strategy:
+    /// - If any unpathed draft is modified, switch to it, trigger close prompt, and block exit.
+    /// - Otherwise, auto-save all modified documents with paths and allow exit.
+    pub fn handle_window_should_close(&mut self) -> bool {
+        self.sync_from_editor();
+
+        let dirty_unpathed_scratch = self.open_docs.iter().find(|d| {
+            d.key.is_scratch()
+                && (d.doc.status == DocumentStatus::Modified || !d.doc.buffer.trim().is_empty())
+        });
+
+        if let Some(scratch) = dirty_unpathed_scratch {
+            let key = scratch.key.clone();
+            self.request_close(&key);
+            return false;
+        }
+
+        for od in self.open_docs.iter_mut() {
+            if od.doc.path.is_some() && od.doc.status == DocumentStatus::Modified {
+                let _ = od.doc.save();
+            }
+        }
+
+        true
     }
 
     pub fn cancel_close(&mut self) {

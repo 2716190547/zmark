@@ -103,6 +103,14 @@ Enjoy writing and reading with pure speed!
             let state = AppState::new(doc);
             let view = cx.new(|cx| WorkspaceView::new(state, cx));
             window.focus(&view.read(cx).focus_handle);
+
+            let view_close = view.clone();
+            window.on_window_should_close(cx, move |_window, cx| {
+                view_close.update(cx, |this, cx| {
+                    this.on_window_should_close(cx)
+                })
+            });
+
             view
         })
         .unwrap();

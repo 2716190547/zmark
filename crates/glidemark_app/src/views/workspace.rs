@@ -321,19 +321,31 @@ impl WorkspaceView {
         }
     }
 
-    pub fn trigger_close_active(&mut self, cx: &mut Context<Self>) {
-        if let Some(key) = self.state.active.clone() {
-            let decision = self.state.request_close(&key);
-            match decision {
-                CloseDecision::CloseImmediately => {
-                    self.on_document_swapped();
-                    cx.notify();
-                }
-                CloseDecision::PromptDirty { .. } => {
-                    cx.notify();
-                }
+    pub fn trigger_close_doc(&mut self, key: &crate::state::DocKey, cx: &mut Context<Self>) {
+        let decision = self.state.request_close(key);
+        match decision {
+            CloseDecision::CloseImmediately => {
+                self.on_document_swapped();
+                cx.notify();
+            }
+            CloseDecision::PromptDirty { .. } => {
+                self.on_document_swapped();
+                cx.notify();
             }
         }
+    }
+
+    pub fn trigger_close_active(&mut self, cx: &mut Context<Self>) {
+        if let Some(key) = self.state.active.clone() {
+            self.trigger_close_doc(&key, cx);
+        }
+    }
+
+    pub fn on_window_should_close(&mut self, cx: &mut Context<Self>) -> bool {
+        let allow = self.state.handle_window_should_close();
+        self.on_document_swapped();
+        cx.notify();
+        allow
     }
 
     pub fn trigger_draft(&mut self, cx: &mut Context<Self>) {
@@ -765,6 +777,29 @@ impl Render for WorkspaceView {
             });
         });
 
+        let view_doc_switch = cx.entity().clone();
+        let on_select_doc = Arc::new(move |key: &crate::state::DocKey, _window: &mut Window, cx: &mut App| {
+            view_doc_switch.update(cx, |this, cx| {
+                this.state.switch_document(key);
+                this.on_document_swapped();
+                cx.notify();
+            });
+        });
+
+        let view_doc_close = cx.entity().clone();
+        let on_close_doc = Arc::new(move |key: &crate::state::DocKey, _window: &mut Window, cx: &mut App| {
+            view_doc_close.update(cx, |this, cx| {
+                this.trigger_close_doc(key, cx);
+            });
+        });
+
+        let view_draft = cx.entity().clone();
+        let on_new_draft = Arc::new(move |_window: &mut Window, cx: &mut App| {
+            view_draft.update(cx, |this, cx| {
+                this.trigger_draft(cx);
+            });
+        });
+
         let view_tab = cx.entity().clone();
         let on_select_tab = Arc::new(move |tab: crate::state::DrawerTab, _window: &mut Window, cx: &mut App| {
             view_tab.update(cx, |this, cx| {
@@ -1037,9 +1072,6 @@ impl Render for WorkspaceView {
                         "n" => {
                             this.trigger_draft(cx);
                         }
-                        "t" => {
-                            this.trigger_draft(cx);
-                        }
                         "o" => {
                             let rx = cx.prompt_for_paths(PathPromptOptions {
                                 files: true,
@@ -1141,7 +1173,9 @@ impl Render for WorkspaceView {
                                 .child(render_drawer(
                                     self.state.drawer_tab,
                                     &tree_rows,
-                                    self.state.doc.path.as_ref(),
+                                    &self.state.open_docs,
+                                    self.state.active.as_ref(),
+                                    is_dirty,
                                     self.state.workspace_folder.as_ref(),
                                     &self.state.doc.parsed.headings(),
                                     theme,
@@ -1150,6 +1184,9 @@ impl Render for WorkspaceView {
                                     on_select_tab,
                                     on_toggle_folder,
                                     on_select_file,
+                                    on_select_doc,
+                                    on_close_doc,
+                                    on_new_draft,
                                     on_select_heading,
                                     on_open_folder,
                                     on_toggle_drawer,
