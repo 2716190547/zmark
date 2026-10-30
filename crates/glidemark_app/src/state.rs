@@ -184,14 +184,21 @@ fn resolve_cmp_path(path: &std::path::Path) -> PathBuf {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedRoots {
+    pub roots: Vec<WorkspaceRoot>,
+    pub discarded: Vec<(PathBuf, String)>,
+}
+
 /// Normalizes a list of configured workspace roots:
 /// - Deduplicates paths;
 /// - Discards nested subpaths;
 /// - Canonicalizes physically existing directories (is_missing = false, is_expanded = true);
 /// - Marks nonexistent paths as is_missing = true, is_expanded = false.
 #[allow(dead_code)]
-pub fn normalize_loaded_roots(paths: &[PathBuf]) -> Vec<WorkspaceRoot> {
+pub fn normalize_loaded_roots(paths: &[PathBuf]) -> NormalizedRoots {
     let mut roots: Vec<WorkspaceRoot> = Vec::new();
+    let mut discarded: Vec<(PathBuf, String)> = Vec::new();
 
     for raw_path in paths {
         let (path, is_missing) = if raw_path.exists() && raw_path.is_dir() {
@@ -209,26 +216,33 @@ pub fn normalize_loaded_roots(paths: &[PathBuf]) -> Vec<WorkspaceRoot> {
         if roots.iter().any(|r| {
             r.path == path || &r.path == raw_path || resolve_cmp_path(&r.path) == path_cmp
         }) {
+            discarded.push((raw_path.clone(), "Duplicate path".to_string()));
             continue;
         }
 
         // Nesting check: discard nested subpaths
         let mut is_nested = false;
-        roots.retain(|r| {
-            let r_cmp = resolve_cmp_path(&r.path);
+        let mut nested_reason = String::new();
+        let mut i = 0;
+        while i < roots.len() {
+            let r_cmp = resolve_cmp_path(&roots[i].path);
             if path_cmp.starts_with(&r_cmp) {
-                // New path is nested within existing root -> discard new path
                 is_nested = true;
-                true
+                nested_reason = format!("Nested within existing root: {}", roots[i].path.display());
+                break;
             } else if r_cmp.starts_with(&path_cmp) {
-                // Existing root is nested within new path -> discard existing root
-                false
+                let removed = roots.remove(i);
+                discarded.push((
+                    removed.path.clone(),
+                    format!("Nested within new parent root: {}", path.display()),
+                ));
             } else {
-                true
+                i += 1;
             }
-        });
+        }
 
         if is_nested {
+            discarded.push((raw_path.clone(), nested_reason));
             continue;
         }
 
@@ -241,7 +255,7 @@ pub fn normalize_loaded_roots(paths: &[PathBuf]) -> Vec<WorkspaceRoot> {
         });
     }
 
-    roots
+    NormalizedRoots { roots, discarded }
 }
 
 /// Derives a disambiguated display label for a workspace root.
@@ -315,6 +329,8 @@ pub struct AppState {
     #[allow(dead_code)]
     pub workspace_roots: Vec<WorkspaceRoot>,
     #[allow(dead_code)]
+    pub discarded_roots: Vec<(PathBuf, String)>,
+    #[allow(dead_code)]
     pub preferences_path: PathBuf,
     pub editor: EditorEngine,
     pub view_mode: ViewMode,
@@ -334,6 +350,20 @@ impl AppState {
     pub fn new(doc: Document) -> Self {
         let preferences = Preferences::load_or_default();
         Self::new_with_preferences_at(doc, preferences, Preferences::default_config_path())
+    }
+
+    #[allow(dead_code)]
+    pub fn new_isolated(doc: Document) -> Self {
+        let tmp_dir = std::env::temp_dir();
+        let file_name = format!(
+            "glidemark_test_{}_{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        Self::new_with_preferences_at(doc, Preferences::default(), tmp_dir.join(file_name))
     }
 
     #[allow(dead_code)]
@@ -361,7 +391,9 @@ impl AppState {
         let editor = EditorEngine::new(&doc.buffer);
 
         let workspace_folder = doc.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf());
-        let workspace_roots = normalize_loaded_roots(&preferences.workspace_roots);
+        let normalized = normalize_loaded_roots(&preferences.workspace_roots);
+        let workspace_roots = normalized.roots;
+        let discarded_roots = normalized.discarded;
 
         let key = if let Some(ref p) = doc.path {
             DocKey::Path(p.clone())
@@ -381,6 +413,7 @@ impl AppState {
             pending_close: None,
             workspace_folder,
             workspace_roots,
+            discarded_roots,
             preferences_path,
             doc,
             editor,
@@ -623,24 +656,37 @@ impl AppState {
         };
 
         // Check if already in workspace_roots
-        for (idx, r) in self.workspace_roots.iter_mut().enumerate() {
+        let existing_match = self.workspace_roots.iter().enumerate().find_map(|(idx, r)| {
             let matches = r.path == canonical
                 || r.path == path
                 || std::fs::canonicalize(&r.path).map(|c| c == canonical).unwrap_or(false);
             if matches {
-                if r.is_missing {
-                    r.path = canonical.clone();
-                    r.is_missing = false;
-                    r.is_expanded = true;
+                Some((idx, r.is_missing))
+            } else {
+                None
+            }
+        });
+
+        if let Some((idx, is_missing)) = existing_match {
+            if is_missing {
+                let old_path = self.workspace_roots[idx].path.clone();
+                self.workspace_roots[idx].path = canonical.clone();
+                self.workspace_roots[idx].is_missing = false;
+                self.workspace_roots[idx].is_expanded = true;
+                self.preferences.workspace_roots =
+                    self.workspace_roots.iter().map(|root| root.path.clone()).collect();
+                if let Err(e) = self.preferences.save_to_path(&self.preferences_path) {
+                    // Atomic rollback
+                    self.workspace_roots[idx].path = old_path;
+                    self.workspace_roots[idx].is_missing = true;
+                    self.workspace_roots[idx].is_expanded = false;
                     self.preferences.workspace_roots =
                         self.workspace_roots.iter().map(|root| root.path.clone()).collect();
-                    if let Err(e) = self.preferences.save_to_path(&self.preferences_path) {
-                        return Err(RootAddError::SaveFailed(e.to_string()));
-                    }
-                    return Ok(idx);
-                } else {
-                    return Err(RootAddError::AlreadyExists);
+                    return Err(RootAddError::SaveFailed(e.to_string()));
                 }
+                return Ok(idx);
+            } else {
+                return Err(RootAddError::AlreadyExists);
             }
         }
 
@@ -667,21 +713,31 @@ impl AppState {
         self.preferences.workspace_roots =
             self.workspace_roots.iter().map(|root| root.path.clone()).collect();
         if let Err(e) = self.preferences.save_to_path(&self.preferences_path) {
+            // Atomic rollback
+            self.workspace_roots.pop();
+            self.preferences.workspace_roots =
+                self.workspace_roots.iter().map(|root| root.path.clone()).collect();
             return Err(RootAddError::SaveFailed(e.to_string()));
         }
         Ok(idx)
     }
 
     #[allow(dead_code)]
-    pub fn remove_workspace_root(&mut self, idx: usize) -> Option<WorkspaceRoot> {
+    pub fn remove_workspace_root(&mut self, idx: usize) -> Result<Option<WorkspaceRoot>, String> {
         if idx >= self.workspace_roots.len() {
-            return None;
+            return Ok(None);
         }
         let removed = self.workspace_roots.remove(idx);
         self.preferences.workspace_roots =
-            self.workspace_roots.iter().map(|root| root.path.clone()).collect();
-        let _ = self.preferences.save_to_path(&self.preferences_path);
-        Some(removed)
+            self.workspace_roots.iter().map(|r| r.path.clone()).collect();
+        if let Err(e) = self.preferences.save_to_path(&self.preferences_path) {
+            // 原子回滚
+            self.workspace_roots.insert(idx, removed);
+            self.preferences.workspace_roots =
+                self.workspace_roots.iter().map(|r| r.path.clone()).collect();
+            return Err(format!("Failed to save preferences: {}", e));
+        }
+        Ok(Some(removed))
     }
 
     #[allow(dead_code)]

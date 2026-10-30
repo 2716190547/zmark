@@ -215,7 +215,7 @@ fn test_workspace_root_remove_preserves_docs() {
     let open_doc_key = state.active.clone().unwrap();
 
     // Remove the workspace root
-    let removed = state.remove_workspace_root(0);
+    let removed = state.remove_workspace_root(0).unwrap();
     assert!(removed.is_some());
     assert!(state.workspace_roots.is_empty());
 
@@ -229,7 +229,7 @@ fn test_workspace_root_remove_preserves_docs() {
     assert!(state.preferences.workspace_roots.is_empty());
 
     // Out of bounds remove returns None
-    assert!(state.remove_workspace_root(0).is_none());
+    assert!(state.remove_workspace_root(0).unwrap().is_none());
 }
 
 #[test]
@@ -275,22 +275,23 @@ fn test_normalize_loaded_roots_dedup_and_nesting() {
     ];
 
     let normalized = normalize_loaded_roots(&configured_paths);
-    assert_eq!(normalized.len(), 3);
+    assert_eq!(normalized.roots.len(), 3);
+    assert_eq!(normalized.discarded.len(), 4);
 
     // 1. Parent is valid and canonicalized
-    assert_eq!(normalized[0].path, canonical_parent);
-    assert!(!normalized[0].is_missing);
-    assert!(normalized[0].is_expanded);
+    assert_eq!(normalized.roots[0].path, canonical_parent);
+    assert!(!normalized.roots[0].is_missing);
+    assert!(normalized.roots[0].is_expanded);
 
     // 2. Sibling is valid and canonicalized
-    assert_eq!(normalized[1].path, canonical_sibling);
-    assert!(!normalized[1].is_missing);
-    assert!(normalized[1].is_expanded);
+    assert_eq!(normalized.roots[1].path, canonical_sibling);
+    assert!(!normalized.roots[1].is_missing);
+    assert!(normalized.roots[1].is_expanded);
 
     // 3. Missing parent is preserved and marked missing
-    assert_eq!(normalized[2].path, missing_parent);
-    assert!(normalized[2].is_missing);
-    assert!(!normalized[2].is_expanded);
+    assert_eq!(normalized.roots[2].path, missing_parent);
+    assert!(normalized.roots[2].is_missing);
+    assert!(!normalized.roots[2].is_expanded);
 }
 
 #[test]
@@ -330,4 +331,74 @@ fn test_workspace_root_missing_root_blocks_nesting() {
 
     let err2 = state2.add_workspace_root(real_parent.clone()).unwrap_err();
     assert_eq!(err2, RootAddError::ContainsExisting(missing_child.clone()));
+}
+
+#[test]
+fn test_workspace_root_atomic_rollback_on_save_failure() {
+    let tmp = tempdir().unwrap();
+    let root_a = tmp.path().join("project_a");
+    let root_b = tmp.path().join("project_b");
+    fs::create_dir_all(&root_a).unwrap();
+    fs::create_dir_all(&root_b).unwrap();
+
+    let mut state = clean_test_state(&tmp);
+    state.add_workspace_root(root_a.clone()).unwrap();
+    assert_eq!(state.workspace_roots.len(), 1);
+
+    // Point preferences_path to a forbidden read-only path to force save failure
+    state.preferences_path = std::path::PathBuf::from("/dev/null/forbidden/config.toml");
+
+    // 1. add_workspace_root failure must roll back newly added root
+    let add_err = state.add_workspace_root(root_b.clone()).unwrap_err();
+    assert!(matches!(add_err, RootAddError::SaveFailed(_)));
+    assert_eq!(state.workspace_roots.len(), 1);
+    assert_eq!(state.preferences.workspace_roots.len(), 1);
+    assert_eq!(
+        state.workspace_roots[0].path,
+        fs::canonicalize(&root_a).unwrap()
+    );
+
+    // 2. remove_workspace_root failure must roll back removed root
+    let remove_err = state.remove_workspace_root(0).unwrap_err();
+    assert!(remove_err.contains("Failed to save preferences"));
+    assert_eq!(state.workspace_roots.len(), 1);
+    assert_eq!(state.preferences.workspace_roots.len(), 1);
+    assert_eq!(
+        state.workspace_roots[0].path,
+        fs::canonicalize(&root_a).unwrap()
+    );
+}
+
+#[test]
+fn test_root_label_root_path_and_full_path_fallback() {
+    // 1. Root path "/" returns "/"
+    let root_slash = vec![WorkspaceRoot {
+        path: std::path::PathBuf::from("/"),
+        tree: Vec::new(),
+        is_expanded: true,
+        is_missing: false,
+        truncated: false,
+    }];
+    assert_eq!(root_label(&root_slash, 0), "/");
+
+    // 2. Roots with identical folder name AND identical parent folder name fall back to full path
+    let roots_same_parent = vec![
+        WorkspaceRoot {
+            path: std::path::PathBuf::from("/a/shared/docs"),
+            tree: Vec::new(),
+            is_expanded: true,
+            is_missing: false,
+            truncated: false,
+        },
+        WorkspaceRoot {
+            path: std::path::PathBuf::from("/b/shared/docs"),
+            tree: Vec::new(),
+            is_expanded: true,
+            is_missing: false,
+            truncated: false,
+        },
+    ];
+
+    assert_eq!(root_label(&roots_same_parent, 0), "/a/shared/docs");
+    assert_eq!(root_label(&roots_same_parent, 1), "/b/shared/docs");
 }

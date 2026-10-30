@@ -9,7 +9,7 @@ use std::path::PathBuf;
 #[test]
 fn test_app_state_initialization_and_mode_switching() {
     let doc = Document::new_scratch();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
 
     assert_eq!(state.view_mode, ViewMode::Split);
     assert!(!state.drawer_open);
@@ -41,7 +41,7 @@ fn test_drawer_and_sibling_files_detection() {
     fs::write(&other, "Ignore me").unwrap();
 
     let doc = Document::from_file(file1.clone()).unwrap();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
 
     // Initially drawer closed
     assert!(!state.drawer_open);
@@ -66,7 +66,7 @@ fn test_export_standalone_html_from_app_state() {
     fs::write(&file, "# Test Heading\n\n- [x] Done item").unwrap();
 
     let doc = Document::from_file(file).unwrap();
-    let state = AppState::new(doc);
+    let state = AppState::new_isolated(doc);
 
     let html = state.export_standalone_html();
     assert!(html.starts_with("<!DOCTYPE html>"));
@@ -78,7 +78,7 @@ fn test_export_standalone_html_from_app_state() {
 #[test]
 fn test_theme_palettes_and_appearance_modes() {
     let doc = Document::new_scratch();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
 
     // Verify 8 palettes can all be set cleanly
     let palettes = [
@@ -117,7 +117,7 @@ fn test_theme_palettes_and_appearance_modes() {
 #[test]
 fn test_locale_switching_and_strings() {
     let doc = Document::new_scratch();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
 
     state.set_locale(SupportedLocale::ZhCn);
     assert_eq!(state.strings.app_title, "GlideMark");
@@ -136,7 +136,7 @@ fn test_locale_switching_and_strings() {
 #[test]
 fn test_editor_typing_and_state_sync() {
     let doc = Document::new_scratch();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
 
     state.editor.insert_text("# Hello World");
     state.editor.insert_newline();
@@ -157,7 +157,7 @@ fn test_rename_file_on_disk() {
     fs::write(&file, "# Original Content").unwrap();
 
     let doc = Document::from_file(file.clone()).unwrap();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
 
     // Rename to renamed.md
     state.rename_file("renamed.md").unwrap();
@@ -173,7 +173,7 @@ fn test_auto_save_and_settings_tabs() {
     fs::write(&file, "Initial text").unwrap();
 
     let doc = Document::from_file(file.clone()).unwrap();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
     state.preferences = glidemark_core::config::Preferences::default();
 
     // Verify auto_save defaults to true and tabs can be switched
@@ -222,7 +222,7 @@ fn test_document_lifecycle_and_switching() {
     fs::write(&file2, "# Second Document").unwrap();
 
     let doc = Document::from_file(file1.clone()).unwrap();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
 
     assert_eq!(state.open_docs.len(), 1);
     assert_eq!(state.active, Some(DocKey::Path(file1.clone())));
@@ -267,7 +267,7 @@ fn test_workspace_folder_and_tabs() {
     fs::write(&f2, "# Nested").unwrap();
 
     let doc = Document::new_scratch();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
 
     // Set workspace folder to root
     state.set_workspace_folder(root.path().to_path_buf());
@@ -288,7 +288,7 @@ fn test_document_transitions_and_buffer_sync() {
     fs::write(&file_c, "# Doc C").unwrap();
 
     let doc_a = Document::from_file(file_a.clone()).unwrap();
-    let mut state = AppState::new(doc_a);
+    let mut state = AppState::new_isolated(doc_a);
 
     state.open_file(file_b.clone()).unwrap();
     state.open_file(file_c.clone()).unwrap();
@@ -344,7 +344,7 @@ fn test_dockey_stable_switching() {
     fs::write(&file2, "Doc 2").unwrap();
 
     let doc = Document::from_file(file1.clone()).unwrap();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
     state.open_file(file2.clone()).unwrap();
     state.focus_or_create_draft();
 
@@ -372,7 +372,7 @@ fn test_close_dirty_document_decision() {
     fs::write(&file, "Original text").unwrap();
 
     let doc = Document::from_file(file.clone()).unwrap();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
     let key = DocKey::Path(file.clone());
 
     // Clean doc: closes immediately
@@ -411,7 +411,7 @@ fn test_confirm_close_save_and_discard() {
     fs::write(&file, "Base text").unwrap();
 
     let doc = Document::from_file(file.clone()).unwrap();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
     let key = DocKey::Path(file.clone());
 
     // 1. Discard changes on close
@@ -445,7 +445,7 @@ fn test_draft_save_as_decision() {
     let target = dir.path().join("newly_saved.md");
 
     let doc = Document::new_scratch();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
 
     state.editor.insert_text("# Brand New Draft Content");
     state.sync_from_editor();
@@ -476,7 +476,7 @@ fn test_draft_save_as_decision() {
 #[test]
 fn test_single_draft_slot_constraint() {
     let doc = Document::new_scratch();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
     state.editor.insert_text("Draft notes");
     state.sync_from_editor();
 
@@ -509,7 +509,7 @@ fn test_exit_window_dirty_save_strategy() {
     fs::write(&f1, "Original").unwrap();
 
     let doc = Document::from_file(f1.clone()).unwrap();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
 
     state.editor.insert_text(" Edited");
     state.sync_from_editor();
@@ -535,7 +535,7 @@ fn test_exit_window_dirty_save_strategy() {
 
 #[test]
 fn test_window_should_close_blocks_on_dirty_draft() {
-    let mut state = AppState::new(Document::new_scratch());
+    let mut state = AppState::new_isolated(Document::new_scratch());
     state.editor.insert_text("Unsaved notes in draft");
     state.sync_from_editor();
     assert!(state.is_dirty());
@@ -555,7 +555,7 @@ fn test_background_dirty_document_switches_on_close_request() {
     fs::write(&f2, "Doc 2").unwrap();
 
     let doc1 = Document::from_file(f1.clone()).unwrap();
-    let mut state = AppState::new(doc1);
+    let mut state = AppState::new_isolated(doc1);
     state.open_file(f2.clone()).unwrap();
 
     // Now f2 is active. Switch to f1, edit it, then switch back to f2
@@ -581,7 +581,7 @@ fn test_background_dirty_document_switches_on_close_request() {
 #[test]
 fn test_save_doc_as_failure_preserves_scratch_key() {
     let doc = Document::new_scratch();
-    let mut state = AppState::new(doc);
+    let mut state = AppState::new_isolated(doc);
     state.editor.insert_text("Preserved scratch content");
     state.sync_from_editor();
 
@@ -608,7 +608,7 @@ fn test_save_doc_as_target_already_open_returns_err() {
     fs::write(&file_a, "# Doc A").unwrap();
 
     let doc_a = Document::from_file(file_a.clone()).unwrap();
-    let mut state = AppState::new(doc_a);
+    let mut state = AppState::new_isolated(doc_a);
 
     state.focus_or_create_draft();
     let scratch_key = state.active.clone().unwrap();
@@ -637,7 +637,7 @@ fn test_quit_draft_save_as_continues_exit_pipeline() {
     fs::write(&f_pathed, "Original").unwrap();
 
     let doc_pathed = Document::from_file(f_pathed.clone()).unwrap();
-    let mut state = AppState::new(doc_pathed);
+    let mut state = AppState::new_isolated(doc_pathed);
 
     // Make pathed doc dirty
     state.editor.insert_text(" (pathed dirty)");
@@ -683,7 +683,7 @@ fn test_rename_file_boundaries_and_error_handling() {
     fs::write(&f2, "File 2").unwrap();
 
     let doc1 = Document::from_file(f1.clone()).unwrap();
-    let mut state = AppState::new(doc1);
+    let mut state = AppState::new_isolated(doc1);
     state.open_file(f2.clone()).unwrap();
 
     // 1. Rename to existing file on disk returns Err(AlreadyExists)
@@ -747,7 +747,7 @@ fn test_workspace_folder_symlink_defense_and_robustness() {
     let f_nm = node_modules.join("package.md");
     fs::write(&f_nm, "# Package").unwrap();
 
-    let mut state = AppState::new(Document::new_scratch());
+    let mut state = AppState::new_isolated(Document::new_scratch());
     state.set_workspace_folder(root.to_path_buf());
 
     // Verified:
@@ -802,7 +802,7 @@ fn test_workspace_tree_recursive_scan() {
     fs::write(&f_arch, "# Arch").unwrap();
     fs::write(&f_ignored, "# Ignored").unwrap();
 
-    let mut state = AppState::new(Document::new_scratch());
+    let mut state = AppState::new_isolated(Document::new_scratch());
     state.set_workspace_folder(root.to_path_buf());
 
     // Directory comes before file in root
@@ -832,7 +832,7 @@ fn test_workspace_tree_expand_and_collapse() {
     fs::write(&f_root, "# Index").unwrap();
     fs::write(&f_doc, "# Doc1").unwrap();
 
-    let mut state = AppState::new(Document::new_scratch());
+    let mut state = AppState::new_isolated(Document::new_scratch());
     state.set_workspace_folder(root.to_path_buf());
 
     // Initially subdirectories are collapsed
@@ -873,7 +873,7 @@ fn test_workspace_tree_switch_folder() {
     let f2 = tmp2.path().join("b.md");
     fs::write(&f2, "# B").unwrap();
 
-    let mut state = AppState::new(Document::new_scratch());
+    let mut state = AppState::new_isolated(Document::new_scratch());
     state.set_workspace_folder(tmp1.path().to_path_buf());
     assert_eq!(state.file_tree.len(), 1);
     assert_eq!(state.file_tree[0].name, "a.md");
@@ -896,7 +896,7 @@ fn test_single_file_open_parent_fallback() {
     fs::write(&f_other, "# Spec").unwrap();
 
     // Start with empty scratch doc with no workspace folder
-    let mut state = AppState::new(Document::new_scratch());
+    let mut state = AppState::new_isolated(Document::new_scratch());
     assert!(state.workspace_folder.is_none());
 
     // Open single file
