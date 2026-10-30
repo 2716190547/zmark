@@ -29,7 +29,7 @@
 | **0028** | [双向同步滚动、嵌套列表与代码块交互](0028-bidirectional-sync-scroll-nested-lists-and-codeblock-ux.md) | 已接受 (Accepted) | 100ms 回声抑制双向同步滚动、递归嵌套列表多层富文本与代码块横向滚动复制 |
 | **0029** | [GPUI 0.2 窗口装饰与图层变换约束](0029-gpui-window-chrome-and-overlay-constraints.md) | 已接受 (Accepted) | 红绿灯静态位置 + 折叠安全区；拖拽区显式 `start_window_move()`；灯箱缩放/平移用尺寸与偏移 |
 | **0030** | [macOS 研发工具链分工、Instruments 性能诊断与零成本 Ad-Hoc 签名](0030-macos-toolchain-profiling-and-adhoc-signing.md) | 已接受 (Accepted) | 工具链轻重解耦；Instruments 一键追踪掉帧；打包脚本集成零费用本地 Ad-Hoc 签名 |
-| **0031** | [侧栏中心导航、无 Tab 头部与多根工作区](0031-sidebar-centric-navigation-and-multi-root-workspace.md) | **提议 (Proposed)** | 移除 Tab Strip、标题改名、DocKey 生命周期、显式多根 + 外部文件 + 懒扫描；A/B 两期落地 |
+| **0031** | [侧栏中心导航、无 Tab 头部与多根工作区](0031-sidebar-centric-navigation-and-multi-root-workspace.md) | 已接受 (Accepted) | A 期已落地：无 Tab、纯标题、DocKey、脏关闭/退出保护、草稿组；B 期多根待实施 |
 
 ---
 
