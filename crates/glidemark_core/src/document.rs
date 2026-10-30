@@ -53,14 +53,19 @@ impl Document {
         })
     }
 
-    /// User-friendly display name (file name or "未命名").
+    /// User-friendly display name (file name or fallback).
     pub fn display_name(&self) -> String {
+        self.display_name_with_fallback("Untitled")
+    }
+
+    /// User-friendly display name with custom localized fallback for untitled documents.
+    pub fn display_name_with_fallback(&self, fallback: &str) -> String {
         self.path
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| "未命名".to_string())
+            .unwrap_or_else(|| fallback.to_string())
     }
 
     /// Updates the buffer from user editing, recalculating AST and dirty state.

@@ -1152,7 +1152,7 @@ impl AppState {
         if is_dirty {
             Some(CloseDecision::PromptDirty {
                 key: key.clone(),
-                title: od.doc.display_name(),
+                title: od.doc.display_name_with_fallback(self.strings.untitled_file),
                 has_path: od.doc.path.is_some(),
             })
         } else {

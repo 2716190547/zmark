@@ -135,7 +135,7 @@ pub fn render_drawer(
 
                         let draft_title = draft_doc.map_or_else(
                             || strings.draft_unopened.to_string(),
-                            |d| d.doc.display_name(),
+                            |d| d.doc.display_name_with_fallback(strings.untitled_file),
                         );
                         let draft_key_opt = draft_doc.map(|d| d.key.clone());
 

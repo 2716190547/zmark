@@ -1,6 +1,7 @@
 use gpui::prelude::*;
 use gpui::*;
 use std::path::PathBuf;
+use glidemark_core::i18n::I18nStrings;
 
 use crate::theme::ThemeColors;
 use crate::views::workspace::WorkspaceView;
@@ -111,6 +112,7 @@ impl LightboxState {
 pub fn render_lightbox(
     state: &LightboxState,
     _theme: &ThemeColors,
+    strings: &'static I18nStrings,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
     let svg_path = state.svg_path.clone();
@@ -212,6 +214,10 @@ pub fn render_lightbox(
                                 .justify_center()
                                 .text_size(px(14.))
                                 .hover(|s| s.bg(rgba(0xffffff20)))
+                                .tooltip({
+                                    let t = strings.lightbox_zoom_out.to_string();
+                                    move |_window, cx| cx.new(|_| HudTooltipView { text: t.clone() }).into()
+                                })
                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
                                     this.lightbox.zoom_out();
                                     cx.notify();
@@ -230,8 +236,9 @@ pub fn render_lightbox(
                                 .cursor_pointer()
                                 .font_weight(FontWeight::MEDIUM)
                                 .hover(|s| s.text_color(rgb(0x38bdf8)))
-                                .tooltip(|_window, cx| {
-                                    cx.new(|_| HudTooltipView { text: "点击重置为 100%".to_string() }).into()
+                                .tooltip({
+                                    let t = strings.lightbox_reset.to_string();
+                                    move |_window, cx| cx.new(|_| HudTooltipView { text: t.clone() }).into()
                                 })
                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
                                     this.lightbox.reset();
@@ -252,6 +259,10 @@ pub fn render_lightbox(
                                 .justify_center()
                                 .text_size(px(14.))
                                 .hover(|s| s.bg(rgba(0xffffff20)))
+                                .tooltip({
+                                    let t = strings.lightbox_zoom_in.to_string();
+                                    move |_window, cx| cx.new(|_| HudTooltipView { text: t.clone() }).into()
+                                })
                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
                                     this.lightbox.zoom_in();
                                     cx.notify();
@@ -260,7 +271,7 @@ pub fn render_lightbox(
                         )
                         // Divider
                         .child(div().w(px(1.)).h(px(12.)).bg(rgba(0xffffff26)))
-                        // [ 适应窗口 ]
+                        // [ Fit to window ]
                         .child(
                             div()
                                 .id("hud_btn_fit")
@@ -273,11 +284,11 @@ pub fn render_lightbox(
                                     this.lightbox.reset();
                                     cx.notify();
                                 }))
-                                .child("适应窗口")
+                                .child(strings.lightbox_fit_window)
                         )
                         // Divider
                         .child(div().w(px(1.)).h(px(12.)).bg(rgba(0xffffff26)))
-                        // [ 关闭 (Esc) ]
+                        // [ Close (Esc) ]
                         .child(
                             div()
                                 .id("hud_btn_close")
@@ -290,7 +301,7 @@ pub fn render_lightbox(
                                     this.lightbox.close();
                                     cx.notify();
                                 }))
-                                .child("关闭 (Esc)")
+                                .child(format!("{} (Esc)", strings.lightbox_close))
                         )
                 )
         )

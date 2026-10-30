@@ -1,6 +1,7 @@
 use gpui::prelude::*;
 use gpui::*;
 use glidemark_core::ast::{BlockElement, InlineGroup, InlineItem, ParsedDocument};
+use glidemark_core::i18n::I18nStrings;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -12,6 +13,7 @@ pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, &mut Windo
 pub fn render_preview_pane(
     parsed: Arc<ParsedDocument>,
     theme: &ThemeColors,
+    strings: &'static I18nStrings,
     max_column_width: f32,
     font_size: f32,
     list_state: &ListState,
@@ -52,6 +54,7 @@ pub fn render_preview_pane(
                             .child(render_block_element(
                                 block,
                                 &item_theme,
+                                strings,
                                 font_size,
                                 copied_code_hash,
                                 item_on_copy.as_ref(),
@@ -72,6 +75,7 @@ pub fn render_preview_pane(
 fn render_block_element(
     block: &BlockElement,
     theme: &ThemeColors,
+    strings: &'static I18nStrings,
     base_font_size: f32,
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<&OnCopyCallback>,
@@ -112,12 +116,13 @@ fn render_block_element(
             .into_any_element(),
         BlockElement::FencedCode { lang, code } => {
             if lang.as_deref() == Some("mermaid") {
-                render_mermaid_diagram(code, theme, base_font_size, on_open_lightbox)
+                render_mermaid_diagram(code, theme, strings, base_font_size, on_open_lightbox)
             } else {
                 render_code_block(
                     lang.as_deref(),
                     code,
                     theme,
+                    strings,
                     base_font_size,
                     copied_code_hash,
                     on_copy,
@@ -138,13 +143,14 @@ fn render_block_element(
             .children(
                 blocks
                     .iter()
-                    .map(|b| render_block_element(b, theme, base_font_size, copied_code_hash, on_copy, on_open_lightbox)),
+                    .map(|b| render_block_element(b, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox)),
             )
             .into_any_element(),
         BlockElement::List { ordered, items } => render_list_element(
             *ordered,
             items,
             theme,
+            strings,
             base_font_size,
             0,
             copied_code_hash,
@@ -403,6 +409,7 @@ fn render_mermaid_container(
     path: std::path::PathBuf,
     code_hash: u64,
     theme: &ThemeColors,
+    strings: &'static I18nStrings,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
 ) -> AnyElement {
     let mut container = div()
@@ -443,7 +450,7 @@ fn render_mermaid_container(
                     .text_color(theme.warm_pill_text())
                     .text_size(px(10.))
                     .font_weight(FontWeight::MEDIUM)
-                    .child("🔍 点击全屏")
+                    .child(format!("🔍 {}", strings.mermaid_zoom_hint))
             );
     }
 
@@ -458,6 +465,7 @@ fn render_mermaid_container(
 fn render_mermaid_diagram(
     code: &str,
     theme: &ThemeColors,
+    strings: &'static I18nStrings,
     _base_font_size: f32,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
 ) -> AnyElement {
@@ -475,7 +483,7 @@ fn render_mermaid_diagram(
 
     if let Some(path) = cached_path {
         if path.exists() {
-            return render_mermaid_container(path, code_hash, theme, on_open_lightbox);
+            return render_mermaid_container(path, code_hash, theme, strings, on_open_lightbox);
         }
     }
 
@@ -495,7 +503,7 @@ fn render_mermaid_diagram(
                 cache.insert((code_hash, is_dark), path.clone());
             }
 
-            render_mermaid_container(path, code_hash, theme, on_open_lightbox)
+            render_mermaid_container(path, code_hash, theme, strings, on_open_lightbox)
         }
         Err(err) => {
             div()
@@ -554,6 +562,7 @@ fn render_list_element(
     ordered: bool,
     items: &[glidemark_core::ast::ListItem],
     theme: &ThemeColors,
+    strings: &'static I18nStrings,
     base_font_size: f32,
     depth: usize,
     copied_code_hash: Option<(u64, std::time::Instant)>,
@@ -642,6 +651,7 @@ fn render_list_element(
                                 *sub_ordered,
                                 sub_items,
                                 theme,
+                                strings,
                                 base_font_size,
                                 depth + 1,
                                 copied_code_hash,
@@ -649,7 +659,7 @@ fn render_list_element(
                                 on_open_lightbox,
                             )
                         } else {
-                            render_block_element(sub, theme, base_font_size, copied_code_hash, on_copy, on_open_lightbox)
+                            render_block_element(sub, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox)
                         })
                 }))
         }))
@@ -660,6 +670,7 @@ fn render_code_block(
     lang: Option<&str>,
     code: &str,
     theme: &ThemeColors,
+    strings: &'static I18nStrings,
     base_font_size: f32,
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<&OnCopyCallback>,
@@ -734,7 +745,7 @@ fn render_code_block(
                             let is_copied = is_copied;
                             move |_window, cx| {
                                 cx.new(|_| CodeTooltipView {
-                                    text: if is_copied { "已复制".to_string() } else { "复制代码".to_string() },
+                                    text: if is_copied { strings.copied.to_string() } else { strings.copy_code.to_string() },
                                 })
                                 .into()
                             }

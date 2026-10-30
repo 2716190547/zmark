@@ -405,7 +405,7 @@ impl WorkspaceView {
                         Err(e) => {
                             eprintln!("Save As failed: {}", e);
                             this.state.is_quitting = was_quitting;
-                            let title = this.state.doc.display_name();
+                            let title = this.state.doc.display_name_with_fallback(this.state.strings.untitled_file);
                             this.state.pending_close = Some(crate::state::PendingClose {
                                 key: close_key,
                                 title,
@@ -476,7 +476,7 @@ impl WorkspaceView {
 
         let active_key = self.state.active.clone();
         let (title_text, tooltip_text, is_dirty) = if active_key.is_some() {
-            let title = self.state.doc.display_name();
+            let title = self.state.doc.display_name_with_fallback(strings.untitled_file);
             let tooltip = if let Some(path) = &self.state.doc.path {
                 path.to_string_lossy().to_string()
             } else {
@@ -947,7 +947,7 @@ impl Render for WorkspaceView {
                                                 format!("{}: {}", strings.error_save_failed, err)
                                             }
                                             crate::state::RootAddError::CanonicalizeFailed(p, err) => {
-                                                format!("{}: {}: {}", strings.error_save_failed, p.display(), err)
+                                                format!("{}: {}: {}", strings.error_canonicalize_failed, p.display(), err)
                                             }
                                         };
                                         this.error_banner = Some(msg.clone());
@@ -1588,6 +1588,7 @@ impl Render for WorkspaceView {
                                                 .child(render_preview_pane(
                                                     self.state.doc.parsed.clone(),
                                                     theme,
+                                                    strings,
                                                     self.state.preferences.max_column_width,
                                                     self.state.preferences.font_size,
                                                     &self.preview_list,
@@ -1668,6 +1669,7 @@ impl Render for WorkspaceView {
                                                         .child(render_preview_pane(
                                                             self.state.doc.parsed.clone(),
                                                             theme,
+                                                            strings,
                                                             self.state.preferences.max_column_width,
                                                             self.state.preferences.font_size,
                                                             &self.preview_list,
@@ -1682,7 +1684,7 @@ impl Render for WorkspaceView {
                             })
                     )
                     .when(self.lightbox.is_open, |root| {
-                        root.child(render_lightbox(&self.lightbox, theme, cx))
+                        root.child(render_lightbox(&self.lightbox, theme, strings, cx))
                     })
                     .when(self.state.pending_close.is_some(), |root| {
                         root.child(self.render_close_modal(theme, cx))

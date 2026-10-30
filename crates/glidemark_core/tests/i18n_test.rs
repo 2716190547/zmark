@@ -49,6 +49,14 @@ fn test_all_10_locales_have_complete_translations() {
         assert!(!t.error_save_failed.is_empty(), "error_save_failed missing in {}", tag);
         assert!(!t.error_remove_failed.is_empty(), "error_remove_failed missing in {}", tag);
         assert!(!t.retry_scan.is_empty(), "retry_scan missing in {}", tag);
+        assert!(!t.error_canonicalize_failed.is_empty(), "error_canonicalize_failed missing in {}", tag);
+        assert!(!t.mermaid_zoom_hint.is_empty(), "mermaid_zoom_hint missing in {}", tag);
+        assert!(!t.lightbox_zoom_in.is_empty(), "lightbox_zoom_in missing in {}", tag);
+        assert!(!t.lightbox_zoom_out.is_empty(), "lightbox_zoom_out missing in {}", tag);
+        assert!(!t.lightbox_reset.is_empty(), "lightbox_reset missing in {}", tag);
+        assert!(!t.lightbox_fit_window.is_empty(), "lightbox_fit_window missing in {}", tag);
+        assert!(!t.lightbox_close.is_empty(), "lightbox_close missing in {}", tag);
+        assert!(t.modal_save_prompt.contains("{}"), "modal_save_prompt must contain placeholder in {}", tag);
     }
 }
 
@@ -73,6 +81,13 @@ fn test_simplified_chinese_content() {
     assert_eq!(t.modal_save, "保存");
     assert_eq!(t.no_document_open, "未打开文档");
     assert_eq!(t.retry_scan, "重新扫描");
+    assert_eq!(t.error_canonicalize_failed, "路径无效或无法规范化");
+    assert_eq!(t.mermaid_zoom_hint, "点击放大查看流程图");
+    assert_eq!(t.lightbox_zoom_in, "放大");
+    assert_eq!(t.lightbox_zoom_out, "缩小");
+    assert_eq!(t.lightbox_reset, "重置");
+    assert_eq!(t.lightbox_fit_window, "适应窗口");
+    assert_eq!(t.lightbox_close, "关闭灯箱");
 }
 
 #[test]

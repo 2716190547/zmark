@@ -151,6 +151,13 @@ pub struct I18nStrings {
     pub error_save_failed: &'static str,
     pub error_remove_failed: &'static str,
     pub retry_scan: &'static str,
+    pub error_canonicalize_failed: &'static str,
+    pub mermaid_zoom_hint: &'static str,
+    pub lightbox_zoom_in: &'static str,
+    pub lightbox_zoom_out: &'static str,
+    pub lightbox_reset: &'static str,
+    pub lightbox_fit_window: &'static str,
+    pub lightbox_close: &'static str,
 }
 
 pub fn localize_palette_name<'a>(id: &'a str, strings: &'a I18nStrings) -> &'a str {
@@ -262,6 +269,13 @@ static ZH_CN: I18nStrings = I18nStrings {
     error_save_failed: "保存配置失败",
     error_remove_failed: "移除工作区根失败",
     retry_scan: "重新扫描",
+    error_canonicalize_failed: "路径无效或无法规范化",
+    mermaid_zoom_hint: "点击放大查看流程图",
+    lightbox_zoom_in: "放大",
+    lightbox_zoom_out: "缩小",
+    lightbox_reset: "重置",
+    lightbox_fit_window: "适应窗口",
+    lightbox_close: "关闭灯箱",
 };
 
 static ZH_TW: I18nStrings = I18nStrings {
@@ -344,6 +358,13 @@ static ZH_TW: I18nStrings = I18nStrings {
     error_save_failed: "儲存設定失敗",
     error_remove_failed: "移除工作區根失敗",
     retry_scan: "重新掃描",
+    error_canonicalize_failed: "路徑無效或無法規範化",
+    mermaid_zoom_hint: "點擊放大檢視流程圖",
+    lightbox_zoom_in: "放大",
+    lightbox_zoom_out: "縮小",
+    lightbox_reset: "重設",
+    lightbox_fit_window: "符合視窗",
+    lightbox_close: "關閉燈箱",
 };
 
 static EN: I18nStrings = I18nStrings {
@@ -426,6 +447,13 @@ static EN: I18nStrings = I18nStrings {
     error_save_failed: "Failed to save preferences",
     error_remove_failed: "Failed to remove workspace root",
     retry_scan: "Retry Scan",
+    error_canonicalize_failed: "Path is invalid or cannot be normalized",
+    mermaid_zoom_hint: "Click to enlarge diagram",
+    lightbox_zoom_in: "Zoom In",
+    lightbox_zoom_out: "Zoom Out",
+    lightbox_reset: "Reset",
+    lightbox_fit_window: "Fit to Window",
+    lightbox_close: "Close Lightbox",
 };
 
 static JA: I18nStrings = I18nStrings {
@@ -508,6 +536,13 @@ static JA: I18nStrings = I18nStrings {
     error_save_failed: "設定の保存に失敗しました",
     error_remove_failed: "ワークスペースルートの削除に失敗しました",
     retry_scan: "再スキャン",
+    error_canonicalize_failed: "パスが無効であるか、正規化できません",
+    mermaid_zoom_hint: "クリックして図を拡大",
+    lightbox_zoom_in: "拡大",
+    lightbox_zoom_out: "縮小",
+    lightbox_reset: "リセット",
+    lightbox_fit_window: "ウィンドウに合わせる",
+    lightbox_close: "ライトボックスを閉じる",
 };
 
 static KO: I18nStrings = I18nStrings {
@@ -590,6 +625,13 @@ static KO: I18nStrings = I18nStrings {
     error_save_failed: "환경설정 저장 실패",
     error_remove_failed: "작업 공간 루트 제거 실패",
     retry_scan: "다시 스캔",
+    error_canonicalize_failed: "경로가 유효하지 않거나 정규화할 수 없습니다",
+    mermaid_zoom_hint: "클릭하여 다이어그램 확대",
+    lightbox_zoom_in: "확대",
+    lightbox_zoom_out: "축소",
+    lightbox_reset: "재설정",
+    lightbox_fit_window: "창에 맞추기",
+    lightbox_close: "라이트박스 닫기",
 };
 
 static FR: I18nStrings = I18nStrings {
@@ -672,6 +714,13 @@ static FR: I18nStrings = I18nStrings {
     error_save_failed: "Échec de l'enregistrement des préférences",
     error_remove_failed: "Échec de la suppression de la racine d'espace de travail",
     retry_scan: "Réessayer le scan",
+    error_canonicalize_failed: "Le chemin est invalide ou ne peut pas être normalisé",
+    mermaid_zoom_hint: "Cliquer pour agrandir le diagramme",
+    lightbox_zoom_in: "Zoom avant",
+    lightbox_zoom_out: "Zoom arrière",
+    lightbox_reset: "Réinitialiser",
+    lightbox_fit_window: "Adapter à la fenêtre",
+    lightbox_close: "Fermer la visionneuse",
 };
 
 static DE: I18nStrings = I18nStrings {
@@ -754,6 +803,13 @@ static DE: I18nStrings = I18nStrings {
     error_save_failed: "Einstellungen konnten nicht gespeichert werden",
     error_remove_failed: "Arbeitsbereich-Wurzel konnte nicht entfernt werden",
     retry_scan: "Erneut scannen",
+    error_canonicalize_failed: "Der Pfad ist ungültig oder kann nicht normalisiert werden",
+    mermaid_zoom_hint: "Klicken, um Diagramm zu vergrößern",
+    lightbox_zoom_in: "Vergrößern",
+    lightbox_zoom_out: "Verkleinern",
+    lightbox_reset: "Zurücksetzen",
+    lightbox_fit_window: "An Fenster anpassen",
+    lightbox_close: "Lightbox schließen",
 };
 
 static ES: I18nStrings = I18nStrings {
@@ -836,6 +892,13 @@ static ES: I18nStrings = I18nStrings {
     error_save_failed: "Error al guardar las preferencias",
     error_remove_failed: "Error al eliminar la raíz del espacio de trabajo",
     retry_scan: "Reintentar escaneo",
+    error_canonicalize_failed: "La ruta no es válida o no se puede normalizar",
+    mermaid_zoom_hint: "Haga clic para ampliar el diagrama",
+    lightbox_zoom_in: "Acercar",
+    lightbox_zoom_out: "Alejar",
+    lightbox_reset: "Restablecer",
+    lightbox_fit_window: "Ajustar a la ventana",
+    lightbox_close: "Cerrar caja de luz",
 };
 
 static RU: I18nStrings = I18nStrings {
@@ -918,6 +981,13 @@ static RU: I18nStrings = I18nStrings {
     error_save_failed: "Не удалось сохранить настройки",
     error_remove_failed: "Не удалось удалить корневую папку рабочей области",
     retry_scan: "Повторить сканирование",
+    error_canonicalize_failed: "Путь недействителен или не может быть нормализован",
+    mermaid_zoom_hint: "Нажмите, чтобы увеличить диаграмму",
+    lightbox_zoom_in: "Увеличить",
+    lightbox_zoom_out: "Уменьшить",
+    lightbox_reset: "Сброс",
+    lightbox_fit_window: "По размеру окна",
+    lightbox_close: "Закрыть просмотр",
 };
 
 static PT: I18nStrings = I18nStrings {
@@ -1000,4 +1070,11 @@ static PT: I18nStrings = I18nStrings {
     error_save_failed: "Falha ao salvar preferências",
     error_remove_failed: "Falha ao remover a raiz do espaço de trabalho",
     retry_scan: "Repetir verificação",
+    error_canonicalize_failed: "O caminho é inválido ou não pode ser normalizado",
+    mermaid_zoom_hint: "Clique para ampliar o diagrama",
+    lightbox_zoom_in: "Aumentar zoom",
+    lightbox_zoom_out: "Reduzir zoom",
+    lightbox_reset: "Redefinir",
+    lightbox_fit_window: "Ajustar à janela",
+    lightbox_close: "Fechar caixa de luz",
 };
