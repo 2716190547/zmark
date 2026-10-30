@@ -355,9 +355,63 @@ impl WorkspaceView {
     }
 
     pub fn handle_modal_save(&mut self, key: &crate::state::DocKey, window: &mut Window, cx: &mut Context<Self>) {
-        let _ = self.state.confirm_close_save(key);
-        self.on_document_swapped();
-        self.after_dirty_doc_resolved(Some(window), cx);
+        match self.state.confirm_close_save(key) {
+            Ok(true) => {
+                self.on_document_swapped();
+                self.after_dirty_doc_resolved(Some(window), cx);
+            }
+            Ok(false) => {
+                self.prompt_save_as_and_close(key.clone(), cx);
+            }
+            Err(e) => {
+                eprintln!("Save error during close: {}", e);
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn prompt_save_as_and_close(&mut self, close_key: crate::state::DocKey, cx: &mut Context<Self>) {
+        let was_quitting = self.state.is_quitting;
+        self.state.pending_close = None;
+        cx.notify();
+
+        let suggested_dir = self.state.workspace_folder.clone().unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        });
+        let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
+
+        cx.spawn(async move |this, app| {
+            if let Ok(Ok(Some(path))) = rx.await {
+                let _ = this.update(app, |this, cx| {
+                    match this.state.save_doc_as(&close_key, path) {
+                        Ok(()) => {
+                            this.state.close_document_forced(&close_key);
+                            this.on_document_swapped();
+                            this.state.is_quitting = was_quitting;
+                            this.after_dirty_doc_resolved(None, cx);
+                        }
+                        Err(e) => {
+                            eprintln!("Save As failed: {}", e);
+                            this.state.is_quitting = was_quitting;
+                            let title = this.state.doc.display_name();
+                            this.state.pending_close = Some(crate::state::PendingClose {
+                                key: close_key,
+                                title,
+                                has_path: false,
+                            });
+                            cx.notify();
+                        }
+                    }
+                });
+            } else {
+                let _ = this.update(app, |this, cx| {
+                    this.state.is_quitting = false;
+                    this.state.pending_close = None;
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     pub fn after_dirty_doc_resolved(&mut self, mut window_opt: Option<&mut Window>, cx: &mut Context<Self>) {
@@ -414,7 +468,7 @@ impl WorkspaceView {
             let tooltip = if let Some(path) = &self.state.doc.path {
                 path.to_string_lossy().to_string()
             } else {
-                "未保存草稿".to_string()
+                "未保存草稿 (双击或 ⌘S 另存为)".to_string()
             };
             let dirty = self.state.is_dirty();
             (title, tooltip, dirty)
@@ -505,18 +559,22 @@ impl WorkspaceView {
                             })
                             .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                 if event.click_count == 2 && this.state.active.is_some() {
-                                    let name = this
-                                        .state
-                                        .doc
-                                        .path
-                                        .as_ref()
-                                        .and_then(|p| p.file_name())
-                                        .and_then(|n| n.to_str())
-                                        .unwrap_or("Untitled.md");
-                                    this.rename_buffer = name.to_string();
-                                    this.is_renaming = true;
-                                    window.focus(&this.focus_handle);
-                                    cx.notify();
+                                    if this.state.doc.path.is_some() {
+                                        let name = this
+                                            .state
+                                            .doc
+                                            .path
+                                            .as_ref()
+                                            .and_then(|p| p.file_name())
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or("Untitled.md");
+                                        this.rename_buffer = name.to_string();
+                                        this.is_renaming = true;
+                                        window.focus(&this.focus_handle);
+                                        cx.notify();
+                                    } else {
+                                        this.trigger_save(cx);
+                                    }
                                 }
                             }))
                             .child(
@@ -650,7 +708,6 @@ impl WorkspaceView {
             has_path: false,
         });
         let title = pending.title.clone();
-        let has_path = pending.has_path;
         let key_discard = pending.key.clone();
         let key_save = pending.key.clone();
 
@@ -751,32 +808,7 @@ impl WorkspaceView {
                                     .text_color(rgb(0xffffff))
                                     .hover(|s| s.opacity(0.9))
                                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
-                                        if has_path {
-                                            this.handle_modal_save(&key_save, window, cx);
-                                        } else {
-                                            this.state.cancel_close();
-                                            let suggested_dir = this.state.workspace_folder.clone().unwrap_or_else(|| {
-                                                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                                            });
-                                            let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
-                                            let close_key = key_save.clone();
-                                            cx.spawn(async move |this, app| {
-                                                if let Ok(Ok(Some(path))) = rx.await {
-                                                    let _ = this.update(app, |this, cx| {
-                                                        let _ = this.state.save_doc_as(&close_key, path);
-                                                        this.state.close_document_forced(&close_key);
-                                                        this.on_document_swapped();
-                                                        this.after_dirty_doc_resolved(None, cx);
-                                                    });
-                                                } else {
-                                                    let _ = this.update(app, |this, cx| {
-                                                        this.state.is_quitting = false;
-                                                        cx.notify();
-                                                    });
-                                                }
-                                            })
-                                            .detach();
-                                        }
+                                        this.handle_modal_save(&key_save, window, cx);
                                     }))
                                     .child("保存 (S)"),
                             ),
@@ -1014,31 +1046,7 @@ impl Render for WorkspaceView {
                             return;
                         }
                         "enter" | "s" | "S" => {
-                            if pending.has_path {
-                                this.handle_modal_save(&pending.key, window, cx);
-                            } else {
-                                this.state.cancel_close();
-                                let suggested_dir = this.state.workspace_folder.clone().unwrap_or_else(|| {
-                                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                                });
-                                let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
-                                let close_key = pending.key.clone();
-                                cx.spawn(async move |this, app| {
-                                    if let Ok(Ok(Some(path))) = rx.await {
-                                        let _ = this.update(app, |this, cx| {
-                                            let _ = this.state.save_doc_as(&close_key, path);
-                                            this.state.close_document_forced(&close_key);
-                                            this.on_document_swapped();
-                                            this.after_dirty_doc_resolved(None, cx);
-                                        });
-                                    } else {
-                                        let _ = this.update(app, |this, cx| {
-                                            this.state.is_quitting = false;
-                                            cx.notify();
-                                        });
-                                    }
-                                }).detach();
-                            }
+                            this.handle_modal_save(&pending.key, window, cx);
                             return;
                         }
                         _ => {}

@@ -4,6 +4,7 @@ use glidemark_core::document::Document;
 use glidemark_core::i18n::SupportedLocale;
 use tempfile::tempdir;
 use std::fs;
+use std::path::PathBuf;
 
 #[test]
 fn test_app_state_initialization_and_mode_switching() {
@@ -575,6 +576,136 @@ fn test_background_dirty_document_switches_on_close_request() {
     // Automatically switched to k1 before presenting prompt
     assert_eq!(state.active, Some(k1));
     assert!(state.pending_close.is_some());
+}
+
+#[test]
+fn test_save_doc_as_failure_preserves_scratch_key() {
+    let doc = Document::new_scratch();
+    let mut state = AppState::new(doc);
+    state.editor.insert_text("Preserved scratch content");
+    state.sync_from_editor();
+
+    let scratch_key = state.active.clone().unwrap();
+    assert!(scratch_key.is_scratch());
+
+    // Attempt to save to an illegal/nonexistent path (atomic save failure)
+    let invalid_path = PathBuf::from("/nonexistent_forbidden_directory_glidemark/sub/doc.md");
+    let res = state.save_doc_as(&scratch_key, invalid_path);
+    assert!(res.is_err());
+
+    // Verify atomic rollback: state retains scratch identity and content completely
+    assert_eq!(state.active, Some(scratch_key.clone()));
+    assert_eq!(state.open_docs.len(), 1);
+    assert_eq!(state.open_docs[0].key, scratch_key);
+    assert!(state.doc.path.is_none());
+    assert_eq!(state.doc.buffer, "Preserved scratch content");
+}
+
+#[test]
+fn test_save_doc_as_target_already_open_returns_err() {
+    let dir = tempdir().unwrap();
+    let file_a = dir.path().join("a.md");
+    fs::write(&file_a, "# Doc A").unwrap();
+
+    let doc_a = Document::from_file(file_a.clone()).unwrap();
+    let mut state = AppState::new(doc_a);
+
+    state.focus_or_create_draft();
+    let scratch_key = state.active.clone().unwrap();
+    assert!(scratch_key.is_scratch());
+
+    // Attempting to Save As a path that is already open in open_docs must return Err(AlreadyExists)
+    let res = state.save_doc_as(&scratch_key, file_a.clone());
+    assert!(res.is_err());
+    assert_eq!(res.unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+
+    // Scratch remains scratch, no duplicated keys in open_docs
+    assert_eq!(state.active, Some(scratch_key.clone()));
+    assert_eq!(state.open_docs.len(), 2);
+    assert!(state.open_docs.iter().any(|d| d.key == scratch_key));
+    assert_eq!(
+        state.open_docs.iter().filter(|d| d.key == DocKey::Path(file_a.clone())).count(),
+        1
+    );
+}
+
+#[test]
+fn test_quit_draft_save_as_continues_exit_pipeline() {
+    let dir = tempdir().unwrap();
+    let f_pathed = dir.path().join("existing.md");
+    let target_save = dir.path().join("saved_draft.md");
+    fs::write(&f_pathed, "Original").unwrap();
+
+    let doc_pathed = Document::from_file(f_pathed.clone()).unwrap();
+    let mut state = AppState::new(doc_pathed);
+
+    // Make pathed doc dirty
+    state.editor.insert_text(" (pathed dirty)");
+    state.sync_from_editor();
+
+    // Create draft and make dirty
+    state.focus_or_create_draft();
+    let draft_key = state.active.clone().unwrap();
+    state.editor.insert_text("Draft dirty notes");
+    state.sync_from_editor();
+
+    // 1. Trigger window close: synchronous return false, is_quitting = true
+    let can_close = state.handle_window_should_close();
+    assert!(!can_close);
+    assert!(state.is_quitting);
+    assert!(state.pending_close.is_some());
+
+    // 2. Resolve draft via Save As
+    state.save_doc_as(&draft_key, target_save.clone()).unwrap();
+    state.close_document_forced(&draft_key);
+
+    // 3. Quitting continues: next dirty document (f_pathed) is identified
+    assert!(state.is_quitting);
+    let next_dirty = state.next_dirty_doc_key();
+    assert_eq!(next_dirty, Some(DocKey::Path(f_pathed.clone())));
+
+    // 4. Resolve pathed document
+    let decision = state.request_close(&DocKey::Path(f_pathed.clone()));
+    assert!(matches!(decision, CloseDecision::PromptDirty { .. }));
+    let save_ok = state.confirm_close_save(&DocKey::Path(f_pathed.clone())).unwrap();
+    assert!(save_ok);
+
+    // 5. All dirty documents resolved, ready to remove_window
+    assert!(state.next_dirty_doc_key().is_none());
+}
+
+#[test]
+fn test_rename_file_boundaries_and_error_handling() {
+    let dir = tempdir().unwrap();
+    let f1 = dir.path().join("file1.md");
+    let f2 = dir.path().join("file2.md");
+    fs::write(&f1, "File 1").unwrap();
+    fs::write(&f2, "File 2").unwrap();
+
+    let doc1 = Document::from_file(f1.clone()).unwrap();
+    let mut state = AppState::new(doc1);
+    state.open_file(f2.clone()).unwrap();
+
+    // 1. Rename to existing file on disk returns Err(AlreadyExists)
+    state.switch_document(&DocKey::Path(f1.clone()));
+    let res = state.rename_file("file2");
+    assert!(res.is_err());
+    assert_eq!(res.unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+
+    // 2. Draft rename returns Err(InvalidInput)
+    state.focus_or_create_draft();
+    let res_draft = state.rename_file("draft_renamed");
+    assert!(res_draft.is_err());
+    assert_eq!(res_draft.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+
+    // 3. Normal rename to non-existing name succeeds
+    state.switch_document(&DocKey::Path(f1.clone()));
+    let res_ok = state.rename_file("file1_renamed");
+    assert!(res_ok.is_ok());
+    let new_path = dir.path().join("file1_renamed.md");
+    assert!(new_path.exists());
+    assert!(!f1.exists());
+    assert_eq!(state.active, Some(DocKey::Path(new_path)));
 }
 
 #[test]

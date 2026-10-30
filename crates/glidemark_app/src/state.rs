@@ -579,20 +579,21 @@ impl AppState {
     }
 
     pub fn confirm_close_save(&mut self, key: &DocKey) -> Result<bool, std::io::Error> {
-        self.pending_close = None;
         if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == key) {
             if od.doc.path.is_some() {
                 od.doc.save()?;
                 if self.active.as_ref() == Some(key) {
                     self.doc = od.doc.clone();
                 }
+                self.pending_close = None;
                 self.close_document_forced(key);
                 return Ok(true);
             } else {
-                // Scratch needs Save As path from UI
+                // Scratch needs Save As path from UI; keep pending_close until path chosen
                 return Ok(false);
             }
         }
+        self.pending_close = None;
         Ok(true)
     }
 
@@ -636,30 +637,60 @@ impl AppState {
         if self.active.is_none() {
             return Ok(());
         }
+
+        let old_path = match self.doc.path.clone() {
+            Some(p) => p,
+            None => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Draft documents cannot be renamed directly; use save_doc_as",
+                ));
+            }
+        };
+
         let clean_name = if new_name.ends_with(".md") || new_name.ends_with(".markdown") {
             new_name.to_string()
         } else {
             format!("{}.md", new_name)
         };
 
-        if let Some(old_path) = self.doc.path.clone() {
-            if let Some(parent) = old_path.parent() {
-                let new_path = parent.join(&clean_name);
-                if new_path != old_path {
-                    std::fs::rename(&old_path, &new_path)?;
-                    let old_key = DocKey::Path(old_path);
-                    let new_key = DocKey::Path(new_path.clone());
+        let parent = old_path.parent().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "Parent directory not found")
+        })?;
+        let new_path = parent.join(&clean_name);
 
-                    self.doc.path = Some(new_path);
-                    if let Some(od) = self.open_docs.iter_mut().find(|d| d.key == old_key) {
-                        od.key = new_key.clone();
-                        od.doc = self.doc.clone();
-                    }
-                    self.active = Some(new_key);
-                    self.refresh_sibling_files();
-                }
-            }
+        if new_path == old_path {
+            return Ok(());
         }
+
+        // Prevent overwriting existing file on disk
+        if new_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "A file with the target name already exists",
+            ));
+        }
+
+        // Prevent collision with another open document key
+        let old_key = DocKey::Path(old_path.clone());
+        let new_key = DocKey::Path(new_path.clone());
+        if self.open_docs.iter().any(|d| d.key != old_key && d.key == new_key) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "A document with target path is already open in workspace",
+            ));
+        }
+
+        std::fs::rename(&old_path, &new_path)?;
+
+        self.doc.path = Some(new_path.clone());
+        if let Some(od) = self.open_docs.iter_mut().find(|d| d.key == old_key) {
+            od.key = new_key.clone();
+            od.doc = self.doc.clone();
+        }
+        self.active = Some(new_key);
+        self.refresh_sibling_files();
+        self.expand_to_file(&new_path);
         Ok(())
     }
 
@@ -681,16 +712,48 @@ impl AppState {
         self.sync_from_editor();
         let new_key = DocKey::Path(path.clone());
 
+        // Check if destination path is already open in another document
+        if self.open_docs.iter().any(|d| d.key != *key && d.key == new_key) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "A document with this path is already open in workspace",
+            ));
+        }
+
+        // Prepare candidate document clone to attempt save atomically
+        let mut candidate_doc = if self.active.as_ref() == Some(key) {
+            self.doc.clone()
+        } else if let Some(od) = self.open_docs.iter().find(|d| &d.key == key) {
+            od.doc.clone()
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Document to save was not found",
+            ));
+        };
+
+        candidate_doc.path = Some(path.clone());
+        candidate_doc.save()?; // Atomic test: if write fails, self state is completely untouched!
+
+        // Atomic commit upon save success
         if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == key) {
-            od.doc.path = Some(path.clone());
-            od.doc.save()?;
             od.key = new_key.clone();
+            od.doc = candidate_doc.clone();
         }
 
         if self.active.as_ref() == Some(key) {
             self.active = Some(new_key);
-            self.doc.path = Some(path.clone());
-            self.doc.save()?;
+            self.doc = candidate_doc;
+        }
+
+        if let Some(parent) = path.parent() {
+            let should_switch = match &self.workspace_folder {
+                Some(folder) => !path.starts_with(folder),
+                None => true,
+            };
+            if should_switch {
+                self.workspace_folder = Some(parent.to_path_buf());
+            }
         }
 
         self.refresh_sibling_files();
