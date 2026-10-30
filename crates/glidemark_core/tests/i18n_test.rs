@@ -33,6 +33,22 @@ fn test_all_10_locales_have_complete_translations() {
         assert!(!t.no_markdown_files.is_empty(), "no_markdown_files missing in {}", tag);
         assert!(!t.untitled_file.is_empty(), "untitled_file missing in {}", tag);
         assert!(!t.collapse_sidebar.is_empty(), "collapse_sidebar missing in {}", tag);
+        assert!(!t.modal_save_prompt.is_empty(), "modal_save_prompt missing in {}", tag);
+        assert!(!t.modal_save_detail.is_empty(), "modal_save_detail missing in {}", tag);
+        assert!(!t.modal_cancel.is_empty(), "modal_cancel missing in {}", tag);
+        assert!(!t.modal_discard.is_empty(), "modal_discard missing in {}", tag);
+        assert!(!t.modal_save.is_empty(), "modal_save missing in {}", tag);
+        assert!(!t.no_document_open.is_empty(), "no_document_open missing in {}", tag);
+        assert!(!t.no_document_open_desc.is_empty(), "no_document_open_desc missing in {}", tag);
+        assert!(!t.draft_unsaved_hint.is_empty(), "draft_unsaved_hint missing in {}", tag);
+        assert!(!t.error_root_not_found.is_empty(), "error_root_not_found missing in {}", tag);
+        assert!(!t.error_root_not_dir.is_empty(), "error_root_not_dir missing in {}", tag);
+        assert!(!t.error_root_already_exists.is_empty(), "error_root_already_exists missing in {}", tag);
+        assert!(!t.error_root_nested.is_empty(), "error_root_nested missing in {}", tag);
+        assert!(!t.error_root_parent.is_empty(), "error_root_parent missing in {}", tag);
+        assert!(!t.error_save_failed.is_empty(), "error_save_failed missing in {}", tag);
+        assert!(!t.error_remove_failed.is_empty(), "error_remove_failed missing in {}", tag);
+        assert!(!t.retry_scan.is_empty(), "retry_scan missing in {}", tag);
     }
 }
 
@@ -52,6 +68,11 @@ fn test_simplified_chinese_content() {
     assert_eq!(t.no_markdown_files, "无 Markdown 文件");
     assert_eq!(t.untitled_file, "未命名");
     assert_eq!(t.collapse_sidebar, "收起侧栏");
+    assert_eq!(t.modal_cancel, "取消");
+    assert_eq!(t.modal_discard, "不保存");
+    assert_eq!(t.modal_save, "保存");
+    assert_eq!(t.no_document_open, "未打开文档");
+    assert_eq!(t.retry_scan, "重新扫描");
 }
 
 #[test]

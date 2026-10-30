@@ -40,6 +40,7 @@ pub struct WorkspaceView {
     pub last_scroll_origin: Option<(ScrollOrigin, std::time::Instant)>,
     pub lightbox: LightboxState,
     pub window_handle: Option<AnyWindowHandle>,
+    pub error_banner: Option<String>,
 }
 
 impl WorkspaceView {
@@ -69,6 +70,7 @@ impl WorkspaceView {
             last_scroll_origin: None,
             lightbox: LightboxState::new(),
             window_handle: None,
+            error_banner: None,
         }
     }
 
@@ -260,7 +262,7 @@ impl WorkspaceView {
             let handle = cx.open_window(
                 WindowOptions {
                     titlebar: Some(TitlebarOptions {
-                        title: Some("GlideMark - 偏好设置".into()),
+                        title: Some(format!("GlideMark - {}", strings.settings).into()),
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(14.), px(14.))),
                     }),
@@ -478,12 +480,12 @@ impl WorkspaceView {
             let tooltip = if let Some(path) = &self.state.doc.path {
                 path.to_string_lossy().to_string()
             } else {
-                "未保存草稿 (双击或 ⌘S 另存为)".to_string()
+                strings.draft_unsaved_hint.to_string()
             };
             let dirty = self.state.is_dirty();
             (title, tooltip, dirty)
         } else {
-            ("未打开文档".to_string(), "未打开文档".to_string(), false)
+            (strings.no_document_open.to_string(), strings.no_document_open.to_string(), false)
         };
 
         div()
@@ -712,6 +714,7 @@ impl WorkspaceView {
     }
 
     fn render_close_modal(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> impl IntoElement {
+        let strings = self.state.strings;
         let pending = self.state.pending_close.clone().unwrap_or(crate::state::PendingClose {
             key: crate::state::DocKey::Scratch(0),
             title: String::new(),
@@ -720,6 +723,7 @@ impl WorkspaceView {
         let title = pending.title.clone();
         let key_discard = pending.key.clone();
         let key_save = pending.key.clone();
+        let prompt_text = strings.modal_save_prompt.replace("{}", &title);
 
         div()
             .id("dirty_close_modal_backdrop")
@@ -753,13 +757,13 @@ impl WorkspaceView {
                                     .text_base()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text_primary)
-                                    .child(format!("是否保存对 “{}” 的更改？", title)),
+                                    .child(prompt_text),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(theme.text_muted)
-                                    .child("如果不保存，您所做的修改将会丢失。"),
+                                    .child(strings.modal_save_detail),
                             ),
                     )
                     .child(
@@ -784,7 +788,7 @@ impl WorkspaceView {
                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
                                         this.handle_modal_cancel(cx);
                                     }))
-                                    .child("取消 (Esc)"),
+                                    .child(format!("{} (Esc)", strings.modal_cancel)),
                             )
                             // Discard button
                             .child(
@@ -802,7 +806,7 @@ impl WorkspaceView {
                                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                         this.handle_modal_discard(&key_discard, window, cx);
                                     }))
-                                    .child("不保存 (D)"),
+                                    .child(format!("{} (D)", strings.modal_discard)),
                             )
                             // Save button
                             .child(
@@ -820,7 +824,7 @@ impl WorkspaceView {
                                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                         this.handle_modal_save(&key_save, window, cx);
                                     }))
-                                    .child("保存 (S)"),
+                                    .child(format!("{} (S)", strings.modal_save)),
                             ),
                     ),
             )
@@ -916,7 +920,40 @@ impl Render for WorkspaceView {
                     if let Ok(Ok(Some(mut paths))) = rx.await {
                         if let Some(path) = paths.pop() {
                             let _ = this.update(app, |this, cx| {
-                                let _ = this.state.add_workspace_root(path);
+                                match this.state.add_workspace_root(path) {
+                                    Ok(_) => {
+                                        this.error_banner = None;
+                                        this.state.clear_error();
+                                    }
+                                    Err(e) => {
+                                        let strings = this.state.strings;
+                                        let msg = match e {
+                                            crate::state::RootAddError::NotFound => {
+                                                strings.error_root_not_found.to_string()
+                                            }
+                                            crate::state::RootAddError::NotADirectory => {
+                                                strings.error_root_not_dir.to_string()
+                                            }
+                                            crate::state::RootAddError::AlreadyExists => {
+                                                strings.error_root_already_exists.to_string()
+                                            }
+                                            crate::state::RootAddError::NestedInExisting(p) => {
+                                                format!("{}: {}", strings.error_root_nested, p.display())
+                                            }
+                                            crate::state::RootAddError::ContainsExisting(p) => {
+                                                format!("{}: {}", strings.error_root_parent, p.display())
+                                            }
+                                            crate::state::RootAddError::SaveFailed(err) => {
+                                                format!("{}: {}", strings.error_save_failed, err)
+                                            }
+                                            crate::state::RootAddError::CanonicalizeFailed(p, err) => {
+                                                format!("{}: {}: {}", strings.error_save_failed, p.display(), err)
+                                            }
+                                        };
+                                        this.error_banner = Some(msg.clone());
+                                        this.state.set_error(msg);
+                                    }
+                                }
                                 cx.notify();
                             });
                         }
@@ -947,7 +984,18 @@ impl Render for WorkspaceView {
         let view_remove_root = cx.entity().clone();
         let on_remove_root = Arc::new(move |root_idx: usize, _window: &mut Window, cx: &mut App| {
             view_remove_root.update(cx, |this, cx| {
-                let _ = this.state.remove_workspace_root(root_idx);
+                match this.state.remove_workspace_root(root_idx) {
+                    Ok(_) => {
+                        this.error_banner = None;
+                        this.state.clear_error();
+                    }
+                    Err(e) => {
+                        let strings = this.state.strings;
+                        let msg = format!("{}: {}", strings.error_remove_failed, e);
+                        this.error_banner = Some(msg.clone());
+                        this.state.set_error(msg);
+                    }
+                }
                 cx.notify();
             });
         });
@@ -1305,6 +1353,60 @@ impl Render for WorkspaceView {
                     .flex_col()
                     .overflow_hidden()
                     .child(self.render_canvas_header(theme, cx))
+                    // Error Feedback Banner
+                    .when_some(self.error_banner.clone(), |el, err_msg| {
+                        el.child(
+                            div()
+                                .id("workspace_error_banner")
+                                .h(px(36.))
+                                .px_4()
+                                .bg(rgba(0xef44441a))
+                                .border_b_1()
+                                .border_color(rgba(0xef444433))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            svg()
+                                                .path("icons/info.svg")
+                                                .size(px(14.))
+                                                .text_color(rgb(0xef4444)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(rgb(0xef4444))
+                                                .child(err_msg),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id("btn_close_error_banner")
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(0xef4444))
+                                        .hover(|s| s.bg(rgba(0xef444422)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _window, cx| {
+                                                this.error_banner = None;
+                                                this.state.clear_error();
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child("×"),
+                                ),
+                        )
+                    })
                     // Conflict Warning Banner
                     .when(has_conflict, |el| {
                         el.child(
@@ -1458,12 +1560,12 @@ impl Render for WorkspaceView {
                                                 div()
                                                     .text_size(px(14.))
                                                     .font_weight(FontWeight::MEDIUM)
-                                                    .child("未打开文档"),
+                                                    .child(strings.no_document_open),
                                             )
                                             .child(
                                                 div()
                                                     .text_size(px(12.))
-                                                    .child("从左侧文件树选择文件，或按 ⌘N 新建草稿"),
+                                                    .child(strings.no_document_open_desc),
                                             )
                                             .into_any_element()
                                     } else {

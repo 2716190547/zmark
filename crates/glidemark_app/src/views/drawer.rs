@@ -321,17 +321,19 @@ pub fn render_drawer(
                                     .tooltip(move |_window, cx| {
                                         let t = root_path_str.clone();
                                         cx.new(|_| DrawerTooltipView { text: t }).into()
-                                    })
-                                    .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
-                                        if is_missing {
-                                            return;
-                                        }
-                                        if is_deferred {
-                                            on_refresh_r(root_idx, window, cx);
-                                        } else {
-                                            on_toggle_r(root_idx, window, cx);
-                                        }
                                     });
+
+                                let on_refresh_header = on_refresh_r.clone();
+                                root_header = root_header.on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                                    if is_missing {
+                                        return;
+                                    }
+                                    if is_deferred {
+                                        on_refresh_header(root_idx, window, cx);
+                                    } else {
+                                        on_toggle_r(root_idx, window, cx);
+                                    }
+                                });
 
                                 let left_part = div()
                                     .flex()
@@ -445,13 +447,40 @@ pub fn render_drawer(
                                     }
 
                                     if is_truncated {
+                                        let on_refresh = on_refresh_r.clone();
                                         root_children_container = root_children_container.child(
                                             div()
+                                                .id(SharedString::from(format!("btn_retry_truncated_{}", root_idx)))
                                                 .pl(px(24.))
+                                                .pr_2()
                                                 .py_1()
-                                                .text_size(px(11.))
-                                                .text_color(theme.text_muted)
-                                                .child(format!("({})", strings.truncated_hint)),
+                                                .rounded(px(4.))
+                                                .cursor_pointer()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .hover(|s| s.bg(theme.surface))
+                                                .tooltip(move |_window, cx| {
+                                                    let t = strings.retry_scan.to_string();
+                                                    cx.new(|_| DrawerTooltipView { text: t }).into()
+                                                })
+                                                .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                                                    cx.stop_propagation();
+                                                    on_refresh(root_idx, window, cx);
+                                                })
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.))
+                                                        .text_color(theme.text_muted)
+                                                        .child(format!("({})", strings.truncated_hint)),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.))
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .text_color(theme.accent)
+                                                        .child(format!("· {}", strings.retry_scan)),
+                                                ),
                                         );
                                     }
 

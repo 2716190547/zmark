@@ -410,6 +410,7 @@ pub struct AppState {
     pub strings: &'static I18nStrings,
     pub is_system_dark: bool,
     pub is_quitting: bool,
+    pub error_message: Option<String>,
 }
 
 impl AppState {
@@ -491,6 +492,7 @@ impl AppState {
             strings,
             is_system_dark: false,
             is_quitting: false,
+            error_message: None,
         };
         state.refresh_all_roots();
         state
@@ -507,6 +509,16 @@ impl AppState {
 
     pub fn set_drawer_tab(&mut self, tab: DrawerTab) {
         self.drawer_tab = tab;
+    }
+
+    #[allow(dead_code)]
+    pub fn set_error(&mut self, err: impl Into<String>) {
+        self.error_message = Some(err.into());
+    }
+
+    #[allow(dead_code)]
+    pub fn clear_error(&mut self) {
+        self.error_message = None;
     }
 
     #[allow(dead_code)]

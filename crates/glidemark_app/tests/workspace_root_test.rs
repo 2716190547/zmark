@@ -1274,5 +1274,22 @@ fn test_expand_to_file_truncation_syncs_root_truncated() {
     );
 }
 
+#[test]
+fn test_state_error_feedback_lifecycle() {
+    let tmp = tempdir().unwrap();
+    let mut state = clean_test_state(&tmp);
+
+    assert_eq!(state.error_message, None);
+    state.set_error("Test error");
+    assert_eq!(state.error_message.as_deref(), Some("Test error"));
+    state.clear_error();
+    assert_eq!(state.error_message, None);
+
+    // Root errors return descriptive typed error variants
+    let nonexistent = tmp.path().join("does_not_exist_folder");
+    let err = state.add_workspace_root(nonexistent).unwrap_err();
+    assert_eq!(err, glidemark_app::state::RootAddError::NotFound);
+}
+
 
 
