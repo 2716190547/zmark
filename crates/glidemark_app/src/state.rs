@@ -819,25 +819,27 @@ impl AppState {
             return;
         }
 
-        if self.scan_budget.entries_left == 0 || self.scan_budget.files_left == 0 {
+        let refund_e = self.workspace_roots[root_idx].entries_used;
+        let refund_f = self.workspace_roots[root_idx].files_used;
+
+        let total_e = (self.scan_budget.entries_left + refund_e).min(2000);
+        let total_f = (self.scan_budget.files_left + refund_f).min(400);
+
+        if total_f == 0 {
             self.workspace_roots[root_idx].deferred = true;
-            self.workspace_roots[root_idx].tree.clear();
-            return;
+            self.workspace_roots[root_idx].truncated = false;
+            return; // 预算为 0 时保留旧 tree，不粗暴 clear()
         }
 
-        self.scan_budget.entries_left =
-            (self.scan_budget.entries_left.saturating_add(self.workspace_roots[root_idx].entries_used)).min(2000);
-        self.scan_budget.files_left =
-            (self.scan_budget.files_left.saturating_add(self.workspace_roots[root_idx].files_used)).min(400);
+        // 成功退还配额给全局预算
+        self.scan_budget.entries_left = total_e;
+        self.scan_budget.files_left = total_f;
+        self.workspace_roots[root_idx].entries_used = 0;
+        self.workspace_roots[root_idx].files_used = 0;
+        self.workspace_roots[root_idx].deferred = false;
 
         let root_entries = self.scan_budget.entries_left.min(ScanBudget::PER_ROOT_ENTRY_CAP);
         let root_files = self.scan_budget.files_left.min(ScanBudget::PER_ROOT_FILE_CAP);
-
-        if root_entries == 0 || root_files == 0 {
-            self.workspace_roots[root_idx].deferred = true;
-            self.workspace_roots[root_idx].tree.clear();
-            return;
-        }
 
         let mut root_budget = ScanBudget::new(root_entries, root_files);
         let mut expanded_paths = HashSet::new();
@@ -889,7 +891,7 @@ impl AppState {
 
             non_missing_seen += 1;
 
-            if root_entries == 0 || root_files == 0 {
+            if root_files == 0 {
                 self.workspace_roots[idx].deferred = true;
                 self.workspace_roots[idx].tree.clear();
                 self.workspace_roots[idx].entries_used = 0;

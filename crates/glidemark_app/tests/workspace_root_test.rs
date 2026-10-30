@@ -888,3 +888,54 @@ fn test_truncated_vs_deferred_distinction() {
     );
     assert_eq!(state.workspace_roots[2].tree.len(), 2);
 }
+
+#[test]
+fn test_refresh_root_refunds_quota_before_check_preventing_accidental_deferred() {
+    let tmp = tempdir().unwrap();
+    let root_dir = tmp.path().join("refresh_refund_test");
+    fs::create_dir_all(&root_dir).unwrap();
+
+    for i in 0..5 {
+        fs::write(root_dir.join(format!("doc_{}.md", i)), "content").unwrap();
+    }
+
+    let mut state = clean_test_state(&tmp);
+    let idx = state.add_workspace_root(root_dir).expect("add root");
+    assert_eq!(idx, 0);
+    assert_eq!(state.workspace_roots[0].tree.len(), 5);
+    assert_eq!(state.workspace_roots[0].files_used, 5);
+    assert!(!state.workspace_roots[0].deferred);
+
+    // 人为将全局预算耗尽
+    state.scan_budget = ScanBudget::new(0, 0);
+
+    // 此时对该根调用 state.refresh_root(0)
+    state.refresh_root(0);
+
+    // 1. state.workspace_roots[0].deferred == false (不会因全局预算耗尽被误标记为 deferred)
+    assert!(
+        !state.workspace_roots[0].deferred,
+        "Root should not be deferred when its refunded quota is sufficient"
+    );
+
+    // 2. state.workspace_roots[0].tree.len() == 5 (文件树没有被意外清空)
+    assert_eq!(
+        state.workspace_roots[0].tree.len(),
+        5,
+        "File tree should not be cleared on refresh"
+    );
+
+    // 3. state.workspace_roots[0].files_used == 5
+    assert_eq!(
+        state.workspace_roots[0].files_used,
+        5,
+        "files_used should be 5 after re-scanning with refunded quota"
+    );
+
+    // 4. 验证退还与再分配逻辑正常工作
+    assert_eq!(state.workspace_roots[0].entries_used, 0);
+    assert!(!state.workspace_roots[0].truncated);
+    assert_eq!(state.scan_budget.files_left, 0);
+    assert_eq!(state.scan_budget.entries_left, 0);
+}
+
