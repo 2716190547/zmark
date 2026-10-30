@@ -1,13 +1,13 @@
 use gpui::prelude::*;
 use gpui::*;
+use std::path::PathBuf;
 use std::sync::Arc;
-use glidemark_core::document::DocumentStatus;
 
 use crate::actions::{
     ExportHtml, OpenFileDialog, SaveFile, ToggleDrawer, TogglePreviewMode, ToggleSettings,
     ToggleSourceMode, ToggleSplitMode,
 };
-use crate::state::{parse_debounce, AppState, ViewMode};
+use crate::state::{parse_debounce, AppState, CloseDecision, ViewMode};
 use crate::views::drawer::render_drawer;
 use crate::views::editor::render_editor_pane;
 use crate::views::lightbox::{render_lightbox, LightboxState};
@@ -293,10 +293,58 @@ impl WorkspaceView {
         }));
     }
 
+    pub fn trigger_save(&mut self, cx: &mut Context<Self>) {
+        if self.state.active.is_none() {
+            return;
+        }
+        self.parse_now_and_refresh();
+        if self.state.doc.path.is_some() {
+            let _ = self.state.save();
+            cx.notify();
+        } else {
+            let suggested_dir = self.state.workspace_folder.clone().unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            });
+            let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
+            cx.spawn(async move |this, app| {
+                if let Ok(Ok(Some(path))) = rx.await {
+                    let _ = this.update(app, |this, cx| {
+                        if let Some(key) = this.state.active.clone() {
+                            let _ = this.state.save_doc_as(&key, path);
+                            this.on_document_swapped();
+                            cx.notify();
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
+    }
+
+    pub fn trigger_close_active(&mut self, cx: &mut Context<Self>) {
+        if let Some(key) = self.state.active.clone() {
+            let decision = self.state.request_close(&key);
+            match decision {
+                CloseDecision::CloseImmediately => {
+                    self.on_document_swapped();
+                    cx.notify();
+                }
+                CloseDecision::PromptDirty { .. } => {
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    pub fn trigger_draft(&mut self, cx: &mut Context<Self>) {
+        self.state.focus_or_create_draft();
+        self.on_document_swapped();
+        cx.notify();
+    }
+
     fn render_canvas_header(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> impl IntoElement {
         let is_macos = cfg!(target_os = "macos");
         let drawer_open = self.state.drawer_open;
-        let active_idx = self.state.active_doc_idx;
         let view_mode = self.state.view_mode;
         let strings = self.state.strings;
         let is_renaming = self.is_renaming;
@@ -306,6 +354,20 @@ impl WorkspaceView {
         let header_pl = if is_macos && !drawer_open { px(76.) } else { px(8.) };
         // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
         let header_pr = if !is_macos { px(138.) } else { px(12.) };
+
+        let active_key = self.state.active.clone();
+        let (title_text, tooltip_text, is_dirty) = if active_key.is_some() {
+            let title = self.state.doc.display_name();
+            let tooltip = if let Some(path) = &self.state.doc.path {
+                path.to_string_lossy().to_string()
+            } else {
+                "未保存草稿".to_string()
+            };
+            let dirty = self.state.is_dirty();
+            (title, tooltip, dirty)
+        } else {
+            ("未打开文档".to_string(), "未打开文档".to_string(), false)
+        };
 
         div()
             .id("canvas_integrated_header")
@@ -318,12 +380,12 @@ impl WorkspaceView {
             .items_center()
             .justify_between()
             .gap_2()
-            // Left Group: Expand sidebar button (when collapsed) + Tab List + [+] New Tab
+            // Left Group: Expand sidebar button (when collapsed) + Document Title
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap_1p5()
                     .min_w(px(0.))
                     .when(!drawer_open, |el| {
                         el.child(render_icon_button(
@@ -337,190 +399,96 @@ impl WorkspaceView {
                             }),
                         ))
                     })
-                    .child(
+                    .child(if is_renaming && active_key.is_some() {
                         div()
-                            .id("tab_strip_scroll")
+                            .id("tab_rename_box")
+                            .px_2()
+                            .py_0p5()
+                            .bg(theme.bg)
+                            .border_1()
+                            .border_color(theme.accent)
+                            .rounded_sm()
                             .flex()
                             .items_center()
-                            .gap_1()
-                            .min_w(px(0.))
-                            .overflow_x_scroll()
-                            .children(self.state.open_docs.iter().enumerate().map(|(idx, doc)| {
-                                let is_active = idx == active_idx;
-                                let is_dirty = doc.status == DocumentStatus::Modified;
-                                let title = doc.display_name();
-
-                                let tab_item = div()
-                                    .id(("tab_item", idx))
-                                    .h(px(26.))
-                                    .max_w(px(180.))
-                                    .min_w(px(80.))
-                                    .px_2()
-                                    .rounded(px(6.))
-                                    .cursor_pointer()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap_1p5()
-                                    .text_xs();
-
-                                let switch_handler = cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                    if event.click_count == 2 && idx == this.state.active_doc_idx {
-                                        let name = this
-                                            .state
-                                            .doc
-                                            .path
-                                            .as_ref()
-                                            .and_then(|p| p.file_name())
-                                            .and_then(|n| n.to_str())
-                                            .unwrap_or("Untitled.md");
-                                        this.rename_buffer = name.to_string();
-                                        this.is_renaming = true;
-                                        window.focus(&this.focus_handle);
-                                        cx.notify();
+                            .cursor_text()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text_primary)
+                                    .child(if rename_buffer.is_empty() {
+                                        "Untitled.md".to_string()
                                     } else {
-                                        this.state.switch_tab(idx);
-                                        this.on_document_swapped();
-                                        cx.notify();
-                                    }
-                                });
-
-                                let close_handler = cx.listener(move |this, _, _window, cx| {
-                                    cx.stop_propagation();
-                                    this.state.close_tab(idx);
-                                    this.on_document_swapped();
-                                    cx.notify();
-                                });
-
-                                let title_content: AnyElement = if is_renaming && is_active {
-                                    div()
-                                        .id("tab_rename_box")
-                                        .px_1()
-                                        .py_0p5()
-                                        .bg(theme.bg)
-                                        .border_1()
-                                        .border_color(theme.accent)
-                                        .rounded_sm()
-                                        .flex()
-                                        .items_center()
-                                        .cursor_text()
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(theme.text_primary)
-                                                .child(if rename_buffer.is_empty() {
-                                                    "Untitled.md".to_string()
-                                                } else {
-                                                    rename_buffer.clone()
-                                                }),
-                                        )
-                                        .child(
-                                            div()
-                                                .w(px(1.5))
-                                                .h(px(12.))
-                                                .ml_0p5()
-                                                .bg(theme.accent)
-                                                .with_animation(
-                                                    "rename_cursor_blink",
-                                                    Animation::new(std::time::Duration::from_millis(600)).repeat(),
-                                                    |el, delta| el.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
-                                                ),
-                                        )
-                                        .into_any_element()
-                                } else {
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.))
-                                        .truncate()
-                                        .child(title)
-                                        .into_any_element()
-                                };
-
-                                let dirty_indicator = if is_dirty {
-                                    Some(
-                                        div()
-                                            .w(px(6.))
-                                            .h(px(6.))
-                                            .rounded_full()
-                                            .bg(theme.accent)
-                                            .flex_shrink_0(),
-                                    )
-                                } else {
-                                    None
-                                };
-
-                                let close_btn = div()
-                                    .id(("tab_close_btn", idx))
-                                    .w(px(16.))
-                                    .h(px(16.))
-                                    .rounded_sm()
-                                    .cursor_pointer()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_color(if is_active { theme.warm_pill_text() } else { theme.text_muted })
-                                    .hover(|s| s.bg(theme.border).text_color(theme.text_primary))
-                                    .tooltip(|_window, cx| {
-                                        cx.new(|_| TooltipView { text: "关闭标签页 (⌘W)".to_string() }).into()
-                                    })
-                                    .on_mouse_down(MouseButton::Left, close_handler)
-                                    .child(
-                                        svg()
-                                            .path("icons/x.svg")
-                                            .size(px(10.))
-                                    );
-
-                                let mut tab = tab_item.child(title_content);
-                                if let Some(dot) = dirty_indicator {
-                                    tab = tab.child(dot);
-                                }
-                                tab = tab.child(close_btn);
-
-                                if is_active {
-                                    tab
-                                        .bg(theme.warm_pill_bg())
-                                        .text_color(theme.warm_pill_text())
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .on_mouse_down(MouseButton::Left, switch_handler)
-                                } else {
-                                    tab
-                                        .text_color(theme.text_muted)
-                                        .hover(|s| s.bg(theme.bg).text_color(theme.text_primary))
-                                        .on_mouse_down(MouseButton::Left, switch_handler)
-                                }
-                            }))
-                    )
-                    // "+" Button to open new tab
-                    .child(
+                                        rename_buffer.clone()
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .w(px(1.5))
+                                    .h(px(14.))
+                                    .ml_0p5()
+                                    .bg(theme.accent)
+                                    .with_animation(
+                                        "rename_cursor_blink",
+                                        Animation::new(std::time::Duration::from_millis(600)).repeat(),
+                                        |el, delta| el.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
+                                    ),
+                            )
+                            .into_any_element()
+                    } else {
+                        let tooltip = tooltip_text.clone();
                         div()
-                            .id("tab_new_btn")
-                            .w(px(24.))
-                            .h(px(24.))
+                            .id("canvas_document_title")
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .px_2()
+                            .py_1()
                             .rounded_md()
                             .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_color(theme.text_muted)
-                            .hover(|s| s.bg(theme.bg).text_color(theme.text_primary))
-                            .tooltip(|_window, cx| {
-                                cx.new(|_| TooltipView { text: "新建标签页 (⌘T)".to_string() }).into()
+                            .tooltip(move |_window, cx| {
+                                let t = tooltip.clone();
+                                cx.new(|_| TooltipView { text: t }).into()
                             })
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-                                this.state.new_tab();
-                                this.on_document_swapped();
-                                cx.notify();
+                            .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                if event.click_count == 2 && this.state.active.is_some() {
+                                    let name = this
+                                        .state
+                                        .doc
+                                        .path
+                                        .as_ref()
+                                        .and_then(|p| p.file_name())
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("Untitled.md");
+                                    this.rename_buffer = name.to_string();
+                                    this.is_renaming = true;
+                                    window.focus(&this.focus_handle);
+                                    cx.notify();
+                                }
                             }))
                             .child(
                                 div()
-                                    .text_size(px(15.))
-                                    .line_height(relative(1.0))
-                                    .child("+")
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(if active_key.is_some() { theme.text_primary } else { theme.text_muted })
+                                    .max_w(px(320.))
+                                    .truncate()
+                                    .child(title_text)
                             )
-                    )
+                            .when(is_dirty, |el| {
+                                el.child(
+                                    div()
+                                        .w(px(6.))
+                                        .h(px(6.))
+                                        .rounded_full()
+                                        .bg(theme.accent)
+                                        .flex_shrink_0()
+                                )
+                            })
+                            .into_any_element()
+                    })
             )
-            // Draggable Window Control Area in center between tabs and action tools
+            // Draggable Window Control Area in center between title and action tools
             .child(
                 div()
                     .id("canvas_header_drag_area")
@@ -591,9 +559,7 @@ impl WorkspaceView {
                                 theme,
                                 render_save_icon(theme.text_muted),
                                 cx.listener(|this, _, _window, cx| {
-                                    this.parse_now_and_refresh();
-                                    let _ = this.state.save();
-                                    cx.notify();
+                                    this.trigger_save(cx);
                                 }),
                             ))
                             .child(render_icon_button(
@@ -621,6 +587,147 @@ impl WorkspaceView {
                                 }),
                             ))
                     )
+            )
+    }
+
+    fn render_close_modal(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> impl IntoElement {
+        let pending = self.state.pending_close.clone().unwrap_or(crate::state::PendingClose {
+            key: crate::state::DocKey::Scratch(0),
+            title: String::new(),
+            has_path: false,
+        });
+        let title = pending.title.clone();
+        let has_path = pending.has_path;
+        let key_discard = pending.key.clone();
+        let key_save = pending.key.clone();
+
+        div()
+            .id("dirty_close_modal_backdrop")
+            .absolute()
+            .inset_0()
+            .bg(rgba(0x00000066))
+            .occlude()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .id("dirty_close_modal_card")
+                    .w(px(380.))
+                    .p_5()
+                    .rounded_xl()
+                    .bg(theme.surface)
+                    .border_1()
+                    .border_color(theme.border)
+                    .shadow_2xl()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_base()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.text_primary)
+                                    .child(format!("是否保存对 “{}” 的更改？", title)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.text_muted)
+                                    .child("如果不保存，您所做的修改将会丢失。"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .items_center()
+                            .gap_2()
+                            // Cancel button
+                            .child(
+                                div()
+                                    .id("btn_modal_cancel")
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .text_xs()
+                                    .text_color(theme.text_primary)
+                                    .hover(|s| s.bg(theme.bg))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
+                                        this.state.cancel_close();
+                                        cx.notify();
+                                    }))
+                                    .child("取消 (Esc)"),
+                            )
+                            // Discard button
+                            .child(
+                                div()
+                                    .id("btn_modal_discard")
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .bg(rgba(0xef44441a))
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(0xef4444))
+                                    .hover(|s| s.bg(rgba(0xef444433)))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _window, cx| {
+                                        this.state.confirm_close_discard(&key_discard);
+                                        this.on_document_swapped();
+                                        cx.notify();
+                                    }))
+                                    .child("不保存 (D)"),
+                            )
+                            // Save button
+                            .child(
+                                div()
+                                    .id("btn_modal_save")
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .bg(theme.accent)
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(0xffffff))
+                                    .hover(|s| s.opacity(0.9))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _window, cx| {
+                                        if has_path {
+                                            let _ = this.state.confirm_close_save(&key_save);
+                                            this.on_document_swapped();
+                                            cx.notify();
+                                        } else {
+                                            this.state.cancel_close();
+                                            let suggested_dir = this.state.workspace_folder.clone().unwrap_or_else(|| {
+                                                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                                            });
+                                            let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
+                                            let close_key = key_save.clone();
+                                            cx.spawn(async move |this, app| {
+                                                if let Ok(Ok(Some(path))) = rx.await {
+                                                    let _ = this.update(app, |this, cx| {
+                                                        let _ = this.state.save_doc_as(&close_key, path);
+                                                        this.state.close_document_forced(&close_key);
+                                                        this.on_document_swapped();
+                                                        cx.notify();
+                                                    });
+                                                }
+                                            })
+                                            .detach();
+                                        }
+                                    }))
+                                    .child("保存 (S)"),
+                            ),
+                    ),
             )
     }
 }
@@ -801,9 +908,7 @@ impl Render for WorkspaceView {
                 .detach();
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _window, cx| {
-                this.parse_now_and_refresh();
-                let _ = this.state.save();
-                cx.notify();
+                this.trigger_save(cx);
             }))
             .on_action(cx.listener(|this, _: &ExportHtml, _window, _cx| {
                 let html = this.state.export_standalone_html();
@@ -818,6 +923,48 @@ impl Render for WorkspaceView {
                         this.lightbox.close();
                         cx.notify();
                         return;
+                    }
+                }
+
+                if let Some(pending) = this.state.pending_close.clone() {
+                    match event.keystroke.key.as_str() {
+                        "escape" => {
+                            this.state.cancel_close();
+                            cx.notify();
+                            return;
+                        }
+                        "d" | "D" => {
+                            this.state.confirm_close_discard(&pending.key);
+                            this.on_document_swapped();
+                            cx.notify();
+                            return;
+                        }
+                        "enter" | "s" | "S" => {
+                            if pending.has_path {
+                                let _ = this.state.confirm_close_save(&pending.key);
+                                this.on_document_swapped();
+                                cx.notify();
+                            } else {
+                                this.state.cancel_close();
+                                let suggested_dir = this.state.workspace_folder.clone().unwrap_or_else(|| {
+                                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                                });
+                                let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
+                                let close_key = pending.key.clone();
+                                cx.spawn(async move |this, app| {
+                                    if let Ok(Ok(Some(path))) = rx.await {
+                                        let _ = this.update(app, |this, cx| {
+                                            let _ = this.state.save_doc_as(&close_key, path);
+                                            this.state.close_document_forced(&close_key);
+                                            this.on_document_swapped();
+                                            cx.notify();
+                                        });
+                                    }
+                                }).detach();
+                            }
+                            return;
+                        }
+                        _ => {}
                     }
                 }
 
@@ -882,19 +1029,16 @@ impl Render for WorkspaceView {
                             cx.notify();
                         }
                         "s" => {
-                            this.parse_now_and_refresh();
-                            let _ = this.state.save();
-                            cx.notify();
+                            this.trigger_save(cx);
                         }
                         "w" => {
-                            this.state.close_tab(this.state.active_doc_idx);
-                            this.on_document_swapped();
-                            cx.notify();
+                            this.trigger_close_active(cx);
+                        }
+                        "n" => {
+                            this.trigger_draft(cx);
                         }
                         "t" => {
-                            this.state.new_tab();
-                            this.on_document_swapped();
-                            cx.notify();
+                            this.trigger_draft(cx);
                         }
                         "o" => {
                             let rx = cx.prompt_for_paths(PathPromptOptions {
@@ -1167,119 +1311,151 @@ impl Render for WorkspaceView {
                                     .min_h(px(0.))
                                     .size_full()
                                     .overflow_hidden()
-                                    .child(match view_mode {
-                                        ViewMode::Source => div()
-                                            .size_full()
-                                            .child(render_editor_pane(
-                                                self.state.editor.lines.clone(),
-                                                self.state.editor.cursor(),
-                                                theme,
-                                                self.state.preferences.font_size,
-                                                is_dirty,
-                                                &self.editor_scroll_handle,
-                                                on_click_line,
-                                            ))
-                                            .into_any_element(),
-                                        ViewMode::Preview => div()
-                                            .size_full()
-                                            .min_w(px(0.))
-                                            .child(render_preview_pane(
-                                                self.state.doc.parsed.clone(),
-                                                theme,
-                                                self.state.preferences.max_column_width,
-                                                self.state.preferences.font_size,
-                                                &self.preview_list,
-                                                copied_code_hash,
-                                                Some(on_copy.clone()),
-                                                Some(on_open_lightbox.clone()),
-                                            ))
-                                            .into_any_element(),
-                                        ViewMode::Split => div()
+                                    .child(if self.state.active.is_none() {
+                                        div()
                                             .size_full()
                                             .flex()
-                                            .overflow_hidden()
-                                            // Left Editor Pane
+                                            .flex_col()
+                                            .items_center()
+                                            .justify_center()
+                                            .gap_3()
+                                            .text_color(theme.text_muted)
+                                            .child(
+                                                svg()
+                                                    .path("icons/files.svg")
+                                                    .size(px(40.))
+                                                    .text_color(theme.border),
+                                            )
                                             .child(
                                                 div()
-                                                    .w(relative(self.split_ratio))
-                                                    .min_w(px(0.))
-                                                    .min_h(px(0.))
-                                                    .h_full()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .overflow_hidden()
-                                                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
-                                                        this.handle_editor_scroll_wheel(event, window, cx);
-                                                    }))
-                                                    .child(render_editor_pane(
-                                                        self.state.editor.lines.clone(),
-                                                        self.state.editor.cursor(),
-                                                        theme,
-                                                        self.state.preferences.font_size,
-                                                        is_dirty,
-                                                        &self.editor_scroll_handle,
-                                                        on_click_line,
-                                                    )),
+                                                    .text_size(px(14.))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child("未打开文档"),
                                             )
-                                            // Draggable Resizable Divider: 5px hit zone with 1px hairline
                                             .child(
                                                 div()
-                                                    .w(px(5.))
-                                                    .h_full()
-                                                    .flex()
-                                                    .justify_center()
-                                                    .items_center()
-                                                    .cursor_col_resize()
-                                                    .bg(theme.surface)
-                                                    .hover(|s| s.bg(theme.accent))
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                                                            if event.click_count == 2 {
-                                                                this.split_ratio = 0.5;
-                                                                cx.notify();
-                                                            } else {
-                                                                this.is_resizing_split = true;
-                                                            }
-                                                        }),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .w(px(1.))
-                                                            .h_full()
-                                                            .bg(theme.border),
-                                                    ),
+                                                    .text_size(px(12.))
+                                                    .child("从左侧文件树选择文件，或按 ⌘N 新建草稿"),
                                             )
-                                            // Right Preview Pane
-                                            .child(
-                                                div()
-                                                    .w(relative(1.0 - self.split_ratio))
-                                                    .min_w(px(0.))
-                                                    .min_h(px(0.))
-                                                    .h_full()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .overflow_hidden()
-                                                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
-                                                        this.handle_preview_scroll_wheel(event, window, cx);
-                                                    }))
-                                                    .child(render_preview_pane(
-                                                        self.state.doc.parsed.clone(),
-                                                        theme,
-                                                        self.state.preferences.max_column_width,
-                                                        self.state.preferences.font_size,
-                                                        &self.preview_list,
-                                                        copied_code_hash,
-                                                        Some(on_copy),
-                                                        Some(on_open_lightbox.clone()),
-                                                    )),
-                                            )
-                                            .into_any_element(),
+                                            .into_any_element()
+                                    } else {
+                                        match view_mode {
+                                            ViewMode::Source => div()
+                                                .size_full()
+                                                .child(render_editor_pane(
+                                                    self.state.editor.lines.clone(),
+                                                    self.state.editor.cursor(),
+                                                    theme,
+                                                    self.state.preferences.font_size,
+                                                    is_dirty,
+                                                    &self.editor_scroll_handle,
+                                                    on_click_line,
+                                                ))
+                                                .into_any_element(),
+                                            ViewMode::Preview => div()
+                                                .size_full()
+                                                .min_w(px(0.))
+                                                .child(render_preview_pane(
+                                                    self.state.doc.parsed.clone(),
+                                                    theme,
+                                                    self.state.preferences.max_column_width,
+                                                    self.state.preferences.font_size,
+                                                    &self.preview_list,
+                                                    copied_code_hash,
+                                                    Some(on_copy.clone()),
+                                                    Some(on_open_lightbox.clone()),
+                                                ))
+                                                .into_any_element(),
+                                            ViewMode::Split => div()
+                                                .size_full()
+                                                .flex()
+                                                .overflow_hidden()
+                                                // Left Editor Pane
+                                                .child(
+                                                    div()
+                                                        .w(relative(self.split_ratio))
+                                                        .min_w(px(0.))
+                                                        .min_h(px(0.))
+                                                        .h_full()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .overflow_hidden()
+                                                        .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                                                            this.handle_editor_scroll_wheel(event, window, cx);
+                                                        }))
+                                                        .child(render_editor_pane(
+                                                            self.state.editor.lines.clone(),
+                                                            self.state.editor.cursor(),
+                                                            theme,
+                                                            self.state.preferences.font_size,
+                                                            is_dirty,
+                                                            &self.editor_scroll_handle,
+                                                            on_click_line,
+                                                        )),
+                                                )
+                                                // Draggable Resizable Divider: 5px hit zone with 1px hairline
+                                                .child(
+                                                    div()
+                                                        .w(px(5.))
+                                                        .h_full()
+                                                        .flex()
+                                                        .justify_center()
+                                                        .items_center()
+                                                        .cursor_col_resize()
+                                                        .bg(theme.surface)
+                                                        .hover(|s| s.bg(theme.accent))
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                                                if event.click_count == 2 {
+                                                                    this.split_ratio = 0.5;
+                                                                    cx.notify();
+                                                                } else {
+                                                                    this.is_resizing_split = true;
+                                                                }
+                                                            }),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .w(px(1.))
+                                                                .h_full()
+                                                                .bg(theme.border),
+                                                        ),
+                                                )
+                                                // Right Preview Pane
+                                                .child(
+                                                    div()
+                                                        .w(relative(1.0 - self.split_ratio))
+                                                        .min_w(px(0.))
+                                                        .min_h(px(0.))
+                                                        .h_full()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .overflow_hidden()
+                                                        .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                                                            this.handle_preview_scroll_wheel(event, window, cx);
+                                                        }))
+                                                        .child(render_preview_pane(
+                                                            self.state.doc.parsed.clone(),
+                                                            theme,
+                                                            self.state.preferences.max_column_width,
+                                                            self.state.preferences.font_size,
+                                                            &self.preview_list,
+                                                            copied_code_hash,
+                                                            Some(on_copy),
+                                                            Some(on_open_lightbox.clone()),
+                                                        )),
+                                                )
+                                                .into_any_element(),
+                                        }
                                     })
-                            }),
+                            })
                     )
                     .when(self.lightbox.is_open, |root| {
                         root.child(render_lightbox(&self.lightbox, theme, cx))
+                    })
+                    .when(self.state.pending_close.is_some(), |root| {
+                        root.child(self.render_close_modal(theme, cx))
                     })
     }
 }

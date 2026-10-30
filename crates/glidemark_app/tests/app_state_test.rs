@@ -1,4 +1,4 @@
-use glidemark_app::state::{AppState, ViewMode};
+use glidemark_app::state::{AppState, CloseDecision, DocKey, ViewMode};
 use glidemark_core::config::ThemeMode;
 use glidemark_core::document::Document;
 use glidemark_core::i18n::SupportedLocale;
@@ -213,7 +213,7 @@ fn test_auto_save_and_settings_tabs() {
 }
 
 #[test]
-fn test_multi_tab_workflow() {
+fn test_document_lifecycle_and_switching() {
     let dir = tempdir().unwrap();
     let file1 = dir.path().join("first.md");
     let file2 = dir.path().join("second.md");
@@ -224,34 +224,35 @@ fn test_multi_tab_workflow() {
     let mut state = AppState::new(doc);
 
     assert_eq!(state.open_docs.len(), 1);
-    assert_eq!(state.active_doc_idx, 0);
+    assert_eq!(state.active, Some(DocKey::Path(file1.clone())));
 
-    // Open second file: should add tab, not close the first!
+    // Open second file: adds to open_docs and activates it
     state.open_file(file2.clone()).unwrap();
     assert_eq!(state.open_docs.len(), 2);
-    assert_eq!(state.active_doc_idx, 1);
+    assert_eq!(state.active, Some(DocKey::Path(file2.clone())));
     assert_eq!(state.doc.path.as_ref(), Some(&file2));
 
-    // Switch back to tab 0
-    state.switch_tab(0);
-    assert_eq!(state.active_doc_idx, 0);
+    // Switch back to file 1 using DocKey
+    state.switch_document(&DocKey::Path(file1.clone()));
+    assert_eq!(state.active, Some(DocKey::Path(file1.clone())));
     assert_eq!(state.doc.path.as_ref(), Some(&file1));
 
-    // Open a third scratch tab
-    state.new_tab();
+    // Open draft slot
+    state.focus_or_create_draft();
     assert_eq!(state.open_docs.len(), 3);
-    assert_eq!(state.active_doc_idx, 2);
+    assert!(state.active.as_ref().map_or(false, |k| k.is_scratch()));
     assert!(state.doc.path.is_none());
 
-    // Close the scratch tab
-    state.close_tab(2);
+    let draft_key = state.active.clone().unwrap();
+
+    // Close the draft
+    state.close_document_forced(&draft_key);
     assert_eq!(state.open_docs.len(), 2);
-    assert_eq!(state.active_doc_idx, 1);
 
     // Re-opening an already open file should switch to it, not duplicate
     state.open_file(file1.clone()).unwrap();
     assert_eq!(state.open_docs.len(), 2);
-    assert_eq!(state.active_doc_idx, 0);
+    assert_eq!(state.active, Some(DocKey::Path(file1.clone())));
 }
 
 #[test]
@@ -276,7 +277,7 @@ fn test_workspace_folder_and_tabs() {
 }
 
 #[test]
-fn test_multi_tab_transitions_and_buffer_sync() {
+fn test_document_transitions_and_buffer_sync() {
     let dir = tempdir().unwrap();
     let file_a = dir.path().join("doc_a.md");
     let file_b = dir.path().join("doc_b.md");
@@ -291,61 +292,230 @@ fn test_multi_tab_transitions_and_buffer_sync() {
     state.open_file(file_b.clone()).unwrap();
     state.open_file(file_c.clone()).unwrap();
     assert_eq!(state.open_docs.len(), 3);
-    assert_eq!(state.active_doc_idx, 2);
+    assert_eq!(state.active, Some(DocKey::Path(file_c.clone())));
 
-    // 1. Buffer synchronization when switching tabs
-    // Edit Doc C in editor
+    // 1. Buffer synchronization when switching documents
     state.editor.insert_text("\nAdded to C");
-    // Switch to Doc A (index 0)
-    state.switch_tab(0);
-    assert_eq!(state.active_doc_idx, 0);
+    state.switch_document(&DocKey::Path(file_a.clone()));
+    assert_eq!(state.active, Some(DocKey::Path(file_a.clone())));
     assert_eq!(state.doc.path.as_ref(), Some(&file_a));
-    assert!(state.open_docs[2].buffer.contains("Added to C"));
+    assert!(state.open_docs.iter().find(|d| d.key == DocKey::Path(file_c.clone())).unwrap().doc.buffer.contains("Added to C"));
 
-    // Edit Doc A
     state.editor.insert_text("\nAdded to A");
-    // Switch to Doc B (index 1)
-    state.switch_tab(1);
-    assert_eq!(state.active_doc_idx, 1);
+    state.switch_document(&DocKey::Path(file_b.clone()));
+    assert_eq!(state.active, Some(DocKey::Path(file_b.clone())));
     assert_eq!(state.doc.path.as_ref(), Some(&file_b));
-    assert!(state.open_docs[0].buffer.contains("Added to A"));
+    assert!(state.open_docs.iter().find(|d| d.key == DocKey::Path(file_a.clone())).unwrap().doc.buffer.contains("Added to A"));
 
-    // 2. Closing inactive tab before active: close index 0 (Doc A) while active is 1 (Doc B)
-    state.close_tab(0);
+    // 2. Closing inactive document: close Doc A while Doc B is active
+    state.close_document_forced(&DocKey::Path(file_a.clone()));
     assert_eq!(state.open_docs.len(), 2);
-    // Active index should adjust from 1 to 0 (still pointing to Doc B)
-    assert_eq!(state.active_doc_idx, 0);
-    assert_eq!(state.doc.path.as_ref(), Some(&file_b));
+    assert_eq!(state.active, Some(DocKey::Path(file_b.clone())));
 
-    // 3. Closing inactive tab after active: open Doc A again, active is 2
+    // 3. Re-open Doc A and close it
     state.open_file(file_a.clone()).unwrap();
-    assert_eq!(state.open_docs.len(), 3); // [Doc B, Doc C, Doc A]
-    assert_eq!(state.active_doc_idx, 2);
-    state.switch_tab(0); // Active is 0 (Doc B)
-    state.close_tab(2); // Close Doc A (after active)
-    assert_eq!(state.open_docs.len(), 2); // [Doc B, Doc C]
-    assert_eq!(state.active_doc_idx, 0); // Stays 0 (Doc B)
-    assert_eq!(state.doc.path.as_ref(), Some(&file_b));
+    assert_eq!(state.open_docs.len(), 3);
+    assert_eq!(state.active, Some(DocKey::Path(file_a.clone())));
+    state.switch_document(&DocKey::Path(file_b.clone()));
+    state.close_document_forced(&DocKey::Path(file_a.clone()));
+    assert_eq!(state.open_docs.len(), 2);
+    assert_eq!(state.active, Some(DocKey::Path(file_b.clone())));
 
-    // 4. Closing the active tab at index 0: [Doc B, Doc C] -> close Doc B
-    state.close_tab(0);
-    assert_eq!(state.open_docs.len(), 1); // [Doc C]
-    assert_eq!(state.active_doc_idx, 0);
-    assert_eq!(state.doc.path.as_ref(), Some(&file_c));
+    // 4. Closing the active document (Doc B): activates neighbor Doc C
+    state.close_document_forced(&DocKey::Path(file_b.clone()));
+    assert_eq!(state.open_docs.len(), 1);
+    assert_eq!(state.active, Some(DocKey::Path(file_c.clone())));
     assert!(state.doc.buffer.contains("Added to C"));
 
-    // 5. Closing the last remaining tab resets to a clean scratch document
-    state.close_tab(0);
-    assert_eq!(state.open_docs.len(), 1);
-    assert_eq!(state.active_doc_idx, 0);
-    assert!(state.doc.path.is_none());
-    assert_eq!(state.doc.buffer, "");
+    // 5. Closing the last remaining document leaves open_docs empty and active None (Empty State)
+    state.close_document_forced(&DocKey::Path(file_c.clone()));
+    assert_eq!(state.open_docs.len(), 0);
+    assert_eq!(state.active, None);
+    assert!(!state.is_dirty());
+}
 
-    // 6. Out-of-bounds safety: switch_tab and close_tab with invalid indices
-    state.switch_tab(42);
-    assert_eq!(state.active_doc_idx, 0);
-    state.close_tab(42);
+#[test]
+fn test_dockey_stable_switching() {
+    let dir = tempdir().unwrap();
+    let file1 = dir.path().join("d1.md");
+    let file2 = dir.path().join("d2.md");
+    fs::write(&file1, "Doc 1").unwrap();
+    fs::write(&file2, "Doc 2").unwrap();
+
+    let doc = Document::from_file(file1.clone()).unwrap();
+    let mut state = AppState::new(doc);
+    state.open_file(file2.clone()).unwrap();
+    state.focus_or_create_draft();
+
+    let k1 = DocKey::Path(file1.clone());
+    let k2 = DocKey::Path(file2.clone());
+    let k_draft = state.active.clone().unwrap();
+
+    // Switch between all 3 in arbitrary order
+    state.switch_document(&k1);
+    assert_eq!(state.active, Some(k1.clone()));
+    assert_eq!(state.doc.buffer, "Doc 1");
+
+    state.switch_document(&k_draft);
+    assert_eq!(state.active, Some(k_draft.clone()));
+
+    state.switch_document(&k2);
+    assert_eq!(state.active, Some(k2.clone()));
+    assert_eq!(state.doc.buffer, "Doc 2");
+}
+
+#[test]
+fn test_close_dirty_document_decision() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("dirty_test.md");
+    fs::write(&file, "Original text").unwrap();
+
+    let doc = Document::from_file(file.clone()).unwrap();
+    let mut state = AppState::new(doc);
+    let key = DocKey::Path(file.clone());
+
+    // Clean doc: closes immediately
+    let decision = state.plan_close(&key);
+    assert_eq!(decision, Some(CloseDecision::CloseImmediately));
+
+    // Modify editor text
+    state.editor.insert_text(" updated");
+    state.sync_from_editor();
+
+    // Dirty doc: prompts Save / Discard / Cancel
+    let decision = state.plan_close(&key);
+    match decision {
+        Some(CloseDecision::PromptDirty { key: dk, has_path, .. }) => {
+            assert_eq!(dk, key);
+            assert!(has_path);
+        }
+        _ => panic!("Expected PromptDirty"),
+    }
+
+    // request_close sets pending_close
+    let req = state.request_close(&key);
+    assert!(matches!(req, CloseDecision::PromptDirty { .. }));
+    assert!(state.pending_close.is_some());
+
+    // Cancel preserves document
+    state.cancel_close();
+    assert!(state.pending_close.is_none());
     assert_eq!(state.open_docs.len(), 1);
+}
+
+#[test]
+fn test_confirm_close_save_and_discard() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("save_discard.md");
+    fs::write(&file, "Base text").unwrap();
+
+    let doc = Document::from_file(file.clone()).unwrap();
+    let mut state = AppState::new(doc);
+    let key = DocKey::Path(file.clone());
+
+    // 1. Discard changes on close
+    state.editor.insert_text(" - discarded modification");
+    state.sync_from_editor();
+    state.request_close(&key);
+    state.confirm_close_discard(&key);
+
+    assert_eq!(state.open_docs.len(), 0);
+    assert_eq!(state.active, None);
+    // File on disk was NOT updated
+    let disk_text = fs::read_to_string(&file).unwrap();
+    assert_eq!(disk_text, "Base text");
+
+    // 2. Save changes on close
+    state.open_file(file.clone()).unwrap();
+    state.editor.insert_text(" - saved modification");
+    state.sync_from_editor();
+    state.request_close(&key);
+    let saved = state.confirm_close_save(&key).unwrap();
+    assert!(saved);
+
+    assert_eq!(state.open_docs.len(), 0);
+    let disk_text = fs::read_to_string(&file).unwrap();
+    assert!(disk_text.contains("- saved modification"));
+}
+
+#[test]
+fn test_draft_save_as_decision() {
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("newly_saved.md");
+
+    let doc = Document::new_scratch();
+    let mut state = AppState::new(doc);
+
+    state.editor.insert_text("# Brand New Draft Content");
+    state.sync_from_editor();
+
+    let scratch_key = state.active.clone().unwrap();
+    assert!(scratch_key.is_scratch());
+
+    // Save As target path
+    state.save_doc_as(&scratch_key, target.clone()).unwrap();
+
+    // Check disk content
+    assert!(target.exists());
+    let content = fs::read_to_string(&target).unwrap();
+    assert!(content.contains("# Brand New Draft Content"));
+
+    // Key transitioned to Path
+    assert_eq!(state.active, Some(DocKey::Path(target.clone())));
+    assert_eq!(state.open_docs[0].key, DocKey::Path(target));
+}
+
+#[test]
+fn test_single_draft_slot_constraint() {
+    let doc = Document::new_scratch();
+    let mut state = AppState::new(doc);
+    state.editor.insert_text("Draft notes");
+    state.sync_from_editor();
+
+    assert_eq!(state.open_docs.len(), 1);
+    let first_draft_key = state.active.clone().unwrap();
+
+    // Repeated calls to focus_or_create_draft must not create multiple drafts
+    state.focus_or_create_draft();
+    assert_eq!(state.open_docs.len(), 1);
+    assert_eq!(state.active, Some(first_draft_key.clone()));
+
+    // Open another file, then call focus_or_create_draft -> switches back to draft
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("other.md");
+    fs::write(&file, "Other").unwrap();
+
+    state.open_file(file.clone()).unwrap();
+    assert_eq!(state.open_docs.len(), 2);
+    assert_eq!(state.active, Some(DocKey::Path(file)));
+
+    state.focus_or_create_draft();
+    assert_eq!(state.open_docs.len(), 2);
+    assert_eq!(state.active, Some(first_draft_key));
+}
+
+#[test]
+fn test_exit_window_dirty_save_strategy() {
+    let dir = tempdir().unwrap();
+    let f1 = dir.path().join("f1.md");
+    fs::write(&f1, "Original").unwrap();
+
+    let doc = Document::from_file(f1.clone()).unwrap();
+    let mut state = AppState::new(doc);
+
+    state.editor.insert_text(" Edited");
+    state.sync_from_editor();
+    assert!(state.is_dirty());
+
+    // Exit window strategy: all modified docs with paths are saved
+    for od in state.open_docs.iter_mut() {
+        if od.doc.status == glidemark_core::document::DocumentStatus::Modified && od.doc.path.is_some() {
+            od.doc.save().unwrap();
+        }
+    }
+
+    let disk = fs::read_to_string(&f1).unwrap();
+    assert!(disk.contains("Edited"));
 }
 
 #[test]

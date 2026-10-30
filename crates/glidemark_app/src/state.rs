@@ -49,6 +49,49 @@ pub enum SettingsTab {
     About,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DocKey {
+    Path(PathBuf),
+    Scratch(u64),
+}
+
+impl DocKey {
+    pub fn is_scratch(&self) -> bool {
+        matches!(self, DocKey::Scratch(_))
+    }
+
+    #[allow(dead_code)]
+    pub fn as_path(&self) -> Option<&PathBuf> {
+        match self {
+            DocKey::Path(p) => Some(p),
+            DocKey::Scratch(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenDoc {
+    pub key: DocKey,
+    pub doc: Document,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CloseDecision {
+    CloseImmediately,
+    PromptDirty {
+        key: DocKey,
+        title: String,
+        has_path: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingClose {
+    pub key: DocKey,
+    pub title: String,
+    pub has_path: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileTreeNode {
     pub path: PathBuf,
@@ -69,8 +112,10 @@ pub struct VisibleTreeRow {
 
 pub struct AppState {
     pub doc: Document,
-    pub open_docs: Vec<Document>,
-    pub active_doc_idx: usize,
+    pub open_docs: Vec<OpenDoc>,
+    pub active: Option<DocKey>,
+    pub next_scratch_id: u64,
+    pub pending_close: Option<PendingClose>,
     pub workspace_folder: Option<PathBuf>,
     pub editor: EditorEngine,
     pub view_mode: ViewMode,
@@ -102,10 +147,22 @@ impl AppState {
         let editor = EditorEngine::new(&doc.buffer);
 
         let workspace_folder = doc.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+        let key = if let Some(ref p) = doc.path {
+            DocKey::Path(p.clone())
+        } else {
+            DocKey::Scratch(1)
+        };
+        let open_docs = vec![OpenDoc {
+            key: key.clone(),
+            doc: doc.clone(),
+        }];
+        let active = Some(key);
 
         let mut state = Self {
-            open_docs: vec![doc.clone()],
-            active_doc_idx: 0,
+            open_docs,
+            active,
+            next_scratch_id: 2,
+            pending_close: None,
             workspace_folder,
             doc,
             editor,
@@ -201,8 +258,17 @@ impl AppState {
 
     /// Mirrors the editor buffer into the document. Returns whether the text changed.
     pub fn sync_from_editor(&mut self) -> bool {
+        if self.active.is_none() {
+            return false;
+        }
         let new_text = self.editor.to_text();
-        self.doc.set_buffer(new_text)
+        let changed = self.doc.set_buffer(new_text);
+        if let Some(active_key) = &self.active {
+            if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == active_key) {
+                od.doc = self.doc.clone();
+            }
+        }
+        changed
     }
 
     /// Parses the buffer now, ignoring the debounce tier.
@@ -324,13 +390,21 @@ impl AppState {
         self.refresh_sibling_files();
     }
 
+    #[allow(dead_code)]
+    pub fn active_key(&self) -> Option<&DocKey> {
+        self.active.as_ref()
+    }
+
+    #[allow(dead_code)]
+    pub fn active_open_doc(&self) -> Option<&OpenDoc> {
+        let key = self.active.as_ref()?;
+        self.open_docs.iter().find(|d| &d.key == key)
+    }
+
     pub fn open_file(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
         self.sync_from_editor();
-        if self.active_doc_idx < self.open_docs.len() {
-            self.open_docs[self.active_doc_idx] = self.doc.clone();
-        }
 
-        // Automatic workspace root fallback: if unopened or outside current workspace, set parent as root
+        // Automatic workspace root fallback: if outside current workspace, set parent as root
         if let Some(parent) = path.parent() {
             let should_switch = match &self.workspace_folder {
                 Some(folder) => !path.starts_with(folder),
@@ -341,26 +415,34 @@ impl AppState {
             }
         }
 
+        let target_key = DocKey::Path(path.clone());
+
         // Check if already open
-        if let Some(pos) = self.open_docs.iter().position(|d| d.path.as_ref() == Some(&path)) {
-            self.switch_tab(pos);
+        if self.open_docs.iter().any(|d| d.key == target_key) {
+            self.switch_document(&target_key);
             self.expand_to_file(&path);
             return Ok(());
         }
 
         let new_doc = Document::from_file(path.clone())?;
-        // If single empty scratch document, replace it
+        // If single empty clean scratch document, replace it
         if self.open_docs.len() == 1
-            && self.open_docs[0].path.is_none()
-            && self.open_docs[0].buffer.trim().is_empty()
+            && self.open_docs[0].key.is_scratch()
+            && self.open_docs[0].doc.buffer.trim().is_empty()
+            && self.open_docs[0].doc.status != DocumentStatus::Modified
         {
-            self.open_docs[0] = new_doc.clone();
-            self.active_doc_idx = 0;
+            self.open_docs[0] = OpenDoc {
+                key: target_key.clone(),
+                doc: new_doc.clone(),
+            };
         } else {
-            self.open_docs.push(new_doc.clone());
-            self.active_doc_idx = self.open_docs.len() - 1;
+            self.open_docs.push(OpenDoc {
+                key: target_key.clone(),
+                doc: new_doc.clone(),
+            });
         }
 
+        self.active = Some(target_key);
         self.doc = new_doc;
         self.editor.reset_text(&self.doc.buffer);
         self.refresh_sibling_files();
@@ -368,59 +450,147 @@ impl AppState {
         Ok(())
     }
 
-    pub fn switch_tab(&mut self, idx: usize) {
-        if idx >= self.open_docs.len() || idx == self.active_doc_idx {
+    pub fn switch_document(&mut self, key: &DocKey) {
+        if self.active.as_ref() == Some(key) {
             return;
         }
         self.sync_from_editor();
-        if self.active_doc_idx < self.open_docs.len() {
-            self.open_docs[self.active_doc_idx] = self.doc.clone();
-        }
 
-        self.active_doc_idx = idx;
-        self.doc = self.open_docs[idx].clone();
-        self.editor.reset_text(&self.doc.buffer);
-        self.refresh_sibling_files();
-    }
-
-    pub fn close_tab(&mut self, idx: usize) {
-        if idx >= self.open_docs.len() {
-            return;
-        }
-
-        if self.open_docs.len() == 1 {
-            let scratch = Document::new_scratch();
-            self.open_docs[0] = scratch.clone();
-            self.doc = scratch;
-            self.active_doc_idx = 0;
-            self.editor.reset_text("");
+        if let Some(pos) = self.open_docs.iter().position(|d| &d.key == key) {
+            self.active = Some(key.clone());
+            self.doc = self.open_docs[pos].doc.clone();
+            self.editor.reset_text(&self.doc.buffer);
+            if let DocKey::Path(ref p) = key {
+                self.expand_to_file(p);
+            }
             self.refresh_sibling_files();
-            return;
         }
-
-        self.open_docs.remove(idx);
-        if self.active_doc_idx >= self.open_docs.len() {
-            self.active_doc_idx = self.open_docs.len() - 1;
-        } else if self.active_doc_idx > idx {
-            self.active_doc_idx -= 1;
-        }
-
-        self.doc = self.open_docs[self.active_doc_idx].clone();
-        self.editor.reset_text(&self.doc.buffer);
-        self.refresh_sibling_files();
     }
 
-    pub fn new_tab(&mut self) {
+    /// Focuses the existing draft slot, or creates a new draft if none exists.
+    pub fn focus_or_create_draft(&mut self) {
         self.sync_from_editor();
-        if self.active_doc_idx < self.open_docs.len() {
-            self.open_docs[self.active_doc_idx] = self.doc.clone();
+
+        if let Some(existing) = self.open_docs.iter().find(|d| d.key.is_scratch()) {
+            let key = existing.key.clone();
+            self.switch_document(&key);
+            return;
         }
 
         let scratch = Document::new_scratch();
-        self.open_docs.push(scratch.clone());
-        self.active_doc_idx = self.open_docs.len() - 1;
+        let key = DocKey::Scratch(self.next_scratch_id);
+        self.next_scratch_id += 1;
+
+        self.open_docs.push(OpenDoc {
+            key: key.clone(),
+            doc: scratch.clone(),
+        });
+        self.active = Some(key);
         self.doc = scratch;
         self.editor.reset_text("");
+        self.refresh_sibling_files();
+    }
+
+    pub fn plan_close(&self, key: &DocKey) -> Option<CloseDecision> {
+        let od = self.open_docs.iter().find(|d| &d.key == key)?;
+        let is_active = self.active.as_ref() == Some(key);
+        let is_dirty = if is_active {
+            self.doc.status == DocumentStatus::Modified
+                || self.editor.to_text() != self.doc.buffer
+        } else {
+            od.doc.status == DocumentStatus::Modified
+        };
+
+        if is_dirty {
+            Some(CloseDecision::PromptDirty {
+                key: key.clone(),
+                title: od.doc.display_name(),
+                has_path: od.doc.path.is_some(),
+            })
+        } else {
+            Some(CloseDecision::CloseImmediately)
+        }
+    }
+
+    pub fn request_close(&mut self, key: &DocKey) -> CloseDecision {
+        self.sync_from_editor();
+        let decision = match self.plan_close(key) {
+            Some(d) => d,
+            None => return CloseDecision::CloseImmediately,
+        };
+
+        match &decision {
+            CloseDecision::PromptDirty { key, title, has_path } => {
+                self.pending_close = Some(PendingClose {
+                    key: key.clone(),
+                    title: title.clone(),
+                    has_path: *has_path,
+                });
+                decision
+            }
+            CloseDecision::CloseImmediately => {
+                self.close_document_forced(key);
+                decision
+            }
+        }
+    }
+
+    pub fn cancel_close(&mut self) {
+        self.pending_close = None;
+    }
+
+    pub fn confirm_close_discard(&mut self, key: &DocKey) {
+        self.pending_close = None;
+        self.close_document_forced(key);
+    }
+
+    pub fn confirm_close_save(&mut self, key: &DocKey) -> Result<bool, std::io::Error> {
+        self.pending_close = None;
+        if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == key) {
+            if od.doc.path.is_some() {
+                od.doc.save()?;
+                if self.active.as_ref() == Some(key) {
+                    self.doc = od.doc.clone();
+                }
+                self.close_document_forced(key);
+                return Ok(true);
+            } else {
+                // Scratch needs Save As path from UI
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    pub fn close_document_forced(&mut self, key: &DocKey) {
+        let pos = match self.open_docs.iter().position(|d| &d.key == key) {
+            Some(p) => p,
+            None => return,
+        };
+
+        self.open_docs.remove(pos);
+
+        if self.active.as_ref() == Some(key) {
+            if self.open_docs.is_empty() {
+                self.active = None;
+                self.doc = Document::new_scratch();
+                self.editor.reset_text("");
+            } else {
+                let next_idx = if pos < self.open_docs.len() {
+                    pos
+                } else {
+                    self.open_docs.len() - 1
+                };
+                let next_key = self.open_docs[next_idx].key.clone();
+                let next_doc = self.open_docs[next_idx].doc.clone();
+                self.active = Some(next_key.clone());
+                self.doc = next_doc;
+                self.editor.reset_text(&self.doc.buffer);
+                if let DocKey::Path(ref p) = next_key {
+                    self.expand_to_file(p);
+                }
+            }
+        }
         self.refresh_sibling_files();
     }
 
@@ -429,6 +599,9 @@ impl AppState {
     }
 
     pub fn rename_file(&mut self, new_name: &str) -> Result<(), std::io::Error> {
+        if self.active.is_none() {
+            return Ok(());
+        }
         let clean_name = if new_name.ends_with(".md") || new_name.ends_with(".markdown") {
             new_name.to_string()
         } else {
@@ -440,31 +613,54 @@ impl AppState {
                 let new_path = parent.join(&clean_name);
                 if new_path != old_path {
                     std::fs::rename(&old_path, &new_path)?;
+                    let old_key = DocKey::Path(old_path);
+                    let new_key = DocKey::Path(new_path.clone());
+
                     self.doc.path = Some(new_path);
-                    if self.active_doc_idx < self.open_docs.len() {
-                        self.open_docs[self.active_doc_idx] = self.doc.clone();
+                    if let Some(od) = self.open_docs.iter_mut().find(|d| d.key == old_key) {
+                        od.key = new_key.clone();
+                        od.doc = self.doc.clone();
                     }
+                    self.active = Some(new_key);
                     self.refresh_sibling_files();
                 }
             }
-        } else {
-            let target_path = std::env::current_dir()?.join(&clean_name);
-            self.doc.path = Some(target_path);
-            self.save()?;
-            if self.active_doc_idx < self.open_docs.len() {
-                self.open_docs[self.active_doc_idx] = self.doc.clone();
-            }
-            self.refresh_sibling_files();
         }
         Ok(())
     }
 
     pub fn save(&mut self) -> Result<(), std::io::Error> {
+        if self.active.is_none() {
+            return Ok(());
+        }
         self.sync_from_editor();
         self.doc.save()?;
-        if self.active_doc_idx < self.open_docs.len() {
-            self.open_docs[self.active_doc_idx] = self.doc.clone();
+        if let Some(active_key) = &self.active {
+            if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == active_key) {
+                od.doc = self.doc.clone();
+            }
         }
+        Ok(())
+    }
+
+    pub fn save_doc_as(&mut self, key: &DocKey, path: PathBuf) -> Result<(), std::io::Error> {
+        self.sync_from_editor();
+        let new_key = DocKey::Path(path.clone());
+
+        if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == key) {
+            od.doc.path = Some(path.clone());
+            od.doc.save()?;
+            od.key = new_key.clone();
+        }
+
+        if self.active.as_ref() == Some(key) {
+            self.active = Some(new_key);
+            self.doc.path = Some(path.clone());
+            self.doc.save()?;
+        }
+
+        self.refresh_sibling_files();
+        self.expand_to_file(&path);
         Ok(())
     }
 
@@ -480,10 +676,16 @@ impl AppState {
     }
 
     pub fn is_dirty(&self) -> bool {
+        if self.active.is_none() {
+            return false;
+        }
         self.doc.status == DocumentStatus::Modified
     }
 
     pub fn has_conflict(&self) -> bool {
+        if self.active.is_none() {
+            return false;
+        }
         self.doc.status == DocumentStatus::ConflictOnDisk
     }
 }
