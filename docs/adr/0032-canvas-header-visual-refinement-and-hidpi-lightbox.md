@@ -48,20 +48,21 @@
 - **SVG 矢量无损提取与重采样**：正文图表生成的 SVG 带有完整的 `viewBox` 矢量坐标。灯箱打开时，无须重新运行昂贵的 Mermaid 语法解析与布局，直接从现有矢量 SVG 提取几何比例，按需生成 HiDPI 变体；
 - **16MP GPU 物理像素硬顶算法 (Pure Function)**：
   - 核心算法纯函数：`calculate_hidpi_dimensions(orig_w: f64, orig_h: f64, scale_factor: f32) -> (f64, f64)`；
-  - 边界防守：`scale_factor` 若 `<= 0.0` 则回退为 `1.0`；若 `orig_w <= 0.0 || orig_h <= 0.0` 或解析失败，安全回退至标准尺寸 `(1000.0, 600.0)`；
-  - 缩放档位确定：`scale_bucket = (scale_factor.clamp(1.0, 3.0) * 2.0).round() as u8`，消除同 key 不同分辨率抖动；
-  - 设定最大 GPU 物理像素总量 `MAX_PHYSICAL_PIXELS = 16_000_000.0`（16MP），最大物理长边 `MAX_PHYSICAL_SIDE = 4000.0`；
+  - 边界防守：`scale_factor` 若 `<= 0.0` 则安全回退为 `1.0`；若 `orig_w <= 0.0 || orig_h <= 0.0` 或解析失败，安全回退至标准尺寸 `(1000.0, 600.0)`；
+  - 缩放档位确定：`scale_bucket = (scale_factor.clamp(1.0, 3.0) * 2.0).round() as u8`（例如 1.0x -> 2, 1.25x -> 3, 1.5x -> 3, 2.0x -> 4, 2.5x -> 5, 3.0x -> 6），消除同 key 不同分辨率抖动；
+  - 设定最大 GPU 物理像素总量 `MAX_PHYSICAL_PIXELS = 16_000_000.0`（16MP），最大物理长边 `MAX_PHYSICAL_SIDE = 4000.0`；默认标准目标 8MP，4K/超大图按需升至 16MP 硬顶；
   - 面积预算计算：`area_ratio = (MAX_PHYSICAL_PIXELS / (orig_w * orig_h * (scale_factor as f64).powi(2))).sqrt()`；
   - 长边预算计算：`side_ratio = MAX_PHYSICAL_SIDE / (orig_w.max(orig_h) * scale_factor as f64)`；
   - 取更小缩放比 `final_ratio = area_ratio.min(side_ratio)`；逻辑尺寸向下取整，并显式断言 `physical_w * physical_h <= 16_000_000.0` 且长边 `<= 4000.0`；
 - **SVG 根节点像素预算重写函数**：
   - 提供生产级纯函数 `apply_texture_pixel_budget(svg: &str, target_w: f64, target_h: f64) -> String`；
-  - 支持缺失 width/height、width="100%"、仅 viewBox 等各种异常情况；保留原有 viewBox 与全部矢量绘制指令，仅安全重写根节点宽高；
-- **独立文件缓存与单图 LRU 1 生命周期管理 (严格低内存基线)**：
-  - 建立专用的灯箱文件缓存 `LIGHTBOX_DIAGRAM_CACHE: Mutex<LruCache<(u64, bool, u8), PathBuf>>`，缓存 key 为 `(code_hash, is_dark, scale_bucket)`；
-  - **单图 LRU 硬顶**：容量严格设为 **1**（灯箱同一时间仅呈现一张图表），杜绝多图累积导致 256MB 内存溢出，应用内存牢牢锁在 ≤ 150MB 基线以内；
-  - 淘汰旧项时自动清除磁盘临时 SVG 文件，杜绝无限磁盘堆积；
-  - `LightboxState` 显式持有 `hidpi_svg_path: Option<PathBuf>`；灯箱关闭时（按 Esc、点击遮罩或关闭按钮）重置状态并释放当前路径引用；
+  - 严密支持 width="100%"、缺失 width/height、仅 viewBox 等三种异常输入；保留原有 viewBox 与全部矢量绘制指令，仅安全重写根节点宽高；
+- **Arc<RenderImage> 持有与 drop_image 生命周期闭环 (严格显存控制)**：
+  - `LightboxState` 显式持有 `hidpi_svg_path: Option<PathBuf>` 与 `hidpi_image: Option<Arc<RenderImage>>`；
+  - 打开灯箱时：从独立文件缓存（`LIGHTBOX_DIAGRAM_CACHE`，单图 LRU 1）读取或生成 HiDPI SVG，通过显式解码生成 `Arc<RenderImage>`；
+  - 渲染视图：`render_lightbox` 使用 `img(ImageSource::Render(handle.clone()))`；
+  - 关闭与切换释放：在灯箱关闭（`LightboxState::close`）或切换当前文档时，显式调用 `cx.drop_image(handle, Some(window))`，立即从 GPU 显存回收 16MP 纹理；
+  - 内存基线指标：灯箱打开与 5x 缩放时峰值内存控制在 ≤ 200MB，灯箱关闭后立刻回落至日常 ≤ 110MB 低内存基线；
 - **5.0x 缩放基线**：在 `LightboxState` 最大 5.0x 缩放或 4K 全屏下，HiDPI 纹理在 16MP 预算内保持高锐利度；超出 16MP 预算的极端超长图由 GPU 平滑双线性插值承接，兼顾极清画质与 100% 显存安全。
 
 ## 分期与 Ticket 落地规划
