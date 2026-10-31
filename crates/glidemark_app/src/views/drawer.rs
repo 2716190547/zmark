@@ -364,7 +364,7 @@ pub fn render_drawer(
                                             .group_hover("drawer_root_row", |s| s.opacity(1.0))
                                             .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
                                             .tooltip(move |_window, cx| {
-                                                let t = strings.draft_create_hint.to_string();
+                                                let t = strings.new_file.to_string();
                                                 cx.new(|_| DrawerTooltipView { text: t }).into()
                                             })
                                             .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
@@ -731,7 +731,7 @@ fn render_file_tree_nodes(
                         .group_hover("drawer_dir_row", |s| s.opacity(1.0))
                         .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
                         .tooltip(move |_window, cx| {
-                            let t = strings.draft_create_hint.to_string();
+                            let t = strings.new_file.to_string();
                             cx.new(|_| DrawerTooltipView { text: t }).into()
                         })
                         .on_mouse_down(MouseButton::Left, move |_e, window, cx| {

@@ -26,6 +26,10 @@ fn test_all_10_locales_have_complete_translations() {
         assert!(!t.truncated_hint.is_empty(), "truncated_hint missing in {}", tag);
         assert!(!t.deferred_hint.is_empty(), "deferred_hint missing in {}", tag);
         assert!(!t.remove_root.is_empty(), "remove_root missing in {}", tag);
+        assert!(!t.new_file.is_empty(), "new_file missing in {}", tag);
+        assert!(!t.remove_root_confirm.is_empty(), "remove_root_confirm missing in {}", tag);
+        assert!(!t.remove_root_confirm_prompt.is_empty(), "remove_root_confirm_prompt missing in {}", tag);
+        assert!(!t.remove_root_confirm_detail.is_empty(), "remove_root_confirm_detail missing in {}", tag);
         assert!(!t.draft_unopened.is_empty(), "draft_unopened missing in {}", tag);
         assert!(!t.draft_focus_hint.is_empty(), "draft_focus_hint missing in {}", tag);
         assert!(!t.draft_create_hint.is_empty(), "draft_create_hint missing in {}", tag);
@@ -57,6 +61,7 @@ fn test_all_10_locales_have_complete_translations() {
         assert!(!t.lightbox_fit_window.is_empty(), "lightbox_fit_window missing in {}", tag);
         assert!(!t.lightbox_close.is_empty(), "lightbox_close missing in {}", tag);
         assert!(t.modal_save_prompt.contains("{}"), "modal_save_prompt must contain placeholder in {}", tag);
+        assert!(t.remove_root_confirm_prompt.contains("{}"), "remove_root_confirm_prompt must contain placeholder in {}", tag);
     }
 }
 
@@ -76,6 +81,10 @@ fn test_simplified_chinese_content() {
     assert_eq!(t.no_markdown_files, "无 Markdown 文件");
     assert_eq!(t.untitled_file, "未命名");
     assert_eq!(t.collapse_sidebar, "收起侧栏");
+    assert_eq!(t.new_file, "新建文件");
+    assert_eq!(t.remove_root_confirm, "确认移除");
+    assert_eq!(t.remove_root_confirm_prompt, "确定要从工作区移除“{}”吗？");
+    assert_eq!(t.remove_root_confirm_detail, "此操作仅从列表中移除工作区，不会删除磁盘上的实际文件。");
     assert_eq!(t.modal_cancel, "取消");
     assert_eq!(t.modal_discard, "不保存");
     assert_eq!(t.modal_save, "保存");

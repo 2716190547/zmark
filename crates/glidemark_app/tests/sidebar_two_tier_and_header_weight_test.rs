@@ -2,6 +2,7 @@ use glidemark_app::assets::AppAssets;
 use glidemark_app::state::{AppState, DocKey, ViewMode};
 use glidemark_app::views::workspace::{adaptive_header_padding, canvas_title_offset};
 use glidemark_core::document::Document;
+use glidemark_core::i18n::{get_strings, SupportedLocale};
 use gpui::AssetSource;
 use tempfile::tempdir;
 
@@ -149,6 +150,142 @@ fn test_dynamic_folder_open_icon_and_hover_new_file_action() {
         src.contains("MouseButton::Right"),
         "Root removal must be protected via MouseButton::Right"
     );
+
+    // Hover "+" tooltip binds strings.new_file (not draft_create_hint)
+    assert!(
+        src.contains("strings.new_file"),
+        "drawer.rs must contain strings.new_file"
+    );
+    let root_btn_pos = src
+        .find("btn_new_file_root_")
+        .expect("drawer.rs must define btn_new_file_root_");
+    let root_btn_section = &src[root_btn_pos..(root_btn_pos + 1500).min(src.len())];
+    assert!(
+        root_btn_section.contains("strings.new_file"),
+        "btn_new_file_root_ tooltip must use strings.new_file"
+    );
+    assert!(
+        !root_btn_section.contains("draft_create_hint"),
+        "btn_new_file_root_ tooltip must not use draft_create_hint"
+    );
+
+    let dir_btn_pos = src
+        .find("btn_new_file_dir_")
+        .expect("drawer.rs must define btn_new_file_dir_");
+    let dir_btn_section = &src[dir_btn_pos..(dir_btn_pos + 1500).min(src.len())];
+    assert!(
+        dir_btn_section.contains("strings.new_file"),
+        "btn_new_file_dir_ tooltip must use strings.new_file"
+    );
+    assert!(
+        !dir_btn_section.contains("draft_create_hint"),
+        "btn_new_file_dir_ tooltip must not use draft_create_hint"
+    );
+}
+
+#[test]
+fn test_secondary_confirmation_for_root_removal() {
+    let drawer_src = include_str!("../src/views/drawer.rs");
+    assert!(
+        drawer_src.contains("MouseButton::Right"),
+        "drawer.rs must handle MouseButton::Right on root header"
+    );
+
+    let workspace_src = include_str!("../src/views/workspace.rs");
+    assert!(
+        workspace_src.contains("render_remove_root_modal"),
+        "workspace.rs must define render_remove_root_modal"
+    );
+    assert!(
+        workspace_src.contains("remove_root_modal_card"),
+        "workspace.rs must define remove_root_modal_card element id"
+    );
+    assert!(
+        workspace_src.contains("btn_remove_root_confirm"),
+        "workspace.rs must define btn_remove_root_confirm"
+    );
+    assert!(
+        workspace_src.contains("btn_remove_root_cancel"),
+        "workspace.rs must define btn_remove_root_cancel"
+    );
+
+    // Functional integration test on AppState
+    let temp_dir = tempdir().expect("Failed to create tempdir");
+    let mut state = AppState::new_isolated(Document::new_scratch());
+
+    let add_res = state.add_workspace_root(temp_dir.path().to_path_buf());
+    assert!(add_res.is_ok(), "add_workspace_root should succeed");
+    assert_eq!(state.workspace_roots.len(), 1, "Should have 1 workspace root");
+
+    // Request removal of root 0
+    state.request_remove_workspace_root(0);
+    assert_eq!(
+        state.pending_remove_root,
+        Some(0),
+        "pending_remove_root should be Some(0) after request_remove_workspace_root(0)"
+    );
+
+    // Cancel removal
+    state.cancel_remove_workspace_root();
+    assert_eq!(
+        state.pending_remove_root, None,
+        "pending_remove_root should be None after cancel"
+    );
+    assert_eq!(
+        state.workspace_roots.len(),
+        1,
+        "Workspace roots must remain untouched after cancel"
+    );
+
+    // Request removal again and confirm
+    state.request_remove_workspace_root(0);
+    assert_eq!(state.pending_remove_root, Some(0));
+    let _ = state.confirm_remove_workspace_root();
+    assert_eq!(
+        state.pending_remove_root, None,
+        "pending_remove_root should be None after confirm"
+    );
+    assert!(
+        state.workspace_roots.is_empty(),
+        "Workspace roots must be empty after confirming root removal"
+    );
+}
+
+#[test]
+fn test_ten_languages_completeness_for_new_file_and_remove_root_confirm() {
+    for (locale, code, name) in SupportedLocale::all() {
+        let t = get_strings(*locale);
+        assert!(
+            !t.new_file.is_empty(),
+            "new_file must not be empty for locale {} ({})",
+            code,
+            name
+        );
+        assert!(
+            !t.remove_root_confirm.is_empty(),
+            "remove_root_confirm must not be empty for locale {} ({})",
+            code,
+            name
+        );
+        assert!(
+            !t.remove_root_confirm_prompt.is_empty(),
+            "remove_root_confirm_prompt must not be empty for locale {} ({})",
+            code,
+            name
+        );
+        assert!(
+            t.remove_root_confirm_prompt.contains("{}"),
+            "remove_root_confirm_prompt must contain '{{}}' placeholder for root name in locale {} ({})",
+            code,
+            name
+        );
+        assert!(
+            !t.remove_root_confirm_detail.is_empty(),
+            "remove_root_confirm_detail must not be empty for locale {} ({})",
+            code,
+            name
+        );
+    }
 }
 
 #[test]

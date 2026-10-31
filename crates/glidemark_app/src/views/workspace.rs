@@ -443,6 +443,27 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    pub fn handle_cancel_remove_root(&mut self, cx: &mut Context<Self>) {
+        self.state.cancel_remove_workspace_root();
+        cx.notify();
+    }
+
+    pub fn handle_confirm_remove_root(&mut self, cx: &mut Context<Self>) {
+        match self.state.confirm_remove_workspace_root() {
+            Ok(_) => {
+                self.error_banner = None;
+                self.state.clear_error();
+            }
+            Err(e) => {
+                let strings = self.state.strings;
+                let msg = format!("{}: {}", strings.error_remove_failed, e);
+                self.error_banner = Some(msg.clone());
+                self.state.set_error(msg);
+            }
+        }
+        cx.notify();
+    }
+
     pub fn handle_modal_discard(&mut self, key: &crate::state::DocKey, window: &mut Window, cx: &mut Context<Self>) {
         self.state.confirm_close_discard(key);
         self.on_document_swapped(Some(window), cx);
@@ -798,6 +819,102 @@ impl WorkspaceView {
             )
     }
 
+    fn render_remove_root_modal(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> impl IntoElement {
+        let strings = self.state.strings;
+        let root_name = self
+            .state
+            .pending_remove_root
+            .map(|idx| crate::state::root_label(&self.state.workspace_roots, idx))
+            .unwrap_or_default();
+        let prompt_text = strings.remove_root_confirm_prompt.replace("{}", &root_name);
+
+        div()
+            .id("remove_root_modal_backdrop")
+            .absolute()
+            .inset_0()
+            .bg(rgba(0x00000066))
+            .occlude()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .id("remove_root_modal_card")
+                    .w(px(380.))
+                    .p_5()
+                    .rounded_xl()
+                    .bg(theme.surface)
+                    .border_1()
+                    .border_color(theme.border)
+                    .shadow_2xl()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_base()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.text_primary)
+                                    .child(prompt_text),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.text_muted)
+                                    .child(strings.remove_root_confirm_detail),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .items_center()
+                            .gap_2()
+                            // Cancel button
+                            .child(
+                                div()
+                                    .id("btn_remove_root_cancel")
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .text_xs()
+                                    .text_color(theme.text_primary)
+                                    .hover(|s| s.bg(theme.bg))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
+                                        this.handle_cancel_remove_root(cx);
+                                    }))
+                                    .child(format!("{} (Esc)", strings.modal_cancel)),
+                            )
+                            // Confirm button
+                            .child(
+                                div()
+                                    .id("btn_remove_root_confirm")
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .bg(rgba(0xef44441a))
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(0xef4444))
+                                    .hover(|s| s.bg(rgba(0xef444433)))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
+                                        this.handle_confirm_remove_root(cx);
+                                    }))
+                                    .child(strings.remove_root_confirm),
+                            ),
+                    ),
+            )
+    }
+
     fn render_close_modal(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> impl IntoElement {
         let strings = self.state.strings;
         let pending = self.state.pending_close.clone().unwrap_or(crate::state::PendingClose {
@@ -1070,18 +1187,7 @@ impl Render for WorkspaceView {
         let view_remove_root = cx.entity().clone();
         let on_remove_root = Arc::new(move |root_idx: usize, _window: &mut Window, cx: &mut App| {
             view_remove_root.update(cx, |this, cx| {
-                match this.state.remove_workspace_root(root_idx) {
-                    Ok(_) => {
-                        this.error_banner = None;
-                        this.state.clear_error();
-                    }
-                    Err(e) => {
-                        let strings = this.state.strings;
-                        let msg = format!("{}: {}", strings.error_remove_failed, e);
-                        this.error_banner = Some(msg.clone());
-                        this.state.set_error(msg);
-                    }
-                }
+                this.state.request_remove_workspace_root(root_idx);
                 cx.notify();
             });
         });
@@ -1220,6 +1326,20 @@ impl Render for WorkspaceView {
                         this.close_lightbox(Some(window), cx);
                         cx.notify();
                         return;
+                    }
+                }
+
+                if this.state.pending_remove_root.is_some() {
+                    match event.keystroke.key.as_str() {
+                        "escape" => {
+                            this.handle_cancel_remove_root(cx);
+                            return;
+                        }
+                        "enter" => {
+                            this.handle_confirm_remove_root(cx);
+                            return;
+                        }
+                        _ => {}
                     }
                 }
 
@@ -1790,6 +1910,9 @@ impl Render for WorkspaceView {
                     )
                     .when(self.lightbox.is_open, |root| {
                         root.child(render_lightbox(&self.lightbox, theme, strings, cx))
+                    })
+                    .when(self.state.pending_remove_root.is_some(), |root| {
+                        root.child(self.render_remove_root_modal(theme, cx))
                     })
                     .when(self.state.pending_close.is_some(), |root| {
                         root.child(self.render_close_modal(theme, cx))

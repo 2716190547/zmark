@@ -392,6 +392,7 @@ pub struct AppState {
     pub active: Option<DocKey>,
     pub next_scratch_id: u64,
     pub pending_close: Option<PendingClose>,
+    pub pending_remove_root: Option<usize>,
     #[allow(dead_code)]
     pub workspace_roots: Vec<WorkspaceRoot>,
     #[allow(dead_code)]
@@ -477,6 +478,7 @@ impl AppState {
             active,
             next_scratch_id: 2,
             pending_close: None,
+            pending_remove_root: None,
             workspace_roots,
             scan_budget: ScanBudget::default(),
             discarded_roots,
@@ -1053,6 +1055,24 @@ impl AppState {
             (self.scan_budget.files_left.saturating_add(removed.files_used))
                 .min(ScanBudget::MAX_GLOBAL_FILES);
         Ok(Some(removed))
+    }
+
+    pub fn request_remove_workspace_root(&mut self, idx: usize) {
+        if idx < self.workspace_roots.len() {
+            self.pending_remove_root = Some(idx);
+        }
+    }
+
+    pub fn cancel_remove_workspace_root(&mut self) {
+        self.pending_remove_root = None;
+    }
+
+    pub fn confirm_remove_workspace_root(&mut self) -> Result<Option<WorkspaceRoot>, String> {
+        if let Some(idx) = self.pending_remove_root.take() {
+            self.remove_workspace_root(idx)
+        } else {
+            Ok(None)
+        }
     }
 
     #[allow(dead_code)]
