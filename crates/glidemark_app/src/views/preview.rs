@@ -432,26 +432,44 @@ fn render_mermaid_container(
     if let Some(cb) = on_open_lightbox {
         let cb = (*cb).clone();
         let p_click = path.clone();
+        let cb_btn = cb.clone();
+        let p_btn = path.clone();
+        let btn = div()
+            .id(("mermaid_zoom_btn", code_hash))
+            .absolute()
+            .top(px(8.))
+            .right(px(8.))
+            .w(px(28.))
+            .h(px(28.))
+            .rounded_md()
+            .cursor_pointer()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme.warm_pill_bg().opacity(0.75))
+            .hover(|s| s.bg(theme.warm_pill_bg()))
+            .tooltip({
+                let t = strings.mermaid_zoom_hint.to_string();
+                move |_window, cx| cx.new(|_| CodeTooltipView { text: t.clone() }).into()
+            })
+            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                cx.stop_propagation(); // 防冒泡到外层容器
+                cb_btn(p_btn.clone(), code_hash, window, cx);
+            })
+            .child(
+                svg()
+                    .path("icons/maximize.svg")
+                    .size(px(14.))
+                    .text_color(theme.warm_pill_text()),
+            );
+
         container = container
             .cursor(CursorStyle::PointingHand)
             .hover(|s| s.border_color(theme.accent))
             .on_mouse_down(MouseButton::Left, move |_event, window, app| {
                 cb(p_click.clone(), code_hash, window, app);
             })
-            .child(
-                div()
-                    .absolute()
-                    .top(px(8.))
-                    .right(px(8.))
-                    .px_2()
-                    .py_0p5()
-                    .rounded_md()
-                    .bg(theme.warm_pill_bg())
-                    .text_color(theme.warm_pill_text())
-                    .text_size(px(10.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(format!("🔍 {}", strings.mermaid_zoom_hint))
-            );
+            .child(btn);
     }
 
     container
