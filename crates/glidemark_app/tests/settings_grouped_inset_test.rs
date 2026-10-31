@@ -1,4 +1,5 @@
 use glidemark_app::assets::AppAssets;
+use glidemark_app::views::settings::{filter_settings_cross_tab, highlight_matching_segments};
 use glidemark_core::i18n::{get_strings, SupportedLocale};
 use gpui::AssetSource;
 
@@ -196,4 +197,199 @@ fn test_ten_locales_search_settings_string_completeness() {
     assert_eq!(get_strings(SupportedLocale::ZhTw).search_settings, "搜尋設定");
     assert_eq!(get_strings(SupportedLocale::En).search_settings, "Search Settings");
     assert_eq!(get_strings(SupportedLocale::Ja).search_settings, "設定を検索");
+}
+
+/// 6. `test_search_no_results_ten_locales`:
+///    - Iterate over `SupportedLocale::all()`.
+///    - Verify `!t.search_no_results.is_empty()`.
+///    - Verify exact translations for all 10 locales.
+#[test]
+fn test_search_no_results_ten_locales() {
+    let locales = SupportedLocale::all();
+    assert_eq!(
+        locales.len(),
+        10,
+        "SupportedLocale::all() must have exactly 10 locales"
+    );
+
+    for &(locale, tag, _name) in locales {
+        let t = get_strings(locale);
+        assert!(
+            !t.search_no_results.is_empty(),
+            "search_no_results string must not be empty for locale {} ({})",
+            tag,
+            _name
+        );
+    }
+
+    assert_eq!(
+        get_strings(SupportedLocale::ZhCn).search_no_results,
+        "未找到相关设置"
+    );
+    assert_eq!(
+        get_strings(SupportedLocale::ZhTw).search_no_results,
+        "未找到相關設定"
+    );
+    assert_eq!(
+        get_strings(SupportedLocale::En).search_no_results,
+        "No matching settings found"
+    );
+    assert_eq!(
+        get_strings(SupportedLocale::Ja).search_no_results,
+        "一致する設定が見つかりません"
+    );
+    assert_eq!(
+        get_strings(SupportedLocale::Ko).search_no_results,
+        "일치하는 설정이 없습니다"
+    );
+    assert_eq!(
+        get_strings(SupportedLocale::Fr).search_no_results,
+        "Aucun paramètre correspondant trouvé"
+    );
+    assert_eq!(
+        get_strings(SupportedLocale::De).search_no_results,
+        "Keine passenden Einstellungen gefunden"
+    );
+    assert_eq!(
+        get_strings(SupportedLocale::Es).search_no_results,
+        "No se encontraron ajustes coincidentes"
+    );
+    assert_eq!(
+        get_strings(SupportedLocale::Ru).search_no_results,
+        "Настройки не найдены"
+    );
+    assert_eq!(
+        get_strings(SupportedLocale::Pt).search_no_results,
+        "Nenhuma definição correspondente encontrada"
+    );
+}
+
+/// 7. `test_highlight_matching_segments_algorithm`:
+///    - Test `glidemark_app::views::settings::highlight_matching_segments`.
+///    - Verify exact matches, splitting, multiple matches, non-matches, and empty cases.
+#[test]
+fn test_highlight_matching_segments_algorithm() {
+    assert_eq!(
+        highlight_matching_segments("Auto Save When Idle", "save"),
+        vec![("Auto ", false), ("Save", true), (" When Idle", false)]
+    );
+
+    assert_eq!(
+        highlight_matching_segments("auto save", "SAVE"),
+        vec![("auto ", false), ("save", true)]
+    );
+
+    let segs = highlight_matching_segments("Mono Roboto", "o");
+    assert_eq!(
+        segs,
+        vec![
+            ("M", false),
+            ("o", true),
+            ("n", false),
+            ("o", true),
+            (" R", false),
+            ("o", true),
+            ("b", false),
+            ("o", true),
+            ("t", false),
+            ("o", true),
+        ]
+    );
+
+    assert_eq!(
+        highlight_matching_segments("Hello World", "xyz"),
+        vec![("Hello World", false)]
+    );
+
+    assert_eq!(
+        highlight_matching_segments("Hello World", ""),
+        vec![("Hello World", false)]
+    );
+
+    assert_eq!(
+        highlight_matching_segments("", "test"),
+        vec![("", false)]
+    );
+}
+
+/// 8. `test_cross_tab_global_search_aggregation`:
+///    - Test `glidemark_app::views::settings::filter_settings_cross_tab`.
+///    - Verify cross-tab recall across categories (Appearance, Editor & Save, Language, About).
+#[test]
+fn test_cross_tab_global_search_aggregation() {
+    let strings = get_strings(SupportedLocale::En);
+
+    // For "save":
+    let save_results = filter_settings_cross_tab("save", strings);
+    assert!(
+        save_results.iter().any(|r| r.category == "Editor & Save"),
+        "Results for 'save' must contain matches from category 'Editor & Save'"
+    );
+    assert!(
+        save_results.iter().any(|r| r.category == "About"),
+        "Results for 'save' must contain matches from category 'About'"
+    );
+
+    // For "light":
+    let light_results = filter_settings_cross_tab("light", strings);
+    assert!(
+        light_results.iter().any(|r| r.category == "Appearance"),
+        "Results for 'light' must contain matches from category 'Appearance'"
+    );
+    assert!(
+        light_results.iter().any(|r| r.category == "Editor & Save"),
+        "Results for 'light' must contain matches from category 'Editor & Save'"
+    );
+
+    // For "chinese" or "中文":
+    let chinese_results = filter_settings_cross_tab("chinese", strings);
+    assert!(
+        chinese_results.iter().any(|r| r.category == "Language"),
+        "Results for 'chinese' must contain matches from category 'Language'"
+    );
+    let zh_results = filter_settings_cross_tab("中文", strings);
+    assert!(
+        zh_results.iter().any(|r| r.category == "Language"),
+        "Results for '中文' must contain matches from category 'Language'"
+    );
+
+    // For "xyznonexistentquery999":
+    let empty_results = filter_settings_cross_tab("xyznonexistentquery999", strings);
+    assert!(
+        empty_results.is_empty(),
+        "Results for 'xyznonexistentquery999' must be empty"
+    );
+}
+
+/// 9. `test_settings_search_source_contract`:
+///    - Inspect `crates/glidemark_app/src/views/settings.rs` via `include_str!`.
+///    - Assert it contains `strings.search_no_results`.
+///    - Assert it does NOT contain `"No results for"`.
+///    - Assert it contains `highlight_matching_segments`.
+///    - Assert it contains `filter_settings_cross_tab`.
+///    - Assert zero occurrences of `.border_1()`.
+#[test]
+fn test_settings_search_source_contract() {
+    let src = include_str!("../src/views/settings.rs");
+
+    assert!(
+        src.contains("strings.search_no_results"),
+        "settings.rs must use 'strings.search_no_results'"
+    );
+    assert!(
+        !src.contains("No results for"),
+        "settings.rs must NOT contain 'No results for'"
+    );
+    assert!(
+        src.contains("highlight_matching_segments"),
+        "settings.rs must contain 'highlight_matching_segments'"
+    );
+    assert!(
+        src.contains("filter_settings_cross_tab"),
+        "settings.rs must contain 'filter_settings_cross_tab'"
+    );
+    assert!(
+        !src.contains(".border_1()"),
+        "settings.rs must have zero occurrences of '.border_1()'"
+    );
 }

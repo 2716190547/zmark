@@ -61,6 +61,7 @@ fn test_all_10_locales_have_complete_translations() {
         assert!(!t.lightbox_fit_window.is_empty(), "lightbox_fit_window missing in {}", tag);
         assert!(!t.lightbox_close.is_empty(), "lightbox_close missing in {}", tag);
         assert!(!t.search_settings.is_empty(), "search_settings missing in {}", tag);
+        assert!(!t.search_no_results.is_empty(), "search_no_results is empty for {:?}", locale);
         assert!(t.modal_save_prompt.contains("{}"), "modal_save_prompt must contain placeholder in {}", tag);
         assert!(t.remove_root_confirm_prompt.contains("{}"), "remove_root_confirm_prompt must contain placeholder in {}", tag);
     }
@@ -99,6 +100,7 @@ fn test_simplified_chinese_content() {
     assert_eq!(t.lightbox_fit_window, "适应窗口");
     assert_eq!(t.lightbox_close, "关闭灯箱");
     assert_eq!(t.search_settings, "搜索设置");
+    assert_eq!(t.search_no_results, "未找到相关设置");
 }
 
 #[test]

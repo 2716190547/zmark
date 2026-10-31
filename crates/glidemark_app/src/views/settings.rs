@@ -8,6 +8,213 @@ use crate::state::SettingsTab;
 use crate::theme::{ThemeColors, ALL_PALETTES};
 use crate::views::workspace::WorkspaceView;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchMatchResult {
+    pub category: &'static str,
+    pub title: String,
+    pub matched_field: String,
+}
+
+#[allow(dead_code)]
+pub fn highlight_matching_segments<'a>(text: &'a str, query: &str) -> Vec<(&'a str, bool)> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() || text.is_empty() {
+        return vec![(text, false)];
+    }
+    let lower_text = text.to_lowercase();
+    let mut segments = Vec::new();
+    let mut last_idx = 0;
+    let mut search_start = 0;
+
+    while let Some(rel_match_idx) = lower_text[search_start..].find(&q) {
+        let match_idx = search_start + rel_match_idx;
+        let match_end = match_idx + q.len();
+
+        if text.is_char_boundary(match_idx) && text.is_char_boundary(match_end) {
+            if match_idx > last_idx {
+                segments.push((&text[last_idx..match_idx], false));
+            }
+            segments.push((&text[match_idx..match_end], true));
+            last_idx = match_end;
+            search_start = match_end;
+        } else {
+            break;
+        }
+    }
+
+    if last_idx < text.len() {
+        segments.push((&text[last_idx..], false));
+    }
+
+    segments
+}
+
+#[allow(dead_code)]
+pub fn render_highlighted_text(
+    text: &str,
+    query: &str,
+    base_color: Hsla,
+    theme: &ThemeColors,
+) -> impl IntoElement {
+    let segments = highlight_matching_segments(text, query);
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .children(segments.into_iter().map(|(seg, is_match)| {
+            if is_match {
+                div()
+                    .text_color(theme.accent)
+                    .font_weight(FontWeight::BOLD)
+                    .child(seg.to_string())
+            } else {
+                div()
+                    .text_color(base_color)
+                    .child(seg.to_string())
+            }
+        }))
+}
+
+pub fn filter_settings_cross_tab(
+    query: &str,
+    strings: &I18nStrings,
+) -> Vec<SearchMatchResult> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let mut results = Vec::new();
+
+    // 1. Appearance category
+    for (name, label) in &[
+        ("Light", strings.theme_light),
+        ("Dark", strings.theme_dark),
+        ("System", strings.theme_auto),
+    ] {
+        if name.to_lowercase().contains(&q)
+            || label.to_lowercase().contains(&q)
+            || "theme".contains(&q)
+            || "mode".contains(&q)
+            || strings.appearance.to_lowercase().contains(&q)
+        {
+            results.push(SearchMatchResult {
+                category: "Appearance",
+                title: label.to_string(),
+                matched_field: format!("Theme Mode: {}", name),
+            });
+        }
+    }
+    for desc in ALL_PALETTES.iter() {
+        let loc_name = glidemark_core::i18n::localize_palette_name(desc.id, strings);
+        if desc.name.to_lowercase().contains(&q)
+            || desc.id.to_lowercase().contains(&q)
+            || loc_name.to_lowercase().contains(&q)
+            || strings.palette.to_lowercase().contains(&q)
+        {
+            results.push(SearchMatchResult {
+                category: "Appearance",
+                title: desc.name.to_string(),
+                matched_field: format!("Palette: {}", desc.name),
+            });
+        }
+    }
+
+    // 2. Editor & Save category
+    if strings.auto_save_label.to_lowercase().contains(&q)
+        || strings.auto_save_desc.to_lowercase().contains(&q)
+        || "save".contains(&q)
+        || "auto".contains(&q)
+    {
+        results.push(SearchMatchResult {
+            category: "Editor & Save",
+            title: strings.auto_save_label.to_string(),
+            matched_field: strings.auto_save_desc.to_string(),
+        });
+    }
+    if strings.auto_save_on_blur_label.to_lowercase().contains(&q)
+        || "blur".contains(&q)
+        || "save".contains(&q)
+    {
+        results.push(SearchMatchResult {
+            category: "Editor & Save",
+            title: strings.auto_save_on_blur_label.to_string(),
+            matched_field: strings.auto_save_on_blur_label.to_string(),
+        });
+    }
+    if strings.tab_size_label.to_lowercase().contains(&q)
+        || "tab".contains(&q)
+        || "spaces".contains(&q)
+    {
+        results.push(SearchMatchResult {
+            category: "Editor & Save",
+            title: strings.tab_size_label.to_string(),
+            matched_field: "Tab Size: 2 / 4".to_string(),
+        });
+    }
+    if strings.line_height_label.to_lowercase().contains(&q)
+        || "line".contains(&q)
+        || "height".contains(&q)
+        || "light".contains(&q)
+        || "highlight".contains(&q)
+    {
+        results.push(SearchMatchResult {
+            category: "Editor & Save",
+            title: strings.line_height_label.to_string(),
+            matched_field: "Line Height (1.3 - 1.7)".to_string(),
+        });
+    }
+
+    // 3. Language category
+    for &(_loc, tag, name) in SupportedLocale::all() {
+        if name.to_lowercase().contains(&q)
+            || tag.to_lowercase().contains(&q)
+            || strings.language.to_lowercase().contains(&q)
+            || (tag.starts_with("zh") && ("中文".contains(&q) || "chinese".contains(&q)))
+        {
+            results.push(SearchMatchResult {
+                category: "Language",
+                title: name.to_string(),
+                matched_field: format!("Locale [{}]", tag),
+            });
+        }
+    }
+
+    // 4. About category
+    if "glidemark".contains(&q)
+        || "version".contains(&q)
+        || "markdown".contains(&q)
+        || strings.about.to_lowercase().contains(&q)
+    {
+        results.push(SearchMatchResult {
+            category: "About",
+            title: "GlideMark".to_string(),
+            matched_field: "GPU-Accelerated Markdown Editor & Reader · Rust + GPUI".to_string(),
+        });
+    }
+    let shortcuts = [
+        (strings.open_file, "⌘O"),
+        (strings.save_file, "⌘S"),
+        (strings.export_html, "⌘E"),
+        (strings.directory_drawer, "⌘B"),
+        (strings.settings, "⌘,"),
+    ];
+    for (desc, key) in shortcuts {
+        if desc.to_lowercase().contains(&q)
+            || key.to_lowercase().contains(&q)
+            || strings.shortcuts_label.to_lowercase().contains(&q)
+            || (desc == strings.save_file && "save".contains(&q))
+        {
+            results.push(SearchMatchResult {
+                category: "About",
+                title: desc.to_string(),
+                matched_field: format!("Shortcut: {}", key),
+            });
+        }
+    }
+
+    results
+}
+
 pub struct SettingsWindowView {
     pub workspace: WeakEntity<WorkspaceView>,
     pub current_tab: SettingsTab,
@@ -77,6 +284,7 @@ impl Render for SettingsWindowView {
         let on_set_tab = Arc::new(move |tab: SettingsTab, _window: &mut Window, cx: &mut App| {
             view_tab.update(cx, |this, cx| {
                 this.current_tab = tab;
+                this.search_query.clear();
                 cx.notify();
             });
         });
@@ -374,44 +582,105 @@ impl Render for SettingsWindowView {
                             .p_5()
                             .bg(theme.surface)
                             .overflow_y_scroll()
-                            .child(match current_tab {
-                                SettingsTab::Appearance => render_appearance_tab(
-                                    &search_query,
-                                    current_mode,
-                                    &current_palette,
-                                    &theme,
-                                    strings,
-                                    on_set_mode,
-                                    on_set_palette,
-                                )
-                                .into_any_element(),
-                                SettingsTab::EditorSave => render_editor_save_tab(
-                                    &search_query,
-                                    auto_save,
-                                    auto_save_on_blur,
-                                    tab_size,
-                                    line_height,
-                                    &theme,
-                                    strings,
-                                    on_toggle_auto_save,
-                                    on_toggle_auto_save_on_blur,
-                                    on_set_tab_size,
-                                    on_set_line_height,
-                                )
-                                .into_any_element(),
-                                SettingsTab::Language => render_language_tab(
-                                    &search_query,
-                                    current_locale,
-                                    &theme,
-                                    on_set_locale,
-                                )
-                                .into_any_element(),
-                                SettingsTab::About => render_about_tab(
-                                    &search_query,
-                                    &theme,
-                                    strings,
-                                )
-                                .into_any_element(),
+                            .child(if !search_query.trim().is_empty() {
+                                let search_results = filter_settings_cross_tab(&search_query, strings);
+                                if search_results.is_empty() {
+                                    render_empty_state(&search_query, &theme, strings).into_any_element()
+                                } else {
+                                    let has_appearance = search_results.iter().any(|r| r.category == "Appearance");
+                                    let has_editor = search_results.iter().any(|r| r.category == "Editor & Save");
+                                    let has_language = search_results.iter().any(|r| r.category == "Language");
+                                    let has_about = search_results.iter().any(|r| r.category == "About");
+
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_6()
+                                        .when(has_appearance, |c| {
+                                            c.child(render_appearance_tab(
+                                                &search_query,
+                                                current_mode,
+                                                &current_palette,
+                                                &theme,
+                                                strings,
+                                                on_set_mode.clone(),
+                                                on_set_palette.clone(),
+                                            ))
+                                        })
+                                        .when(has_editor, |c| {
+                                            c.child(render_editor_save_tab(
+                                                &search_query,
+                                                auto_save,
+                                                auto_save_on_blur,
+                                                tab_size,
+                                                line_height,
+                                                &theme,
+                                                strings,
+                                                on_toggle_auto_save.clone(),
+                                                on_toggle_auto_save_on_blur.clone(),
+                                                on_set_tab_size.clone(),
+                                                on_set_line_height.clone(),
+                                            ))
+                                        })
+                                        .when(has_language, |c| {
+                                            c.child(render_language_tab(
+                                                &search_query,
+                                                current_locale,
+                                                &theme,
+                                                strings,
+                                                on_set_locale.clone(),
+                                            ))
+                                        })
+                                        .when(has_about, |c| {
+                                            c.child(render_about_tab(
+                                                &search_query,
+                                                &theme,
+                                                strings,
+                                            ))
+                                        })
+                                        .into_any_element()
+                                }
+                            } else {
+                                match current_tab {
+                                    SettingsTab::Appearance => render_appearance_tab(
+                                        &search_query,
+                                        current_mode,
+                                        &current_palette,
+                                        &theme,
+                                        strings,
+                                        on_set_mode,
+                                        on_set_palette,
+                                    )
+                                    .into_any_element(),
+                                    SettingsTab::EditorSave => render_editor_save_tab(
+                                        &search_query,
+                                        auto_save,
+                                        auto_save_on_blur,
+                                        tab_size,
+                                        line_height,
+                                        &theme,
+                                        strings,
+                                        on_toggle_auto_save,
+                                        on_toggle_auto_save_on_blur,
+                                        on_set_tab_size,
+                                        on_set_line_height,
+                                    )
+                                    .into_any_element(),
+                                    SettingsTab::Language => render_language_tab(
+                                        &search_query,
+                                        current_locale,
+                                        &theme,
+                                        strings,
+                                        on_set_locale,
+                                    )
+                                    .into_any_element(),
+                                    SettingsTab::About => render_about_tab(
+                                        &search_query,
+                                        &theme,
+                                        strings,
+                                    )
+                                    .into_any_element(),
+                                }
                             }),
                     ),
             )
@@ -460,7 +729,7 @@ where
     }
 }
 
-fn render_empty_state(search_query: &str, theme: &ThemeColors) -> impl IntoElement {
+fn render_empty_state(search_query: &str, theme: &ThemeColors, strings: &I18nStrings) -> impl IntoElement {
     div()
         .p_8()
         .flex()
@@ -476,9 +745,16 @@ fn render_empty_state(search_query: &str, theme: &ThemeColors) -> impl IntoEleme
         )
         .child(
             div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.text_primary)
+                .child(strings.search_no_results),
+        )
+        .child(
+            div()
                 .text_xs()
                 .text_color(theme.text_muted)
-                .child(format!("No results for \"{}\"", search_query)),
+                .child(format!("\"{}\"", search_query)),
         )
 }
 
@@ -553,7 +829,7 @@ fn render_appearance_tab(
     let show_palette = !filtered_palettes.is_empty();
 
     if !show_mode && !show_palette {
-        return render_empty_state(search_query, theme).into_any_element();
+        return render_empty_state(search_query, theme, strings).into_any_element();
     }
 
     div()
@@ -708,7 +984,7 @@ fn render_editor_save_tab(
     let has_editor_card = show_tab_size || show_line_height;
 
     if !has_save_card && !has_editor_card {
-        return render_empty_state(search_query, theme).into_any_element();
+        return render_empty_state(search_query, theme, strings).into_any_element();
     }
 
     div()
@@ -935,6 +1211,7 @@ fn render_language_tab(
     search_query: &str,
     current_locale: SupportedLocale,
     theme: &ThemeColors,
+    strings: &'static I18nStrings,
     on_set_locale: Arc<dyn Fn(SupportedLocale, &mut Window, &mut App)>,
 ) -> impl IntoElement {
     let q = search_query.trim().to_lowercase();
@@ -944,12 +1221,13 @@ fn render_language_tab(
             q.is_empty()
                 || name.to_lowercase().contains(&q)
                 || tag.to_lowercase().contains(&q)
+                || (tag.starts_with("zh") && ("中文".contains(&q) || "chinese".contains(&q)))
         })
         .copied()
         .collect();
 
     if filtered_locales.is_empty() {
-        return render_empty_state(search_query, theme).into_any_element();
+        return render_empty_state(search_query, theme, strings).into_any_element();
     }
 
     div()
@@ -1038,7 +1316,7 @@ fn render_about_tab(
     let show_shortcuts = !filtered_shortcuts.is_empty();
 
     if !show_header && !show_shortcuts {
-        return render_empty_state(search_query, theme).into_any_element();
+        return render_empty_state(search_query, theme, strings).into_any_element();
     }
 
     div()
