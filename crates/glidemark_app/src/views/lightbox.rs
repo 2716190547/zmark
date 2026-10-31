@@ -98,11 +98,11 @@ impl LightboxState {
         }
     }
 
-    pub fn open(&mut self, svg_path: PathBuf, code_hash: u64) {
+    pub fn open(&mut self, svg_path: PathBuf, code_hash: u64) -> Option<Arc<gpui::RenderImage>> {
+        let old_img = self.hidpi_image.take();
         self.is_open = true;
         self.svg_path = Some(svg_path);
         self.hidpi_svg_path = None;
-        self.hidpi_image = None;
         self.code_hash = Some(code_hash);
         self.zoom = 1.0;
         self.pan_x = 0.0;
@@ -110,6 +110,7 @@ impl LightboxState {
         self.is_dragging = false;
         self.drag_start_mouse = None;
         self.drag_start_pan = (0.0, 0.0);
+        old_img
     }
 
     pub fn open_hidpi(
@@ -118,7 +119,8 @@ impl LightboxState {
         hidpi_svg_path: PathBuf,
         image: Arc<gpui::RenderImage>,
         code_hash: u64,
-    ) {
+    ) -> Option<Arc<gpui::RenderImage>> {
+        let old_img = self.hidpi_image.take();
         self.is_open = true;
         self.svg_path = Some(svg_path);
         self.hidpi_svg_path = Some(hidpi_svg_path);
@@ -130,6 +132,7 @@ impl LightboxState {
         self.is_dragging = false;
         self.drag_start_mouse = None;
         self.drag_start_pan = (0.0, 0.0);
+        old_img
     }
 
     pub fn close(&mut self) -> Option<Arc<gpui::RenderImage>> {

@@ -191,12 +191,11 @@ impl WorkspaceView {
     }
 
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
-    pub fn on_document_swapped(&mut self) {
+    /// Reclaims GPU texture memory by dropping any active HiDPI lightbox image.
+    pub fn on_document_swapped(&mut self, window: Option<&mut Window>, cx: &mut App) {
         self.parse_task = None;
         self.parse_paused = false;
-        if self.lightbox.is_open {
-            let _ = self.lightbox.close();
-        }
+        self.close_lightbox(window, cx);
         if self.state.view_mode != ViewMode::Source && self.state.doc.is_parse_stale() {
             self.parse_now_and_refresh();
         }
@@ -274,12 +273,18 @@ impl WorkspaceView {
             let img = gpui::Image::from_bytes(gpui::ImageFormat::Svg, hidpi_svg.into_bytes());
             let render_img = img.to_image_data(cx.svg_renderer()).ok();
             if let Some(r_img) = render_img {
-                self.lightbox.open_hidpi(svg_path, hidpi_path, r_img, code_hash);
+                if let Some(evicted) = self.lightbox.open_hidpi(svg_path, hidpi_path, r_img, code_hash) {
+                    cx.drop_image(evicted, Some(window));
+                }
             } else {
-                self.lightbox.open(svg_path, code_hash);
+                if let Some(evicted) = self.lightbox.open(svg_path, code_hash) {
+                    cx.drop_image(evicted, Some(window));
+                }
             }
         } else {
-            self.lightbox.open(svg_path, code_hash);
+            if let Some(evicted) = self.lightbox.open(svg_path, code_hash) {
+                cx.drop_image(evicted, Some(window));
+            }
         }
     }
 
@@ -395,7 +400,7 @@ impl WorkspaceView {
                     let _ = this.update(app, |this, cx| {
                         if let Some(key) = this.state.active.clone() {
                             let _ = this.state.save_doc_as(&key, path);
-                            this.on_document_swapped();
+                            this.on_document_swapped(None, cx);
                             cx.notify();
                         }
                     });
@@ -405,23 +410,28 @@ impl WorkspaceView {
         }
     }
 
-    pub fn trigger_close_doc(&mut self, key: &crate::state::DocKey, cx: &mut Context<Self>) {
+    pub fn trigger_close_doc(
+        &mut self,
+        key: &crate::state::DocKey,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
         let decision = self.state.request_close(key);
         match decision {
             CloseDecision::CloseImmediately => {
-                self.on_document_swapped();
+                self.on_document_swapped(window, cx);
                 cx.notify();
             }
             CloseDecision::PromptDirty { .. } => {
-                self.on_document_swapped();
+                self.on_document_swapped(window, cx);
                 cx.notify();
             }
         }
     }
 
-    pub fn trigger_close_active(&mut self, cx: &mut Context<Self>) {
+    pub fn trigger_close_active(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         if let Some(key) = self.state.active.clone() {
-            self.trigger_close_doc(&key, cx);
+            self.trigger_close_doc(&key, window, cx);
         }
     }
 
@@ -432,14 +442,14 @@ impl WorkspaceView {
 
     pub fn handle_modal_discard(&mut self, key: &crate::state::DocKey, window: &mut Window, cx: &mut Context<Self>) {
         self.state.confirm_close_discard(key);
-        self.on_document_swapped();
+        self.on_document_swapped(Some(window), cx);
         self.after_dirty_doc_resolved(Some(window), cx);
     }
 
     pub fn handle_modal_save(&mut self, key: &crate::state::DocKey, window: &mut Window, cx: &mut Context<Self>) {
         match self.state.confirm_close_save(key) {
             Ok(true) => {
-                self.on_document_swapped();
+                self.on_document_swapped(Some(window), cx);
                 self.after_dirty_doc_resolved(Some(window), cx);
             }
             Ok(false) => {
@@ -473,7 +483,7 @@ impl WorkspaceView {
                     match this.state.save_doc_as(&close_key, path) {
                         Ok(()) => {
                             this.state.close_document_forced(&close_key);
-                            this.on_document_swapped();
+                            this.on_document_swapped(None, cx);
                             this.state.is_quitting = was_quitting;
                             this.after_dirty_doc_resolved(None, cx);
                         }
@@ -505,7 +515,7 @@ impl WorkspaceView {
         if self.state.is_quitting {
             if let Some(next_dirty) = self.state.next_dirty_doc_key() {
                 self.state.request_close(&next_dirty);
-                self.on_document_swapped();
+                self.on_document_swapped(window_opt.as_deref_mut(), cx);
                 cx.notify();
             } else {
                 // All dirty documents resolved! Close window per ADR 0031.
@@ -523,16 +533,16 @@ impl WorkspaceView {
         }
     }
 
-    pub fn on_window_should_close(&mut self, cx: &mut Context<Self>) -> bool {
+    pub fn on_window_should_close(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) -> bool {
         let allow = self.state.handle_window_should_close();
-        self.on_document_swapped();
+        self.on_document_swapped(window, cx);
         cx.notify();
         allow
     }
 
-    pub fn trigger_draft(&mut self, cx: &mut Context<Self>) {
+    pub fn trigger_draft(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         self.state.focus_or_create_draft();
-        self.on_document_swapped();
+        self.on_document_swapped(window, cx);
         cx.notify();
     }
 
@@ -938,34 +948,34 @@ impl Render for WorkspaceView {
         });
 
         let view_drawer = cx.entity().clone();
-        let on_select_file = Arc::new(move |path: &std::path::PathBuf, _window: &mut Window, cx: &mut App| {
+        let on_select_file = Arc::new(move |path: &std::path::PathBuf, window: &mut Window, cx: &mut App| {
             view_drawer.update(cx, |this, cx| {
                 let _ = this.state.load_file(path.clone());
-                this.on_document_swapped();
+                this.on_document_swapped(Some(window), cx);
                 cx.notify();
             });
         });
 
         let view_doc_switch = cx.entity().clone();
-        let on_select_doc = Arc::new(move |key: &crate::state::DocKey, _window: &mut Window, cx: &mut App| {
+        let on_select_doc = Arc::new(move |key: &crate::state::DocKey, window: &mut Window, cx: &mut App| {
             view_doc_switch.update(cx, |this, cx| {
                 this.state.switch_document(key);
-                this.on_document_swapped();
+                this.on_document_swapped(Some(window), cx);
                 cx.notify();
             });
         });
 
         let view_doc_close = cx.entity().clone();
-        let on_close_doc = Arc::new(move |key: &crate::state::DocKey, _window: &mut Window, cx: &mut App| {
+        let on_close_doc = Arc::new(move |key: &crate::state::DocKey, window: &mut Window, cx: &mut App| {
             view_doc_close.update(cx, |this, cx| {
-                this.trigger_close_doc(key, cx);
+                this.trigger_close_doc(key, Some(window), cx);
             });
         });
 
         let view_draft = cx.entity().clone();
-        let on_new_draft = Arc::new(move |_window: &mut Window, cx: &mut App| {
+        let on_new_draft = Arc::new(move |window: &mut Window, cx: &mut App| {
             view_draft.update(cx, |this, cx| {
-                this.trigger_draft(cx);
+                this.trigger_draft(Some(window), cx);
             });
         });
 
@@ -1124,12 +1134,12 @@ impl Render for WorkspaceView {
                     false
                 }
             })
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 if let Some(path) = paths.paths().iter().find(|p| {
                     p.extension().map_or(false, |ext| ext == "md" || ext == "markdown" || ext == "txt")
                 }) {
                     let _ = this.state.load_file(path.clone());
-                    this.on_document_swapped();
+                    this.on_document_swapped(Some(window), cx);
                     cx.notify();
                 }
             }))
@@ -1176,7 +1186,7 @@ impl Render for WorkspaceView {
                         if let Some(path) = paths.pop() {
                             let _ = this.update(app, |this, cx| {
                                 let _ = this.state.load_file(path);
-                                this.on_document_swapped();
+                                this.on_document_swapped(None, cx);
                                 cx.notify();
                             });
                         }
@@ -1284,10 +1294,10 @@ impl Render for WorkspaceView {
                             this.trigger_save(cx);
                         }
                         "w" => {
-                            this.trigger_close_active(cx);
+                            this.trigger_close_active(Some(window), cx);
                         }
                         "n" => {
-                            this.trigger_draft(cx);
+                            this.trigger_draft(Some(window), cx);
                         }
                         "o" => {
                             let rx = cx.prompt_for_paths(PathPromptOptions {
@@ -1301,7 +1311,7 @@ impl Render for WorkspaceView {
                                     if let Some(path) = paths.pop() {
                                         let _ = this.update(app, |this, cx| {
                                             let _ = this.state.load_file(path);
-                                            this.on_document_swapped();
+                                            this.on_document_swapped(None, cx);
                                             cx.notify();
                                         });
                                     }
@@ -1539,10 +1549,10 @@ impl Render for WorkspaceView {
                                                 .cursor_pointer()
                                                 .on_mouse_down(
                                                     MouseButton::Left,
-                                                    cx.listener(|this, _, _window, cx| {
+                                                    cx.listener(|this, _, window, cx| {
                                                         if let Some(path) = &this.state.doc.path.clone() {
                                                             let _ = this.state.load_file(path.clone());
-                                                            this.on_document_swapped();
+                                                            this.on_document_swapped(Some(window), cx);
                                                         }
                                                         cx.notify();
                                                     }),

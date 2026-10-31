@@ -105,9 +105,9 @@ Enjoy writing and reading with pure speed!
             window.focus(&view.read(cx).focus_handle);
 
             let view_close = view.clone();
-            window.on_window_should_close(cx, move |_window, cx| {
+            window.on_window_should_close(cx, move |window, cx| {
                 view_close.update(cx, |this, cx| {
-                    this.on_window_should_close(cx)
+                    this.on_window_should_close(Some(window), cx)
                 })
             });
 

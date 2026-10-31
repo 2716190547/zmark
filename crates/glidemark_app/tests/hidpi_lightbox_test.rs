@@ -144,3 +144,63 @@ fn test_lightbox_state_lifecycle_and_image_release() {
     let second_closed = state.close();
     assert_eq!(second_closed, None);
 }
+
+#[test]
+fn test_document_swapped_and_open_paths_release_vram_safely() {
+    let mut state = LightboxState::new();
+
+    // 1. Initial state has no image
+    assert_eq!(state.hidpi_image, None);
+    assert_eq!(state.close(), None);
+
+    // 2. Open HiDPI image 1
+    let svg1 = PathBuf::from("/tmp/doc1_diagram.svg");
+    let hidpi1 = PathBuf::from("/tmp/doc1_hidpi.svg");
+    let img1 = Arc::new(RenderImage::new(Vec::new()));
+    let evicted0 = state.open_hidpi(svg1.clone(), hidpi1.clone(), img1.clone(), 101);
+    assert_eq!(evicted0, None, "Initial open_hidpi should have no evicted image");
+    assert_eq!(state.hidpi_image, Some(img1.clone()));
+
+    // 3. Open another diagram (or plain open) without explicit close:
+    // Must return img1 so the caller can invoke cx.drop_image(img1)
+    let svg2 = PathBuf::from("/tmp/doc2_diagram.svg");
+    let evicted1 = state.open(svg2.clone(), 102);
+    assert_eq!(
+        evicted1,
+        Some(img1.clone()),
+        "Calling open() while holding a HiDPI image must return the previous image for drop_image"
+    );
+    assert_eq!(state.hidpi_image, None);
+
+    // 4. Open HiDPI image 2
+    let hidpi2 = PathBuf::from("/tmp/doc2_hidpi.svg");
+    let img2 = Arc::new(RenderImage::new(Vec::new()));
+    let evicted2 = state.open_hidpi(svg2.clone(), hidpi2.clone(), img2.clone(), 102);
+    assert_eq!(evicted2, None);
+    assert_eq!(state.hidpi_image, Some(img2.clone()));
+
+    // 5. Open HiDPI image 3 while image 2 is active:
+    // Must return img2 so the caller can invoke cx.drop_image(img2)
+    let svg3 = PathBuf::from("/tmp/doc3_diagram.svg");
+    let hidpi3 = PathBuf::from("/tmp/doc3_hidpi.svg");
+    let img3 = Arc::new(RenderImage::new(Vec::new()));
+    let evicted3 = state.open_hidpi(svg3.clone(), hidpi3.clone(), img3.clone(), 103);
+    assert_eq!(
+        evicted3,
+        Some(img2),
+        "Calling open_hidpi() while holding another HiDPI image must return the old image for drop_image"
+    );
+    assert_eq!(state.hidpi_image, Some(img3.clone()));
+
+    // 6. Document swapped simulation:
+    // When document is swapped, close_lightbox() calls state.close()
+    let swapped_evicted = state.close();
+    assert_eq!(
+        swapped_evicted,
+        Some(img3),
+        "Document swapped must release the active HiDPI image for drop_image"
+    );
+    assert!(!state.is_open);
+    assert_eq!(state.hidpi_image, None);
+    assert_eq!(state.hidpi_svg_path, None);
+}
