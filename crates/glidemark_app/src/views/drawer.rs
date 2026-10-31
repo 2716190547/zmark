@@ -38,10 +38,8 @@ pub fn render_drawer(
     let t_folder = on_open_folder.clone();
     let t_toggle = on_toggle_drawer.clone();
 
-    #[cfg(target_os = "macos")]
-    let drawer_header_pl = if is_fullscreen { px(12.) } else { px(76.) };
-    #[cfg(not(target_os = "macos"))]
-    let drawer_header_pl = px(8.);
+    let is_macos = cfg!(target_os = "macos");
+    let drawer_header_pl = px(crate::views::workspace::adaptive_header_padding(is_macos, is_fullscreen, false));
 
     div()
         .w(px(250.))

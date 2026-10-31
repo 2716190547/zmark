@@ -475,13 +475,9 @@ impl WorkspaceView {
         let rename_buffer = self.rename_buffer.clone();
 
         #[cfg(target_os = "macos")]
-        let header_pl = if !drawer_open {
-            if is_fullscreen { px(12.) } else { px(76.) }
-        } else {
-            px(8.)
-        };
+        let header_pl = px(adaptive_header_padding(is_macos, is_fullscreen, drawer_open));
         #[cfg(not(target_os = "macos"))]
-        let header_pl = px(8.);
+        let header_pl = px(adaptive_header_padding(is_macos, is_fullscreen, drawer_open));
 
         // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
         let header_pr = if !is_macos { px(138.) } else { px(12.) };
@@ -653,7 +649,7 @@ impl WorkspaceView {
                                 format!("{} (⌘1)", strings.source_mode),
                                 view_mode == ViewMode::Source,
                                 theme,
-                                render_source_mode_icon(if view_mode == ViewMode::Source { theme.warm_pill_text() } else { theme.text_muted }),
+                                render_source_mode_icon(mode_tab_colors(view_mode == ViewMode::Source, theme).1),
                                 cx.listener(|this, _, _window, cx| {
                                     this.set_view_mode(ViewMode::Source, cx);
                                 }),
@@ -663,7 +659,7 @@ impl WorkspaceView {
                                 format!("{} (⌘2)", strings.split_mode),
                                 view_mode == ViewMode::Split,
                                 theme,
-                                render_split_mode_icon(if view_mode == ViewMode::Split { theme.warm_pill_text() } else { theme.text_muted }),
+                                render_split_mode_icon(mode_tab_colors(view_mode == ViewMode::Split, theme).1),
                                 cx.listener(|this, _, _window, cx| {
                                     this.set_view_mode(ViewMode::Split, cx);
                                 }),
@@ -673,7 +669,7 @@ impl WorkspaceView {
                                 format!("{} (⌘3)", strings.preview_mode),
                                 view_mode == ViewMode::Preview,
                                 theme,
-                                render_preview_mode_icon(if view_mode == ViewMode::Preview { theme.warm_pill_text() } else { theme.text_muted }),
+                                render_preview_mode_icon(mode_tab_colors(view_mode == ViewMode::Preview, theme).1),
                                 cx.listener(|this, _, _window, cx| {
                                     this.set_view_mode(ViewMode::Preview, cx);
                                 }),
@@ -1762,6 +1758,41 @@ where
     }
 }
 
+/// Adaptive header padding calculation for window chrome clearance (ADR 0032).
+///
+/// Under ADR 0032:
+/// - On macOS:
+///   - When the drawer is collapsed (`drawer_open == false`), the canvas header touches the left edge
+///     and must clear traffic lights: 76px in normal window mode, 12px in fullscreen mode.
+///   - When the drawer is open (`drawer_open == true`), the drawer header occupies the left edge,
+///     so the canvas header needs only standard 8px padding.
+/// - On non-macOS platforms:
+///   - Always 8px regardless of fullscreen or drawer state.
+pub fn adaptive_header_padding(is_macos: bool, is_fullscreen: bool, drawer_open: bool) -> f32 {
+    if !is_macos {
+        8.0
+    } else if drawer_open {
+        8.0
+    } else if is_fullscreen {
+        12.0
+    } else {
+        76.0
+    }
+}
+
+/// Resolves background and text colors for view mode switcher tabs.
+///
+/// Active tabs receive `theme.warm_pill_bg()` and `theme.warm_pill_text()` for the warm stone
+/// micro-capsule styling, strictly distinct from `theme.surface`.
+/// Inactive tabs receive transparent background and `theme.text_muted`.
+pub fn mode_tab_colors(active: bool, theme: &crate::theme::ThemeColors) -> (gpui::Hsla, gpui::Hsla) {
+    if active {
+        (theme.warm_pill_bg(), theme.warm_pill_text())
+    } else {
+        (gpui::transparent_black(), theme.text_muted)
+    }
+}
+
 fn render_mode_icon_tab<F>(
     id: impl Into<ElementId>,
     tooltip_text: impl Into<String>,
@@ -1774,6 +1805,7 @@ where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
     let text = tooltip_text.into();
+    let (bg_color, text_color) = mode_tab_colors(active, theme);
     let base = div()
         .id(id)
         .tooltip(move |_window, cx| {
@@ -1790,11 +1822,11 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        base.bg(theme.warm_pill_bg())
-            .text_color(theme.warm_pill_text())
+        base.bg(bg_color)
+            .text_color(text_color)
             .child(icon)
     } else {
-        base.text_color(theme.text_muted)
+        base.text_color(text_color)
             .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
             .child(icon)
     }

@@ -1,48 +1,11 @@
 use glidemark_app::state::{AppState, DocKey, OpenDoc, ViewMode};
 use glidemark_app::theme::ThemeColors;
+use glidemark_app::views::workspace::{adaptive_header_padding, mode_tab_colors};
 use glidemark_core::document::Document;
 use glidemark_core::i18n::{get_strings, SupportedLocale};
 use gpui::rgb;
 use std::fs;
 use tempfile::tempdir;
-
-/// Pure function defining the adaptive left padding calculation for window chrome avoidance.
-///
-/// Under ADR 0032:
-/// - On macOS:
-///   - Normal window mode: safe area of 76px to avoid native traffic light window buttons.
-///   - Fullscreen mode: traffic lights auto-hide, smoothly adapting to 12px padding.
-/// - On non-macOS platforms (Windows / Linux):
-///   - Always 8px standard padding regardless of fullscreen state.
-pub fn calculate_adaptive_left_padding(is_macos: bool, is_fullscreen: bool) -> f32 {
-    if !is_macos {
-        8.0
-    } else if is_fullscreen {
-        12.0
-    } else {
-        76.0
-    }
-}
-
-/// Pure helper for resolving header left padding accounting for drawer open/close state.
-/// When the sidebar/drawer is open, the drawer header takes the safe padding (76px or 12px),
-/// leaving the canvas header at 8px. When the drawer is collapsed, the canvas header itself
-/// must adaptively absorb the traffic light safe area.
-pub fn calculate_canvas_header_left_padding(
-    is_macos: bool,
-    is_fullscreen: bool,
-    drawer_open: bool,
-) -> f32 {
-    if !is_macos {
-        8.0
-    } else if drawer_open {
-        8.0
-    } else if is_fullscreen {
-        12.0
-    } else {
-        76.0
-    }
-}
 
 #[test]
 fn test_sidebar_draft_decentralization_lifecycle() {
@@ -228,6 +191,36 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
         assert_eq!(l_theme.warm_pill_bg().a, 1.0);
         assert_eq!(d_theme.warm_pill_bg().a, 1.0);
     }
+
+    // Direct verification of mode_tab_colors production function (P1 requirement)
+    for is_dark in [false, true] {
+        let theme = ThemeColors::default_palette(is_dark);
+
+        let (active_bg, active_text) = mode_tab_colors(true, &theme);
+        let (_inactive_bg, inactive_text) = mode_tab_colors(false, &theme);
+
+        // Active background MUST be warm_pill_bg, NOT theme.surface
+        assert_eq!(
+            active_bg,
+            theme.warm_pill_bg(),
+            "Active mode tab background must equal warm_pill_bg"
+        );
+        assert_ne!(
+            active_bg,
+            theme.surface,
+            "Active mode tab background must NOT be theme.surface"
+        );
+        assert_eq!(
+            active_text,
+            theme.warm_pill_text(),
+            "Active mode tab text must equal warm_pill_text"
+        );
+        assert_eq!(
+            inactive_text,
+            theme.text_muted,
+            "Inactive mode tab text must equal text_muted"
+        );
+    }
 }
 
 #[test]
@@ -331,59 +324,60 @@ fn test_document_title_display_name_and_i18n_fallback() {
 
 #[test]
 fn test_fullscreen_padding_adaptive_calculation() {
-    // macOS behavior:
-    // Normal window mode requires 76px to leave safe room for native traffic lights
+    // Direct assertion on production function: adaptive_header_padding(is_macos, is_fullscreen, drawer_open)
+
+    // 1. Drawer Header (always at leading edge of window, drawer_open = false):
+    // macOS non-fullscreen normal window requires 76px to leave safe room for native traffic lights
     assert_eq!(
-        calculate_adaptive_left_padding(true, false),
+        adaptive_header_padding(true, false, false),
         76.0,
-        "macOS non-fullscreen window must have 76px left padding"
+        "macOS non-fullscreen window leading edge must have 76px left padding"
     );
-    // Fullscreen window mode smoothly adapts to 12px
+    // macOS fullscreen window smoothly adapts to 12px
     assert_eq!(
-        calculate_adaptive_left_padding(true, true),
+        adaptive_header_padding(true, true, false),
         12.0,
-        "macOS fullscreen window must adapt to 12px left padding"
+        "macOS fullscreen window leading edge must adapt to 12px left padding"
+    );
+    // Non-macOS window leading edge always 8px
+    assert_eq!(
+        adaptive_header_padding(false, false, false),
+        8.0,
+        "Non-macOS window leading edge must have 8px left padding in normal mode"
+    );
+    assert_eq!(
+        adaptive_header_padding(false, true, false),
+        8.0,
+        "Non-macOS window leading edge must have 8px left padding in fullscreen mode"
     );
 
-    // Non-macOS behavior (Windows / Linux):
-    // Always 8px regardless of fullscreen state
+    // 2. Canvas Header (contextual based on drawer open/collapsed state):
+    // When drawer is open on macOS, canvas header receives standard 8px padding
     assert_eq!(
-        calculate_adaptive_left_padding(false, false),
-        8.0,
-        "Non-macOS window must have 8px left padding in normal mode"
-    );
-    assert_eq!(
-        calculate_adaptive_left_padding(false, true),
-        8.0,
-        "Non-macOS window must have 8px left padding in fullscreen mode"
-    );
-
-    // Contextual header padding with drawer state:
-    // When drawer is open on macOS, canvas header receives 8px padding
-    assert_eq!(
-        calculate_canvas_header_left_padding(true, false, true),
+        adaptive_header_padding(true, false, true),
         8.0,
         "When drawer is open on macOS, canvas header needs only standard 8px padding"
     );
     assert_eq!(
-        calculate_canvas_header_left_padding(true, true, true),
+        adaptive_header_padding(true, true, true),
         8.0,
         "When drawer is open in fullscreen on macOS, canvas header needs only standard 8px padding"
     );
-    // When drawer is collapsed on macOS, canvas header absorbs the chrome safe padding
+    // When drawer is collapsed on macOS, canvas header absorbs the traffic light safe padding
     assert_eq!(
-        calculate_canvas_header_left_padding(true, false, false),
+        adaptive_header_padding(true, false, false),
         76.0,
         "When drawer is collapsed on macOS, canvas header needs 76px padding"
     );
     assert_eq!(
-        calculate_canvas_header_left_padding(true, true, false),
+        adaptive_header_padding(true, true, false),
         12.0,
         "When drawer is collapsed in fullscreen on macOS, canvas header needs 12px padding"
     );
-    // On non-macOS, drawer open or collapsed always yields 8px for canvas header
-    assert_eq!(calculate_canvas_header_left_padding(false, false, false), 8.0);
-    assert_eq!(calculate_canvas_header_left_padding(false, true, false), 8.0);
-    assert_eq!(calculate_canvas_header_left_padding(false, false, true), 8.0);
-    assert_eq!(calculate_canvas_header_left_padding(false, true, true), 8.0);
+
+    // On non-macOS (Windows / Linux), drawer open or collapsed always yields 8px for canvas header
+    assert_eq!(adaptive_header_padding(false, false, false), 8.0);
+    assert_eq!(adaptive_header_padding(false, true, false), 8.0);
+    assert_eq!(adaptive_header_padding(false, false, true), 8.0);
+    assert_eq!(adaptive_header_padding(false, true, true), 8.0);
 }
