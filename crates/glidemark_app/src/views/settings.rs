@@ -20,29 +20,59 @@ pub fn highlight_matching_segments<'a>(text: &'a str, query: &str) -> Vec<(&'a s
     if q.is_empty() || text.is_empty() {
         return vec![(text, false)];
     }
-    let lower_text = text.to_lowercase();
+
+    let char_indices: Vec<(usize, char)> = text.char_indices().collect();
+    if char_indices.is_empty() {
+        return vec![(text, false)];
+    }
+
     let mut segments = Vec::new();
-    let mut last_idx = 0;
-    let mut search_start = 0;
+    let mut last_byte = 0;
+    let mut i = 0;
 
-    while let Some(rel_match_idx) = lower_text[search_start..].find(&q) {
-        let match_idx = search_start + rel_match_idx;
-        let match_end = match_idx + q.len();
+    while i < char_indices.len() {
+        let start_byte = char_indices[i].0;
+        let mut accumulated_lower = String::new();
+        let mut match_found = false;
+        let mut match_end_byte = start_byte;
+        let mut next_i = i + 1;
 
-        if text.is_char_boundary(match_idx) && text.is_char_boundary(match_end) {
-            if match_idx > last_idx {
-                segments.push((&text[last_idx..match_idx], false));
+        for j in i..char_indices.len() {
+            let (_, ch) = char_indices[j];
+            for lc in ch.to_lowercase() {
+                accumulated_lower.push(lc);
             }
-            segments.push((&text[match_idx..match_end], true));
-            last_idx = match_end;
-            search_start = match_end;
+
+            let end_byte = if j + 1 < char_indices.len() {
+                char_indices[j + 1].0
+            } else {
+                text.len()
+            };
+
+            if accumulated_lower == q {
+                match_found = true;
+                match_end_byte = end_byte;
+                next_i = j + 1;
+                break;
+            } else if !q.starts_with(&accumulated_lower) {
+                break;
+            }
+        }
+
+        if match_found {
+            if start_byte > last_byte {
+                segments.push((&text[last_byte..start_byte], false));
+            }
+            segments.push((&text[start_byte..match_end_byte], true));
+            last_byte = match_end_byte;
+            i = next_i;
         } else {
-            break;
+            i += 1;
         }
     }
 
-    if last_idx < text.len() {
-        segments.push((&text[last_idx..], false));
+    if last_byte < text.len() {
+        segments.push((&text[last_byte..], false));
     }
 
     segments
@@ -497,6 +527,9 @@ impl Render for SettingsWindowView {
             .flex_col()
             .overflow_hidden()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                if !this.is_search_focused {
+                    return;
+                }
                 match event.keystroke.key.as_str() {
                     "backspace" => {
                         if this.search_query.pop().is_some() {

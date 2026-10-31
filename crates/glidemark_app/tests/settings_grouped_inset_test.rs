@@ -313,6 +313,35 @@ fn test_highlight_matching_segments_algorithm() {
         highlight_matching_segments("", "test"),
         vec![("", false)]
     );
+
+    // Unicode special variable-length case-folding tests:
+    // Turkish 'İ' (\u{0130})
+    assert_eq!(
+        highlight_matching_segments("İpek Yolu", "İpek"),
+        vec![("İpek", true), (" Yolu", false)]
+    );
+    assert_eq!(
+        highlight_matching_segments("İpek Yolu", "i\u{0307}pek"),
+        vec![("İpek", true), (" Yolu", false)]
+    );
+
+    // German 'ß'
+    assert_eq!(
+        highlight_matching_segments("Straße in Berlin", "straße"),
+        vec![("Straße", true), (" in Berlin", false)]
+    );
+
+    // French accented vowels
+    assert_eq!(
+        highlight_matching_segments("Éditeur de texte", "éditeur"),
+        vec![("Éditeur", true), (" de texte", false)]
+    );
+
+    // Spanish
+    assert_eq!(
+        highlight_matching_segments("Ajustes de Configuración", "configuración"),
+        vec![("Ajustes de ", false), ("Configuración", true)]
+    );
 }
 
 /// 8. `test_cross_tab_global_search_aggregation`:
@@ -465,6 +494,7 @@ fn test_render_highlighted_text_structure_and_matching() {
 /// 10. `test_settings_search_source_contract`:
 ///    - Inspect `crates/glidemark_app/src/views/settings.rs` via `include_str!`.
 ///    - Assert `is_search_focused` field exists in `SettingsWindowView`.
+///    - Assert `if !this.is_search_focused` exists inside `on_key_down`.
 ///    - Assert `render_highlighted_text` is called in `render_appearance_tab`, `render_editor_save_tab`, `render_language_tab`, and `render_about_tab`.
 ///    - Assert `strings.search_no_results` is present.
 ///    - Assert `!src.contains("\"No results for\"")`.
@@ -485,6 +515,21 @@ fn test_settings_search_source_contract() {
     assert!(
         struct_src.contains("is_search_focused"),
         "SettingsWindowView must contain 'is_search_focused' field"
+    );
+
+    // Assert on_key_down gates keyboard events with if !this.is_search_focused
+    let on_key_down_pos = src
+        .find(".on_key_down")
+        .expect("settings.rs must contain .on_key_down listener");
+    let on_key_down_slice =
+        &src[on_key_down_pos..on_key_down_pos + 400.min(src.len() - on_key_down_pos)];
+    assert!(
+        on_key_down_slice.contains("if !this.is_search_focused"),
+        "settings.rs on_key_down listener must gate keyboard events with 'if !this.is_search_focused'"
+    );
+    assert!(
+        src.contains("if !this.is_search_focused"),
+        "settings.rs must contain 'if !this.is_search_focused'"
     );
 
     // Assert render_highlighted_text is called in render_appearance_tab, render_editor_save_tab, render_language_tab, and render_about_tab
