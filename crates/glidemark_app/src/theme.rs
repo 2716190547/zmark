@@ -16,6 +16,17 @@ pub struct ThemeColors {
     pub code_bg: Hsla,
     pub conflict_bg: Hsla,
     pub conflict_border: Hsla,
+    #[allow(dead_code)]
+    pub syntax_keyword: Hsla,
+    #[allow(dead_code)]
+    pub syntax_string: Hsla,
+    #[allow(dead_code)]
+    pub syntax_comment: Hsla,
+    #[allow(dead_code)]
+    pub syntax_heading: Hsla,
+    pub syntax_inline_code: Hsla,
+    #[allow(dead_code)]
+    pub syntax_link: Hsla,
 }
 
 pub struct PaletteDescriptor {
@@ -37,12 +48,12 @@ pub const ALL_PALETTES: &[PaletteDescriptor] = &[
 ];
 
 impl ThemeColors {
-    /// Low-contrast warm stone pill background: `#EBE7DE` (light) / `#2A2826` (dark)
+    /// Low-contrast cool neutral pill background: `#EFF1F4` (light) / `#272B33` (dark)
     pub fn warm_pill_bg(&self) -> Hsla {
         if self.is_dark {
-            rgb(0x2a2826).into()
+            rgb(0x272b33).into()
         } else {
-            rgb(0xebe7de).into()
+            rgb(0xeff1f4).into()
         }
     }
 
@@ -55,12 +66,12 @@ impl ThemeColors {
         }
     }
 
-    /// Primary text for subtle warm stone pill: `#1E1E1E` (light) / `#E5E2DC` (dark)
+    /// Primary text for subtle pill: `#1F2328` (light) / `#F0F2F5` (dark)
     pub fn warm_pill_text(&self) -> Hsla {
         if self.is_dark {
-            rgb(0xe5e2dc).into()
+            rgb(0xf0f2f5).into()
         } else {
-            rgb(0x1e1e1e).into()
+            rgb(0x1f2328).into()
         }
     }
 
@@ -93,6 +104,12 @@ impl ThemeColors {
                 code_bg: rgb(0x282623).into(),
                 conflict_bg: rgb(0x382218).into(),
                 conflict_border: rgb(0x5e3322).into(),
+                syntax_keyword: rgb(0xd2a8ff).into(),
+                syntax_string: rgb(0x7ee787).into(),
+                syntax_comment: rgb(0x8b949e).into(),
+                syntax_heading: rgb(0x58a6ff).into(),
+                syntax_inline_code: rgb(0xf3f1ed).into(),
+                syntax_link: rgb(0x58a6ff).into(),
             }
         } else {
             Self {
@@ -102,12 +119,18 @@ impl ThemeColors {
                 bg: rgb(0xf5f4f0).into(),      // Warm stone paper for window & sidebar (#F5F4F0)
                 surface: rgb(0xffffff).into(), // Pure crisp white paper canvas (#FFFFFF)
                 border: rgb(0xe6e4de).into(),  // Delicate warm stone hairline divider (#E6E4DE)
-                text_primary: rgb(0x2c2a29).into(), // Warm deep charcoal text (#2C2A29)
+                text_primary: rgb(0x1f2328).into(), // Deep carbon gray text (#1F2328)
                 text_muted: rgb(0x787571).into(),   // Warm neutral muted text (#787571)
                 accent: rgb(0xd9532f).into(),  // Warm Terracotta Coral matching Logo (#D9532F)
-                code_bg: rgb(0xeeece6).into(), // Warm light stone code block (#EEECE6)
+                code_bg: rgb(0xf6f8fa).into(), // Clean light gray code block (#F6F8FA)
                 conflict_bg: rgb(0xfef3e8).into(),
                 conflict_border: rgb(0xfcd9b8).into(),
+                syntax_keyword: rgb(0x8250df).into(),
+                syntax_string: rgb(0x1a7f37).into(),
+                syntax_comment: rgb(0x6e7781).into(),
+                syntax_heading: rgb(0x0969da).into(),
+                syntax_inline_code: rgb(0x1f2328).into(),
+                syntax_link: rgb(0x0969da).into(),
             }
         }
     }
@@ -127,6 +150,12 @@ impl ThemeColors {
                 code_bg: rgb(0x2c2925).into(),
                 conflict_bg: rgb(0x451a03).into(),
                 conflict_border: rgb(0xb45309).into(),
+                syntax_keyword: rgb(0xfbbf24).into(),
+                syntax_string: rgb(0x34d399).into(),
+                syntax_comment: rgb(0xa8a29e).into(),
+                syntax_heading: rgb(0xf59e0b).into(),
+                syntax_inline_code: rgb(0xfafaf9).into(),
+                syntax_link: rgb(0xfbbf24).into(),
             }
         } else {
             Self {
@@ -142,6 +171,12 @@ impl ThemeColors {
                 code_bg: rgb(0xefece6).into(),
                 conflict_bg: rgb(0xfef3c7).into(),
                 conflict_border: rgb(0xf59e0b).into(),
+                syntax_keyword: rgb(0xd97706).into(),
+                syntax_string: rgb(0x059669).into(),
+                syntax_comment: rgb(0x78716c).into(),
+                syntax_heading: rgb(0xb45309).into(),
+                syntax_inline_code: rgb(0x292524).into(),
+                syntax_link: rgb(0xb45309).into(),
             }
         }
     }
@@ -161,6 +196,12 @@ impl ThemeColors {
                 code_bg: rgb(0x252528).into(),
                 conflict_bg: rgb(0x451a03).into(),
                 conflict_border: rgb(0xb45309).into(),
+                syntax_keyword: rgb(0xbf5af2).into(),
+                syntax_string: rgb(0x30d158).into(),
+                syntax_comment: rgb(0x98989d).into(),
+                syntax_heading: rgb(0x0a84ff).into(),
+                syntax_inline_code: rgb(0xffffff).into(),
+                syntax_link: rgb(0x0a84ff).into(),
             }
         } else {
             Self {
@@ -176,6 +217,12 @@ impl ThemeColors {
                 code_bg: rgb(0xf0f0f2).into(),
                 conflict_bg: rgb(0xfef3c7).into(),
                 conflict_border: rgb(0xf59e0b).into(),
+                syntax_keyword: rgb(0xaf52de).into(),
+                syntax_string: rgb(0x34c759).into(),
+                syntax_comment: rgb(0x8e8e93).into(),
+                syntax_heading: rgb(0x007aff).into(),
+                syntax_inline_code: rgb(0x1c1c1e).into(),
+                syntax_link: rgb(0x007aff).into(),
             }
         }
     }
@@ -195,6 +242,12 @@ impl ThemeColors {
                 code_bg: rgb(0x24283b).into(),
                 conflict_bg: rgb(0x441b22).into(),
                 conflict_border: rgb(0xf7768e).into(),
+                syntax_keyword: rgb(0xbb9af7).into(),
+                syntax_string: rgb(0x9ece6a).into(),
+                syntax_comment: rgb(0x565f89).into(),
+                syntax_heading: rgb(0x7aa2f7).into(),
+                syntax_inline_code: rgb(0xc0caf5).into(),
+                syntax_link: rgb(0x7dcfff).into(),
             }
         } else {
             Self {
@@ -210,6 +263,12 @@ impl ThemeColors {
                 code_bg: rgb(0xcbccd1).into(),
                 conflict_bg: rgb(0xfde8e8).into(),
                 conflict_border: rgb(0xf7768e).into(),
+                syntax_keyword: rgb(0x7847bd).into(),
+                syntax_string: rgb(0x485e30).into(),
+                syntax_comment: rgb(0x8990b3).into(),
+                syntax_heading: rgb(0x2e7de9).into(),
+                syntax_inline_code: rgb(0x343b58).into(),
+                syntax_link: rgb(0x2e7de9).into(),
             }
         }
     }
@@ -229,6 +288,12 @@ impl ThemeColors {
                 code_bg: rgb(0x3b4252).into(),
                 conflict_bg: rgb(0x4c3238).into(),
                 conflict_border: rgb(0xbf616a).into(),
+                syntax_keyword: rgb(0xb48ead).into(),
+                syntax_string: rgb(0xa3be8c).into(),
+                syntax_comment: rgb(0x616e88).into(),
+                syntax_heading: rgb(0x81a1c1).into(),
+                syntax_inline_code: rgb(0xeceff4).into(),
+                syntax_link: rgb(0x88c0d0).into(),
             }
         } else {
             Self {
@@ -244,6 +309,12 @@ impl ThemeColors {
                 code_bg: rgb(0xe5e9f0).into(),
                 conflict_bg: rgb(0xfbedee).into(),
                 conflict_border: rgb(0xbf616a).into(),
+                syntax_keyword: rgb(0xb48ead).into(),
+                syntax_string: rgb(0xa3be8c).into(),
+                syntax_comment: rgb(0x4c566a).into(),
+                syntax_heading: rgb(0x5e81ac).into(),
+                syntax_inline_code: rgb(0x2e3440).into(),
+                syntax_link: rgb(0x88c0d0).into(),
             }
         }
     }
@@ -263,6 +334,12 @@ impl ThemeColors {
                 code_bg: rgb(0x1f242c).into(),
                 conflict_bg: rgb(0x3d1d20).into(),
                 conflict_border: rgb(0xf85149).into(),
+                syntax_keyword: rgb(0xff7b72).into(),
+                syntax_string: rgb(0xa5d6ff).into(),
+                syntax_comment: rgb(0x8b949e).into(),
+                syntax_heading: rgb(0x79c0ff).into(),
+                syntax_inline_code: rgb(0xc9d1d9).into(),
+                syntax_link: rgb(0x58a6ff).into(),
             }
         } else {
             Self {
@@ -278,6 +355,12 @@ impl ThemeColors {
                 code_bg: rgb(0xf1f5f9).into(),
                 conflict_bg: rgb(0xffebe9).into(),
                 conflict_border: rgb(0xcf222e).into(),
+                syntax_keyword: rgb(0xcf222e).into(),
+                syntax_string: rgb(0x0a3069).into(),
+                syntax_comment: rgb(0x6e7781).into(),
+                syntax_heading: rgb(0x0550ae).into(),
+                syntax_inline_code: rgb(0x24292f).into(),
+                syntax_link: rgb(0x0969da).into(),
             }
         }
     }
@@ -297,6 +380,12 @@ impl ThemeColors {
                 code_bg: rgb(0x073642).into(),
                 conflict_bg: rgb(0x3e1f24).into(),
                 conflict_border: rgb(0xdc322f).into(),
+                syntax_keyword: rgb(0x859900).into(),
+                syntax_string: rgb(0x2aa198).into(),
+                syntax_comment: rgb(0x586e75).into(),
+                syntax_heading: rgb(0x268bd2).into(),
+                syntax_inline_code: rgb(0x93a1a1).into(),
+                syntax_link: rgb(0x6c71c4).into(),
             }
         } else {
             Self {
@@ -312,6 +401,12 @@ impl ThemeColors {
                 code_bg: rgb(0xeee8d5).into(),
                 conflict_bg: rgb(0xfdf0ed).into(),
                 conflict_border: rgb(0xdc322f).into(),
+                syntax_keyword: rgb(0x859900).into(),
+                syntax_string: rgb(0x2aa198).into(),
+                syntax_comment: rgb(0x93a1a1).into(),
+                syntax_heading: rgb(0x268bd2).into(),
+                syntax_inline_code: rgb(0x073642).into(),
+                syntax_link: rgb(0x6c71c4).into(),
             }
         }
     }
@@ -331,6 +426,12 @@ impl ThemeColors {
                 code_bg: rgb(0x1e2227).into(),
                 conflict_bg: rgb(0x451a03).into(),
                 conflict_border: rgb(0xb45309).into(),
+                syntax_keyword: rgb(0xc678dd).into(),
+                syntax_string: rgb(0x98c379).into(),
+                syntax_comment: rgb(0x5c6370).into(),
+                syntax_heading: rgb(0x61afef).into(),
+                syntax_inline_code: rgb(0xabb2bf).into(),
+                syntax_link: rgb(0x61afef).into(),
             }
         } else {
             Self {
@@ -346,6 +447,12 @@ impl ThemeColors {
                 code_bg: rgb(0xf4f4f4).into(),
                 conflict_bg: rgb(0xfef2f2).into(),
                 conflict_border: rgb(0xfecaca).into(),
+                syntax_keyword: rgb(0xa626a4).into(),
+                syntax_string: rgb(0x50a14f).into(),
+                syntax_comment: rgb(0xa0a1a7).into(),
+                syntax_heading: rgb(0x4078f2).into(),
+                syntax_inline_code: rgb(0x383a42).into(),
+                syntax_link: rgb(0x4078f2).into(),
             }
         }
     }

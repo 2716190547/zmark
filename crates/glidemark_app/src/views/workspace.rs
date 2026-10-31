@@ -572,17 +572,16 @@ impl WorkspaceView {
         let header_pr = if !is_macos { px(138.) } else { px(12.) };
 
         let active_key = self.state.active.clone();
-        let (title_text, tooltip_text, is_dirty) = if active_key.is_some() {
+        let (title_text, tooltip_text) = if active_key.is_some() {
             let title = self.state.doc.display_name_with_fallback(strings.untitled_file);
             let tooltip = if let Some(path) = &self.state.doc.path {
                 path.to_string_lossy().to_string()
             } else {
                 strings.draft_unsaved_hint.to_string()
             };
-            let dirty = self.state.is_dirty();
-            (title, tooltip, dirty)
+            (title, tooltip)
         } else {
-            (strings.no_document_open.to_string(), strings.no_document_open.to_string(), false)
+            (strings.no_document_open.to_string(), strings.no_document_open.to_string())
         };
 
         div()
@@ -699,16 +698,6 @@ impl WorkspaceView {
                                     .truncate()
                                     .child(title_text)
                             )
-                            .when(is_dirty, |el| {
-                                el.child(
-                                    div()
-                                        .w(px(6.))
-                                        .h(px(6.))
-                                        .rounded_full()
-                                        .bg(theme.accent)
-                                        .flex_shrink_0()
-                                )
-                            })
                             .into_any_element()
                     })
             )

@@ -320,7 +320,7 @@ fn render_styled_text_only(
                 let end = text.len();
                 if start < end {
                     highlights.push((start..end, HighlightStyle {
-                        color: Some(theme.accent),
+                        color: Some(theme.syntax_inline_code),
                         background_color: Some(theme.code_bg),
                         ..Default::default()
                     }));

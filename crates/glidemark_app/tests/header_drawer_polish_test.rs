@@ -145,9 +145,9 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
     let light_bg = light_theme.warm_pill_bg();
     let light_text = light_theme.warm_pill_text();
 
-    // Verify exact expected warm stone colors (#EBE7DE light bg, #1E1E1E light text)
-    assert_eq!(light_bg, rgb(0xebe7de).into());
-    assert_eq!(light_text, rgb(0x1e1e1e).into());
+    // Verify exact expected warm stone colors (#EFF1F4 light bg, #1F2328 light text)
+    assert_eq!(light_bg, rgb(0xeff1f4).into());
+    assert_eq!(light_text, rgb(0x1f2328).into());
     assert_eq!(light_bg.a, 1.0, "Light warm pill bg must be fully opaque");
     assert_eq!(light_text.a, 1.0, "Light warm pill text must be fully opaque");
     assert_ne!(
@@ -163,9 +163,9 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
     let dark_bg = dark_theme.warm_pill_bg();
     let dark_text = dark_theme.warm_pill_text();
 
-    // Verify exact expected warm stone colors (#2A2826 dark bg, #E5E2DC dark text)
-    assert_eq!(dark_bg, rgb(0x2a2826).into());
-    assert_eq!(dark_text, rgb(0xe5e2dc).into());
+    // Verify exact expected warm stone colors (#272B33 dark bg, #F0F2F5 dark text)
+    assert_eq!(dark_bg, rgb(0x272b33).into());
+    assert_eq!(dark_text, rgb(0xf0f2f5).into());
     assert_eq!(dark_bg.a, 1.0, "Dark warm pill bg must be fully opaque");
     assert_eq!(dark_text.a, 1.0, "Dark warm pill text must be fully opaque");
     assert_ne!(
