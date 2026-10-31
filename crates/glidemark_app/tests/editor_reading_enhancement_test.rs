@@ -10,12 +10,31 @@ use glidemark_app::views::workspace::canvas_title_offset;
 /// In Preview mode, or when drawer is closed, offset is 0.0.
 #[test]
 fn test_canvas_title_offset_aligns_with_editor_gutter() {
-    assert_eq!(canvas_title_offset(ViewMode::Source, true), 48.0);
-    assert_eq!(canvas_title_offset(ViewMode::Split, true), 48.0);
+    // 1. Drawer open state (core workflow):
+    let header_pl_open = 8.0;
+    let title_pill_px = 8.0; // px_2 inner padding
+    let editor_code_column_start = 16.0 + 36.0 + 12.0; // 16px padding + 36px line_no + 12px margin = 64.0
+    let actual_title_text_x = header_pl_open + canvas_title_offset(ViewMode::Source, true) + title_pill_px;
+    assert_eq!(actual_title_text_x, 64.0);
+    assert_eq!(actual_title_text_x, editor_code_column_start);
+
+    let split_title_text_x = header_pl_open + canvas_title_offset(ViewMode::Split, true) + title_pill_px;
+    assert_eq!(split_title_text_x, editor_code_column_start);
+
+    // 2. Drawer collapsed state (traffic light safety zone):
+    let header_pl_collapsed = 76.0; // macOS traffic light clearance
+    let btn_expand_w = 28.0;
+    let btn_gap = 6.0; // gap_1p5
+    let offset_collapsed = canvas_title_offset(ViewMode::Source, false);
+    assert_eq!(offset_collapsed, 0.0);
+    let actual_collapsed_title_x = header_pl_collapsed + btn_expand_w + btn_gap + offset_collapsed + title_pill_px;
+    assert!(actual_collapsed_title_x >= 110.0, "Title must sit safely past expand button and traffic lights");
+
+    // 3. Preview mode offset is 0.0:
     assert_eq!(canvas_title_offset(ViewMode::Preview, true), 0.0);
+    assert_eq!(canvas_title_offset(ViewMode::Preview, false), 0.0);
     assert_eq!(canvas_title_offset(ViewMode::Source, false), 0.0);
     assert_eq!(canvas_title_offset(ViewMode::Split, false), 0.0);
-    assert_eq!(canvas_title_offset(ViewMode::Preview, false), 0.0);
 }
 
 /// Requirement 2: Dynamic line row height calculation and sanitization fallback
@@ -315,8 +334,8 @@ fn test_active_line_token_splitting_and_highlight_preservation() {
 
     // -----------------------------------------------------------------
     // Test 3: Cursor inside inline code:
-    // "Run `cargo test` now" with cursor at pos 7 (after "`ca")
-    // Both before and after cursor tokens maintain MarkdownTokenKind::InlineCode
+    // "Run `cargo test` now" with cursor at pos 7 (inside "`cargo test`")
+    // Both before and after cursor tokens maintain MarkdownTokenKind::InlineCodeSplitLeft/Right
     // -----------------------------------------------------------------
     let line3 = "Run `cargo test` now";
     let tokens3 = tokenize_markdown_line(line3);
@@ -328,12 +347,12 @@ fn test_active_line_token_splitting_and_highlight_preservation() {
     assert!(cursor_idx3 > 0 && cursor_idx3 < segments3.len() - 1);
     match (&segments3[cursor_idx3 - 1], &segments3[cursor_idx3 + 1]) {
         (ActiveLineSegment::Token(before), ActiveLineSegment::Token(after)) => {
-            assert_eq!(before.kind, MarkdownTokenKind::InlineCode);
-            assert_eq!(after.kind, MarkdownTokenKind::InlineCode);
+            assert_eq!(before.kind, MarkdownTokenKind::InlineCodeSplitLeft);
+            assert_eq!(after.kind, MarkdownTokenKind::InlineCodeSplitRight);
             assert_eq!(before.text, "`ca");
             assert_eq!(after.text, "rgo test`");
         }
-        _ => panic!("Expected InlineCode tokens immediately before and after cursor"),
+        _ => panic!("Expected InlineCodeSplit tokens immediately before and after cursor"),
     }
 
     // -----------------------------------------------------------------
@@ -396,4 +415,23 @@ fn test_active_line_token_splitting_and_highlight_preservation() {
         segments_empty.iter().filter(|s| matches!(s, ActiveLineSegment::Cursor)).count(),
         1
     );
+}
+
+/// Requirement 9: Scroll wheel row height linkage
+/// Verifies top_line_index calculation across various line heights
+#[test]
+fn test_scroll_wheel_row_height_linkage() {
+    let font_size = 16.0;
+    let line_heights = [1.3, 1.4, 1.5, 1.6, 1.7];
+    let scroll_y = 320.0;
+    for lh in line_heights {
+        let row_h = calculate_line_row_height(font_size, lh);
+        let top_line_index = (scroll_y / row_h.max(1.0)).floor() as usize;
+        let expected = (320.0 / (font_size * lh)).floor() as usize;
+        assert_eq!(
+            top_line_index, expected,
+            "Mismatch in top_line_index calculation for font_size = {}, lh = {}",
+            font_size, lh
+        );
+    }
 }

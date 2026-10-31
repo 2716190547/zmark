@@ -15,6 +15,8 @@ pub enum MarkdownTokenKind {
     BlockquotePrefix,
     BlockquoteText,
     InlineCode,
+    InlineCodeSplitLeft,
+    InlineCodeSplitRight,
     Bold,
     LinkText,
     LinkUrl,
@@ -238,17 +240,30 @@ pub fn build_active_line_segments(tokens: &[MarkdownToken], cursor_col: usize) -
             let before: String = tok.text.chars().take(offset).collect();
             let after: String = tok.text.chars().skip(offset).collect();
 
+            let (before_kind, after_kind) = if tok.kind == MarkdownTokenKind::InlineCode {
+                if !before.is_empty() && !after.is_empty() {
+                    (
+                        MarkdownTokenKind::InlineCodeSplitLeft,
+                        MarkdownTokenKind::InlineCodeSplitRight,
+                    )
+                } else {
+                    (MarkdownTokenKind::InlineCode, MarkdownTokenKind::InlineCode)
+                }
+            } else {
+                (tok.kind.clone(), tok.kind.clone())
+            };
+
             if !before.is_empty() {
                 segments.push(ActiveLineSegment::Token(MarkdownToken {
                     text: before,
-                    kind: tok.kind.clone(),
+                    kind: before_kind,
                 }));
             }
             segments.push(ActiveLineSegment::Cursor);
             if !after.is_empty() {
                 segments.push(ActiveLineSegment::Token(MarkdownToken {
                     text: after,
-                    kind: tok.kind.clone(),
+                    kind: after_kind,
                 }));
             }
             cursor_placed = true;
@@ -279,6 +294,20 @@ fn render_markdown_token_element(tok: &MarkdownToken, list_theme: &ThemeColors) 
                 .bg(list_theme.warm_pill_bg().opacity(0.6))
                 .rounded(px(3.))
                 .px(px(4.));
+        }
+        MarkdownTokenKind::InlineCodeSplitLeft => {
+            el = el.text_color(list_theme.accent)
+                .bg(list_theme.warm_pill_bg().opacity(0.6))
+                .rounded_l(px(3.))
+                .pl(px(4.))
+                .pr_0();
+        }
+        MarkdownTokenKind::InlineCodeSplitRight => {
+            el = el.text_color(list_theme.accent)
+                .bg(list_theme.warm_pill_bg().opacity(0.6))
+                .rounded_r(px(3.))
+                .pr(px(4.))
+                .pl_0();
         }
         MarkdownTokenKind::Bold => {
             el = el.text_color(list_theme.text_primary).font_weight(FontWeight::BOLD);
@@ -378,18 +407,46 @@ pub fn render_editor_pane(
                                     .font_family("ui-monospace")
                                     .flex()
                                     .items_center()
-                                    .children(segments.into_iter().map(|seg| {
+                                    .children(segments.iter().enumerate().map(|(idx, seg)| {
                                         match seg {
                                             ActiveLineSegment::Token(tok) => {
-                                                render_markdown_token_element(&tok, &list_theme).into_any_element()
+                                                render_markdown_token_element(tok, &list_theme).into_any_element()
                                             }
                                             ActiveLineSegment::Cursor => {
-                                                div()
-                                                    .w(px(2.))
-                                                    .h(px(font_size * 1.2))
-                                                    .bg(list_theme.accent)
-                                                    .mx(px(0.5))
-                                                    .into_any_element()
+                                                let in_inline_code = (idx > 0
+                                                    && matches!(
+                                                        &segments[idx - 1],
+                                                        ActiveLineSegment::Token(t)
+                                                            if t.kind == MarkdownTokenKind::InlineCodeSplitLeft
+                                                    ))
+                                                    || (idx + 1 < segments.len()
+                                                        && matches!(
+                                                            &segments[idx + 1],
+                                                            ActiveLineSegment::Token(t)
+                                                                if t.kind == MarkdownTokenKind::InlineCodeSplitRight
+                                                        ));
+
+                                                if in_inline_code {
+                                                    div()
+                                                        .bg(list_theme.warm_pill_bg().opacity(0.6))
+                                                        .mx_0()
+                                                        .flex()
+                                                        .items_center()
+                                                        .child(
+                                                            div()
+                                                                .w(px(2.))
+                                                                .h(px(font_size * 1.2))
+                                                                .bg(list_theme.accent),
+                                                        )
+                                                        .into_any_element()
+                                                } else {
+                                                    div()
+                                                        .w(px(2.))
+                                                        .h(px(font_size * 1.2))
+                                                        .bg(list_theme.accent)
+                                                        .mx(px(0.5))
+                                                        .into_any_element()
+                                                }
                                             }
                                         }
                                     }))
