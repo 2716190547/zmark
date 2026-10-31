@@ -154,7 +154,10 @@ impl WorkspaceView {
         self.last_scroll_origin = Some((ScrollOrigin::Editor, now));
 
         let scroll_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
-        let line_height = (self.state.preferences.font_size * 1.5).max(1.0);
+        let line_height = crate::views::editor::calculate_line_row_height(
+            self.state.preferences.font_size,
+            self.state.preferences.line_height,
+        ).max(1.0);
         let top_line_index = (scroll_y / line_height).floor() as usize;
         let line = top_line_index + 1;
 
@@ -1876,7 +1879,14 @@ pub fn adaptive_header_padding(is_macos: bool, is_fullscreen: bool, drawer_open:
 /// Editor code column 1 starts at 64px from canvas left:
 /// 16px outer margin (p_4) + 36px line numbers (w_36) + 12px gap (mr_3) = 64px.
 /// Canvas header has 8px base padding, and title pill has 8px horizontal padding (px_2).
-/// In Source/Split mode with drawer open, offset = 64px - 8px - 8px = 48px.
+///
+/// Offset calculations per view mode and drawer state:
+/// - `drawer_open == true` in Source/Split returns `48.0`:
+///   8px base padding + 48px offset + 8px title inner padding = 64px, aligning title text
+///   with 16px outer margin + 36px line numbers + 12px gap.
+/// - `drawer_open == false` returns `0.0`:
+///   macOS 76px traffic light safety inset + expand drawer button already push title past gutter.
+/// - Preview mode returns `0.0`.
 pub fn canvas_title_offset(view_mode: ViewMode, drawer_open: bool) -> f32 {
     match view_mode {
         ViewMode::Source | ViewMode::Split => {

@@ -220,6 +220,82 @@ pub fn tokenize_markdown_line(line: &str) -> Vec<MarkdownToken> {
     tokens
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActiveLineSegment {
+    Token(MarkdownToken),
+    Cursor,
+}
+
+pub fn build_active_line_segments(tokens: &[MarkdownToken], cursor_col: usize) -> Vec<ActiveLineSegment> {
+    let mut segments = Vec::new();
+    let mut curr_char_idx = 0;
+    let mut cursor_placed = false;
+
+    for tok in tokens {
+        let tok_len = tok.text.chars().count();
+        if !cursor_placed && cursor_col >= curr_char_idx && cursor_col <= curr_char_idx + tok_len {
+            let offset = cursor_col - curr_char_idx;
+            let before: String = tok.text.chars().take(offset).collect();
+            let after: String = tok.text.chars().skip(offset).collect();
+
+            if !before.is_empty() {
+                segments.push(ActiveLineSegment::Token(MarkdownToken {
+                    text: before,
+                    kind: tok.kind.clone(),
+                }));
+            }
+            segments.push(ActiveLineSegment::Cursor);
+            if !after.is_empty() {
+                segments.push(ActiveLineSegment::Token(MarkdownToken {
+                    text: after,
+                    kind: tok.kind.clone(),
+                }));
+            }
+            cursor_placed = true;
+        } else {
+            segments.push(ActiveLineSegment::Token(tok.clone()));
+        }
+        curr_char_idx += tok_len;
+    }
+
+    if !cursor_placed {
+        segments.push(ActiveLineSegment::Cursor);
+    }
+
+    segments
+}
+
+fn render_markdown_token_element(tok: &MarkdownToken, list_theme: &ThemeColors) -> impl IntoElement {
+    let mut el = div().child(tok.text.clone());
+    match tok.kind {
+        MarkdownTokenKind::HeadingPrefix | MarkdownTokenKind::HeadingText => {
+            el = el.text_color(list_theme.accent).font_weight(FontWeight::BOLD);
+        }
+        MarkdownTokenKind::BlockquotePrefix | MarkdownTokenKind::BlockquoteText => {
+            el = el.text_color(list_theme.text_muted);
+        }
+        MarkdownTokenKind::InlineCode => {
+            el = el.text_color(list_theme.accent)
+                .bg(list_theme.warm_pill_bg().opacity(0.6))
+                .rounded(px(3.))
+                .px(px(4.));
+        }
+        MarkdownTokenKind::Bold => {
+            el = el.text_color(list_theme.text_primary).font_weight(FontWeight::BOLD);
+        }
+        MarkdownTokenKind::LinkText => {
+            el = el.text_color(list_theme.accent).underline();
+        }
+        MarkdownTokenKind::LinkUrl => {
+            el = el.text_color(list_theme.text_muted);
+        }
+        MarkdownTokenKind::Plain => {
+            el = el.text_color(list_theme.text_primary);
+        }
+    }
+    el
+}
+
 pub fn render_editor_pane(
     lines: Arc<Vec<String>>,
     cursor: (usize, usize),
@@ -235,6 +311,7 @@ pub fn render_editor_pane(
     let theme = theme.clone();
     let list_theme = theme.clone();
     let scroll_x = (-f32::from(scroll_handle.0.borrow().base_handle.offset().x)).max(0.0);
+    let sanitized_lh = glidemark_core::config::Preferences::sanitize_line_height(line_height);
 
     div()
         .flex_1()
@@ -252,7 +329,7 @@ pub fn render_editor_pane(
                         let is_active = line_idx == cursor_line;
                         let on_click_line = on_click_line.clone();
 
-                        let row_h = calculate_line_row_height(font_size, line_height);
+                        let row_h = calculate_line_row_height(font_size, sanitized_lh);
                         let row = div()
                             .min_w_full()
                             .flex()
@@ -282,35 +359,40 @@ pub fn render_editor_pane(
                                     .mr_3()
                                     .text_right()
                                     .text_size(px(font_size * 0.85))
-                                    .line_height(relative(line_height))
+                                    .line_height(relative(sanitized_lh))
                                     .font_family("ui-monospace")
                                     .text_color(if is_active { list_theme.accent } else { list_theme.text_muted })
                                     .child((line_idx + 1).to_string()),
                             )
                             .child(if is_active {
+                                let tokens = tokenize_markdown_line(line);
                                 let char_count = line.chars().count();
                                 let col = cursor_col.min(char_count);
-                                let before: String = line.chars().take(col).collect();
-                                let after: String = line.chars().skip(col).collect();
+                                let segments = build_active_line_segments(&tokens, col);
 
                                 div()
                                     .flex_1()
                                     .whitespace_nowrap()
                                     .text_size(px(font_size))
-                                    .line_height(relative(line_height))
+                                    .line_height(relative(sanitized_lh))
                                     .font_family("ui-monospace")
-                                    .text_color(list_theme.text_primary)
                                     .flex()
                                     .items_center()
-                                    .child(before)
-                                    .child(
-                                        div()
-                                            .w(px(2.))
-                                            .h(px(font_size * 1.2))
-                                            .bg(list_theme.accent)
-                                            .mx(px(0.5)),
-                                    )
-                                    .child(after)
+                                    .children(segments.into_iter().map(|seg| {
+                                        match seg {
+                                            ActiveLineSegment::Token(tok) => {
+                                                render_markdown_token_element(&tok, &list_theme).into_any_element()
+                                            }
+                                            ActiveLineSegment::Cursor => {
+                                                div()
+                                                    .w(px(2.))
+                                                    .h(px(font_size * 1.2))
+                                                    .bg(list_theme.accent)
+                                                    .mx(px(0.5))
+                                                    .into_any_element()
+                                            }
+                                        }
+                                    }))
                                     .into_any_element()
                             } else {
                                 let tokens = tokenize_markdown_line(line);
@@ -318,45 +400,12 @@ pub fn render_editor_pane(
                                     .flex_1()
                                     .whitespace_nowrap()
                                     .text_size(px(font_size))
-                                    .line_height(relative(line_height))
+                                    .line_height(relative(sanitized_lh))
                                     .font_family("ui-monospace")
                                     .flex()
                                     .items_center()
                                     .children(tokens.into_iter().map(|tok| {
-                                        let mut el = div().child(tok.text);
-                                        match tok.kind {
-                                            MarkdownTokenKind::HeadingPrefix => {
-                                                el = el.text_color(list_theme.accent).font_weight(FontWeight::BOLD);
-                                            }
-                                            MarkdownTokenKind::HeadingText => {
-                                                el = el.text_color(list_theme.accent).font_weight(FontWeight::BOLD);
-                                            }
-                                            MarkdownTokenKind::BlockquotePrefix => {
-                                                el = el.text_color(list_theme.text_muted);
-                                            }
-                                            MarkdownTokenKind::BlockquoteText => {
-                                                el = el.text_color(list_theme.text_muted);
-                                            }
-                                            MarkdownTokenKind::InlineCode => {
-                                                el = el.text_color(list_theme.accent)
-                                                    .bg(list_theme.warm_pill_bg().opacity(0.6))
-                                                    .rounded(px(3.))
-                                                    .px(px(4.));
-                                            }
-                                            MarkdownTokenKind::Bold => {
-                                                el = el.text_color(list_theme.text_primary).font_weight(FontWeight::BOLD);
-                                            }
-                                            MarkdownTokenKind::LinkText => {
-                                                el = el.text_color(list_theme.accent).underline();
-                                            }
-                                            MarkdownTokenKind::LinkUrl => {
-                                                el = el.text_color(list_theme.text_muted);
-                                            }
-                                            MarkdownTokenKind::Plain => {
-                                                el = el.text_color(list_theme.text_primary);
-                                            }
-                                        }
-                                        el
+                                        render_markdown_token_element(&tok, &list_theme).into_any_element()
                                     }))
                                     .into_any_element()
                             })
