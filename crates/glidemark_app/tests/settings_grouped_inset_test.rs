@@ -1,5 +1,8 @@
 use glidemark_app::assets::AppAssets;
-use glidemark_app::views::settings::{filter_settings_cross_tab, highlight_matching_segments};
+use glidemark_app::views::settings::{
+    filter_settings_cross_tab, highlight_matching_segments, matches_auto_save, matches_line_height,
+    matches_theme_mode,
+};
 use glidemark_core::i18n::{get_strings, SupportedLocale};
 use gpui::AssetSource;
 
@@ -319,8 +322,49 @@ fn test_highlight_matching_segments_algorithm() {
 fn test_cross_tab_global_search_aggregation() {
     let strings = get_strings(SupportedLocale::En);
 
-    // For "save":
+    // Test "light":
+    let light_results = filter_settings_cross_tab("light", strings);
+    assert!(
+        !light_results.is_empty(),
+        "Results for 'light' must not be empty"
+    );
+    assert!(
+        light_results.iter().any(|r| r.category == "Appearance"),
+        "Results for 'light' must contain matches from category 'Appearance'"
+    );
+    assert!(
+        !light_results.iter().any(|r| r.category == "Editor & Save"),
+        "Results for 'light' must DO NOT have any matches from category 'Editor & Save'"
+    );
+
+    // Test "theme":
+    let theme_results = filter_settings_cross_tab("theme", strings);
+    assert!(
+        !theme_results.is_empty(),
+        "Results for 'theme' must not be empty"
+    );
+    assert!(
+        theme_results.iter().any(|r| r.category == "Appearance"),
+        "Results for 'theme' must contain matches from category 'Appearance'"
+    );
+
+    // Test "mode":
+    let mode_results = filter_settings_cross_tab("mode", strings);
+    assert!(
+        !mode_results.is_empty(),
+        "Results for 'mode' must not be empty"
+    );
+    assert!(
+        mode_results.iter().any(|r| r.category == "Appearance"),
+        "Results for 'mode' must contain matches from category 'Appearance'"
+    );
+
+    // Test "save":
     let save_results = filter_settings_cross_tab("save", strings);
+    assert!(
+        !save_results.is_empty(),
+        "Results for 'save' must not be empty"
+    );
     assert!(
         save_results.iter().any(|r| r.category == "Editor & Save"),
         "Results for 'save' must contain matches from category 'Editor & Save'"
@@ -328,17 +372,6 @@ fn test_cross_tab_global_search_aggregation() {
     assert!(
         save_results.iter().any(|r| r.category == "About"),
         "Results for 'save' must contain matches from category 'About'"
-    );
-
-    // For "light":
-    let light_results = filter_settings_cross_tab("light", strings);
-    assert!(
-        light_results.iter().any(|r| r.category == "Appearance"),
-        "Results for 'light' must contain matches from category 'Appearance'"
-    );
-    assert!(
-        light_results.iter().any(|r| r.category == "Editor & Save"),
-        "Results for 'light' must contain matches from category 'Editor & Save'"
     );
 
     // For "chinese" or "中文":
@@ -353,41 +386,167 @@ fn test_cross_tab_global_search_aggregation() {
         "Results for '中文' must contain matches from category 'Language'"
     );
 
-    // For "xyznonexistentquery999":
-    let empty_results = filter_settings_cross_tab("xyznonexistentquery999", strings);
+    // Test "nonexistentquery12345":
+    let nonexistent_results = filter_settings_cross_tab("nonexistentquery12345", strings);
     assert!(
-        empty_results.is_empty(),
-        "Results for 'xyznonexistentquery999' must be empty"
+        nonexistent_results.is_empty(),
+        "Results for 'nonexistentquery12345' must be empty"
     );
 }
 
-/// 9. `test_settings_search_source_contract`:
+/// 9. `test_render_highlighted_text_structure_and_matching`:
+///    - Test `glidemark_app::views::settings::highlight_matching_segments`:
+///      - Assert `highlight_matching_segments("Light Mode", "light") == vec![("Light", true), (" Mode", false)]`.
+///      - Assert `highlight_matching_segments("Theme Mode", "mode") == vec![("Theme ", false), ("Mode", true)]`.
+///    - Test `glidemark_app::views::settings::matches_theme_mode`:
+///      - Assert `matches_theme_mode("light", strings)` is true.
+///      - Assert `matches_theme_mode("theme", strings)` is true.
+///      - Assert `matches_theme_mode("mode", strings)` is true.
+///    - Test `glidemark_app::views::settings::matches_line_height`:
+///      - Assert `matches_line_height("light", strings)` is FALSE!
+///      - Assert `matches_line_height("line", strings)` is true.
+///      - Assert `matches_line_height("height", strings)` is true.
+///    - Test `glidemark_app::views::settings::matches_auto_save`:
+///      - Assert `matches_auto_save("save", strings)` is true.
+///      - Assert `matches_auto_save("light", strings)` is false.
+#[test]
+fn test_render_highlighted_text_structure_and_matching() {
+    let strings = get_strings(SupportedLocale::En);
+
+    // Test highlight_matching_segments
+    assert_eq!(
+        highlight_matching_segments("Light Mode", "light"),
+        vec![("Light", true), (" Mode", false)]
+    );
+    assert_eq!(
+        highlight_matching_segments("Theme Mode", "mode"),
+        vec![("Theme ", false), ("Mode", true)]
+    );
+
+    // Test matches_theme_mode
+    assert!(
+        matches_theme_mode("light", strings),
+        "matches_theme_mode('light', strings) must be true"
+    );
+    assert!(
+        matches_theme_mode("theme", strings),
+        "matches_theme_mode('theme', strings) must be true"
+    );
+    assert!(
+        matches_theme_mode("mode", strings),
+        "matches_theme_mode('mode', strings) must be true"
+    );
+
+    // Test matches_line_height
+    assert!(
+        !matches_line_height("light", strings),
+        "matches_line_height('light', strings) must be false"
+    );
+    assert!(
+        matches_line_height("line", strings),
+        "matches_line_height('line', strings) must be true"
+    );
+    assert!(
+        matches_line_height("height", strings),
+        "matches_line_height('height', strings) must be true"
+    );
+
+    // Test matches_auto_save
+    assert!(
+        matches_auto_save("save", strings),
+        "matches_auto_save('save', strings) must be true"
+    );
+    assert!(
+        !matches_auto_save("light", strings),
+        "matches_auto_save('light', strings) must be false"
+    );
+}
+
+/// 10. `test_settings_search_source_contract`:
 ///    - Inspect `crates/glidemark_app/src/views/settings.rs` via `include_str!`.
-///    - Assert it contains `strings.search_no_results`.
-///    - Assert it does NOT contain `"No results for"`.
-///    - Assert it contains `highlight_matching_segments`.
-///    - Assert it contains `filter_settings_cross_tab`.
-///    - Assert zero occurrences of `.border_1()`.
+///    - Assert `is_search_focused` field exists in `SettingsWindowView`.
+///    - Assert `render_highlighted_text` is called in `render_appearance_tab`, `render_editor_save_tab`, `render_language_tab`, and `render_about_tab`.
+///    - Assert `strings.search_no_results` is present.
+///    - Assert `!src.contains("\"No results for\"")`.
+///    - Assert `!src.contains(".border_1()")` (strictly zero hard borders).
 #[test]
 fn test_settings_search_source_contract() {
     let src = include_str!("../src/views/settings.rs");
 
+    // Assert is_search_focused field exists in SettingsWindowView
+    let struct_pos = src
+        .find("pub struct SettingsWindowView")
+        .expect("SettingsWindowView struct must exist");
+    let struct_end = src[struct_pos..]
+        .find('}')
+        .map(|idx| struct_pos + idx)
+        .expect("SettingsWindowView closing brace");
+    let struct_src = &src[struct_pos..struct_end];
+    assert!(
+        struct_src.contains("is_search_focused"),
+        "SettingsWindowView must contain 'is_search_focused' field"
+    );
+
+    // Assert render_highlighted_text is called in render_appearance_tab, render_editor_save_tab, render_language_tab, and render_about_tab
+    let app_tab_start = src
+        .find("fn render_appearance_tab")
+        .expect("render_appearance_tab function must exist");
+    let app_tab_end = src[app_tab_start..]
+        .find("fn render_editor_save_tab")
+        .map(|i| app_tab_start + i)
+        .expect("render_editor_save_tab function must exist");
+    assert!(
+        src[app_tab_start..app_tab_end].contains("render_highlighted_text"),
+        "render_appearance_tab must call render_highlighted_text"
+    );
+
+    let editor_tab_start = app_tab_end;
+    let editor_tab_end = src[editor_tab_start..]
+        .find("fn render_language_tab")
+        .map(|i| editor_tab_start + i)
+        .expect("render_language_tab function must exist");
+    assert!(
+        src[editor_tab_start..editor_tab_end].contains("render_highlighted_text"),
+        "render_editor_save_tab must call render_highlighted_text"
+    );
+
+    let lang_tab_start = editor_tab_end;
+    let lang_tab_end = src[lang_tab_start..]
+        .find("fn render_about_tab")
+        .map(|i| lang_tab_start + i)
+        .expect("render_about_tab function must exist");
+    assert!(
+        src[lang_tab_start..lang_tab_end].contains("render_highlighted_text"),
+        "render_language_tab must call render_highlighted_text"
+    );
+
+    let about_tab_start = lang_tab_end;
+    let about_tab_end = src[about_tab_start + 1..]
+        .find("\nfn ")
+        .map(|i| about_tab_start + 1 + i)
+        .unwrap_or(src.len());
+    assert!(
+        src[about_tab_start..about_tab_end].contains("render_highlighted_text"),
+        "render_about_tab must call render_highlighted_text"
+    );
+
+    // Assert strings.search_no_results is present
     assert!(
         src.contains("strings.search_no_results"),
         "settings.rs must use 'strings.search_no_results'"
+    );
+
+    // Assert !src.contains("\"No results for\"")
+    assert!(
+        !src.contains("\"No results for\""),
+        "settings.rs must NOT contain '\"No results for\"'"
     );
     assert!(
         !src.contains("No results for"),
         "settings.rs must NOT contain 'No results for'"
     );
-    assert!(
-        src.contains("highlight_matching_segments"),
-        "settings.rs must contain 'highlight_matching_segments'"
-    );
-    assert!(
-        src.contains("filter_settings_cross_tab"),
-        "settings.rs must contain 'filter_settings_cross_tab'"
-    );
+
+    // Assert strictly zero hard borders
     assert!(
         !src.contains(".border_1()"),
         "settings.rs must have zero occurrences of '.border_1()'"

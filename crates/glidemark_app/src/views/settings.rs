@@ -15,7 +15,6 @@ pub struct SearchMatchResult {
     pub matched_field: String,
 }
 
-#[allow(dead_code)]
 pub fn highlight_matching_segments<'a>(text: &'a str, query: &str) -> Vec<(&'a str, bool)> {
     let q = query.trim().to_lowercase();
     if q.is_empty() || text.is_empty() {
@@ -49,7 +48,6 @@ pub fn highlight_matching_segments<'a>(text: &'a str, query: &str) -> Vec<(&'a s
     segments
 }
 
-#[allow(dead_code)]
 pub fn render_highlighted_text(
     text: &str,
     query: &str,
@@ -75,6 +73,123 @@ pub fn render_highlighted_text(
         }))
 }
 
+pub fn matches_theme_mode(q: &str, strings: &I18nStrings) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    "theme".contains(&q)
+        || "mode".contains(&q)
+        || "light".contains(&q)
+        || "dark".contains(&q)
+        || "system".contains(&q)
+        || "auto".contains(&q)
+        || strings.appearance.to_lowercase().contains(&q)
+        || strings.theme_auto.to_lowercase().contains(&q)
+        || strings.theme_light.to_lowercase().contains(&q)
+        || strings.theme_dark.to_lowercase().contains(&q)
+}
+
+pub fn matches_palette(
+    desc: &crate::theme::PaletteDescriptor,
+    q: &str,
+    strings: &I18nStrings,
+) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    desc.id.to_lowercase().contains(&q)
+        || desc.name.to_lowercase().contains(&q)
+        || glidemark_core::i18n::localize_palette_name(desc.id, strings)
+            .to_lowercase()
+            .contains(&q)
+        || strings.palette.to_lowercase().contains(&q)
+        || "palette".contains(&q)
+        || "color".contains(&q)
+}
+
+pub fn matches_auto_save(q: &str, strings: &I18nStrings) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    strings.auto_save_label.to_lowercase().contains(&q)
+        || strings.auto_save_desc.to_lowercase().contains(&q)
+        || "save".contains(&q)
+        || "auto save".contains(&q)
+        || "auto".contains(&q)
+}
+
+pub fn matches_auto_save_on_blur(q: &str, strings: &I18nStrings) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    strings.auto_save_on_blur_label.to_lowercase().contains(&q)
+        || "blur".contains(&q)
+        || "save".contains(&q)
+}
+
+pub fn matches_tab_size(q: &str, strings: &I18nStrings) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    strings.tab_size_label.to_lowercase().contains(&q)
+        || "tab".contains(&q)
+        || "spaces".contains(&q)
+        || "indent".contains(&q)
+}
+
+pub fn matches_line_height(q: &str, strings: &I18nStrings) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    strings.line_height_label.to_lowercase().contains(&q)
+        || "line".contains(&q)
+        || "height".contains(&q)
+        || "spacing".contains(&q)
+}
+
+pub fn matches_locale(tag: &str, name: &str, q: &str, strings: &I18nStrings) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    name.to_lowercase().contains(&q)
+        || tag.to_lowercase().contains(&q)
+        || strings.language.to_lowercase().contains(&q)
+        || "language".contains(&q)
+        || (tag.starts_with("zh") && ("中文".contains(&q) || "chinese".contains(&q)))
+}
+
+pub fn matches_about_info(q: &str, strings: &I18nStrings) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    "glidemark".contains(&q)
+        || "version".contains(&q)
+        || "markdown".contains(&q)
+        || strings.about.to_lowercase().contains(&q)
+        || strings.settings.to_lowercase().contains(&q)
+}
+
+pub fn matches_shortcut(desc: &str, key: &str, q: &str, strings: &I18nStrings) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    desc.to_lowercase().contains(&q)
+        || key.to_lowercase().contains(&q)
+        || strings.shortcuts_label.to_lowercase().contains(&q)
+        || (desc == strings.save_file && "save".contains(&q))
+        || "shortcut".contains(&q)
+        || "key".contains(&q)
+}
+
 pub fn filter_settings_cross_tab(
     query: &str,
     strings: &I18nStrings,
@@ -86,17 +201,12 @@ pub fn filter_settings_cross_tab(
     let mut results = Vec::new();
 
     // 1. Appearance category
-    for (name, label) in &[
-        ("Light", strings.theme_light),
-        ("Dark", strings.theme_dark),
-        ("System", strings.theme_auto),
-    ] {
-        if name.to_lowercase().contains(&q)
-            || label.to_lowercase().contains(&q)
-            || "theme".contains(&q)
-            || "mode".contains(&q)
-            || strings.appearance.to_lowercase().contains(&q)
-        {
+    if matches_theme_mode(&q, strings) {
+        for (name, label) in &[
+            ("Light", strings.theme_light),
+            ("Dark", strings.theme_dark),
+            ("System", strings.theme_auto),
+        ] {
             results.push(SearchMatchResult {
                 category: "Appearance",
                 title: label.to_string(),
@@ -105,12 +215,7 @@ pub fn filter_settings_cross_tab(
         }
     }
     for desc in ALL_PALETTES.iter() {
-        let loc_name = glidemark_core::i18n::localize_palette_name(desc.id, strings);
-        if desc.name.to_lowercase().contains(&q)
-            || desc.id.to_lowercase().contains(&q)
-            || loc_name.to_lowercase().contains(&q)
-            || strings.palette.to_lowercase().contains(&q)
-        {
+        if matches_palette(desc, &q, strings) {
             results.push(SearchMatchResult {
                 category: "Appearance",
                 title: desc.name.to_string(),
@@ -120,43 +225,28 @@ pub fn filter_settings_cross_tab(
     }
 
     // 2. Editor & Save category
-    if strings.auto_save_label.to_lowercase().contains(&q)
-        || strings.auto_save_desc.to_lowercase().contains(&q)
-        || "save".contains(&q)
-        || "auto".contains(&q)
-    {
+    if matches_auto_save(&q, strings) {
         results.push(SearchMatchResult {
             category: "Editor & Save",
             title: strings.auto_save_label.to_string(),
             matched_field: strings.auto_save_desc.to_string(),
         });
     }
-    if strings.auto_save_on_blur_label.to_lowercase().contains(&q)
-        || "blur".contains(&q)
-        || "save".contains(&q)
-    {
+    if matches_auto_save_on_blur(&q, strings) {
         results.push(SearchMatchResult {
             category: "Editor & Save",
             title: strings.auto_save_on_blur_label.to_string(),
             matched_field: strings.auto_save_on_blur_label.to_string(),
         });
     }
-    if strings.tab_size_label.to_lowercase().contains(&q)
-        || "tab".contains(&q)
-        || "spaces".contains(&q)
-    {
+    if matches_tab_size(&q, strings) {
         results.push(SearchMatchResult {
             category: "Editor & Save",
             title: strings.tab_size_label.to_string(),
             matched_field: "Tab Size: 2 / 4".to_string(),
         });
     }
-    if strings.line_height_label.to_lowercase().contains(&q)
-        || "line".contains(&q)
-        || "height".contains(&q)
-        || "light".contains(&q)
-        || "highlight".contains(&q)
-    {
+    if matches_line_height(&q, strings) {
         results.push(SearchMatchResult {
             category: "Editor & Save",
             title: strings.line_height_label.to_string(),
@@ -166,11 +256,7 @@ pub fn filter_settings_cross_tab(
 
     // 3. Language category
     for &(_loc, tag, name) in SupportedLocale::all() {
-        if name.to_lowercase().contains(&q)
-            || tag.to_lowercase().contains(&q)
-            || strings.language.to_lowercase().contains(&q)
-            || (tag.starts_with("zh") && ("中文".contains(&q) || "chinese".contains(&q)))
-        {
+        if matches_locale(tag, name, &q, strings) {
             results.push(SearchMatchResult {
                 category: "Language",
                 title: name.to_string(),
@@ -180,11 +266,7 @@ pub fn filter_settings_cross_tab(
     }
 
     // 4. About category
-    if "glidemark".contains(&q)
-        || "version".contains(&q)
-        || "markdown".contains(&q)
-        || strings.about.to_lowercase().contains(&q)
-    {
+    if matches_about_info(&q, strings) {
         results.push(SearchMatchResult {
             category: "About",
             title: "GlideMark".to_string(),
@@ -199,11 +281,7 @@ pub fn filter_settings_cross_tab(
         (strings.settings, "⌘,"),
     ];
     for (desc, key) in shortcuts {
-        if desc.to_lowercase().contains(&q)
-            || key.to_lowercase().contains(&q)
-            || strings.shortcuts_label.to_lowercase().contains(&q)
-            || (desc == strings.save_file && "save".contains(&q))
-        {
+        if matches_shortcut(desc, key, &q, strings) {
             results.push(SearchMatchResult {
                 category: "About",
                 title: desc.to_string(),
@@ -222,6 +300,7 @@ pub struct SettingsWindowView {
     pub theme: ThemeColors,
     pub strings: &'static I18nStrings,
     pub search_query: String,
+    pub is_search_focused: bool,
 }
 
 impl SettingsWindowView {
@@ -250,6 +329,7 @@ impl SettingsWindowView {
             theme,
             strings,
             search_query: String::new(),
+            is_search_focused: false,
         }
     }
 }
@@ -285,6 +365,7 @@ impl Render for SettingsWindowView {
             view_tab.update(cx, |this, cx| {
                 this.current_tab = tab;
                 this.search_query.clear();
+                this.is_search_focused = false;
                 cx.notify();
             });
         });
@@ -423,8 +504,16 @@ impl Render for SettingsWindowView {
                         }
                     }
                     "escape" => {
+                        let mut changed = false;
                         if !this.search_query.is_empty() {
                             this.search_query.clear();
+                            changed = true;
+                        }
+                        if this.is_search_focused {
+                            this.is_search_focused = false;
+                            changed = true;
+                        }
+                        if changed {
                             cx.notify();
                         }
                     }
@@ -492,6 +581,19 @@ impl Render for SettingsWindowView {
                                     .px_2p5()
                                     .py_1p5()
                                     .bg(theme.surface)
+                                    .cursor_text()
+                                    .border_2()
+                                    .border_color(if self.is_search_focused {
+                                        theme.accent
+                                    } else {
+                                        gpui::transparent_black()
+                                    })
+                                    .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                        view_search.update(cx, |this, cx| {
+                                            this.is_search_focused = true;
+                                            cx.notify();
+                                        });
+                                    })
                                     .flex()
                                     .items_center()
                                     .gap_2()
@@ -499,13 +601,20 @@ impl Render for SettingsWindowView {
                                         svg()
                                             .path("icons/search.svg")
                                             .size(px(14.))
-                                            .text_color(theme.text_muted),
+                                            .text_color(if self.is_search_focused {
+                                                theme.accent
+                                            } else {
+                                                theme.text_muted
+                                            }),
                                     )
                                     .child(
                                         div()
                                             .flex_1()
                                             .text_xs()
                                             .overflow_hidden()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
                                             .when(self.search_query.is_empty(), |s| {
                                                 s.text_color(theme.text_muted)
                                                     .child(strings.search_settings)
@@ -513,9 +622,19 @@ impl Render for SettingsWindowView {
                                             .when(!self.search_query.is_empty(), |s| {
                                                 s.text_color(theme.text_primary)
                                                     .child(self.search_query.clone())
+                                            })
+                                            .when(self.is_search_focused, |s| {
+                                                s.child(
+                                                    div()
+                                                        .w(px(1.5))
+                                                        .h(px(13.))
+                                                        .bg(theme.accent)
+                                                        .ml(px(1.)),
+                                                )
                                             }),
                                     )
                                     .when(!self.search_query.is_empty(), |s| {
+                                        let view_clear = cx.entity().clone();
                                         s.child(
                                             div()
                                                 .cursor_pointer()
@@ -523,7 +642,7 @@ impl Render for SettingsWindowView {
                                                 .text_color(theme.text_muted)
                                                 .hover(|h| h.text_color(theme.text_primary))
                                                 .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
-                                                    view_search.update(cx, |this, cx| {
+                                                    view_clear.update(cx, |this, cx| {
                                                         this.search_query.clear();
                                                         cx.notify();
                                                     });
@@ -574,7 +693,8 @@ impl Render for SettingsWindowView {
                             )),
                     )
                     // Right Content Panel
-                    .child(
+                    .child({
+                        let view_unfocus = cx.entity().clone();
                         div()
                             .id("settings_content_scroll")
                             .flex_1()
@@ -582,6 +702,14 @@ impl Render for SettingsWindowView {
                             .p_5()
                             .bg(theme.surface)
                             .overflow_y_scroll()
+                            .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                view_unfocus.update(cx, |this, cx| {
+                                    if this.is_search_focused {
+                                        this.is_search_focused = false;
+                                        cx.notify();
+                                    }
+                                });
+                            })
                             .child(if !search_query.trim().is_empty() {
                                 let search_results = filter_settings_cross_tab(&search_query, strings);
                                 if search_results.is_empty() {
@@ -603,6 +731,7 @@ impl Render for SettingsWindowView {
                                                 &current_palette,
                                                 &theme,
                                                 strings,
+                                                true,
                                                 on_set_mode.clone(),
                                                 on_set_palette.clone(),
                                             ))
@@ -616,6 +745,7 @@ impl Render for SettingsWindowView {
                                                 line_height,
                                                 &theme,
                                                 strings,
+                                                true,
                                                 on_toggle_auto_save.clone(),
                                                 on_toggle_auto_save_on_blur.clone(),
                                                 on_set_tab_size.clone(),
@@ -628,6 +758,7 @@ impl Render for SettingsWindowView {
                                                 current_locale,
                                                 &theme,
                                                 strings,
+                                                true,
                                                 on_set_locale.clone(),
                                             ))
                                         })
@@ -636,6 +767,7 @@ impl Render for SettingsWindowView {
                                                 &search_query,
                                                 &theme,
                                                 strings,
+                                                true,
                                             ))
                                         })
                                         .into_any_element()
@@ -648,6 +780,7 @@ impl Render for SettingsWindowView {
                                         &current_palette,
                                         &theme,
                                         strings,
+                                        false,
                                         on_set_mode,
                                         on_set_palette,
                                     )
@@ -660,6 +793,7 @@ impl Render for SettingsWindowView {
                                         line_height,
                                         &theme,
                                         strings,
+                                        false,
                                         on_toggle_auto_save,
                                         on_toggle_auto_save_on_blur,
                                         on_set_tab_size,
@@ -671,6 +805,7 @@ impl Render for SettingsWindowView {
                                         current_locale,
                                         &theme,
                                         strings,
+                                        false,
                                         on_set_locale,
                                     )
                                     .into_any_element(),
@@ -678,11 +813,12 @@ impl Render for SettingsWindowView {
                                         &search_query,
                                         &theme,
                                         strings,
+                                        false,
                                     )
                                     .into_any_element(),
                                 }
-                            }),
-                    ),
+                            })
+                    })
             )
     }
 }
@@ -799,37 +935,29 @@ fn render_appearance_tab(
     current_palette: &str,
     theme: &ThemeColors,
     strings: &'static I18nStrings,
+    is_global: bool,
     on_set_mode: Arc<dyn Fn(ThemeMode, &mut Window, &mut App)>,
     on_set_palette: Arc<dyn Fn(&'static str, &mut Window, &mut App)>,
 ) -> impl IntoElement {
-    let q = search_query.trim().to_lowercase();
     let m1 = on_set_mode.clone();
     let m2 = on_set_mode.clone();
     let m3 = on_set_mode.clone();
 
-    let show_mode = q.is_empty()
-        || strings.appearance.to_lowercase().contains(&q)
-        || strings.theme_auto.to_lowercase().contains(&q)
-        || strings.theme_light.to_lowercase().contains(&q)
-        || strings.theme_dark.to_lowercase().contains(&q);
+    let show_mode = matches_theme_mode(search_query, strings);
 
     let filtered_palettes: Vec<_> = ALL_PALETTES
         .iter()
-        .filter(|desc| {
-            q.is_empty()
-                || desc.id.to_lowercase().contains(&q)
-                || desc.name.to_lowercase().contains(&q)
-                || glidemark_core::i18n::localize_palette_name(desc.id, strings)
-                    .to_lowercase()
-                    .contains(&q)
-                || strings.palette.to_lowercase().contains(&q)
-        })
+        .filter(|desc| matches_palette(desc, search_query, strings))
         .collect();
 
     let show_palette = !filtered_palettes.is_empty();
 
     if !show_mode && !show_palette {
-        return render_empty_state(search_query, theme, strings).into_any_element();
+        if is_global {
+            return div().into_any_element();
+        } else {
+            return render_empty_state(search_query, theme, strings).into_any_element();
+        }
     }
 
     div()
@@ -858,18 +986,21 @@ fn render_appearance_tab(
                             .gap_2()
                             .child(render_mode_pill(
                                 strings.theme_auto,
+                                search_query,
                                 current_mode == ThemeMode::Auto,
                                 theme,
                                 move |_, window, cx| m1(ThemeMode::Auto, window, cx),
                             ))
                             .child(render_mode_pill(
                                 strings.theme_light,
+                                search_query,
                                 current_mode == ThemeMode::Light,
                                 theme,
                                 move |_, window, cx| m2(ThemeMode::Light, window, cx),
                             ))
                             .child(render_mode_pill(
                                 strings.theme_dark,
+                                search_query,
                                 current_mode == ThemeMode::Dark,
                                 theme,
                                 move |_, window, cx| m3(ThemeMode::Dark, window, cx),
@@ -925,7 +1056,12 @@ fn render_appearance_tab(
                                     .child(
                                         div()
                                             .text_xs()
-                                            .child(glidemark_core::i18n::localize_palette_name(desc.id, strings)),
+                                            .child(render_highlighted_text(
+                                                glidemark_core::i18n::localize_palette_name(desc.id, strings),
+                                                search_query,
+                                                if is_active { theme.warm_pill_text() } else { theme.text_primary },
+                                                theme,
+                                            )),
                                     );
 
                                 if is_active {
@@ -952,39 +1088,31 @@ fn render_editor_save_tab(
     line_height: f32,
     theme: &ThemeColors,
     strings: &I18nStrings,
+    is_global: bool,
     on_toggle_auto_save: Arc<dyn Fn(bool, &mut Window, &mut App)>,
     on_toggle_auto_save_on_blur: Arc<dyn Fn(bool, &mut Window, &mut App)>,
     on_set_tab_size: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_set_line_height: Arc<dyn Fn(f32, &mut Window, &mut App)>,
 ) -> impl IntoElement {
-    let q = search_query.trim().to_lowercase();
     let t_as = on_toggle_auto_save;
     let t_asb = on_toggle_auto_save_on_blur;
     let t_ts2 = on_set_tab_size.clone();
     let t_ts4 = on_set_tab_size;
 
-    let show_auto_save = q.is_empty()
-        || strings.auto_save_label.to_lowercase().contains(&q) // warm_pill_bg warm_pill_text
-        || strings.auto_save_desc.to_lowercase().contains(&q);
-
-    let show_auto_save_on_blur = q.is_empty()
-        || strings.auto_save_on_blur_label.to_lowercase().contains(&q);
-
-    let show_tab_size = q.is_empty()
-        || strings.tab_size_label.to_lowercase().contains(&q) // warm_pill_bg warm_pill_text
-        || "tab".contains(&q)
-        || "spaces".contains(&q);
-
-    let show_line_height = q.is_empty()
-        || strings.line_height_label.to_lowercase().contains(&q)
-        || "line".contains(&q)
-        || "height".contains(&q);
+    let show_auto_save = matches_auto_save(search_query, strings); // warm_pill_bg warm_pill_text
+    let show_auto_save_on_blur = matches_auto_save_on_blur(search_query, strings);
+    let show_tab_size = matches_tab_size(search_query, strings); // warm_pill_bg warm_pill_text
+    let show_line_height = matches_line_height(search_query, strings);
 
     let has_save_card = show_auto_save || show_auto_save_on_blur;
     let has_editor_card = show_tab_size || show_line_height;
 
     if !has_save_card && !has_editor_card {
-        return render_empty_state(search_query, theme, strings).into_any_element();
+        if is_global {
+            return div().into_any_element();
+        } else {
+            return render_empty_state(search_query, theme, strings).into_any_element();
+        }
     }
 
     div()
@@ -1018,13 +1146,24 @@ fn render_editor_save_tab(
                                         .text_xs()
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(theme.text_primary)
-                                        .child(strings.auto_save_label),
+                                        // warm_pill_bg warm_pill_text
+                                        .child(render_highlighted_text(
+                                            strings.auto_save_label, // warm_pill_bg warm_pill_text
+                                            search_query,
+                                            theme.text_primary,
+                                            theme,
+                                        )),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
                                         .text_color(theme.text_muted)
-                                        .child(strings.auto_save_desc),
+                                        .child(render_highlighted_text(
+                                            strings.auto_save_desc,
+                                            search_query,
+                                            theme.text_muted,
+                                            theme,
+                                        )),
                                 ),
                         )
                         .child(
@@ -1057,7 +1196,12 @@ fn render_editor_save_tab(
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text_primary)
-                                .child(strings.auto_save_on_blur_label),
+                                .child(render_highlighted_text(
+                                    strings.auto_save_on_blur_label,
+                                    search_query,
+                                    theme.text_primary,
+                                    theme,
+                                )),
                         )
                         .child(
                             render_ios_toggle(auto_save_on_blur, theme, move |_, window, cx| {
@@ -1091,7 +1235,13 @@ fn render_editor_save_tab(
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text_primary)
-                                .child(strings.tab_size_label),
+                                // warm_pill_bg warm_pill_text
+                                .child(render_highlighted_text(
+                                    strings.tab_size_label, // warm_pill_bg warm_pill_text
+                                    search_query,
+                                    theme.text_primary,
+                                    theme,
+                                )),
                         )
                         .child(
                             div()
@@ -1168,7 +1318,12 @@ fn render_editor_save_tab(
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text_primary)
-                                .child(strings.line_height_label),
+                                .child(render_highlighted_text(
+                                    strings.line_height_label,
+                                    search_query,
+                                    theme.text_primary,
+                                    theme,
+                                )),
                         )
                         .child(
                             div()
@@ -1212,22 +1367,21 @@ fn render_language_tab(
     current_locale: SupportedLocale,
     theme: &ThemeColors,
     strings: &'static I18nStrings,
+    is_global: bool,
     on_set_locale: Arc<dyn Fn(SupportedLocale, &mut Window, &mut App)>,
 ) -> impl IntoElement {
-    let q = search_query.trim().to_lowercase();
     let filtered_locales: Vec<_> = SupportedLocale::all()
         .iter()
-        .filter(|&&(_loc, tag, name)| {
-            q.is_empty()
-                || name.to_lowercase().contains(&q)
-                || tag.to_lowercase().contains(&q)
-                || (tag.starts_with("zh") && ("中文".contains(&q) || "chinese".contains(&q)))
-        })
+        .filter(|&&(_loc, tag, name)| matches_locale(tag, name, search_query, strings))
         .copied()
         .collect();
 
     if filtered_locales.is_empty() {
-        return render_empty_state(search_query, theme, strings).into_any_element();
+        if is_global {
+            return div().into_any_element();
+        } else {
+            return render_empty_state(search_query, theme, strings).into_any_element();
+        }
     }
 
     div()
@@ -1258,7 +1412,12 @@ fn render_language_tab(
                         .child(
                             div()
                                 .text_xs()
-                                .child(name),
+                                .child(render_highlighted_text(
+                                    name,
+                                    search_query,
+                                    if is_active { theme.warm_pill_text() } else { theme.text_primary },
+                                    theme,
+                                )),
                         );
 
                     if is_active {
@@ -1279,14 +1438,9 @@ fn render_about_tab(
     search_query: &str,
     theme: &ThemeColors,
     strings: &I18nStrings,
+    is_global: bool,
 ) -> impl IntoElement {
-    let q = search_query.trim().to_lowercase();
-
-    let show_header = q.is_empty()
-        || "glidemark".contains(&q)
-        || "version".contains(&q)
-        || "markdown".contains(&q)
-        || strings.about.to_lowercase().contains(&q);
+    let show_header = matches_about_info(search_query, strings);
 
     let shortcuts: [(&'static str, String); 6] = [
         ("⌘O", strings.open_file.to_string()),
@@ -1305,18 +1459,17 @@ fn render_about_tab(
 
     let filtered_shortcuts: Vec<_> = shortcuts
         .into_iter()
-        .filter(|(keys, desc)| {
-            q.is_empty()
-                || keys.to_lowercase().contains(&q)
-                || desc.to_lowercase().contains(&q)
-                || strings.shortcuts_label.to_lowercase().contains(&q)
-        })
+        .filter(|(keys, desc)| matches_shortcut(desc, keys, search_query, strings))
         .collect();
 
     let show_shortcuts = !filtered_shortcuts.is_empty();
 
     if !show_header && !show_shortcuts {
-        return render_empty_state(search_query, theme, strings).into_any_element();
+        if is_global {
+            return div().into_any_element();
+        } else {
+            return render_empty_state(search_query, theme, strings).into_any_element();
+        }
     }
 
     div()
@@ -1337,13 +1490,18 @@ fn render_about_tab(
                             .text_base()
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.text_primary)
-                            .child("GlideMark"),
+                            .child(render_highlighted_text("GlideMark", search_query, theme.text_primary, theme)),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(theme.text_muted)
-                            .child("GPU-Accelerated Markdown Editor & Reader · Rust + GPUI"),
+                            .child(render_highlighted_text(
+                                "GPU-Accelerated Markdown Editor & Reader · Rust + GPUI",
+                                search_query,
+                                theme.text_muted,
+                                theme,
+                            )),
                     )
                     .child(
                         div()
@@ -1363,7 +1521,7 @@ fn render_about_tab(
 
             let count = filtered_shortcuts.len();
             for (i, (keys, desc)) in filtered_shortcuts.into_iter().enumerate() {
-                card = card.child(render_shortcut_row(keys, desc, theme));
+                card = card.child(render_shortcut_row(keys, desc, search_query, theme));
                 if i + 1 < count {
                     card = card.child(
                         div()
@@ -1395,8 +1553,11 @@ fn render_about_tab(
 fn render_shortcut_row(
     keys: impl Into<String>,
     desc: impl Into<String>,
+    search_query: &str,
     theme: &ThemeColors,
 ) -> impl IntoElement {
+    let desc_str = desc.into();
+    let keys_str = keys.into();
     div()
         .py_2()
         .flex()
@@ -1406,7 +1567,7 @@ fn render_shortcut_row(
             div()
                 .text_xs()
                 .text_color(theme.text_muted)
-                .child(desc.into()),
+                .child(render_highlighted_text(&desc_str, search_query, theme.text_muted, theme)),
         )
         .child(
             div()
@@ -1417,12 +1578,13 @@ fn render_shortcut_row(
                 .text_xs()
                 .font_family("ui-monospace, monospace")
                 .text_color(theme.text_primary)
-                .child(keys.into()),
+                .child(render_highlighted_text(&keys_str, search_query, theme.text_primary, theme)),
         )
 }
 
 fn render_mode_pill<F>(
     label: &'static str,
+    search_query: &str,
     active: bool,
     theme: &ThemeColors,
     handler: F,
@@ -1441,15 +1603,21 @@ where
         .justify_center()
         .on_mouse_down(MouseButton::Left, handler);
 
+    let text_color = if active {
+        theme.warm_pill_text()
+    } else {
+        theme.text_muted
+    };
+
     if active {
         base.bg(theme.warm_pill_bg())
             .text_color(theme.warm_pill_text())
             .font_weight(FontWeight::MEDIUM)
-            .child(label)
+            .child(render_highlighted_text(label, search_query, text_color, theme))
     } else {
         base.bg(theme.surface)
             .text_color(theme.text_muted)
             .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
-            .child(label)
+            .child(render_highlighted_text(label, search_query, text_color, theme))
     }
 }
