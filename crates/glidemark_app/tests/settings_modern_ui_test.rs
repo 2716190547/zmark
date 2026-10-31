@@ -23,6 +23,12 @@ fn load_settings_source() -> String {
 fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
     let src = load_settings_source();
 
+    // 0. Verify zero occurrences of .border_1() in entire settings.rs
+    assert!(
+        !src.contains(".border_1()"),
+        "settings.rs must not contain any .border_1() hard borders"
+    );
+
     // 1. Verify render_nav_item has no .border_1() and uses warm_pill styles
     let nav_pos = src
         .find("fn render_nav_item")
@@ -95,6 +101,65 @@ fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
     assert!(
         palette_loop_section.contains("warm_pill_text"),
         "Palette cards in render_appearance_tab must use warm_pill_text"
+    );
+
+    // 4. Verify language cards in render_language_tab use warm_pill styles
+    let lang_tab_pos = src
+        .find("fn render_language_tab")
+        .expect("render_language_tab definition must exist");
+    let lang_tab_end = src[lang_tab_pos + 1..]
+        .find("\nfn ")
+        .map(|idx| lang_tab_pos + 1 + idx)
+        .unwrap_or(src.len());
+    let lang_tab_section = &src[lang_tab_pos..lang_tab_end];
+
+    assert!(
+        lang_tab_section.contains("warm_pill_bg"),
+        "Language cards in render_language_tab must use warm_pill_bg"
+    );
+    assert!(
+        lang_tab_section.contains("warm_pill_text"),
+        "Language cards in render_language_tab must use warm_pill_text"
+    );
+
+    // 5. Verify auto_save and tab_size toggles in render_editor_save_tab use warm_pill styles
+    let editor_tab_pos = src
+        .find("fn render_editor_save_tab")
+        .expect("render_editor_save_tab definition must exist");
+    let editor_tab_end = src[editor_tab_pos + 1..]
+        .find("\nfn ")
+        .map(|idx| editor_tab_pos + 1 + idx)
+        .unwrap_or(src.len());
+    let editor_tab_section = &src[editor_tab_pos..editor_tab_end];
+
+    let auto_save_pos = editor_tab_section
+        .find("auto_save_label")
+        .expect("auto_save_label must exist");
+    let tab_size_pos = editor_tab_section
+        .find("tab_size_label")
+        .expect("tab_size_label must exist");
+    let line_height_pos = editor_tab_section
+        .find("line_height_label")
+        .expect("line_height_label must exist");
+
+    let auto_save_section = &editor_tab_section[auto_save_pos..tab_size_pos];
+    assert!(
+        auto_save_section.contains("warm_pill_bg"),
+        "auto_save toggle must use warm_pill_bg"
+    );
+    assert!(
+        auto_save_section.contains("warm_pill_text"),
+        "auto_save toggle must use warm_pill_text"
+    );
+
+    let tab_size_section = &editor_tab_section[tab_size_pos..line_height_pos];
+    assert!(
+        tab_size_section.contains("warm_pill_bg"),
+        "tab_size toggle must use warm_pill_bg"
+    );
+    assert!(
+        tab_size_section.contains("warm_pill_text"),
+        "tab_size toggle must use warm_pill_text"
     );
 }
 
@@ -199,4 +264,15 @@ fn test_app_state_set_line_height_persistence() {
     let loaded_nan =
         Preferences::load_from_path(&config_path).expect("failed to load preferences");
     assert!((loaded_nan.line_height - 1.6).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_backwards_compatibility_without_line_height() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = dir.path().join("old_config.toml");
+    let toml_str = "font_family = 'Monaco'\nfont_size = 14.0\nmax_column_width = 800.0\ntheme = 'dark'\npalette = 'default'\nlocale = 'auto'\ntab_size = 4\n";
+    fs::write(&config_path, toml_str).expect("write old config");
+    let pref: Preferences =
+        Preferences::load_from_path(&config_path).expect("should deserialize");
+    assert!((pref.line_height - 1.6).abs() < f32::EPSILON);
 }

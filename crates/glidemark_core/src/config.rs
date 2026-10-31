@@ -32,10 +32,15 @@ fn default_auto_save_delay() -> u64 {
     1000
 }
 
+fn default_line_height() -> f32 {
+    1.6
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Preferences {
     pub font_family: String,
     pub font_size: f32,
+    #[serde(default = "default_line_height")]
     pub line_height: f32,
     pub max_column_width: f32,
     pub theme: ThemeMode,

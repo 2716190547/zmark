@@ -58,6 +58,26 @@ fn test_load_without_workspace_roots_defaults_to_empty() {
 }
 
 #[test]
+fn test_load_without_line_height_defaults_to_1_6() {
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("old_config.toml");
+    std::fs::write(
+        &config_path,
+        "font_family = 'Monaco'\nfont_size = 14.0\nmax_column_width = 800.0\ntheme = 'dark'\npalette = 'default'\nlocale = 'auto'\ntab_size = 4\n",
+    )
+    .unwrap();
+    let loaded = Preferences::load_from_path(&config_path).expect("Load should succeed");
+    assert!((loaded.line_height - 1.6).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_toml_deserialize_without_line_height() {
+    let toml_str = "font_family = 'Monaco'\nfont_size = 14.0\nmax_column_width = 800.0\ntheme = 'dark'\npalette = 'default'\nlocale = 'auto'\ntab_size = 4\n";
+    let pref: Preferences = toml::from_str(toml_str).expect("should deserialize");
+    assert!((pref.line_height - 1.6).abs() < f32::EPSILON);
+}
+
+#[test]
 fn test_load_nonexistent_returns_default() {
     let dir = tempdir().unwrap();
     let non_existent = dir.path().join("does_not_exist.toml");

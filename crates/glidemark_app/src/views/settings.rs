@@ -515,8 +515,6 @@ fn render_editor_save_tab(
             div()
                 .p_3()
                 .rounded_lg()
-                .border_1()
-                .border_color(theme.border)
                 .bg(theme.bg)
                 .flex()
                 .items_center()
@@ -540,31 +538,36 @@ fn render_editor_save_tab(
                                 .child(strings.auto_save_desc),
                         ),
                 )
-                .child(
-                    div()
+                .child({
+                    let toggle = div()
                         .px_3()
                         .py_1()
-                        .rounded_full()
-                        .border_1()
-                        .border_color(if auto_save { theme.accent } else { theme.border })
-                        .bg(if auto_save { theme.accent } else { theme.surface })
-                        .text_color(if auto_save { rgb(0xffffff).into() } else { theme.text_muted })
+                        .rounded(px(6.))
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
                         .cursor_pointer()
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             t_as(!auto_save, window, cx);
                         })
-                        .child(if auto_save { "ON" } else { "OFF" }),
-                ),
+                        .child(if auto_save { "ON" } else { "OFF" });
+
+                    if auto_save {
+                        toggle
+                            .bg(theme.warm_pill_bg())
+                            .text_color(theme.warm_pill_text())
+                    } else {
+                        toggle
+                            .bg(theme.surface)
+                            .text_color(theme.text_muted)
+                            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                    }
+                }),
         )
         // Auto Save On Blur Row
         .child(
             div()
                 .p_3()
                 .rounded_lg()
-                .border_1()
-                .border_color(theme.border)
                 .bg(theme.bg)
                 .flex()
                 .items_center()
@@ -576,31 +579,36 @@ fn render_editor_save_tab(
                         .text_color(theme.text_primary)
                         .child(strings.auto_save_on_blur_label),
                 )
-                .child(
-                    div()
+                .child({
+                    let toggle = div()
                         .px_3()
                         .py_1()
-                        .rounded_full()
-                        .border_1()
-                        .border_color(if auto_save_on_blur { theme.accent } else { theme.border })
-                        .bg(if auto_save_on_blur { theme.accent } else { theme.surface })
-                        .text_color(if auto_save_on_blur { rgb(0xffffff).into() } else { theme.text_muted })
+                        .rounded(px(6.))
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
                         .cursor_pointer()
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             t_asb(!auto_save_on_blur, window, cx);
                         })
-                        .child(if auto_save_on_blur { "ON" } else { "OFF" }),
-                ),
+                        .child(if auto_save_on_blur { "ON" } else { "OFF" });
+
+                    if auto_save_on_blur {
+                        toggle
+                            .bg(theme.warm_pill_bg())
+                            .text_color(theme.warm_pill_text())
+                    } else {
+                        toggle
+                            .bg(theme.surface)
+                            .text_color(theme.text_muted)
+                            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                    }
+                }),
         )
         // Tab Size Row
         .child(
             div()
                 .p_3()
                 .rounded_lg()
-                .border_1()
-                .border_color(theme.border)
                 .bg(theme.bg)
                 .flex()
                 .items_center()
@@ -616,40 +624,52 @@ fn render_editor_save_tab(
                     div()
                         .flex()
                         .gap_2()
-                        .child(
-                            div()
+                        .child({
+                            let active = tab_size == 2;
+                            let pill = div()
                                 .px_3()
                                 .py_1()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(if tab_size == 2 { theme.accent } else { theme.border })
-                                .bg(if tab_size == 2 { theme.accent } else { theme.surface })
-                                .text_color(if tab_size == 2 { rgb(0xffffff).into() } else { theme.text_muted })
+                                .rounded(px(6.))
                                 .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
                                 .cursor_pointer()
                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     t_ts2(2, window, cx);
                                 })
-                                .child("2 Spaces"),
-                        )
-                        .child(
-                            div()
+                                .child("2 Spaces");
+
+                            if active {
+                                pill.bg(theme.warm_pill_bg())
+                                    .text_color(theme.warm_pill_text())
+                                    .font_weight(FontWeight::SEMIBOLD)
+                            } else {
+                                pill.bg(theme.surface)
+                                    .text_color(theme.text_muted)
+                                    .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                            }
+                        })
+                        .child({
+                            let active = tab_size == 4;
+                            let pill = div()
                                 .px_3()
                                 .py_1()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(if tab_size == 4 { theme.accent } else { theme.border })
-                                .bg(if tab_size == 4 { theme.accent } else { theme.surface })
-                                .text_color(if tab_size == 4 { rgb(0xffffff).into() } else { theme.text_muted })
+                                .rounded(px(6.))
                                 .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
                                 .cursor_pointer()
                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     t_ts4(4, window, cx);
                                 })
-                                .child("4 Spaces"),
-                        ),
+                                .child("4 Spaces");
+
+                            if active {
+                                pill.bg(theme.warm_pill_bg())
+                                    .text_color(theme.warm_pill_text())
+                                    .font_weight(FontWeight::SEMIBOLD)
+                            } else {
+                                pill.bg(theme.surface)
+                                    .text_color(theme.text_muted)
+                                    .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                            }
+                        }),
                 ),
         )
         // Line Height Row
@@ -657,8 +677,6 @@ fn render_editor_save_tab(
             div()
                 .p_3()
                 .rounded_lg()
-                .border_1()
-                .border_color(theme.border)
                 .bg(theme.bg)
                 .flex()
                 .items_center()
@@ -720,26 +738,30 @@ fn render_language_tab(
                     let is_active = current_locale.resolve() == loc;
                     let on_set = on_set_locale.clone();
 
-                    div()
+                    let card = div()
                         .w(px(165.))
                         .px_3()
                         .py_2()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(if is_active { theme.accent } else { theme.border })
-                        .bg(if is_active { theme.accent } else { theme.bg })
+                        .rounded(px(6.))
                         .cursor_pointer()
-                        .hover(|s| s.border_color(theme.accent))
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             on_set(loc, window, cx);
                         })
                         .child(
                             div()
                                 .text_xs()
-                                .font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
-                                .text_color(if is_active { rgb(0xffffff).into() } else { theme.text_primary })
                                 .child(name),
-                        )
+                        );
+
+                    if is_active {
+                        card.bg(theme.warm_pill_bg())
+                            .text_color(theme.warm_pill_text())
+                            .font_weight(FontWeight::MEDIUM)
+                    } else {
+                        card.bg(theme.surface)
+                            .text_color(theme.text_primary)
+                            .hover(|s| s.bg(theme.warm_pill_hover()))
+                    }
                 })),
         )
 }
@@ -757,8 +779,6 @@ fn render_about_tab(
             div()
                 .p_4()
                 .rounded_lg()
-                .border_1()
-                .border_color(theme.border)
                 .bg(theme.bg)
                 .flex()
                 .flex_col()
@@ -828,10 +848,8 @@ fn render_shortcut_row(
             div()
                 .px_1p5()
                 .py_0p5()
-                .rounded_sm()
+                .rounded(px(4.))
                 .bg(theme.surface)
-                .border_1()
-                .border_color(theme.border)
                 .text_xs()
                 .font_family("ui-monospace, monospace")
                 .text_color(theme.text_primary)
