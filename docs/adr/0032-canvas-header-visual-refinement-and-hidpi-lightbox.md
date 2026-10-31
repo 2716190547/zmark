@@ -55,14 +55,17 @@
 - **5.0x 缩放基线**：在 `LightboxState` 最大 5.0x 缩放或 4K/5K 大屏全屏预览时，超清纹理保证排版线条极为锐利；超出 16MP 上限部分由 GPU 平滑双线性插值承接，确保兼顾视网膜清晰度与绝对显存安全。
 
 ## 分期与 Ticket 落地规划
-- **Ticket C1 (Header & Drawer Visual Polish)**：
+- **Ticket C1 (Header & Drawer Visual Polish) [已交付]**：
   - 全屏 `is_fullscreen` 动态感知与 12px/76px 即时切换；
   - 侧栏常驻草稿分组与未打开占位行移除，活动草稿置顶单行收纳；
   - 大标题 15px Semibold 居中与防挤压截断；
   - 视图模式平铺去边框与暖石统一。
-- **Ticket C2 (HiDPI Lightbox & Icon Button)**：
-  - 流程图卡片右上角纯 Icon 悬停放大入口与事件防冒泡；
-  - 灯箱按需 HiDPI 矢量重采样、16MP 显存硬顶约束与 `drop_image` 释放机制；
+- **Ticket C2a (Mermaid Vector Icon Button) [已交付]**：
+  - 流程图卡片右上角彻底移除 `🔍` Emoji 与文字，改为纯矢量微图标微胶囊按钮（28×28px，半透明暖石底色，悬停高亮）；
+  - 内置纯矢量展开图标，绑定本地化 Tooltip，点击阻断冒泡；
+  - 对应独立单测套件 `mermaid_icon_button_test.rs`。
+- **Ticket C2b (HiDPI Lightbox Resampling) [规划中]**：
+  - 灯箱按需 HiDPI 矢量重采样、16MP GPU 物理像素硬顶约束与 `drop_image` 释放机制；
   - 对应单元测试与显存安全断言。
 - **Ticket C3 (Integration & Verification)**：
   - 全量 `cargo test --workspace` 回归验证；
