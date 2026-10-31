@@ -629,9 +629,9 @@ impl WorkspaceView {
                             .cursor_text()
                             .child(
                                 div()
-                                    .text_size(px(15.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .line_height(px(20.))
+                                    .text_size(px(18.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .line_height(px(24.))
                                     .text_color(theme.text_primary)
                                     .child(if rename_buffer.is_empty() {
                                         "Untitled.md".to_string()
@@ -690,9 +690,9 @@ impl WorkspaceView {
                             }))
                             .child(
                                 div()
-                                    .text_size(px(15.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .line_height(px(20.))
+                                    .text_size(px(18.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .line_height(px(24.))
                                     .text_color(if active_key.is_some() { theme.text_primary } else { theme.text_muted })
                                     .max_w(px(320.))
                                     .truncate()
@@ -1104,6 +1104,21 @@ impl Render for WorkspaceView {
             },
         );
 
+        let view_new_file = cx.entity().clone();
+        let on_new_file_in_dir = Arc::new(move |dir: &std::path::PathBuf, window: &mut Window, cx: &mut App| {
+            view_new_file.update(cx, |this, cx| {
+                match this.state.create_file_in_dir(dir) {
+                    Ok(_) => {
+                        this.on_document_swapped(Some(window), cx);
+                    }
+                    Err(e) => {
+                        this.state.set_error(format!("Failed to create file: {}", e));
+                    }
+                }
+                cx.notify();
+            });
+        });
+
         let loose_docs = self.state.loose_docs();
 
         let view_lb = cx.entity().clone();
@@ -1416,6 +1431,7 @@ impl Render for WorkspaceView {
                                     on_select_heading,
                                     on_open_folder,
                                     on_toggle_drawer,
+                                    on_new_file_in_dir,
                                 )),
                         )
                         .with_animation(
@@ -1822,9 +1838,9 @@ where
             let t = text.clone();
             cx.new(|_| TooltipView { text: t }).into()
         })
-        .w(px(32.))
-        .h(px(32.))
-        .rounded_md()
+        .w(px(28.))
+        .h(px(28.))
+        .rounded(px(6.))
         .cursor_pointer()
         .flex()
         .items_center()
@@ -1832,10 +1848,10 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        base.bg(theme.surface)
+        base.bg(theme.warm_pill_bg())
             .child(icon)
     } else {
-        base.hover(|s| s.bg(theme.surface))
+        base.hover(|s| s.bg(theme.warm_pill_hover()))
             .child(icon)
     }
 }
@@ -1921,9 +1937,9 @@ where
             let t = text.clone();
             cx.new(|_| TooltipView { text: t }).into()
         })
-        .w(px(32.))
-        .h(px(32.))
-        .rounded_md()
+        .w(px(28.))
+        .h(px(28.))
+        .rounded(px(6.))
         .cursor_pointer()
         .flex()
         .items_center()
@@ -1936,36 +1952,36 @@ where
             .child(icon)
     } else {
         base.text_color(text_color)
-            .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
+            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
             .child(icon)
     }
 }
 
 // Standard Lucide SVG icons rendered natively by GPUI
 fn render_sidebar_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/panel-left.svg").size(px(20.)).text_color(color)
+    svg().path("icons/panel-left.svg").size(px(16.)).text_color(color)
 }
 
 fn render_source_mode_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/code.svg").size(px(18.)).text_color(color)
+    svg().path("icons/code.svg").size(px(16.)).text_color(color)
 }
 
 fn render_split_mode_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/columns-2.svg").size(px(18.)).text_color(color)
+    svg().path("icons/columns-2.svg").size(px(16.)).text_color(color)
 }
 
 fn render_preview_mode_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/book-open.svg").size(px(18.)).text_color(color)
+    svg().path("icons/book-open.svg").size(px(16.)).text_color(color)
 }
 
 fn render_export_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/download.svg").size(px(20.)).text_color(color)
+    svg().path("icons/download.svg").size(px(16.)).text_color(color)
 }
 
 fn render_save_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/save.svg").size(px(20.)).text_color(color)
+    svg().path("icons/save.svg").size(px(16.)).text_color(color)
 }
 
 fn render_settings_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/settings.svg").size(px(20.)).text_color(color)
+    svg().path("icons/settings.svg").size(px(16.)).text_color(color)
 }

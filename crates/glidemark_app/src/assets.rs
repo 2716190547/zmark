@@ -8,6 +8,7 @@ impl AssetSource for AppAssets {
         let bytes: Option<&'static [u8]> = match path {
             "icons/panel-left.svg" => Some(include_bytes!("../assets/icons/panel-left.svg")),
             "icons/folder.svg" => Some(include_bytes!("../assets/icons/folder.svg")),
+            "icons/folder-open.svg" => Some(include_bytes!("../assets/icons/folder-open.svg")),
             "icons/folder-plus.svg" => Some(include_bytes!("../assets/icons/folder-plus.svg")),
             "icons/columns-2.svg" => Some(include_bytes!("../assets/icons/columns-2.svg")),
             "icons/book-open.svg" => Some(include_bytes!("../assets/icons/book-open.svg")),
@@ -34,6 +35,7 @@ impl AssetSource for AppAssets {
         Ok(vec![
             "icons/panel-left.svg".into(),
             "icons/folder.svg".into(),
+            "icons/folder-open.svg".into(),
             "icons/folder-plus.svg".into(),
             "icons/columns-2.svg".into(),
             "icons/book-open.svg".into(),

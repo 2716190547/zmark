@@ -1284,6 +1284,26 @@ impl AppState {
         self.open_file(path)
     }
 
+    pub fn create_file_in_dir(&mut self, dir: &std::path::Path) -> Result<std::path::PathBuf, std::io::Error> {
+        if !dir.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Target directory does not exist",
+            ));
+        }
+
+        let mut candidate = dir.join("Untitled.md");
+        let mut counter = 1;
+        while candidate.exists() {
+            candidate = dir.join(format!("Untitled {}.md", counter));
+            counter += 1;
+        }
+
+        std::fs::write(&candidate, "")?;
+        self.open_file(candidate.clone())?;
+        Ok(candidate)
+    }
+
     pub fn rename_file(&mut self, new_name: &str) -> Result<(), std::io::Error> {
         if self.active.is_none() {
             return Ok(());

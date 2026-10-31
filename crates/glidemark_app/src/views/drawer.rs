@@ -32,6 +32,7 @@ pub fn render_drawer(
     on_select_heading: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_open_folder: Arc<dyn Fn(&mut Window, &mut App)>,
     on_toggle_drawer: Arc<dyn Fn(&mut Window, &mut App)>,
+    on_new_file_in_dir: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
 ) -> impl IntoElement {
     let t1 = on_select_tab.clone();
     let t2 = on_select_tab.clone();
@@ -274,7 +275,7 @@ pub fn render_drawer(
                                     .items_center()
                                     .justify_between()
                                     .text_size(px(13.))
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .font_weight(FontWeight::MEDIUM)
                                     .hover(|s| s.bg(theme.warm_pill_hover()))
                                     .tooltip(move |_window, cx| {
                                         let t = root_path_str.clone();
@@ -282,16 +283,28 @@ pub fn render_drawer(
                                     });
 
                                 let on_refresh_header = on_refresh_r.clone();
-                                root_header = root_header.on_mouse_down(MouseButton::Left, move |_e, window, cx| {
-                                    if is_missing {
-                                        return;
-                                    }
-                                    if is_deferred {
-                                        on_refresh_header(root_idx, window, cx);
-                                    } else {
-                                        on_toggle_r(root_idx, window, cx);
-                                    }
-                                });
+                                let on_remove_header = on_remove_r.clone();
+                                root_header = root_header
+                                    .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                                        if is_missing {
+                                            return;
+                                        }
+                                        if is_deferred {
+                                            on_refresh_header(root_idx, window, cx);
+                                        } else {
+                                            on_toggle_r(root_idx, window, cx);
+                                        }
+                                    })
+                                    .on_mouse_down(MouseButton::Right, move |_e, window, cx| {
+                                        cx.stop_propagation();
+                                        on_remove_header(root_idx, window, cx);
+                                    });
+
+                                let folder_icon = if is_expanded {
+                                    "icons/folder-open.svg"
+                                } else {
+                                    "icons/folder.svg"
+                                };
 
                                 let left_part = div()
                                     .flex()
@@ -299,19 +312,8 @@ pub fn render_drawer(
                                     .gap_1p5()
                                     .min_w(px(0.))
                                     .child(
-                                        div()
-                                            .w(px(12.))
-                                            .h(px(12.))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_size(px(10.))
-                                            .text_color(theme.text_muted)
-                                            .child(if is_missing { " " } else if is_expanded { "▾" } else { "▸" }),
-                                    )
-                                    .child(
                                         svg()
-                                            .path("icons/folder.svg")
+                                            .path(folder_icon)
                                             .size(px(14.))
                                             .text_color(theme.text_muted),
                                     )
@@ -320,7 +322,7 @@ pub fn render_drawer(
                                             .min_w(px(0.))
                                             .truncate()
                                             .text_size(px(13.))
-                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .font_weight(FontWeight::MEDIUM)
                                             .text_color(if is_missing { theme.text_muted } else { theme.text_primary })
                                             .child(root_name),
                                     )
@@ -341,13 +343,15 @@ pub fn render_drawer(
                                         )
                                     });
 
+                                let on_new_file_root = on_new_file_in_dir.clone();
+                                let root_dir_path = root.path.clone();
                                 let right_part = div()
                                     .flex()
                                     .items_center()
                                     .gap_1()
                                     .child(
                                         div()
-                                            .id(SharedString::from(format!("btn_remove_root_{}", root_idx)))
+                                            .id(SharedString::from(format!("btn_new_file_root_{}", root_idx)))
                                             .w(px(16.))
                                             .h(px(16.))
                                             .rounded(px(3.))
@@ -360,14 +364,14 @@ pub fn render_drawer(
                                             .group_hover("drawer_root_row", |s| s.opacity(1.0))
                                             .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
                                             .tooltip(move |_window, cx| {
-                                                let t = strings.remove_root.to_string();
+                                                let t = strings.draft_create_hint.to_string();
                                                 cx.new(|_| DrawerTooltipView { text: t }).into()
                                             })
                                             .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
                                                 cx.stop_propagation();
-                                                on_remove_r(root_idx, window, cx);
+                                                on_new_file_root(&root_dir_path, window, cx);
                                             })
-                                            .child("×"),
+                                            .child("+"),
                                     );
 
                                 root_header = root_header.child(left_part).child(right_part);
@@ -397,6 +401,7 @@ pub fn render_drawer(
                                             theme,
                                             strings,
                                             &on_toggle_folder,
+                                            &on_new_file_in_dir,
                                             &on_select_file,
                                             &on_close_doc,
                                             &mut tree_elements,
@@ -668,6 +673,7 @@ fn render_file_tree_nodes(
     theme: &ThemeColors,
     strings: &'static I18nStrings,
     on_toggle_folder: &Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
+    on_new_file_in_dir: &Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_select_file: &Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_close_doc: &Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
     out: &mut Vec<AnyElement>,
@@ -680,9 +686,65 @@ fn render_file_tree_nodes(
             let is_expanded = node.is_expanded;
             let folder_name = node.name.clone();
 
+            let folder_icon = if is_expanded {
+                "icons/folder-open.svg"
+            } else {
+                "icons/folder.svg"
+            };
+
+            let left_part = div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .min_w(px(0.))
+                .child(
+                    svg()
+                        .path(folder_icon)
+                        .size(px(13.))
+                        .text_color(theme.text_muted),
+                )
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .truncate()
+                        .child(folder_name),
+                );
+
+            let on_new_file_dir = on_new_file_in_dir.clone();
+            let dir_path = p.clone();
+            let right_part = div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .id(SharedString::from(format!("btn_new_file_dir_{}_{}_{}", root_idx, depth, node_idx)))
+                        .w(px(16.))
+                        .h(px(16.))
+                        .rounded(px(3.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(12.))
+                        .text_color(theme.text_muted)
+                        .opacity(0.0)
+                        .group_hover("drawer_dir_row", |s| s.opacity(1.0))
+                        .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
+                        .tooltip(move |_window, cx| {
+                            let t = strings.draft_create_hint.to_string();
+                            cx.new(|_| DrawerTooltipView { text: t }).into()
+                        })
+                        .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                            cx.stop_propagation();
+                            on_new_file_dir(&dir_path, window, cx);
+                        })
+                        .child("+"),
+                );
+
             out.push(
                 div()
                     .id(SharedString::from(format!("drawer_tree_dir_{}_{}_{}", root_idx, depth, node_idx)))
+                    .group("drawer_dir_row")
                     .w_full()
                     .h(px(28.))
                     .pl(px(depth_indent + 4.0))
@@ -691,7 +753,7 @@ fn render_file_tree_nodes(
                     .cursor_pointer()
                     .flex()
                     .items_center()
-                    .gap_1p5()
+                    .justify_between()
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_muted)
@@ -699,28 +761,8 @@ fn render_file_tree_nodes(
                     .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                         on_toggle(root_idx, &p, window, cx);
                     })
-                    .child(
-                        div()
-                            .w(px(12.))
-                            .h(px(12.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(10.))
-                            .child(if is_expanded { "▾" } else { "▸" }),
-                    )
-                    .child(
-                        svg()
-                            .path("icons/folder.svg")
-                            .size(px(13.))
-                            .text_color(theme.text_muted),
-                    )
-                    .child(
-                        div()
-                            .min_w(px(0.))
-                            .truncate()
-                            .child(folder_name),
-                    )
+                    .child(left_part)
+                    .child(right_part)
                     .into_any_element(),
             );
 
@@ -735,6 +777,7 @@ fn render_file_tree_nodes(
                     theme,
                     strings,
                     on_toggle_folder,
+                    on_new_file_in_dir,
                     on_select_file,
                     on_close_doc,
                     out,
