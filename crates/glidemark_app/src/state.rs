@@ -541,6 +541,12 @@ impl AppState {
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
+    pub fn set_line_height(&mut self, val: f32) {
+        let clamped = Preferences::sanitize_line_height(val);
+        self.preferences.line_height = clamped;
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
     pub fn set_theme_mode(&mut self, mode: ThemeMode) {
         self.preferences.theme = mode;
         let _ = self.preferences.save_to_path(&self.preferences_path);

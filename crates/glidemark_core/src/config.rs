@@ -72,6 +72,14 @@ impl Default for Preferences {
 }
 
 impl Preferences {
+    pub fn sanitize_line_height(val: f32) -> f32 {
+        if !(1.3..=1.7).contains(&val) || val.is_nan() {
+            1.6
+        } else {
+            val
+        }
+    }
+
     /// Standard OS application support or config directory.
     pub fn default_config_dir() -> PathBuf {
         dirs::config_dir()
@@ -85,7 +93,8 @@ impl Preferences {
 
     pub fn load_from_path(path: &Path) -> Result<Self, ConfigError> {
         let content = fs::read_to_string(path)?;
-        let pref: Preferences = toml::from_str(&content)?;
+        let mut pref: Preferences = toml::from_str(&content)?;
+        pref.line_height = Self::sanitize_line_height(pref.line_height);
         Ok(pref)
     }
 
@@ -141,5 +150,20 @@ impl Preferences {
 
     pub fn save(&self) -> Result<(), ConfigError> {
         self.save_to_path(&Self::default_config_path())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_line_height() {
+        assert_eq!(Preferences::sanitize_line_height(1.6), 1.6);
+        assert_eq!(Preferences::sanitize_line_height(1.3), 1.3);
+        assert_eq!(Preferences::sanitize_line_height(1.7), 1.7);
+        assert_eq!(Preferences::sanitize_line_height(1.29), 1.6);
+        assert_eq!(Preferences::sanitize_line_height(1.71), 1.6);
+        assert_eq!(Preferences::sanitize_line_height(f32::NAN), 1.6);
     }
 }

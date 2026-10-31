@@ -66,6 +66,7 @@ impl Render for SettingsWindowView {
         let auto_save = self.preferences.auto_save;
         let auto_save_on_blur = self.preferences.auto_save_on_blur;
         let tab_size = self.preferences.tab_size;
+        let line_height = self.preferences.line_height;
         let theme = self.theme.clone();
         let strings = self.strings;
 
@@ -173,6 +174,22 @@ impl Render for SettingsWindowView {
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_tab_size(size);
+                        cx.notify();
+                    });
+                }
+                cx.notify();
+            });
+        });
+
+        let view_lh = cx.entity().clone();
+        let on_set_line_height = Arc::new(move |lh: f32, _window: &mut Window, cx: &mut App| {
+            view_lh.update(cx, |this, cx| {
+                let clamped = Preferences::sanitize_line_height(lh);
+                this.preferences.line_height = clamped;
+                let _ = this.preferences.save();
+                if let Some(ws) = this.workspace.upgrade() {
+                    ws.update(cx, |ws, cx| {
+                        ws.state.set_line_height(clamped);
                         cx.notify();
                     });
                 }
@@ -289,11 +306,13 @@ impl Render for SettingsWindowView {
                                     auto_save,
                                     auto_save_on_blur,
                                     tab_size,
+                                    line_height,
                                     &theme,
                                     strings,
                                     on_toggle_auto_save,
                                     on_toggle_auto_save_on_blur,
                                     on_set_tab_size,
+                                    on_set_line_height,
                                 )
                                 .into_any_element(),
                                 SettingsTab::Language => render_language_tab(
@@ -326,7 +345,7 @@ where
     let base = div()
         .px_3()
         .py_2()
-        .rounded_md()
+        .rounded(px(6.))
         .cursor_pointer()
         .flex()
         .items_center()
@@ -334,20 +353,22 @@ where
         .text_xs()
         .on_mouse_down(MouseButton::Left, handler);
 
-    let color = if active { theme.accent } else { theme.text_muted };
-    let icon = svg().path(icon_path).size(px(18.)).text_color(color);
+    let icon_color = if active {
+        theme.warm_pill_text()
+    } else {
+        theme.text_muted
+    };
+    let icon = svg().path(icon_path).size(px(18.)).text_color(icon_color);
 
     if active {
-        base.bg(theme.surface)
-            .border_1()
-            .border_color(theme.border)
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(theme.accent)
+        base.bg(theme.warm_pill_bg())
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(theme.warm_pill_text())
             .child(icon)
             .child(title)
     } else {
         base.text_color(theme.text_muted)
-            .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
+            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
             .child(icon)
             .child(title)
     }
@@ -357,7 +378,7 @@ fn render_appearance_tab(
     current_mode: ThemeMode,
     current_palette: &str,
     theme: &ThemeColors,
-    strings: &I18nStrings,
+    strings: &'static I18nStrings,
     on_set_mode: Arc<dyn Fn(ThemeMode, &mut Window, &mut App)>,
     on_set_palette: Arc<dyn Fn(&'static str, &mut Window, &mut App)>,
 ) -> impl IntoElement {
@@ -429,16 +450,12 @@ fn render_appearance_tab(
                             let palette_id = desc.id;
                             let on_set = on_set_palette.clone();
 
-                            div()
+                            let card = div()
                                 .w(px(165.))
                                 .px_3()
                                 .py_2()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(if is_active { theme.accent } else { theme.border })
-                                .bg(if is_active { theme.bg } else { theme.surface })
+                                .rounded(px(6.))
                                 .cursor_pointer()
-                                .hover(|s| s.border_color(theme.accent))
                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     on_set(palette_id, window, cx);
                                 })
@@ -455,10 +472,18 @@ fn render_appearance_tab(
                                 .child(
                                     div()
                                         .text_xs()
-                                        .font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
-                                        .text_color(if is_active { theme.accent } else { theme.text_primary })
-                                        .child(glidemark_core::i18n::localize_palette_name(desc.id, strings).to_string()),
-                                )
+                                        .child(glidemark_core::i18n::localize_palette_name(desc.id, strings)),
+                                );
+
+                            if is_active {
+                                card.bg(theme.warm_pill_bg())
+                                    .text_color(theme.warm_pill_text())
+                                    .font_weight(FontWeight::MEDIUM)
+                            } else {
+                                card.bg(theme.surface)
+                                    .text_color(theme.text_primary)
+                                    .hover(|s| s.bg(theme.warm_pill_hover()))
+                            }
                         })),
                 ),
         )
@@ -468,11 +493,13 @@ fn render_editor_save_tab(
     auto_save: bool,
     auto_save_on_blur: bool,
     tab_size: usize,
+    line_height: f32,
     theme: &ThemeColors,
     strings: &I18nStrings,
     on_toggle_auto_save: Arc<dyn Fn(bool, &mut Window, &mut App)>,
     on_toggle_auto_save_on_blur: Arc<dyn Fn(bool, &mut Window, &mut App)>,
     on_set_tab_size: Arc<dyn Fn(usize, &mut Window, &mut App)>,
+    on_set_line_height: Arc<dyn Fn(f32, &mut Window, &mut App)>,
 ) -> impl IntoElement {
     let t_as = on_toggle_auto_save;
     let t_asb = on_toggle_auto_save_on_blur;
@@ -623,6 +650,54 @@ fn render_editor_save_tab(
                                 })
                                 .child("4 Spaces"),
                         ),
+                ),
+        )
+        // Line Height Row
+        .child(
+            div()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.bg)
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.text_primary)
+                        .child(strings.line_height_label),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .children([1.3f32, 1.4, 1.5, 1.6, 1.7].into_iter().map(|lh_opt| {
+                            let is_active = (line_height - lh_opt).abs() < 0.05;
+                            let on_set = on_set_line_height.clone();
+                            let pill = div()
+                                .px_3()
+                                .py_1()
+                                .rounded(px(6.))
+                                .text_xs()
+                                .cursor_pointer()
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    on_set(lh_opt, window, cx);
+                                })
+                                .child(format!("{:.1}x", lh_opt));
+
+                            if is_active {
+                                pill.bg(theme.warm_pill_bg())
+                                    .text_color(theme.warm_pill_text())
+                                    .font_weight(FontWeight::SEMIBOLD)
+                            } else {
+                                pill.bg(theme.surface)
+                                    .text_color(theme.text_muted)
+                                    .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                            }
+                        })),
                 ),
         )
 }
@@ -776,8 +851,7 @@ where
     let base = div()
         .flex_1()
         .py_1p5()
-        .rounded_md()
-        .border_1()
+        .rounded(px(6.))
         .text_xs()
         .cursor_pointer()
         .flex()
@@ -786,16 +860,14 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        base.bg(theme.accent)
-            .border_color(theme.accent)
-            .text_color(rgb(0xffffff))
-            .font_weight(FontWeight::SEMIBOLD)
+        base.bg(theme.warm_pill_bg())
+            .text_color(theme.warm_pill_text())
+            .font_weight(FontWeight::MEDIUM)
             .child(label)
     } else {
         base.bg(theme.bg)
-            .border_color(theme.border)
-            .text_color(theme.text_primary)
-            .hover(|s| s.border_color(theme.accent))
+            .text_color(theme.text_muted)
+            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
             .child(label)
     }
 }
