@@ -1,7 +1,7 @@
 # ADR 0032: 视觉层级精进、无感知全屏适配与 HiDPI 流程图重采样灯箱
 
 ## 状态
-提议 (Proposed) - 等待 Ticket C1 与 C2 分步实施与终验后转为 Accepted
+已通过 (Accepted) - Ticket C1、C2a、C2b 已全面实施并通过审查端终验归档
 
 ## 上下文 (Context)
 在 Phase B 多文件夹联合工作区落地后，日常深度使用中发现以下 6 处直接影响使用体验的细节：
