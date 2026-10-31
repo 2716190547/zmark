@@ -48,14 +48,16 @@
 - **SVG 矢量无损提取与重采样**：正文图表生成的 SVG 带有完整的 `viewBox` 矢量坐标。灯箱打开时，无须重新运行昂贵的 Mermaid 语法解析与布局，直接从现有矢量 SVG 提取几何比例，按需生成 HiDPI 变体；
 - **16MP GPU 物理像素硬顶算法 (Pure Function)**：
   - 核心算法纯函数：`calculate_hidpi_dimensions(orig_w: f64, orig_h: f64, scale_factor: f32) -> (f64, f64)`；
+  - 边界防守：若 `orig_w <= 0.0 || orig_h <= 0.0` 或解析失败，安全回退至标准尺寸 `(1000.0, 600.0)`；
   - 设定最大 GPU 物理像素总量 `MAX_PHYSICAL_PIXELS = 16_000_000.0`（16MP），最大物理长边 `MAX_PHYSICAL_SIDE = 4000.0`；
   - 面积预算计算：`area_ratio = (MAX_PHYSICAL_PIXELS / (orig_w * orig_h * (scale_factor as f64).powi(2))).sqrt()`；
-  - 结合长边硬顶约束取更小缩放比，计算出安全的逻辑尺寸 `(target_w, target_h)`，仅重写 `<svg>` 根标签的 `width` 与 `height`，保留原生 `viewBox`；
-- **独立文件缓存与生命周期管理**：
-  - 灯箱 HiDPI SVG 写入独立文件缓存（如 `${code_hash}_lightbox_hidpi.svg`），不污染正文预览缓存；
-  - `LightboxState` 显式持有 `hidpi_svg_path: Option<PathBuf>`；
-  - 当灯箱关闭（按 Esc、点击遮罩或关闭按钮）以及切换文档时，重置状态并释放显存引用；同一图表重复打开时直接命中缓存；
-- **5.0x 缩放基线**：在 `LightboxState` 最大 5.0x 缩放或 4K 全屏下，HiDPI 纹理确保文字排版达到视网膜级锐利；超出 16MP 预算的极端超长图由 GPU 平滑双线性插值承接，兼顾极清画质与 100% 显存安全。
+  - 长边预算计算：`side_ratio = MAX_PHYSICAL_SIDE / (orig_w.max(orig_h) * scale_factor as f64)`；
+  - 取更小缩放比 `final_ratio = area_ratio.min(side_ratio)`，计算出安全的逻辑尺寸 `(target_w, target_h)`，仅重写 `<svg>` 根标签的 `width` 与 `height`，保留原生 `viewBox`；
+- **独立文件缓存与生命周期管理 (LRU 4 限制)**：
+  - 建立专用的灯箱文件缓存 `LIGHTBOX_DIAGRAM_CACHE: Mutex<LruCache<(u64, bool, u8), PathBuf>>`，缓存 key 包含 `(code_hash, is_dark, scale_bucket)`，容量硬顶为 4；
+  - 淘汰旧项时自动清除磁盘临时 SVG 文件，杜绝无限磁盘占用；
+  - `LightboxState` 显式持有 `hidpi_svg_path: Option<PathBuf>`；灯箱关闭时（按 Esc、点击遮罩或关闭按钮）重置状态并释放当前路径引用；
+- **5.0x 缩放基线**：在 `LightboxState` 最大 5.0x 缩放或 4K 全屏下，HiDPI 纹理在 16MP 预算内保持高锐利度；超出 16MP 的极端大图由 GPU 平滑双线性插值承接，兼顾极清画质与 100% 显存安全。
 
 ## 分期与 Ticket 落地规划
 - **Ticket C1 (Header & Drawer Visual Polish) [已交付]**：
