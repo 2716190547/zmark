@@ -31,6 +31,7 @@
 | **0030** | [macOS 研发工具链分工、Instruments 性能诊断与零成本 Ad-Hoc 签名](0030-macos-toolchain-profiling-and-adhoc-signing.md) | 已接受 (Accepted) | 工具链轻重解耦；Instruments 一键追踪掉帧；打包脚本集成零费用本地 Ad-Hoc 签名 |
 | **0031** | [侧栏中心导航、无 Tab 头部与多根工作区](0031-sidebar-centric-navigation-and-multi-root-workspace.md) | 已接受 (Accepted) | A/B 全部落地：无 Tab、多根工作区、外部文件组、共享扫描预算、多语言侧栏与错误反馈 |
 | **0032** | [视觉层级精进、无感知全屏适配与 HiDPI 流程图重采样灯箱](0032-canvas-header-visual-refinement-and-hidpi-lightbox.md) | 已通过 (Accepted) | 全屏左边距动态感知、侧栏草稿去常驻化、头部大标题与视图模式平铺统一、HiDPI 矢量重采样与显存保护 |
+| **0033** | [现代化设置视窗、侧栏层级降噪、灯箱纸张画布与沉浸阅读排版](0033-modern-settings-drawer-refinement-and-editor-reading.md) | 提议 (Proposed) | 灯箱纸张实体画布隔离透光、侧栏移除工作区标头与灰点并升级13px、设置窗口无框胶囊重构、编辑器对齐/1.6x行高/轻量语法高亮 |
 
 ---
 
