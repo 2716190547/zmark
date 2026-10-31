@@ -512,6 +512,147 @@ stateDiagram-v2
         let res_invalid = render_to_svg(invalid);
         assert!(res_invalid.is_err());
     }
+
+    #[test]
+    fn test_scale_factor_to_bucket() {
+        assert_eq!(scale_factor_to_bucket(1.0), 2);
+        assert_eq!(scale_factor_to_bucket(1.25), 3);
+        assert_eq!(scale_factor_to_bucket(1.5), 3);
+        assert_eq!(scale_factor_to_bucket(2.0), 4);
+        assert_eq!(scale_factor_to_bucket(2.5), 5);
+        assert_eq!(scale_factor_to_bucket(3.0), 6);
+        // Out of bounds / invalid fallback
+        assert_eq!(scale_factor_to_bucket(0.0), 2);
+        assert_eq!(scale_factor_to_bucket(-1.5), 2);
+        assert_eq!(scale_factor_to_bucket(f32::NAN), 2);
+        assert_eq!(scale_factor_to_bucket(f32::INFINITY), 2);
+        assert_eq!(scale_factor_to_bucket(4.0), 6);
+    }
+
+    #[test]
+    fn test_calculate_hidpi_dimensions_multi_scale_and_budget_guards() {
+        let scales = [1.0f32, 1.25f32, 1.5f32, 2.0f32, 3.0f32];
+        for &sf in &scales {
+            let (tw, th) = calculate_hidpi_dimensions(1000.0, 600.0, sf);
+            let effective_scale = (scale_factor_to_bucket(sf) as f64) / 2.0;
+            let pw = tw * effective_scale;
+            let ph = th * effective_scale;
+            assert!(pw * ph <= 16_000_000.0 + 1e-4, "pixel budget exceeded at {}x", sf);
+            assert!(pw.max(ph) <= 4000.0 + 1e-4, "max side exceeded at {}x", sf);
+            assert!(tw >= 1.0 && th >= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_calculate_hidpi_dimensions_invalid_and_edge_inputs() {
+        // Negative / zero / NaN dimensions fallback safely to (1000.0, 600.0)
+        let (tw, th) = calculate_hidpi_dimensions(-100.0, 500.0, 2.0);
+        assert!(tw > 0.0 && th > 0.0);
+        let (tw0, th0) = calculate_hidpi_dimensions(0.0, 500.0, 2.0);
+        assert_eq!((tw, th), (tw0, th0));
+        let (twnan, thnan) = calculate_hidpi_dimensions(f64::NAN, 500.0, 2.0);
+        assert_eq!((tw, th), (twnan, thnan));
+        let (twinf, thinf) = calculate_hidpi_dimensions(f64::INFINITY, 500.0, 2.0);
+        assert_eq!((tw, th), (twinf, thinf));
+
+        // Negative / zero / NaN scale_factor safely fallback to 1.0
+        let (tw_sf_neg, th_sf_neg) = calculate_hidpi_dimensions(800.0, 600.0, -1.0);
+        let (tw_sf_1, th_sf_1) = calculate_hidpi_dimensions(800.0, 600.0, 1.0);
+        assert_eq!((tw_sf_neg, th_sf_neg), (tw_sf_1, th_sf_1));
+
+        let (tw_sf_nan, _) = calculate_hidpi_dimensions(800.0, 600.0, f32::NAN);
+        assert_eq!(tw_sf_nan, tw_sf_1);
+    }
+
+    #[test]
+    fn test_calculate_hidpi_dimensions_huge_diagrams() {
+        // 10000x8000 diagram at scale 2.0
+        let (tw, th) = calculate_hidpi_dimensions(10000.0, 8000.0, 2.0);
+        let pw = tw * 2.0;
+        let ph = th * 2.0;
+        assert!(pw * ph <= 16_000_000.0 + 1e-4);
+        assert!(pw.max(ph) <= 4000.0 + 1e-4);
+        assert_eq!(pw, 4000.0);
+        assert_eq!(ph, 3200.0);
+
+        // Ultra wide diagram (30000x1000)
+        let (uw_w, uw_h) = calculate_hidpi_dimensions(30000.0, 1000.0, 2.0);
+        let upw = uw_w * 2.0;
+        let uph = uw_h * 2.0;
+        assert!(upw * uph <= 16_000_000.0 + 1e-4);
+        assert!(upw <= 4000.0 + 1e-4);
+    }
+
+    #[test]
+    fn test_extract_svg_dimensions() {
+        // Standard width and height
+        let svg1 = r#"<svg width="800" height="600" viewBox="0 0 800 600"><g></g></svg>"#;
+        assert_eq!(extract_svg_dimensions(svg1), (800.0, 600.0));
+
+        // Floating point and px unit
+        let svg2 = r#"<svg width="1200.5px" height="800.25px"><g></g></svg>"#;
+        assert_eq!(extract_svg_dimensions(svg2), (1200.5, 800.25));
+
+        // Attributes with other prefixes like stroke-width
+        let svg3 = r#"<svg stroke-width="2" width="500" height="300"><g></g></svg>"#;
+        assert_eq!(extract_svg_dimensions(svg3), (500.0, 300.0));
+
+        // Width and height with % fallback to viewBox
+        let svg_pct = r#"<svg width="100%" height="100%" viewBox="0 0 1920 1080"><g></g></svg>"#;
+        assert_eq!(extract_svg_dimensions(svg_pct), (1920.0, 1080.0));
+
+        // ViewBox only (comma or whitespace separated)
+        let svg_vb_space = r#"<svg viewBox="0 0 750 450"><g></g></svg>"#;
+        assert_eq!(extract_svg_dimensions(svg_vb_space), (750.0, 450.0));
+        let svg_vb_comma = r#"<svg viewBox="0, 0, 750, 450"><g></g></svg>"#;
+        assert_eq!(extract_svg_dimensions(svg_vb_comma), (750.0, 450.0));
+
+        // Fallback for missing or invalid
+        let svg_empty = r#"<svg><g></g></svg>"#;
+        assert_eq!(extract_svg_dimensions(svg_empty), (1000.0, 600.0));
+        assert_eq!(extract_svg_dimensions("not an svg"), (1000.0, 600.0));
+    }
+
+    #[test]
+    fn test_apply_texture_pixel_budget() {
+        // Case 1: Standard SVG (replace width/height, preserve viewBox)
+        let svg_std = r#"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><path d="M0,0 L10,10"/></svg>"#;
+        let res_std = apply_texture_pixel_budget(svg_std, 1600.0, 1200.0);
+        assert!(res_std.contains(r#"width="1600.00""#));
+        assert!(res_std.contains(r#"height="1200.00""#));
+        assert!(res_std.contains(r#"viewBox="0 0 800 600""#));
+        assert!(res_std.contains(r#"<path d="M0,0 L10,10"/>"#));
+
+        // Case 2: width="100%" and height="100%"
+        let svg_pct = r#"<svg width="100%" height="100%" viewBox="0 0 500 300"><circle cx="5" cy="5" r="5"/></svg>"#;
+        let res_pct = apply_texture_pixel_budget(svg_pct, 1000.0, 600.0);
+        assert!(res_pct.contains(r#"width="1000.00""#));
+        assert!(res_pct.contains(r#"height="600.00""#));
+        assert!(!res_pct.contains("100%"));
+        assert!(res_pct.contains(r#"viewBox="0 0 500 300""#));
+
+        // Case 3: Only viewBox (missing width & height)
+        let svg_vb = r#"<svg viewBox="0 0 400 300"><rect x="0" y="0"/></svg>"#;
+        let res_vb = apply_texture_pixel_budget(svg_vb, 800.0, 600.0);
+        assert!(res_vb.contains(r#"width="800.00""#));
+        assert!(res_vb.contains(r#"height="600.00""#));
+        assert!(res_vb.contains(r#"viewBox="0 0 400 300""#));
+        assert!(res_vb.contains(r#"<rect x="0" y="0"/>"#));
+
+        // Case 4: Missing viewBox (synthesize viewBox from original dimensions)
+        let svg_no_vb = r#"<svg width="500" height="250"><g></g></svg>"#;
+        let res_no_vb = apply_texture_pixel_budget(svg_no_vb, 1000.0, 500.0);
+        assert!(res_no_vb.contains(r#"viewBox="0 0 500.00 250.00""#));
+        assert!(res_no_vb.contains(r#"width="1000.00""#));
+        assert!(res_no_vb.contains(r#"height="500.00""#));
+
+        // Case 5: Missing all (synthesize viewBox from target dimensions)
+        let svg_none = r#"<svg><g></g></svg>"#;
+        let res_none = apply_texture_pixel_budget(svg_none, 1200.0, 800.0);
+        assert!(res_none.contains(r#"viewBox="0 0 1200.00 800.00""#));
+        assert!(res_none.contains(r#"width="1200.00""#));
+        assert!(res_none.contains(r#"height="800.00""#));
+    }
 }
 
 /// Renders a Mermaid diagram source to a standard, high-quality SVG vector graphic in pure Rust.
@@ -727,5 +868,265 @@ fn sanitize_mermaid(code: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Maps a window scale factor (e.g. 1.0, 1.25, 2.0) into discrete bucket IDs.
+/// Bucketing avoids cache thrashing across minute resolution fluctuations.
+pub fn scale_factor_to_bucket(scale_factor: f32) -> u8 {
+    let sf = if scale_factor <= 0.0 || !scale_factor.is_finite() {
+        1.0
+    } else {
+        scale_factor
+    };
+    (sf.clamp(1.0, 3.0) * 2.0).round() as u8
+}
+
+/// Calculates HiDPI logical target dimensions subject to a strict 16MP / 4000px physical pixel budget.
+pub fn calculate_hidpi_dimensions(orig_w: f64, orig_h: f64, scale_factor: f32) -> (f64, f64) {
+    let sf = if scale_factor <= 0.0 || !scale_factor.is_finite() {
+        1.0
+    } else {
+        scale_factor
+    };
+
+    let (w, h) = if orig_w <= 0.0 || orig_h <= 0.0 || !orig_w.is_finite() || !orig_h.is_finite() {
+        (1000.0, 600.0)
+    } else {
+        (orig_w, orig_h)
+    };
+
+    let scale_bucket = scale_factor_to_bucket(sf);
+    let effective_scale = (scale_bucket as f64) / 2.0;
+
+    const MAX_PHYSICAL_PIXELS: f64 = 16_000_000.0;
+    const MAX_PHYSICAL_SIDE: f64 = 4000.0;
+
+    let area_ratio = (MAX_PHYSICAL_PIXELS / (w * h * effective_scale.powi(2))).sqrt();
+    let side_ratio = MAX_PHYSICAL_SIDE / (w.max(h) * effective_scale);
+    let final_ratio = area_ratio.min(side_ratio);
+
+    let mut target_w = (w * final_ratio).floor().max(1.0);
+    let mut target_h = (h * final_ratio).floor().max(1.0);
+
+    let mut physical_w = target_w * effective_scale;
+    let mut physical_h = target_h * effective_scale;
+
+    if physical_w.max(physical_h) > MAX_PHYSICAL_SIDE {
+        let scale = MAX_PHYSICAL_SIDE / physical_w.max(physical_h);
+        target_w = (target_w * scale).floor().max(1.0);
+        target_h = (target_h * scale).floor().max(1.0);
+        physical_w = target_w * effective_scale;
+        physical_h = target_h * effective_scale;
+    }
+    if physical_w * physical_h > MAX_PHYSICAL_PIXELS {
+        let scale = (MAX_PHYSICAL_PIXELS / (physical_w * physical_h)).sqrt();
+        target_w = (target_w * scale).floor().max(1.0);
+        target_h = (target_h * scale).floor().max(1.0);
+        physical_w = target_w * effective_scale;
+        physical_h = target_h * effective_scale;
+    }
+
+    assert!(
+        physical_w * physical_h <= MAX_PHYSICAL_PIXELS + 1e-4,
+        "physical pixels {} exceed 16MP budget",
+        physical_w * physical_h
+    );
+    assert!(
+        physical_w.max(physical_h) <= MAX_PHYSICAL_SIDE + 1e-4,
+        "physical max side {} exceeds 4000 budget",
+        physical_w.max(physical_h)
+    );
+
+    (target_w, target_h)
+}
+
+/// Inspects root `<svg ...>` tag and extracts width and height, falling back to viewBox or default (1000.0, 600.0).
+pub fn extract_svg_dimensions(svg: &str) -> (f64, f64) {
+    let root_tag = match find_root_svg_tag(svg) {
+        Some((_, _, tag)) => tag,
+        None => return (1000.0, 600.0),
+    };
+
+    let w_attr = get_tag_attr(root_tag, "width");
+    let h_attr = get_tag_attr(root_tag, "height");
+
+    if let (Some(w_str), Some(h_str)) = (w_attr, h_attr) {
+        if !w_str.contains('%') && !h_str.contains('%') {
+            let w_val = w_str.trim().trim_end_matches("px").trim().parse::<f64>();
+            let h_val = h_str.trim().trim_end_matches("px").trim().parse::<f64>();
+            if let (Ok(w), Ok(h)) = (w_val, h_val) {
+                if w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite() {
+                    return (w, h);
+                }
+            }
+        }
+    }
+
+    // Fallback to viewBox
+    let vb_attr = get_tag_attr(root_tag, "viewBox").or_else(|| get_tag_attr(root_tag, "viewbox"));
+    if let Some(vb) = vb_attr {
+        let parts: Vec<&str> = vb
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|s| !s.is_empty())
+            .collect();
+        if parts.len() == 4 {
+            let vb_w = parts[2].trim().parse::<f64>();
+            let vb_h = parts[3].trim().parse::<f64>();
+            if let (Ok(w), Ok(h)) = (vb_w, vb_h) {
+                if w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite() {
+                    return (w, h);
+                }
+            }
+        }
+    }
+
+    (1000.0, 600.0)
+}
+
+/// Rewrites root `<svg ...>` dimensions to target_w and target_h while strictly preserving
+/// vector viewBox coordinate fidelity and inner vector graphics.
+pub fn apply_texture_pixel_budget(svg: &str, target_w: f64, target_h: f64) -> String {
+    let (tag_start, tag_end, root_tag) = match find_root_svg_tag(svg) {
+        Some(res) => res,
+        None => return svg.to_string(),
+    };
+
+    let orig_num_w = get_tag_attr(root_tag, "width").and_then(|val| {
+        if val.contains('%') {
+            None
+        } else {
+            val.trim().trim_end_matches("px").trim().parse::<f64>().ok()
+        }
+    });
+    let orig_num_h = get_tag_attr(root_tag, "height").and_then(|val| {
+        if val.contains('%') {
+            None
+        } else {
+            val.trim().trim_end_matches("px").trim().parse::<f64>().ok()
+        }
+    });
+
+    let has_viewbox = find_attr_range(root_tag, "viewBox").is_some()
+        || find_attr_range(root_tag, "viewbox").is_some();
+
+    let mut new_tag = root_tag.to_string();
+
+    // Preserve viewBox intact if present; synthesize if missing
+    if !has_viewbox {
+        let vb_val = if let (Some(w), Some(h)) = (orig_num_w, orig_num_h) {
+            if w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite() {
+                format!("0 0 {:.2} {:.2}", w, h)
+            } else {
+                format!("0 0 {:.2} {:.2}", target_w, target_h)
+            }
+        } else {
+            format!("0 0 {:.2} {:.2}", target_w, target_h)
+        };
+        new_tag = set_or_insert_attr(&new_tag, "viewBox", &vb_val);
+    }
+
+    // Set or replace width and height
+    new_tag = set_or_insert_attr(&new_tag, "width", &format!("{:.2}", target_w));
+    new_tag = set_or_insert_attr(&new_tag, "height", &format!("{:.2}", target_h));
+
+    format!("{}{}{}", &svg[..tag_start], new_tag, &svg[tag_end..])
+}
+
+fn find_root_svg_tag(svg: &str) -> Option<(usize, usize, &str)> {
+    let start = svg.find("<svg").or_else(|| svg.find("<SVG"))?;
+    let after = &svg[start..];
+    let end_rel = find_tag_end(after)?;
+    let end = start + end_rel + 1;
+    Some((start, end, &svg[start..end]))
+}
+
+fn find_tag_end(s: &str) -> Option<usize> {
+    let mut in_quote: Option<char> = None;
+    for (i, c) in s.char_indices() {
+        match in_quote {
+            Some(q) => {
+                if c == q {
+                    in_quote = None;
+                }
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    in_quote = Some(c);
+                } else if c == '>' {
+                    return Some(i);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn get_tag_attr<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
+    let (start, end) = find_attr_range(tag, attr_name)?;
+    let span = &tag[start..end];
+    let eq_idx = span.find('=')?;
+    let after_eq = span[eq_idx + 1..].trim();
+    if after_eq.len() >= 2 {
+        let first = after_eq.as_bytes()[0] as char;
+        let last = after_eq.as_bytes()[after_eq.len() - 1] as char;
+        if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+            return Some(&after_eq[1..after_eq.len() - 1]);
+        }
+    }
+    None
+}
+
+fn find_attr_range(tag: &str, attr_name: &str) -> Option<(usize, usize)> {
+    let mut search_idx = 0;
+    while let Some(rel_idx) = tag[search_idx..].find(attr_name) {
+        let idx = search_idx + rel_idx;
+        let valid_prefix = if idx == 0 {
+            true
+        } else {
+            let prev = tag.as_bytes()[idx - 1];
+            prev.is_ascii_whitespace() || prev == b'<'
+        };
+
+        if valid_prefix {
+            let after_name = idx + attr_name.len();
+            let rest = &tag[after_name..];
+            let trimmed_rest = rest.trim_start();
+            let ws_len = rest.len() - trimmed_rest.len();
+            if let Some(after_eq) = trimmed_rest.strip_prefix('=') {
+                let trimmed_after_eq = after_eq.trim_start();
+                let ws_after_eq = after_eq.len() - trimmed_after_eq.len();
+                if let Some(&quote) = trimmed_after_eq.as_bytes().first() {
+                    if quote == b'"' || quote == b'\'' {
+                        let val_start = 1;
+                        if let Some(val_end) = trimmed_after_eq[val_start..].find(quote as char) {
+                            let total_end = after_name
+                                + ws_len
+                                + 1
+                                + ws_after_eq
+                                + 1
+                                + val_end
+                                + 1;
+                            return Some((idx, total_end));
+                        }
+                    }
+                }
+            }
+        }
+        search_idx = idx + attr_name.len();
+    }
+    None
+}
+
+fn set_or_insert_attr(tag: &str, attr_name: &str, new_value: &str) -> String {
+    let range = find_attr_range(tag, attr_name)
+        .or_else(|| find_attr_range(tag, &attr_name.to_lowercase()));
+    if let Some((start, end)) = range {
+        format!("{}{}=\"{}\"{}", &tag[..start], attr_name, new_value, &tag[end..])
+    } else if tag.starts_with("<svg") || tag.starts_with("<SVG") {
+        let prefix_len = 4;
+        format!("<svg {}=\"{}\"{}", attr_name, new_value, &tag[prefix_len..])
+    } else {
+        tag.to_string()
+    }
 }
 

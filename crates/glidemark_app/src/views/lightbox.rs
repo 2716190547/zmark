@@ -1,15 +1,71 @@
 use gpui::prelude::*;
 use gpui::*;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::{Arc, LazyLock, Mutex};
 use glidemark_core::i18n::I18nStrings;
 
 use crate::theme::ThemeColors;
 use crate::views::workspace::WorkspaceView;
 
+#[derive(Debug)]
+pub struct LightboxDiagramCache {
+    entries: HashMap<(u64, bool, u8), PathBuf>,
+    order: VecDeque<(u64, bool, u8)>,
+    max_size: usize,
+}
+
+impl LightboxDiagramCache {
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            max_size,
+        }
+    }
+
+    pub fn get(&mut self, key: &(u64, bool, u8)) -> Option<PathBuf> {
+        if let Some(path) = self.entries.get(key).cloned() {
+            if let Some(pos) = self.order.iter().position(|k| k == key) {
+                self.order.remove(pos);
+            }
+            self.order.push_back(*key);
+            Some(path)
+        } else {
+            None
+        }
+    }
+
+    pub fn insert(&mut self, key: (u64, bool, u8), path: PathBuf) {
+        if let Some(pos) = self.order.iter().position(|k| k == &key) {
+            self.order.remove(pos);
+        }
+        if let Some(old_path) = self.entries.insert(key, path.clone()) {
+            if old_path != path {
+                let _ = std::fs::remove_file(old_path);
+            }
+        }
+        self.order.push_back(key);
+
+        while self.order.len() > self.max_size {
+            if let Some(evicted_key) = self.order.pop_front() {
+                if let Some(evicted_path) = self.entries.remove(&evicted_key) {
+                    let _ = std::fs::remove_file(evicted_path);
+                }
+            }
+        }
+    }
+}
+
+pub static LIGHTBOX_DIAGRAM_CACHE: LazyLock<Mutex<LightboxDiagramCache>> =
+    LazyLock::new(|| Mutex::new(LightboxDiagramCache::new(1)));
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LightboxState {
     pub is_open: bool,
     pub svg_path: Option<PathBuf>,
+    pub hidpi_svg_path: Option<PathBuf>,
+    pub hidpi_image: Option<Arc<gpui::RenderImage>>,
     pub code_hash: Option<u64>,
     pub zoom: f32,
     pub pan_x: f32,
@@ -30,6 +86,8 @@ impl LightboxState {
         Self {
             is_open: false,
             svg_path: None,
+            hidpi_svg_path: None,
+            hidpi_image: None,
             code_hash: None,
             zoom: 1.0,
             pan_x: 0.0,
@@ -43,6 +101,8 @@ impl LightboxState {
     pub fn open(&mut self, svg_path: PathBuf, code_hash: u64) {
         self.is_open = true;
         self.svg_path = Some(svg_path);
+        self.hidpi_svg_path = None;
+        self.hidpi_image = None;
         self.code_hash = Some(code_hash);
         self.zoom = 1.0;
         self.pan_x = 0.0;
@@ -52,15 +112,39 @@ impl LightboxState {
         self.drag_start_pan = (0.0, 0.0);
     }
 
-    pub fn close(&mut self) {
+    pub fn open_hidpi(
+        &mut self,
+        svg_path: PathBuf,
+        hidpi_svg_path: PathBuf,
+        image: Arc<gpui::RenderImage>,
+        code_hash: u64,
+    ) {
+        self.is_open = true;
+        self.svg_path = Some(svg_path);
+        self.hidpi_svg_path = Some(hidpi_svg_path);
+        self.hidpi_image = Some(image);
+        self.code_hash = Some(code_hash);
+        self.zoom = 1.0;
+        self.pan_x = 0.0;
+        self.pan_y = 0.0;
+        self.is_dragging = false;
+        self.drag_start_mouse = None;
+        self.drag_start_pan = (0.0, 0.0);
+    }
+
+    pub fn close(&mut self) -> Option<Arc<gpui::RenderImage>> {
         self.is_open = false;
         self.svg_path = None;
+        self.hidpi_svg_path = None;
+        let old_img = self.hidpi_image.take();
         self.code_hash = None;
         self.zoom = 1.0;
         self.pan_x = 0.0;
         self.pan_y = 0.0;
         self.is_dragging = false;
         self.drag_start_mouse = None;
+        self.drag_start_pan = (0.0, 0.0);
+        old_img
     }
 
     pub fn zoom_in(&mut self) {
@@ -131,8 +215,8 @@ pub fn render_lightbox(
         .items_center()
         .justify_center()
         .overflow_hidden()
-        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-            this.lightbox.close();
+        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+            this.close_lightbox(Some(window), cx);
             cx.notify();
         }))
         .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
@@ -168,10 +252,16 @@ pub fn render_lightbox(
                     this.lightbox.start_drag(f32::from(event.position.x), f32::from(event.position.y));
                     cx.notify();
                 }))
-                .children(svg_path.map(|path| {
-                    img(path)
+                .children(state.hidpi_image.as_ref().map(|handle| {
+                    img(ImageSource::Render(handle.clone()))
                         .w(px(800.0 * zoom))
                         .max_w(px(800.0 * zoom))
+                }).or_else(|| {
+                    svg_path.map(|path| {
+                        img(path)
+                            .w(px(800.0 * zoom))
+                            .max_w(px(800.0 * zoom))
+                    })
                 }))
         )
         // Floating bottom HUD pill: [ - ] [ Current % ] [ + ] | [ 适应窗口 ] | [ 关闭 (Esc) ]
@@ -297,8 +387,8 @@ pub fn render_lightbox(
                                 .rounded_full()
                                 .cursor_pointer()
                                 .hover(|s| s.bg(rgba(0xffffff20)).text_color(rgb(0xf87171)))
-                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-                                    this.lightbox.close();
+                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                    this.close_lightbox(Some(window), cx);
                                     cx.notify();
                                 }))
                                 .child(format!("{} (Esc)", strings.lightbox_close))

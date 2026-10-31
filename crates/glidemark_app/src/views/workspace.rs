@@ -194,6 +194,9 @@ impl WorkspaceView {
     pub fn on_document_swapped(&mut self) {
         self.parse_task = None;
         self.parse_paused = false;
+        if self.lightbox.is_open {
+            let _ = self.lightbox.close();
+        }
         if self.state.view_mode != ViewMode::Source && self.state.doc.is_parse_stale() {
             self.parse_now_and_refresh();
         }
@@ -206,6 +209,78 @@ impl WorkspaceView {
         }
         self.state.set_view_mode(mode);
         cx.notify();
+    }
+
+    pub fn theme(&self, _cx: &App) -> &crate::theme::ThemeColors {
+        &self.state.theme
+    }
+
+    pub fn close_lightbox(&mut self, window: Option<&mut Window>, cx: &mut App) {
+        if let Some(image) = self.lightbox.close() {
+            cx.drop_image(image, window);
+        }
+    }
+
+    pub fn open_lightbox(
+        &mut self,
+        svg_path: std::path::PathBuf,
+        code_hash: u64,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(old_img) = self.lightbox.close() {
+            cx.drop_image(old_img, Some(window));
+        }
+
+        let scale_factor = window.scale_factor();
+        let scale_bucket = glidemark_core::mermaid::scale_factor_to_bucket(scale_factor);
+        let is_dark = self.theme(cx).is_dark;
+
+        let cached_path = {
+            let mut cache = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE.lock().unwrap();
+            cache.get(&(code_hash, is_dark, scale_bucket))
+        };
+
+        let hidpi_res = if let Some(path) = cached_path.filter(|p| p.exists()) {
+            std::fs::read_to_string(&path).ok().map(|content| (path, content))
+        } else {
+            if let Ok(orig_svg) = std::fs::read_to_string(&svg_path) {
+                let (orig_w, orig_h) = glidemark_core::mermaid::extract_svg_dimensions(&orig_svg);
+                let (target_w, target_h) =
+                    glidemark_core::mermaid::calculate_hidpi_dimensions(orig_w, orig_h, scale_factor);
+                let hidpi_svg =
+                    glidemark_core::mermaid::apply_texture_pixel_budget(&orig_svg, target_w, target_h);
+                let cache_dir = std::env::temp_dir().join("glidemark").join("mermaid_hidpi");
+                let _ = std::fs::create_dir_all(&cache_dir);
+                let filename = format!(
+                    "{:016x}_{}_{}.svg",
+                    code_hash,
+                    if is_dark { "dark" } else { "light" },
+                    scale_bucket
+                );
+                let out_path = cache_dir.join(filename);
+                let _ = std::fs::write(&out_path, &hidpi_svg);
+                {
+                    let mut cache = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE.lock().unwrap();
+                    cache.insert((code_hash, is_dark, scale_bucket), out_path.clone());
+                }
+                Some((out_path, hidpi_svg))
+            } else {
+                None
+            }
+        };
+
+        if let Some((hidpi_path, hidpi_svg)) = hidpi_res {
+            let img = gpui::Image::from_bytes(gpui::ImageFormat::Svg, hidpi_svg.into_bytes());
+            let render_img = img.to_image_data(cx.svg_renderer()).ok();
+            if let Some(r_img) = render_img {
+                self.lightbox.open_hidpi(svg_path, hidpi_path, r_img, code_hash);
+            } else {
+                self.lightbox.open(svg_path, code_hash);
+            }
+        } else {
+            self.lightbox.open(svg_path, code_hash);
+        }
     }
 
     pub fn toggle_drawer(&mut self, cx: &mut Context<Self>) {
@@ -1027,9 +1102,9 @@ impl Render for WorkspaceView {
         let loose_docs = self.state.loose_docs();
 
         let view_lb = cx.entity().clone();
-        let on_open_lightbox = Arc::new(move |svg_path: std::path::PathBuf, hash: u64, _window: &mut Window, cx: &mut App| {
+        let on_open_lightbox = Arc::new(move |svg_path: std::path::PathBuf, hash: u64, window: &mut Window, cx: &mut App| {
             view_lb.update(cx, |this, cx| {
-                this.lightbox.open(svg_path, hash);
+                this.open_lightbox(svg_path, hash, window, cx);
                 cx.notify();
             });
         });
@@ -1122,7 +1197,7 @@ impl Render for WorkspaceView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.lightbox.is_open {
                     if event.keystroke.key == "escape" {
-                        this.lightbox.close();
+                        this.close_lightbox(Some(window), cx);
                         cx.notify();
                         return;
                     }
