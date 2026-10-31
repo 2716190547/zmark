@@ -1,0 +1,247 @@
+use glidemark_app::state::ViewMode;
+use glidemark_app::views::editor::{
+    calculate_line_row_height, tokenize_markdown_line, MarkdownToken, MarkdownTokenKind,
+};
+use glidemark_app::views::workspace::canvas_title_offset;
+
+/// Requirement 1: Canvas title offset aligns with editor gutter
+/// In Source/Split mode with drawer open, offset is 48.0 to align title with code column 1.
+/// In Preview mode, or when drawer is closed, offset is 0.0.
+#[test]
+fn test_canvas_title_offset_aligns_with_editor_gutter() {
+    assert_eq!(canvas_title_offset(ViewMode::Source, true), 48.0);
+    assert_eq!(canvas_title_offset(ViewMode::Split, true), 48.0);
+    assert_eq!(canvas_title_offset(ViewMode::Preview, true), 0.0);
+    assert_eq!(canvas_title_offset(ViewMode::Source, false), 0.0);
+    assert_eq!(canvas_title_offset(ViewMode::Split, false), 0.0);
+    assert_eq!(canvas_title_offset(ViewMode::Preview, false), 0.0);
+}
+
+/// Requirement 2: Dynamic line row height calculation and sanitization fallback
+#[test]
+fn test_dynamic_line_row_height_calculation() {
+    let font_size = 16.0;
+
+    // Normal valid line heights
+    let cases = [
+        (1.3, 16.0 * 1.3),
+        (1.4, 16.0 * 1.4),
+        (1.5, 16.0 * 1.5),
+        (1.6, 16.0 * 1.6),
+        (1.7, 16.0 * 1.7),
+    ];
+
+    for (lh, expected) in cases {
+        let calculated = calculate_line_row_height(font_size, lh);
+        assert!(
+            (calculated - expected).abs() < 1e-4,
+            "calculate_line_row_height({}, {}) = {}, expected {}",
+            font_size,
+            lh,
+            calculated,
+            expected
+        );
+    }
+
+    // Protection against invalid or out-of-bounds line heights (fallback: 1.6)
+    let fallback_expected = 16.0 * 1.6;
+    let fallback_cases = [
+        0.5,
+        2.5,
+        f32::NAN,
+        f32::INFINITY,
+        -1.0,
+        100.0,
+    ];
+
+    for invalid_lh in fallback_cases {
+        let calculated = calculate_line_row_height(font_size, invalid_lh);
+        assert!(
+            (calculated - fallback_expected).abs() < 1e-4,
+            "calculate_line_row_height({}, {}) = {}, expected fallback {}",
+            font_size,
+            invalid_lh,
+            calculated,
+            fallback_expected
+        );
+    }
+}
+
+/// Requirement 3: Markdown tokenizer headings (levels 1-6 and invalid heading syntax)
+#[test]
+fn test_markdown_tokenizer_headings() {
+    // Level 1
+    let t1 = tokenize_markdown_line("# Heading 1");
+    assert_eq!(
+        t1,
+        vec![
+            MarkdownToken {
+                text: "# ".to_string(),
+                kind: MarkdownTokenKind::HeadingPrefix,
+            },
+            MarkdownToken {
+                text: "Heading 1".to_string(),
+                kind: MarkdownTokenKind::HeadingText,
+            },
+        ]
+    );
+
+    // Level 2
+    let t2 = tokenize_markdown_line("## Second level");
+    assert_eq!(
+        t2,
+        vec![
+            MarkdownToken {
+                text: "## ".to_string(),
+                kind: MarkdownTokenKind::HeadingPrefix,
+            },
+            MarkdownToken {
+                text: "Second level".to_string(),
+                kind: MarkdownTokenKind::HeadingText,
+            },
+        ]
+    );
+
+    // Level 6
+    let t6 = tokenize_markdown_line("###### Sixth level");
+    assert_eq!(
+        t6,
+        vec![
+            MarkdownToken {
+                text: "###### ".to_string(),
+                kind: MarkdownTokenKind::HeadingPrefix,
+            },
+            MarkdownToken {
+                text: "Sixth level".to_string(),
+                kind: MarkdownTokenKind::HeadingText,
+            },
+        ]
+    );
+
+    // Not a heading: `#` not followed by a space
+    let t_not = tokenize_markdown_line("#NotAHeading");
+    assert_eq!(
+        t_not,
+        vec![MarkdownToken {
+            text: "#NotAHeading".to_string(),
+            kind: MarkdownTokenKind::Plain,
+        }]
+    );
+
+    // Not a heading: 7 hashes (> 6)
+    let t_seven = tokenize_markdown_line("####### Seven hashes");
+    assert_eq!(
+        t_seven,
+        vec![MarkdownToken {
+            text: "####### Seven hashes".to_string(),
+            kind: MarkdownTokenKind::Plain,
+        }]
+    );
+}
+
+/// Requirement 4: Markdown tokenizer blockquotes
+#[test]
+fn test_markdown_tokenizer_blockquotes() {
+    // With space: `> Quote text`
+    let t1 = tokenize_markdown_line("> Quote text");
+    assert_eq!(
+        t1,
+        vec![
+            MarkdownToken {
+                text: "> ".to_string(),
+                kind: MarkdownTokenKind::BlockquotePrefix,
+            },
+            MarkdownToken {
+                text: "Quote text".to_string(),
+                kind: MarkdownTokenKind::BlockquoteText,
+            },
+        ]
+    );
+
+    // Without space: `>Quote text`
+    let t2 = tokenize_markdown_line(">Quote text");
+    assert_eq!(
+        t2,
+        vec![
+            MarkdownToken {
+                text: ">".to_string(),
+                kind: MarkdownTokenKind::BlockquotePrefix,
+            },
+            MarkdownToken {
+                text: "Quote text".to_string(),
+                kind: MarkdownTokenKind::BlockquoteText,
+            },
+        ]
+    );
+}
+
+/// Requirement 5: Markdown tokenizer inline code and bold text
+#[test]
+fn test_markdown_tokenizer_inline_code_and_bold() {
+    let line = "Here is `code` and **bold** text";
+    let tokens = tokenize_markdown_line(line);
+
+    // Verify tokens include inline code and bold
+    assert!(
+        tokens.iter().any(|t| t.kind == MarkdownTokenKind::InlineCode && t.text == "`code`"),
+        "Must contain MarkdownTokenKind::InlineCode with text '`code`'. Got: {:?}",
+        tokens
+    );
+    assert!(
+        tokens.iter().any(|t| t.kind == MarkdownTokenKind::Bold && t.text == "**bold**"),
+        "Must contain MarkdownTokenKind::Bold with text '**bold**'. Got: {:?}",
+        tokens
+    );
+
+    // Check full reconstructed content equals original string
+    let reconstructed: String = tokens.iter().map(|t| t.text.as_str()).collect();
+    assert_eq!(reconstructed, line);
+}
+
+/// Requirement 6: Markdown tokenizer links
+#[test]
+fn test_markdown_tokenizer_links() {
+    let line = "See [GlideMark](https://glidemark.app) for details";
+    let tokens = tokenize_markdown_line(line);
+
+    // Verify tokens include link text and link url
+    assert!(
+        tokens.iter().any(|t| t.kind == MarkdownTokenKind::LinkText && t.text == "[GlideMark]"),
+        "Must contain MarkdownTokenKind::LinkText with text '[GlideMark]'. Got: {:?}",
+        tokens
+    );
+    assert!(
+        tokens.iter().any(|t| t.kind == MarkdownTokenKind::LinkUrl && t.text == "(https://glidemark.app)"),
+        "Must contain MarkdownTokenKind::LinkUrl with text '(https://glidemark.app)'. Got: {:?}",
+        tokens
+    );
+
+    // Check full reconstructed content equals original string
+    let reconstructed: String = tokens.iter().map(|t| t.text.as_str()).collect();
+    assert_eq!(reconstructed, line);
+}
+
+/// Requirement 7: Markdown tokenizer empty line and plain text
+#[test]
+fn test_markdown_tokenizer_empty_and_plain() {
+    // Empty line -> non-empty fallback " "
+    let empty_tokens = tokenize_markdown_line("");
+    assert_eq!(
+        empty_tokens,
+        vec![MarkdownToken {
+            text: " ".to_string(),
+            kind: MarkdownTokenKind::Plain,
+        }]
+    );
+
+    // Plain text without markdown formatting
+    let plain_line = "Just standard plain markdown paragraph text without any markers.";
+    let plain_tokens = tokenize_markdown_line(plain_line);
+    assert_eq!(
+        plain_tokens,
+        vec![MarkdownToken {
+            text: plain_line.to_string(),
+            kind: MarkdownTokenKind::Plain,
+        }]
+    );
+}

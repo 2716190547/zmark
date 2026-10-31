@@ -3,11 +3,229 @@ use gpui::*;
 use std::sync::Arc;
 use crate::theme::ThemeColors;
 
+pub fn calculate_line_row_height(font_size: f32, line_height: f32) -> f32 {
+    let lh = glidemark_core::config::Preferences::sanitize_line_height(line_height);
+    font_size * lh
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarkdownTokenKind {
+    HeadingPrefix,
+    HeadingText,
+    BlockquotePrefix,
+    BlockquoteText,
+    InlineCode,
+    Bold,
+    LinkText,
+    LinkUrl,
+    Plain,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownToken {
+    pub text: String,
+    pub kind: MarkdownTokenKind,
+}
+
+enum MatchKind {
+    InlineCode(usize, usize),
+    Bold(usize, usize),
+    Link(usize, usize, usize),
+}
+
+fn find_inline_code(line: &str, from: usize) -> Option<(usize, usize)> {
+    let mut search_from = from;
+    while let Some(rel_start) = line[search_from..].find('`') {
+        let start = search_from + rel_start;
+        if let Some(rel_end) = line[start + 1..].find('`') {
+            if rel_end > 0 {
+                let end = start + 1 + rel_end + 1;
+                return Some((start, end));
+            } else {
+                search_from = start + 2;
+            }
+        } else {
+            return None;
+        }
+    }
+    None
+}
+
+fn find_bold(line: &str, from: usize) -> Option<(usize, usize)> {
+    let mut search_from = from;
+    while let Some(rel_start) = line[search_from..].find("**") {
+        let start = search_from + rel_start;
+        if let Some(rel_end) = line[start + 2..].find("**") {
+            if rel_end > 0 {
+                let end = start + 2 + rel_end + 2;
+                return Some((start, end));
+            } else {
+                search_from = start + 2;
+            }
+        } else {
+            return None;
+        }
+    }
+    None
+}
+
+fn find_link(line: &str, from: usize) -> Option<(usize, usize, usize)> {
+    let mut search_from = from;
+    while let Some(rel_start) = line[search_from..].find('[') {
+        let start = search_from + rel_start;
+        if let Some(rel_bracket) = line[start + 1..].find(']') {
+            let close_bracket = start + 1 + rel_bracket;
+            if line[close_bracket + 1..].starts_with('(') {
+                let open_paren = close_bracket + 1;
+                if let Some(rel_paren) = line[open_paren + 1..].find(')') {
+                    let close_paren = open_paren + 1 + rel_paren;
+                    return Some((start, close_bracket + 1, close_paren + 1));
+                }
+            }
+            search_from = close_bracket + 1;
+        } else {
+            return None;
+        }
+    }
+    None
+}
+
+pub fn tokenize_markdown_line(line: &str) -> Vec<MarkdownToken> {
+    if line.is_empty() {
+        return vec![MarkdownToken {
+            text: " ".to_string(),
+            kind: MarkdownTokenKind::Plain,
+        }];
+    }
+
+    // Heading: Check if line starts with 1 to 6 '#' followed by a space
+    let hash_count = line.chars().take_while(|&c| c == '#').count();
+    if hash_count >= 1 && hash_count <= 6 && line[hash_count..].starts_with(' ') {
+        let prefix = &line[..hash_count + 1];
+        let remainder = &line[hash_count + 1..];
+        let mut tokens = vec![MarkdownToken {
+            text: prefix.to_string(),
+            kind: MarkdownTokenKind::HeadingPrefix,
+        }];
+        if !remainder.is_empty() {
+            tokens.push(MarkdownToken {
+                text: remainder.to_string(),
+                kind: MarkdownTokenKind::HeadingText,
+            });
+        }
+        return tokens;
+    }
+
+    // Blockquote: Check if line starts with '>' (e.g. '> ' or '>')
+    if line.starts_with("> ") {
+        let prefix = "> ";
+        let remainder = &line[2..];
+        let mut tokens = vec![MarkdownToken {
+            text: prefix.to_string(),
+            kind: MarkdownTokenKind::BlockquotePrefix,
+        }];
+        if !remainder.is_empty() {
+            tokens.push(MarkdownToken {
+                text: remainder.to_string(),
+                kind: MarkdownTokenKind::BlockquoteText,
+            });
+        }
+        return tokens;
+    } else if line.starts_with('>') {
+        let prefix = ">";
+        let remainder = &line[1..];
+        let mut tokens = vec![MarkdownToken {
+            text: prefix.to_string(),
+            kind: MarkdownTokenKind::BlockquotePrefix,
+        }];
+        if !remainder.is_empty() {
+            tokens.push(MarkdownToken {
+                text: remainder.to_string(),
+                kind: MarkdownTokenKind::BlockquoteText,
+            });
+        }
+        return tokens;
+    }
+
+    // Inline parsing
+    let mut tokens = Vec::new();
+    let mut cursor = 0;
+
+    while cursor < line.len() {
+        let mut earliest: Option<MatchKind> = None;
+        let mut earliest_start = usize::MAX;
+
+        if let Some((start, end)) = find_inline_code(line, cursor) {
+            if start < earliest_start {
+                earliest_start = start;
+                earliest = Some(MatchKind::InlineCode(start, end));
+            }
+        }
+        if let Some((start, end)) = find_bold(line, cursor) {
+            if start < earliest_start {
+                earliest_start = start;
+                earliest = Some(MatchKind::Bold(start, end));
+            }
+        }
+        if let Some((start, text_end, url_end)) = find_link(line, cursor) {
+            if start < earliest_start {
+                earliest_start = start;
+                earliest = Some(MatchKind::Link(start, text_end, url_end));
+            }
+        }
+
+        if let Some(m) = earliest {
+            if earliest_start > cursor {
+                tokens.push(MarkdownToken {
+                    text: line[cursor..earliest_start].to_string(),
+                    kind: MarkdownTokenKind::Plain,
+                });
+            }
+            match m {
+                MatchKind::InlineCode(start, end) => {
+                    tokens.push(MarkdownToken {
+                        text: line[start..end].to_string(),
+                        kind: MarkdownTokenKind::InlineCode,
+                    });
+                    cursor = end;
+                }
+                MatchKind::Bold(start, end) => {
+                    tokens.push(MarkdownToken {
+                        text: line[start..end].to_string(),
+                        kind: MarkdownTokenKind::Bold,
+                    });
+                    cursor = end;
+                }
+                MatchKind::Link(start, text_end, url_end) => {
+                    tokens.push(MarkdownToken {
+                        text: line[start..text_end].to_string(),
+                        kind: MarkdownTokenKind::LinkText,
+                    });
+                    tokens.push(MarkdownToken {
+                        text: line[text_end..url_end].to_string(),
+                        kind: MarkdownTokenKind::LinkUrl,
+                    });
+                    cursor = url_end;
+                }
+            }
+        } else {
+            tokens.push(MarkdownToken {
+                text: line[cursor..].to_string(),
+                kind: MarkdownTokenKind::Plain,
+            });
+            break;
+        }
+    }
+
+    tokens
+}
+
 pub fn render_editor_pane(
     lines: Arc<Vec<String>>,
     cursor: (usize, usize),
     theme: &ThemeColors,
     font_size: f32,
+    line_height: f32,
     is_dirty: bool,
     scroll_handle: &UniformListScrollHandle,
     on_click_line: Arc<dyn Fn(usize, usize, &mut Window, &mut App)>,
@@ -34,11 +252,12 @@ pub fn render_editor_pane(
                         let is_active = line_idx == cursor_line;
                         let on_click_line = on_click_line.clone();
 
+                        let row_h = calculate_line_row_height(font_size, line_height);
                         let row = div()
                             .min_w_full()
                             .flex()
                             .items_center()
-                            .h(px(font_size * 1.5))
+                            .h(px(row_h))
                             .px_1()
                             .rounded_sm()
                             .cursor_text()
@@ -63,7 +282,7 @@ pub fn render_editor_pane(
                                     .mr_3()
                                     .text_right()
                                     .text_size(px(font_size * 0.85))
-                                    .line_height(relative(1.5))
+                                    .line_height(relative(line_height))
                                     .font_family("ui-monospace")
                                     .text_color(if is_active { list_theme.accent } else { list_theme.text_muted })
                                     .child((line_idx + 1).to_string()),
@@ -78,7 +297,7 @@ pub fn render_editor_pane(
                                     .flex_1()
                                     .whitespace_nowrap()
                                     .text_size(px(font_size))
-                                    .line_height(relative(1.5))
+                                    .line_height(relative(line_height))
                                     .font_family("ui-monospace")
                                     .text_color(list_theme.text_primary)
                                     .flex()
@@ -94,14 +313,51 @@ pub fn render_editor_pane(
                                     .child(after)
                                     .into_any_element()
                             } else {
+                                let tokens = tokenize_markdown_line(line);
                                 div()
                                     .flex_1()
                                     .whitespace_nowrap()
                                     .text_size(px(font_size))
-                                    .line_height(relative(1.5))
+                                    .line_height(relative(line_height))
                                     .font_family("ui-monospace")
-                                    .text_color(list_theme.text_primary)
-                                    .child(if line.is_empty() { " ".to_string() } else { line.to_string() })
+                                    .flex()
+                                    .items_center()
+                                    .children(tokens.into_iter().map(|tok| {
+                                        let mut el = div().child(tok.text);
+                                        match tok.kind {
+                                            MarkdownTokenKind::HeadingPrefix => {
+                                                el = el.text_color(list_theme.accent).font_weight(FontWeight::BOLD);
+                                            }
+                                            MarkdownTokenKind::HeadingText => {
+                                                el = el.text_color(list_theme.accent).font_weight(FontWeight::BOLD);
+                                            }
+                                            MarkdownTokenKind::BlockquotePrefix => {
+                                                el = el.text_color(list_theme.text_muted);
+                                            }
+                                            MarkdownTokenKind::BlockquoteText => {
+                                                el = el.text_color(list_theme.text_muted);
+                                            }
+                                            MarkdownTokenKind::InlineCode => {
+                                                el = el.text_color(list_theme.accent)
+                                                    .bg(list_theme.warm_pill_bg().opacity(0.6))
+                                                    .rounded(px(3.))
+                                                    .px(px(4.));
+                                            }
+                                            MarkdownTokenKind::Bold => {
+                                                el = el.text_color(list_theme.text_primary).font_weight(FontWeight::BOLD);
+                                            }
+                                            MarkdownTokenKind::LinkText => {
+                                                el = el.text_color(list_theme.accent).underline();
+                                            }
+                                            MarkdownTokenKind::LinkUrl => {
+                                                el = el.text_color(list_theme.text_muted);
+                                            }
+                                            MarkdownTokenKind::Plain => {
+                                                el = el.text_color(list_theme.text_primary);
+                                            }
+                                        }
+                                        el
+                                    }))
                                     .into_any_element()
                             })
                     })
@@ -138,3 +394,5 @@ pub fn render_editor_pane(
                 .child(format!("Ln {}, Col {}", cursor_line + 1, cursor_col + 1)),
         )
 }
+
+

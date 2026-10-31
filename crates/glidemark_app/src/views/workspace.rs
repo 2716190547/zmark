@@ -558,6 +558,7 @@ impl WorkspaceView {
         let strings = self.state.strings;
         let is_renaming = self.is_renaming;
         let rename_buffer = self.rename_buffer.clone();
+        let title_offset = canvas_title_offset(view_mode, drawer_open);
 
         #[cfg(target_os = "macos")]
         let header_pl = px(adaptive_header_padding(is_macos, is_fullscreen, drawer_open));
@@ -614,6 +615,7 @@ impl WorkspaceView {
                     .child(if is_renaming && active_key.is_some() {
                         div()
                             .id("tab_rename_box")
+                            .when(title_offset > 0.0, |el| el.ml(px(title_offset)))
                             .px_2()
                             .py_0p5()
                             .bg(theme.bg)
@@ -652,6 +654,7 @@ impl WorkspaceView {
                         let tooltip = tooltip_text.clone();
                         div()
                             .id("canvas_document_title")
+                            .when(title_offset > 0.0, |el| el.ml(px(title_offset)))
                             .flex()
                             .items_center()
                             .gap_1p5()
@@ -1669,6 +1672,7 @@ impl Render for WorkspaceView {
                                                     self.state.editor.cursor(),
                                                     theme,
                                                     self.state.preferences.font_size,
+                                                    self.state.preferences.line_height,
                                                     is_dirty,
                                                     &self.editor_scroll_handle,
                                                     on_click_line,
@@ -1711,6 +1715,7 @@ impl Render for WorkspaceView {
                                                             self.state.editor.cursor(),
                                                             theme,
                                                             self.state.preferences.font_size,
+                                                            self.state.preferences.line_height,
                                                             is_dirty,
                                                             &self.editor_scroll_handle,
                                                             on_click_line,
@@ -1862,6 +1867,26 @@ pub fn adaptive_header_padding(is_macos: bool, is_fullscreen: bool, drawer_open:
         12.0
     } else {
         76.0
+    }
+}
+
+/// Left margin offset for document title in canvas header to vertically align with
+/// the editor's code column 1 (ADR 0033).
+///
+/// Editor code column 1 starts at 64px from canvas left:
+/// 16px outer margin (p_4) + 36px line numbers (w_36) + 12px gap (mr_3) = 64px.
+/// Canvas header has 8px base padding, and title pill has 8px horizontal padding (px_2).
+/// In Source/Split mode with drawer open, offset = 64px - 8px - 8px = 48px.
+pub fn canvas_title_offset(view_mode: ViewMode, drawer_open: bool) -> f32 {
+    match view_mode {
+        ViewMode::Source | ViewMode::Split => {
+            if drawer_open {
+                48.0
+            } else {
+                0.0
+            }
+        }
+        ViewMode::Preview => 0.0,
     }
 }
 
