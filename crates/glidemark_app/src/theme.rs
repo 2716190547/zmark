@@ -46,6 +46,15 @@ impl ThemeColors {
         }
     }
 
+    /// Soft translucent hover highlight: low-contrast warm stone tint
+    pub fn warm_pill_hover(&self) -> Hsla {
+        if self.is_dark {
+            rgba(0xffffff0f).into() // ~6% white in dark mode
+        } else {
+            rgba(0x0000000d).into() // ~5% black in light mode
+        }
+    }
+
     /// Primary text for subtle warm stone pill: `#1E1E1E` (light) / `#E5E2DC` (dark)
     pub fn warm_pill_text(&self) -> Hsla {
         if self.is_dark {

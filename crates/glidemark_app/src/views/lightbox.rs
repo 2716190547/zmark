@@ -198,7 +198,7 @@ impl LightboxState {
 
 pub fn render_lightbox(
     state: &LightboxState,
-    _theme: &ThemeColors,
+    theme: &ThemeColors,
     strings: &'static I18nStrings,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
@@ -212,7 +212,7 @@ pub fn render_lightbox(
         .id("diagram_lightbox_backdrop")
         .absolute()
         .inset_0()
-        .bg(rgba(0x00000073)) // rgba(0, 0, 0, 0.45)
+        .bg(rgba(0x000000e0)) // ~88% deep black
         .occlude() // block background mouse interactions
         .flex()
         .items_center()
@@ -249,6 +249,10 @@ pub fn render_lightbox(
                 .relative()
                 .left(px(pan_x))
                 .top(px(pan_y))
+                .rounded_xl()
+                .p_4()
+                .shadow_lg()
+                .bg(if theme.is_dark { theme.surface } else { rgb(0xffffff).into() })
                 .cursor(if is_dragging { CursorStyle::ClosedHand } else { CursorStyle::OpenHand })
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
                     cx.stop_propagation(); // Don't trigger backdrop click

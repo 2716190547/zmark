@@ -173,14 +173,14 @@ pub fn render_drawer(
                                 .id("drawer_draft_item")
                                 .group("drawer_draft_row")
                                 .w_full()
+                                .h(px(28.))
                                 .px_2()
-                                .py_1()
                                 .rounded(px(6.))
                                 .cursor_pointer()
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .text_size(px(12.))
+                                .text_size(px(13.))
                                 .font_weight(FontWeight::NORMAL)
                                 .tooltip(move |_window, cx| {
                                     let t = draft_tooltip_text.clone();
@@ -198,7 +198,7 @@ pub fn render_drawer(
                             } else {
                                 draft_item = draft_item
                                     .text_color(theme.text_primary)
-                                    .hover(|s| s.bg(theme.surface));
+                                    .hover(|s| s.bg(theme.warm_pill_hover()));
                             }
 
                             let draft_item = draft_item
@@ -236,17 +236,7 @@ pub fn render_drawer(
                         let mut roots_section = div()
                             .flex()
                             .flex_col()
-                            .gap_0p5()
-                            .child(
-                                div()
-                                    .px_2()
-                                    .pt_2p5()
-                                    .pb_0p5()
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text_muted)
-                                    .child(strings.workspace_group),
-                            );
+                            .gap_0p5();
 
                         if workspace_roots.is_empty() {
                             roots_section = roots_section.child(
@@ -276,14 +266,16 @@ pub fn render_drawer(
                                     .id(SharedString::from(format!("drawer_root_header_{}", root_idx)))
                                     .group("drawer_root_row")
                                     .w_full()
+                                    .h(px(28.))
                                     .px_2()
-                                    .py_1()
                                     .rounded(px(6.))
                                     .cursor_pointer()
                                     .flex()
                                     .items_center()
                                     .justify_between()
-                                    .hover(|s| s.bg(theme.surface))
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .hover(|s| s.bg(theme.warm_pill_hover()))
                                     .tooltip(move |_window, cx| {
                                         let t = root_path_str.clone();
                                         cx.new(|_| DrawerTooltipView { text: t }).into()
@@ -425,7 +417,7 @@ pub fn render_drawer(
                                                 .flex()
                                                 .items_center()
                                                 .gap_1p5()
-                                                .hover(|s| s.bg(theme.surface))
+                                                .hover(|s| s.bg(theme.warm_pill_hover()))
                                                 .tooltip(move |_window, cx| {
                                                     let t = strings.retry_scan.to_string();
                                                     cx.new(|_| DrawerTooltipView { text: t }).into()
@@ -511,14 +503,14 @@ pub fn render_drawer(
                                     .id(SharedString::from(format!("drawer_loose_file_{}", idx)))
                                     .group("drawer_loose_file_row")
                                     .w_full()
+                                    .h(px(28.))
                                     .px_2()
-                                    .py_1()
                                     .rounded(px(6.))
                                     .cursor_pointer()
                                     .flex()
                                     .items_center()
                                     .justify_between()
-                                    .text_size(px(12.))
+                                    .text_size(px(13.))
                                     .font_weight(FontWeight::NORMAL)
                                     .tooltip(move |_window, cx| {
                                         let t = tooltip_path.clone();
@@ -536,7 +528,7 @@ pub fn render_drawer(
                                 } else {
                                     item = item
                                         .text_color(theme.text_primary)
-                                        .hover(|s| s.bg(theme.surface));
+                                        .hover(|s| s.bg(theme.warm_pill_hover()));
                                 }
 
                                 let left_part = div()
@@ -643,7 +635,7 @@ pub fn render_drawer(
                                         .font_weight(font_weight)
                                         .text_color(text_color)
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(theme.surface).text_color(theme.accent))
+                                        .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.accent))
                                         .tooltip(move |_window, cx| {
                                             let t = tooltip_heading.clone();
                                             cx.new(|_| DrawerTooltipView { text: t }).into()
@@ -692,18 +684,18 @@ fn render_file_tree_nodes(
                 div()
                     .id(SharedString::from(format!("drawer_tree_dir_{}_{}_{}", root_idx, depth, node_idx)))
                     .w_full()
+                    .h(px(28.))
                     .pl(px(depth_indent + 4.0))
                     .pr_2()
-                    .py_1()
                     .rounded(px(5.))
                     .cursor_pointer()
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::NORMAL)
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_muted)
-                    .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
+                    .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
                     .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                         on_toggle(root_idx, &p, window, cx);
                     })
@@ -772,15 +764,15 @@ fn render_file_tree_nodes(
                 .id(SharedString::from(format!("drawer_tree_file_{}_{}_{}", root_idx, depth, node_idx)))
                 .group("drawer_file_row")
                 .w_full()
+                .h(px(28.))
                 .pl(px(depth_indent + 8.0))
                 .pr_1p5()
-                .py_1()
                 .rounded(px(6.))
                 .cursor_pointer()
                 .flex()
                 .items_center()
                 .justify_between()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .font_weight(FontWeight::NORMAL)
                 .tooltip(move |_window, cx| {
                     let t = tooltip_name.clone();
@@ -798,25 +790,13 @@ fn render_file_tree_nodes(
             } else {
                 item = item
                     .text_color(theme.text_primary)
-                    .hover(|s| s.bg(theme.surface));
+                    .hover(|s| s.bg(theme.warm_pill_hover()));
             }
 
             let left_part = div()
                 .flex()
                 .items_center()
-                .gap_1p5()
                 .min_w(px(0.))
-                .child(
-                    if is_open && !is_active {
-                        div()
-                            .w(px(5.))
-                            .h(px(5.))
-                            .rounded_full()
-                            .bg(theme.text_muted)
-                    } else {
-                        div().w(px(5.)).h(px(5.))
-                    },
-                )
                 .child(
                     div()
                         .min_w(px(0.))
@@ -920,7 +900,7 @@ where
             .child(icon_el)
     } else {
         base.rounded(px(6.))
-            .hover(|s| s.bg(theme.surface).text_color(theme.text_primary))
+            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
             .child(icon_el)
     }
 }
