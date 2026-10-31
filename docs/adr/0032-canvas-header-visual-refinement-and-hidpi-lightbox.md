@@ -43,16 +43,19 @@
 - 改为流程图卡片右上角悬停显现的纯矢量微图标按钮（尺寸 ≥ 28×28，带 `cursor_pointer`），悬停呼出本地化 Tooltip（使用既有 `strings.mermaid_zoom_hint`，严禁中文硬编码）；
 - 图标按钮点击事件调用 `e.stop_propagation()`，阻断冒泡到流程图卡片底层。
 
-### 6. HiDPI 流程图灯箱独立重采样与显存保护 (Ticket C2)
+### 6. HiDPI 流程图灯箱独立重采样与显存保护 (Ticket C2b)
 - **预览卡片预算不变**：正文图表继续严格执行 1000px 纹理预算（遵循 ADR 0022），绝不全局拉高默认栅格化尺寸；
-- **灯箱独立按需生成**：仅当用户点击放大打开灯箱时，基于原始矢量 SVG 单独按需生成高分辨率视网膜纹理；
-- **GPU 物理像素安全硬顶 (≤ 16MP)**：
-  - 显式定义 16MP 为 **GPU 物理像素（Physical Pixels）**（`width_px * height_px <= 16,000,000`）；在 macOS Retina 2x 环境下等价于逻辑尺寸至多 2000×2000（物理尺寸 4000×4000），严防 2x 缩放导致 64MP 爆显存；
-  - 若图表原始宽高比极端，限制长边至多 4000 物理像素且总像素严格 ≤ 16MP；
-- **独立缓存与即时释放 (Lifecycle Management)**：
-  - 正文与灯箱使用独立缓存 key（如 `${svg_hash}_preview_1000` 与 `${svg_hash}_lightbox_hidpi`），互不穿透；
-  - 在灯箱关闭（按 Esc 或点击关闭按钮）、或者切换当前文档时，立即执行 `cx.drop_image` 回收显存，不占用常驻内存；
-- **5.0x 缩放基线**：在 `LightboxState` 最大 5.0x 缩放或 4K/5K 大屏全屏预览时，超清纹理保证排版线条极为锐利；超出 16MP 上限部分由 GPU 平滑双线性插值承接，确保兼顾视网膜清晰度与绝对显存安全。
+- **SVG 矢量无损提取与重采样**：正文图表生成的 SVG 带有完整的 `viewBox` 矢量坐标。灯箱打开时，无须重新运行昂贵的 Mermaid 语法解析与布局，直接从现有矢量 SVG 提取几何比例，按需生成 HiDPI 变体；
+- **16MP GPU 物理像素硬顶算法 (Pure Function)**：
+  - 核心算法纯函数：`calculate_hidpi_dimensions(orig_w: f64, orig_h: f64, scale_factor: f32) -> (f64, f64)`；
+  - 设定最大 GPU 物理像素总量 `MAX_PHYSICAL_PIXELS = 16_000_000.0`（16MP），最大物理长边 `MAX_PHYSICAL_SIDE = 4000.0`；
+  - 面积预算计算：`area_ratio = (MAX_PHYSICAL_PIXELS / (orig_w * orig_h * (scale_factor as f64).powi(2))).sqrt()`；
+  - 结合长边硬顶约束取更小缩放比，计算出安全的逻辑尺寸 `(target_w, target_h)`，仅重写 `<svg>` 根标签的 `width` 与 `height`，保留原生 `viewBox`；
+- **独立文件缓存与生命周期管理**：
+  - 灯箱 HiDPI SVG 写入独立文件缓存（如 `${code_hash}_lightbox_hidpi.svg`），不污染正文预览缓存；
+  - `LightboxState` 显式持有 `hidpi_svg_path: Option<PathBuf>`；
+  - 当灯箱关闭（按 Esc、点击遮罩或关闭按钮）以及切换文档时，重置状态并释放显存引用；同一图表重复打开时直接命中缓存；
+- **5.0x 缩放基线**：在 `LightboxState` 最大 5.0x 缩放或 4K 全屏下，HiDPI 纹理确保文字排版达到视网膜级锐利；超出 16MP 预算的极端超长图由 GPU 平滑双线性插值承接，兼顾极清画质与 100% 显存安全。
 
 ## 分期与 Ticket 落地规划
 - **Ticket C1 (Header & Drawer Visual Polish) [已交付]**：
