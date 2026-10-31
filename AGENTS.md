@@ -46,3 +46,4 @@ GPUI 0.2 的窗口装饰、拖拽与灯箱变换限制已记录在 `docs/adr/002
 - 报告 commit hash、改动文件、`cargo test --workspace` 的 passed/failed 数量。
 - 逐条对照需求说明：已完成 / 替代实现 / 未完成。
 - API 限制、已知取舍、回归风险必须显式写出。
+- **主动交付回调**：在提交 Git 并生成交付报告后，最后一步必须执行主动反向通知（例如 `herdr agent prompt w3:p2 "【执行端完成通知】<TICKET> 交付完毕，commit: <HASH>"`），实现 0 轮询的纯原生事件闭环。
