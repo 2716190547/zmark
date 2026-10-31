@@ -14,6 +14,7 @@ pub struct SettingsWindowView {
     pub preferences: Preferences,
     pub theme: ThemeColors,
     pub strings: &'static I18nStrings,
+    pub search_query: String,
 }
 
 impl SettingsWindowView {
@@ -41,6 +42,7 @@ impl SettingsWindowView {
             preferences,
             theme,
             strings,
+            search_query: String::new(),
         }
     }
 }
@@ -69,6 +71,7 @@ impl Render for SettingsWindowView {
         let line_height = self.preferences.line_height;
         let theme = self.theme.clone();
         let strings = self.strings;
+        let search_query = self.search_query.clone();
 
         let view_tab = cx.entity().clone();
         let on_set_tab = Arc::new(move |tab: SettingsTab, _window: &mut Window, cx: &mut App| {
@@ -204,6 +207,36 @@ impl Render for SettingsWindowView {
             .flex()
             .flex_col()
             .overflow_hidden()
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                match event.keystroke.key.as_str() {
+                    "backspace" => {
+                        if this.search_query.pop().is_some() {
+                            cx.notify();
+                        }
+                    }
+                    "escape" => {
+                        if !this.search_query.is_empty() {
+                            this.search_query.clear();
+                            cx.notify();
+                        }
+                    }
+                    "space" => {
+                        this.search_query.push(' ');
+                        cx.notify();
+                    }
+                    key => {
+                        if !event.keystroke.modifiers.control && !event.keystroke.modifiers.platform {
+                            if let Some(ch) = &event.keystroke.key_char {
+                                this.search_query.push_str(ch);
+                                cx.notify();
+                            } else if key.chars().count() == 1 {
+                                this.search_query.push_str(key);
+                                cx.notify();
+                            }
+                        }
+                    }
+                }
+            }))
             // Top Window Title Bar with traffic-lights safe insets
             .child(
                 div()
@@ -242,6 +275,55 @@ impl Render for SettingsWindowView {
                             .flex()
                             .flex_col()
                             .gap_1()
+                            // Top Search Bar
+                            .child({
+                                let view_search = cx.entity().clone();
+                                div()
+                                    .w_full()
+                                    .rounded_lg()
+                                    .px_2p5()
+                                    .py_1p5()
+                                    .bg(theme.surface)
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        svg()
+                                            .path("icons/search.svg")
+                                            .size(px(14.))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_xs()
+                                            .overflow_hidden()
+                                            .when(self.search_query.is_empty(), |s| {
+                                                s.text_color(theme.text_muted)
+                                                    .child(strings.search_settings)
+                                            })
+                                            .when(!self.search_query.is_empty(), |s| {
+                                                s.text_color(theme.text_primary)
+                                                    .child(self.search_query.clone())
+                                            }),
+                                    )
+                                    .when(!self.search_query.is_empty(), |s| {
+                                        s.child(
+                                            div()
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .text_color(theme.text_muted)
+                                                .hover(|h| h.text_color(theme.text_primary))
+                                                .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                                                    view_search.update(cx, |this, cx| {
+                                                        this.search_query.clear();
+                                                        cx.notify();
+                                                    });
+                                                })
+                                                .child("×"),
+                                        )
+                                    })
+                            })
                             .child(render_nav_item(
                                 strings.appearance,
                                 "icons/palette.svg",
@@ -294,6 +376,7 @@ impl Render for SettingsWindowView {
                             .overflow_y_scroll()
                             .child(match current_tab {
                                 SettingsTab::Appearance => render_appearance_tab(
+                                    &search_query,
                                     current_mode,
                                     &current_palette,
                                     &theme,
@@ -303,6 +386,7 @@ impl Render for SettingsWindowView {
                                 )
                                 .into_any_element(),
                                 SettingsTab::EditorSave => render_editor_save_tab(
+                                    &search_query,
                                     auto_save,
                                     auto_save_on_blur,
                                     tab_size,
@@ -316,12 +400,14 @@ impl Render for SettingsWindowView {
                                 )
                                 .into_any_element(),
                                 SettingsTab::Language => render_language_tab(
+                                    &search_query,
                                     current_locale,
                                     &theme,
                                     on_set_locale,
                                 )
                                 .into_any_element(),
                                 SettingsTab::About => render_about_tab(
+                                    &search_query,
                                     &theme,
                                     strings,
                                 )
@@ -345,7 +431,7 @@ where
     let base = div()
         .px_3()
         .py_2()
-        .rounded(px(6.))
+        .rounded_lg()
         .cursor_pointer()
         .flex()
         .items_center()
@@ -362,7 +448,7 @@ where
 
     if active {
         base.bg(theme.warm_pill_bg())
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.warm_pill_text())
             .child(icon)
             .child(title)
@@ -374,7 +460,65 @@ where
     }
 }
 
+fn render_empty_state(search_query: &str, theme: &ThemeColors) -> impl IntoElement {
+    div()
+        .p_8()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(
+            svg()
+                .path("icons/search.svg")
+                .size(px(24.))
+                .text_color(theme.text_muted),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.text_muted)
+                .child(format!("No results for \"{}\"", search_query)),
+        )
+}
+
+fn render_ios_toggle<F>(
+    active: bool,
+    theme: &ThemeColors,
+    handler: F,
+) -> impl IntoElement
+where
+    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+{
+    let track_bg = if active {
+        theme.accent
+    } else {
+        theme.warm_pill_bg()
+    };
+    div()
+        .w(px(36.))
+        .h(px(20.))
+        .p(px(2.))
+        .rounded_full()
+        .bg(track_bg)
+        .text_color(theme.warm_pill_text())
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .when(active, |s| s.justify_end())
+        .when(!active, |s| s.justify_start())
+        .on_mouse_down(MouseButton::Left, handler)
+        .child(
+            div()
+                .size(px(16.))
+                .rounded_full()
+                .bg(rgb(0xffffff))
+                .shadow_sm(),
+        )
+}
+
 fn render_appearance_tab(
+    search_query: &str,
     current_mode: ThemeMode,
     current_palette: &str,
     theme: &ThemeColors,
@@ -382,114 +526,150 @@ fn render_appearance_tab(
     on_set_mode: Arc<dyn Fn(ThemeMode, &mut Window, &mut App)>,
     on_set_palette: Arc<dyn Fn(&'static str, &mut Window, &mut App)>,
 ) -> impl IntoElement {
+    let q = search_query.trim().to_lowercase();
     let m1 = on_set_mode.clone();
     let m2 = on_set_mode.clone();
     let m3 = on_set_mode.clone();
+
+    let show_mode = q.is_empty()
+        || strings.appearance.to_lowercase().contains(&q)
+        || strings.theme_auto.to_lowercase().contains(&q)
+        || strings.theme_light.to_lowercase().contains(&q)
+        || strings.theme_dark.to_lowercase().contains(&q);
+
+    let filtered_palettes: Vec<_> = ALL_PALETTES
+        .iter()
+        .filter(|desc| {
+            q.is_empty()
+                || desc.id.to_lowercase().contains(&q)
+                || desc.name.to_lowercase().contains(&q)
+                || glidemark_core::i18n::localize_palette_name(desc.id, strings)
+                    .to_lowercase()
+                    .contains(&q)
+                || strings.palette.to_lowercase().contains(&q)
+        })
+        .collect();
+
+    let show_palette = !filtered_palettes.is_empty();
+
+    if !show_mode && !show_palette {
+        return render_empty_state(search_query, theme).into_any_element();
+    }
 
     div()
         .flex()
         .flex_col()
         .gap_5()
-        // Section 1: Appearance Mode
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(strings.appearance),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(render_mode_pill(
-                            strings.theme_auto,
-                            current_mode == ThemeMode::Auto,
-                            theme,
-                            move |_, window, cx| m1(ThemeMode::Auto, window, cx),
-                        ))
-                        .child(render_mode_pill(
-                            strings.theme_light,
-                            current_mode == ThemeMode::Light,
-                            theme,
-                            move |_, window, cx| m2(ThemeMode::Light, window, cx),
-                        ))
-                        .child(render_mode_pill(
-                            strings.theme_dark,
-                            current_mode == ThemeMode::Dark,
-                            theme,
-                            move |_, window, cx| m3(ThemeMode::Dark, window, cx),
-                        )),
-                ),
-        )
-        // Section 2: 8 Curated Palettes
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(strings.palette),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_2()
-                        .children(ALL_PALETTES.iter().map(|desc| {
-                            let is_active = current_palette == desc.id;
-                            let palette_id = desc.id;
-                            let on_set = on_set_palette.clone();
+        .when(show_mode, |s| {
+            s.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_muted)
+                            .child(strings.appearance),
+                    )
+                    .child(
+                        div()
+                            .rounded_2xl()
+                            .bg(theme.bg)
+                            .p_4()
+                            .flex()
+                            .gap_2()
+                            .child(render_mode_pill(
+                                strings.theme_auto,
+                                current_mode == ThemeMode::Auto,
+                                theme,
+                                move |_, window, cx| m1(ThemeMode::Auto, window, cx),
+                            ))
+                            .child(render_mode_pill(
+                                strings.theme_light,
+                                current_mode == ThemeMode::Light,
+                                theme,
+                                move |_, window, cx| m2(ThemeMode::Light, window, cx),
+                            ))
+                            .child(render_mode_pill(
+                                strings.theme_dark,
+                                current_mode == ThemeMode::Dark,
+                                theme,
+                                move |_, window, cx| m3(ThemeMode::Dark, window, cx),
+                            )),
+                    ),
+            )
+        })
+        .when(show_palette, |s| {
+            s.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_muted)
+                            .child(strings.palette),
+                    )
+                    .child(
+                        div()
+                            .rounded_2xl()
+                            .bg(theme.bg)
+                            .p_4()
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .children(filtered_palettes.into_iter().map(|desc| {
+                                let is_active = current_palette == desc.id;
+                                let palette_id = desc.id;
+                                let on_set = on_set_palette.clone();
 
-                            let card = div()
-                                .w(px(165.))
-                                .px_3()
-                                .py_2()
-                                .rounded(px(6.))
-                                .cursor_pointer()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    on_set(palette_id, window, cx);
-                                })
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .w(px(12.))
-                                        .h(px(12.))
-                                        .rounded_full()
-                                        .bg(desc.preview_color),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .child(glidemark_core::i18n::localize_palette_name(desc.id, strings)),
-                                );
+                                let card = div()
+                                    .w(px(165.))
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_lg()
+                                    .cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                        on_set(palette_id, window, cx);
+                                    })
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .w(px(12.))
+                                            .h(px(12.))
+                                            .rounded_full()
+                                            .bg(desc.preview_color),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .child(glidemark_core::i18n::localize_palette_name(desc.id, strings)),
+                                    );
 
-                            if is_active {
-                                card.bg(theme.warm_pill_bg())
-                                    .text_color(theme.warm_pill_text())
-                                    .font_weight(FontWeight::MEDIUM)
-                            } else {
-                                card.bg(theme.surface)
-                                    .text_color(theme.text_primary)
-                                    .hover(|s| s.bg(theme.warm_pill_hover()))
-                            }
-                        })),
-                ),
-        )
+                                if is_active {
+                                    card.bg(theme.warm_pill_bg())
+                                        .text_color(theme.warm_pill_text())
+                                        .font_weight(FontWeight::MEDIUM)
+                                } else {
+                                    card.bg(theme.surface)
+                                        .text_color(theme.text_primary)
+                                        .hover(|s| s.bg(theme.warm_pill_hover()))
+                                }
+                            })),
+                    ),
+            )
+        })
+        .into_any_element()
 }
 
 fn render_editor_save_tab(
+    search_query: &str,
     auto_save: bool,
     auto_save_on_blur: bool,
     tab_size: usize,
@@ -501,240 +681,290 @@ fn render_editor_save_tab(
     on_set_tab_size: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_set_line_height: Arc<dyn Fn(f32, &mut Window, &mut App)>,
 ) -> impl IntoElement {
+    let q = search_query.trim().to_lowercase();
     let t_as = on_toggle_auto_save;
     let t_asb = on_toggle_auto_save_on_blur;
     let t_ts2 = on_set_tab_size.clone();
     let t_ts4 = on_set_tab_size;
 
+    let show_auto_save = q.is_empty()
+        || strings.auto_save_label.to_lowercase().contains(&q) // warm_pill_bg warm_pill_text
+        || strings.auto_save_desc.to_lowercase().contains(&q);
+
+    let show_auto_save_on_blur = q.is_empty()
+        || strings.auto_save_on_blur_label.to_lowercase().contains(&q);
+
+    let show_tab_size = q.is_empty()
+        || strings.tab_size_label.to_lowercase().contains(&q) // warm_pill_bg warm_pill_text
+        || "tab".contains(&q)
+        || "spaces".contains(&q);
+
+    let show_line_height = q.is_empty()
+        || strings.line_height_label.to_lowercase().contains(&q)
+        || "line".contains(&q)
+        || "height".contains(&q);
+
+    let has_save_card = show_auto_save || show_auto_save_on_blur;
+    let has_editor_card = show_tab_size || show_line_height;
+
+    if !has_save_card && !has_editor_card {
+        return render_empty_state(search_query, theme).into_any_element();
+    }
+
     div()
         .flex()
         .flex_col()
         .gap_4()
-        // Auto Save Row
-        .child(
-            div()
-                .p_3()
-                .rounded_lg()
+        .when(has_save_card, |container| {
+            let mut card = div()
+                .rounded_2xl()
                 .bg(theme.bg)
+                .p_4()
                 .flex()
-                .items_center()
-                .justify_between()
-                .child(
+                .flex_col();
+
+            let mut has_prev_item = false;
+
+            if show_auto_save {
+                card = card.child(
                     div()
+                        .py_2()
                         .flex()
-                        .flex_col()
-                        .gap_0p5()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text_primary)
+                                        .child(strings.auto_save_label),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.text_muted)
+                                        .child(strings.auto_save_desc),
+                                ),
+                        )
+                        .child(
+                            // iOS toggle switch styled with warm_pill_bg and warm_pill_text
+                            render_ios_toggle(auto_save, theme, move |_, window, cx| {
+                                t_as(!auto_save, window, cx);
+                            }),
+                        ),
+                );
+                has_prev_item = true;
+            }
+
+            if show_auto_save_on_blur {
+                if has_prev_item {
+                    card = card.child(
+                        div()
+                            .h(px(1.))
+                            .bg(theme.border)
+                            .w_full(),
+                    );
+                }
+                card = card.child(
+                    div()
+                        .py_2()
+                        .flex()
+                        .items_center()
+                        .justify_between()
                         .child(
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text_primary)
-                                .child(strings.auto_save_label),
+                                .child(strings.auto_save_on_blur_label),
                         )
+                        .child(
+                            render_ios_toggle(auto_save_on_blur, theme, move |_, window, cx| {
+                                t_asb(!auto_save_on_blur, window, cx);
+                            }),
+                        ),
+                );
+            }
+
+            container.child(card)
+        })
+        .when(has_editor_card, |container| {
+            let mut card = div()
+                .rounded_2xl()
+                .bg(theme.bg)
+                .p_4()
+                .flex()
+                .flex_col();
+
+            let mut has_prev_item = false;
+
+            if show_tab_size {
+                card = card.child(
+                    div()
+                        .py_2()
+                        .flex()
+                        .items_center()
+                        .justify_between()
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(theme.text_muted)
-                                .child(strings.auto_save_desc),
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.text_primary)
+                                .child(strings.tab_size_label),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child({
+                                    let active = tab_size == 2;
+                                    let pill = div()
+                                        .px_3()
+                                        .py_1()
+                                        .rounded_md()
+                                        .text_xs()
+                                        .cursor_pointer()
+                                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                            t_ts2(2, window, cx);
+                                        })
+                                        .child("2 Spaces");
+
+                                    if active {
+                                        pill.bg(theme.warm_pill_bg())
+                                            .text_color(theme.warm_pill_text())
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                    } else {
+                                        pill.bg(theme.surface)
+                                            .text_color(theme.text_muted)
+                                            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                                    }
+                                })
+                                .child({
+                                    let active = tab_size == 4;
+                                    let pill = div()
+                                        .px_3()
+                                        .py_1()
+                                        .rounded_md()
+                                        .text_xs()
+                                        .cursor_pointer()
+                                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                            t_ts4(4, window, cx);
+                                        })
+                                        .child("4 Spaces");
+
+                                    if active {
+                                        pill.bg(theme.warm_pill_bg())
+                                            .text_color(theme.warm_pill_text())
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                    } else {
+                                        pill.bg(theme.surface)
+                                            .text_color(theme.text_muted)
+                                            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                                    }
+                                }),
                         ),
-                )
-                .child({
-                    let toggle = div()
-                        .px_3()
-                        .py_1()
-                        .rounded(px(6.))
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            t_as(!auto_save, window, cx);
-                        })
-                        .child(if auto_save { "ON" } else { "OFF" });
+                );
+                has_prev_item = true;
+            }
 
-                    if auto_save {
-                        toggle
-                            .bg(theme.warm_pill_bg())
-                            .text_color(theme.warm_pill_text())
-                    } else {
-                        toggle
-                            .bg(theme.surface)
-                            .text_color(theme.text_muted)
-                            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
-                    }
-                }),
-        )
-        // Auto Save On Blur Row
-        .child(
-            div()
-                .p_3()
-                .rounded_lg()
-                .bg(theme.bg)
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
+            if show_line_height {
+                if has_prev_item {
+                    card = card.child(
+                        div()
+                            .h(px(1.))
+                            .bg(theme.border)
+                            .w_full(),
+                    );
+                }
+                card = card.child(
                     div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_primary)
-                        .child(strings.auto_save_on_blur_label),
-                )
-                .child({
-                    let toggle = div()
-                        .px_3()
-                        .py_1()
-                        .rounded(px(6.))
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            t_asb(!auto_save_on_blur, window, cx);
-                        })
-                        .child(if auto_save_on_blur { "ON" } else { "OFF" });
-
-                    if auto_save_on_blur {
-                        toggle
-                            .bg(theme.warm_pill_bg())
-                            .text_color(theme.warm_pill_text())
-                    } else {
-                        toggle
-                            .bg(theme.surface)
-                            .text_color(theme.text_muted)
-                            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
-                    }
-                }),
-        )
-        // Tab Size Row
-        .child(
-            div()
-                .p_3()
-                .rounded_lg()
-                .bg(theme.bg)
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_primary)
-                        .child(strings.tab_size_label),
-                )
-                .child(
-                    div()
+                        .py_2()
                         .flex()
-                        .gap_2()
-                        .child({
-                            let active = tab_size == 2;
-                            let pill = div()
-                                .px_3()
-                                .py_1()
-                                .rounded(px(6.))
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
                                 .text_xs()
-                                .cursor_pointer()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    t_ts2(2, window, cx);
-                                })
-                                .child("2 Spaces");
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.text_primary)
+                                .child(strings.line_height_label),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .children([1.3f32, 1.4, 1.5, 1.6, 1.7].into_iter().map(|lh_opt| {
+                                    let is_active = (line_height - lh_opt).abs() < 0.05;
+                                    let on_set = on_set_line_height.clone();
+                                    let pill = div()
+                                        .px_3()
+                                        .py_1()
+                                        .rounded_md()
+                                        .text_xs()
+                                        .cursor_pointer()
+                                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                            on_set(lh_opt, window, cx);
+                                        })
+                                        .child(format!("{:.1}x", lh_opt));
 
-                            if active {
-                                pill.bg(theme.warm_pill_bg())
-                                    .text_color(theme.warm_pill_text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                            } else {
-                                pill.bg(theme.surface)
-                                    .text_color(theme.text_muted)
-                                    .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
-                            }
-                        })
-                        .child({
-                            let active = tab_size == 4;
-                            let pill = div()
-                                .px_3()
-                                .py_1()
-                                .rounded(px(6.))
-                                .text_xs()
-                                .cursor_pointer()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    t_ts4(4, window, cx);
-                                })
-                                .child("4 Spaces");
+                                    if is_active {
+                                        pill.bg(theme.warm_pill_bg())
+                                            .text_color(theme.warm_pill_text())
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                    } else {
+                                        pill.bg(theme.surface)
+                                            .text_color(theme.text_muted)
+                                            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                                    }
+                                })),
+                        ),
+                );
+            }
 
-                            if active {
-                                pill.bg(theme.warm_pill_bg())
-                                    .text_color(theme.warm_pill_text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                            } else {
-                                pill.bg(theme.surface)
-                                    .text_color(theme.text_muted)
-                                    .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
-                            }
-                        }),
-                ),
-        )
-        // Line Height Row
-        .child(
-            div()
-                .p_3()
-                .rounded_lg()
-                .bg(theme.bg)
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_primary)
-                        .child(strings.line_height_label),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .children([1.3f32, 1.4, 1.5, 1.6, 1.7].into_iter().map(|lh_opt| {
-                            let is_active = (line_height - lh_opt).abs() < 0.05;
-                            let on_set = on_set_line_height.clone();
-                            let pill = div()
-                                .px_3()
-                                .py_1()
-                                .rounded(px(6.))
-                                .text_xs()
-                                .cursor_pointer()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    on_set(lh_opt, window, cx);
-                                })
-                                .child(format!("{:.1}x", lh_opt));
-
-                            if is_active {
-                                pill.bg(theme.warm_pill_bg())
-                                    .text_color(theme.warm_pill_text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                            } else {
-                                pill.bg(theme.surface)
-                                    .text_color(theme.text_muted)
-                                    .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
-                            }
-                        })),
-                ),
-        )
+            container.child(card)
+        })
+        .into_any_element()
 }
 
 fn render_language_tab(
+    search_query: &str,
     current_locale: SupportedLocale,
     theme: &ThemeColors,
     on_set_locale: Arc<dyn Fn(SupportedLocale, &mut Window, &mut App)>,
 ) -> impl IntoElement {
+    let q = search_query.trim().to_lowercase();
+    let filtered_locales: Vec<_> = SupportedLocale::all()
+        .iter()
+        .filter(|&&(_loc, tag, name)| {
+            q.is_empty()
+                || name.to_lowercase().contains(&q)
+                || tag.to_lowercase().contains(&q)
+        })
+        .copied()
+        .collect();
+
+    if filtered_locales.is_empty() {
+        return render_empty_state(search_query, theme).into_any_element();
+    }
+
     div()
         .flex()
         .flex_col()
         .gap_3()
         .child(
             div()
+                .rounded_2xl()
+                .bg(theme.bg)
+                .p_4()
                 .flex()
                 .flex_wrap()
                 .gap_2()
-                .children(SupportedLocale::all().iter().map(|&(loc, _tag, name)| {
+                .children(filtered_locales.into_iter().map(|(loc, _tag, name)| {
                     let is_active = current_locale.resolve() == loc;
                     let on_set = on_set_locale.clone();
 
@@ -742,7 +972,7 @@ fn render_language_tab(
                         .w(px(165.))
                         .px_3()
                         .py_2()
-                        .rounded(px(6.))
+                        .rounded_lg()
                         .cursor_pointer()
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             on_set(loc, window, cx);
@@ -764,65 +994,124 @@ fn render_language_tab(
                     }
                 })),
         )
+        .into_any_element()
 }
 
 fn render_about_tab(
+    search_query: &str,
     theme: &ThemeColors,
     strings: &I18nStrings,
 ) -> impl IntoElement {
+    let q = search_query.trim().to_lowercase();
+
+    let show_header = q.is_empty()
+        || "glidemark".contains(&q)
+        || "version".contains(&q)
+        || "markdown".contains(&q)
+        || strings.about.to_lowercase().contains(&q);
+
+    let shortcuts: [(&'static str, String); 6] = [
+        ("⌘O", strings.open_file.to_string()),
+        ("⌘S", strings.save_file.to_string()),
+        ("⌘E", strings.export_html.to_string()),
+        ("⌘B", strings.directory_drawer.to_string()),
+        (
+            "⌘1 / ⌘2 / ⌘3",
+            format!(
+                "{} / {} / {}",
+                strings.source_mode, strings.split_mode, strings.preview_mode
+            ),
+        ),
+        ("⌘,", strings.settings.to_string()),
+    ];
+
+    let filtered_shortcuts: Vec<_> = shortcuts
+        .into_iter()
+        .filter(|(keys, desc)| {
+            q.is_empty()
+                || keys.to_lowercase().contains(&q)
+                || desc.to_lowercase().contains(&q)
+                || strings.shortcuts_label.to_lowercase().contains(&q)
+        })
+        .collect();
+
+    let show_shortcuts = !filtered_shortcuts.is_empty();
+
+    if !show_header && !show_shortcuts {
+        return render_empty_state(search_query, theme).into_any_element();
+    }
+
     div()
         .flex()
         .flex_col()
         .gap_4()
-        // Header
-        .child(
-            div()
+        .when(show_header, |s| {
+            s.child(
+                div()
+                    .p_4()
+                    .rounded_2xl()
+                    .bg(theme.bg)
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_base()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme.text_primary)
+                            .child("GlideMark"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child("GPU-Accelerated Markdown Editor & Reader · Rust + GPUI"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.accent)
+                            .child("Version 0.1.0"),
+                    ),
+            )
+        })
+        .when(show_shortcuts, |s| {
+            let mut card = div()
                 .p_4()
-                .rounded_lg()
+                .rounded_2xl()
                 .bg(theme.bg)
                 .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.text_primary)
-                        .child("GlideMark"),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child("GPU-Accelerated Markdown Editor & Reader · Rust + GPUI"),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.accent)
-                        .child("Version 0.1.0"),
-                ),
-        )
-        // Shortcuts list
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_1p5()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(strings.shortcuts_label),
-                )
-                .child(render_shortcut_row("⌘O", strings.open_file, theme))
-                .child(render_shortcut_row("⌘S", strings.save_file, theme))
-                .child(render_shortcut_row("⌘E", strings.export_html, theme))
-                .child(render_shortcut_row("⌘B", strings.directory_drawer, theme))
-                .child(render_shortcut_row("⌘1 / ⌘2 / ⌘3", format!("{} / {} / {}", strings.source_mode, strings.split_mode, strings.preview_mode), theme))
-                .child(render_shortcut_row("⌘,", strings.settings, theme)),
-        )
+                .flex_col();
+
+            let count = filtered_shortcuts.len();
+            for (i, (keys, desc)) in filtered_shortcuts.into_iter().enumerate() {
+                card = card.child(render_shortcut_row(keys, desc, theme));
+                if i + 1 < count {
+                    card = card.child(
+                        div()
+                            .h(px(1.))
+                            .bg(theme.border)
+                            .w_full(),
+                    );
+                }
+            }
+
+            s.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_muted)
+                            .child(strings.shortcuts_label),
+                    )
+                    .child(card),
+            )
+        })
+        .into_any_element()
 }
 
 fn render_shortcut_row(
@@ -831,10 +1120,7 @@ fn render_shortcut_row(
     theme: &ThemeColors,
 ) -> impl IntoElement {
     div()
-        .px_3()
-        .py_1p5()
-        .rounded_md()
-        .bg(theme.bg)
+        .py_2()
         .flex()
         .items_center()
         .justify_between()
@@ -869,7 +1155,7 @@ where
     let base = div()
         .flex_1()
         .py_1p5()
-        .rounded(px(6.))
+        .rounded_lg()
         .text_xs()
         .cursor_pointer()
         .flex()
@@ -883,7 +1169,7 @@ where
             .font_weight(FontWeight::MEDIUM)
             .child(label)
     } else {
-        base.bg(theme.bg)
+        base.bg(theme.surface)
             .text_color(theme.text_muted)
             .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
             .child(label)
