@@ -9,6 +9,7 @@ use crate::state::{root_label, DocKey, DrawerTab, FileTreeNode, OpenDoc, Workspa
 use crate::theme::ThemeColors;
 
 pub fn render_drawer(
+    is_fullscreen: bool,
     active_tab: DrawerTab,
     workspace_roots: &[WorkspaceRoot],
     loose_docs: &[DocKey],
@@ -27,7 +28,7 @@ pub fn render_drawer(
     on_select_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_select_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
     on_close_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
-    on_new_draft: Arc<dyn Fn(&mut Window, &mut App)>,
+    _on_new_draft: Arc<dyn Fn(&mut Window, &mut App)>,
     on_select_heading: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_open_folder: Arc<dyn Fn(&mut Window, &mut App)>,
     on_toggle_drawer: Arc<dyn Fn(&mut Window, &mut App)>,
@@ -38,7 +39,7 @@ pub fn render_drawer(
     let t_toggle = on_toggle_drawer.clone();
 
     #[cfg(target_os = "macos")]
-    let drawer_header_pl = px(76.);
+    let drawer_header_pl = if is_fullscreen { px(12.) } else { px(76.) };
     #[cfg(not(target_os = "macos"))]
     let drawer_header_pl = px(8.);
 
@@ -120,73 +121,24 @@ pub fn render_drawer(
                         let mut content = div().flex().flex_col().gap_1();
 
                         // ==========================================
-                        // 1. Section 1: Drafts Group (草稿组)
+                        // 1. Draft Item (decentralized: rendered only when an active/open scratch doc exists)
                         // ==========================================
-                        let draft_doc = open_docs.iter().find(|d| d.key.is_scratch());
-                        let has_open_draft = draft_doc.is_some();
-                        let is_draft_active = draft_doc.map_or(false, |d| active_key == Some(&d.key));
-                        let is_draft_dirty = if is_draft_active {
-                            is_active_dirty
-                        } else if let Some(d) = draft_doc {
-                            d.doc.status == glidemark_core::document::DocumentStatus::Modified
-                        } else {
-                            false
-                        };
+                        if let Some(draft_doc) = open_docs.iter().find(|d| d.key.is_scratch()) {
+                            let is_draft_active = active_key == Some(&draft_doc.key);
+                            let is_draft_dirty = if is_draft_active {
+                                is_active_dirty
+                            } else {
+                                draft_doc.doc.status == glidemark_core::document::DocumentStatus::Modified
+                            };
 
-                        let draft_title = draft_doc.map_or_else(
-                            || strings.draft_unopened.to_string(),
-                            |d| d.doc.display_name_with_fallback(strings.untitled_file),
-                        );
-                        let draft_key_opt = draft_doc.map(|d| d.key.clone());
+                            let draft_title = draft_doc.doc.display_name_with_fallback(strings.untitled_file);
+                            let d_key = draft_doc.key.clone();
+                            let t_switch_draft = on_select_doc.clone();
+                            let t_close_draft = on_close_doc.clone();
 
-                        let t_switch_draft = on_select_doc.clone();
-                        let t_close_draft = on_close_doc.clone();
-                        let t_create_draft = on_new_draft.clone();
-
-                        let mut draft_item = div()
-                            .id("drawer_draft_item")
-                            .group("drawer_draft_row")
-                            .w_full()
-                            .px_2()
-                            .py_1()
-                            .rounded(px(6.))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::NORMAL)
-                            .tooltip(move |_window, cx| {
-                                let t = if has_open_draft {
-                                    format!("{} (⌘N)", strings.draft_focus_hint)
-                                } else {
-                                    format!("{} (⌘N)", strings.draft_create_hint)
-                                };
-                                cx.new(|_| DrawerTooltipView { text: t }).into()
-                            })
-                            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                                if let Some(key) = &draft_key_opt {
-                                    t_switch_draft(key, window, cx);
-                                } else {
-                                    t_create_draft(window, cx);
-                                }
-                            });
-
-                        if is_draft_active {
-                            draft_item = draft_item
-                                .bg(theme.warm_pill_bg())
-                                .text_color(theme.warm_pill_text())
-                                .font_weight(FontWeight::MEDIUM);
-                        } else {
-                            draft_item = draft_item
-                                .text_color(if has_open_draft { theme.text_primary } else { theme.text_muted })
-                                .hover(|s| s.bg(theme.surface));
-                        }
-
-                        let draft_right = {
-                            let mut right = div().flex().items_center().gap_1();
+                            let mut draft_right = div().flex().items_center().gap_1();
                             if is_draft_dirty {
-                                right = right.child(
+                                draft_right = draft_right.child(
                                     div()
                                         .w(px(6.))
                                         .h(px(6.))
@@ -194,75 +146,91 @@ pub fn render_drawer(
                                         .bg(theme.accent),
                                 );
                             }
-                            if let Some(d_key) = draft_doc.map(|d| d.key.clone()) {
-                                let on_close = t_close_draft.clone();
-                                right = right.child(
-                                    div()
-                                        .id("btn_close_draft")
-                                        .w(px(16.))
-                                        .h(px(16.))
-                                        .rounded(px(3.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .text_size(px(12.))
-                                        .text_color(theme.text_muted)
-                                        .opacity(0.0)
-                                        .group_hover("drawer_draft_row", |s| s.opacity(1.0))
-                                        .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
-                                        .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
-                                            cx.stop_propagation();
-                                            on_close(&d_key, window, cx);
-                                        })
-                                        .child("×"),
-                                );
-                            }
-                            right
-                        };
-
-                        let draft_section = div()
-                            .flex()
-                            .flex_col()
-                            .gap_0p5()
-                            .child(
+                            let close_key = d_key.clone();
+                            let on_close = t_close_draft.clone();
+                            draft_right = draft_right.child(
                                 div()
-                                    .px_2()
-                                    .pt_1()
-                                    .pb_0p5()
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .id("btn_close_draft")
+                                    .w(px(16.))
+                                    .h(px(16.))
+                                    .rounded(px(3.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_size(px(12.))
                                     .text_color(theme.text_muted)
-                                    .child(strings.drafts_group),
-                            )
-                            .child(
-                                draft_item
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1p5()
-                                            .min_w(px(0.))
-                                            .child(
-                                                svg()
-                                                    .path("icons/files.svg")
-                                                    .size(px(13.))
-                                                    .text_color(if is_draft_active {
-                                                        theme.warm_pill_text()
-                                                    } else {
-                                                        theme.text_muted
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .min_w(px(0.))
-                                                    .truncate()
-                                                    .child(draft_title),
-                                            ),
-                                    )
-                                    .child(draft_right),
+                                    .opacity(0.0)
+                                    .group_hover("drawer_draft_row", |s| s.opacity(1.0))
+                                    .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
+                                    .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                                        cx.stop_propagation();
+                                        on_close(&close_key, window, cx);
+                                    })
+                                    .child("×"),
                             );
 
-                        content = content.child(draft_section);
+                            let draft_tooltip_text = format!("{} (⌘N)", strings.draft_focus_hint);
+                            let sel_key = d_key.clone();
+                            let mut draft_item = div()
+                                .id("drawer_draft_item")
+                                .group("drawer_draft_row")
+                                .w_full()
+                                .px_2()
+                                .py_1()
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::NORMAL)
+                                .tooltip(move |_window, cx| {
+                                    let t = draft_tooltip_text.clone();
+                                    cx.new(|_| DrawerTooltipView { text: t }).into()
+                                })
+                                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                                    t_switch_draft(&sel_key, window, cx);
+                                });
+
+                            if is_draft_active {
+                                draft_item = draft_item
+                                    .bg(theme.warm_pill_bg())
+                                    .text_color(theme.warm_pill_text())
+                                    .font_weight(FontWeight::MEDIUM);
+                            } else {
+                                draft_item = draft_item
+                                    .text_color(theme.text_primary)
+                                    .hover(|s| s.bg(theme.surface));
+                            }
+
+                            let draft_item = draft_item
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1p5()
+                                        .min_w(px(0.))
+                                        .child(
+                                            svg()
+                                                .path("icons/files.svg")
+                                                .size(px(13.))
+                                                .text_color(if is_draft_active {
+                                                    theme.warm_pill_text()
+                                                } else {
+                                                    theme.text_muted
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .min_w(px(0.))
+                                                .truncate()
+                                                .child(draft_title),
+                                        ),
+                                )
+                                .child(draft_right);
+
+                            content = content.child(draft_item);
+                        }
 
                         // ==========================================
                         // 2. Section 2: Workspace Roots Group (工作区多根组)

@@ -461,7 +461,12 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    fn render_canvas_header(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_canvas_header(
+        &self,
+        theme: &crate::theme::ThemeColors,
+        is_fullscreen: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let is_macos = cfg!(target_os = "macos");
         let drawer_open = self.state.drawer_open;
         let view_mode = self.state.view_mode;
@@ -469,8 +474,15 @@ impl WorkspaceView {
         let is_renaming = self.is_renaming;
         let rename_buffer = self.rename_buffer.clone();
 
-        // Left padding: on macOS when sidebar is collapsed, inject 76px safe area to avoid traffic lights.
-        let header_pl = if is_macos && !drawer_open { px(76.) } else { px(8.) };
+        #[cfg(target_os = "macos")]
+        let header_pl = if !drawer_open {
+            if is_fullscreen { px(12.) } else { px(76.) }
+        } else {
+            px(8.)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let header_pl = px(8.);
+
         // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
         let header_pr = if !is_macos { px(138.) } else { px(12.) };
 
@@ -532,8 +544,9 @@ impl WorkspaceView {
                             .cursor_text()
                             .child(
                                 div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_size(px(15.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .line_height(px(20.))
                                     .text_color(theme.text_primary)
                                     .child(if rename_buffer.is_empty() {
                                         "Untitled.md".to_string()
@@ -591,8 +604,9 @@ impl WorkspaceView {
                             }))
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(px(15.))
                                     .font_weight(FontWeight::SEMIBOLD)
+                                    .line_height(px(20.))
                                     .text_color(if active_key.is_some() { theme.text_primary } else { theme.text_muted })
                                     .max_w(px(320.))
                                     .truncate()
@@ -623,7 +637,7 @@ impl WorkspaceView {
                         window.start_window_move();
                     })
             )
-            // Right Group: Segmented View Mode Switcher + Action Buttons (Save, Export, Settings)
+            // Right Group: Flat View Mode Switcher + Action Buttons (Save, Export, Settings)
             .child(
                 div()
                     .flex()
@@ -633,12 +647,7 @@ impl WorkspaceView {
                         div()
                             .flex()
                             .items_center()
-                            .bg(theme.bg)
-                            .p(px(2.))
-                            .rounded(px(7.))
-                            .gap(px(2.))
-                            .border_1()
-                            .border_color(theme.border)
+                            .gap_1()
                             .child(render_mode_icon_tab(
                                 "btn_mode_source",
                                 format!("{} (⌘1)", strings.source_mode),
@@ -840,6 +849,7 @@ impl Render for WorkspaceView {
         self.state.update_appearance(is_sys_dark);
         self.workspace_width = f32::from(window.viewport_size().width);
         self.window_handle = Some(window.window_handle());
+        let is_fullscreen = window.is_fullscreen();
 
         let theme = &self.state.theme;
         let strings = self.state.strings;
@@ -1307,6 +1317,7 @@ impl Render for WorkspaceView {
                                 .bg(theme.bg)
                                 .overflow_hidden()
                                 .child(render_drawer(
+                                    is_fullscreen,
                                     self.state.drawer_tab,
                                     &self.state.workspace_roots,
                                     &loose_docs,
@@ -1352,7 +1363,7 @@ impl Render for WorkspaceView {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .child(self.render_canvas_header(theme, cx))
+                    .child(self.render_canvas_header(theme, is_fullscreen, cx))
                     // Error Feedback Banner
                     .when_some(self.error_banner.clone(), |el, err_msg| {
                         el.child(
@@ -1769,9 +1780,9 @@ where
             let t = text.clone();
             cx.new(|_| TooltipView { text: t }).into()
         })
-        .w(px(36.))
-        .h(px(26.))
-        .rounded(px(5.))
+        .w(px(32.))
+        .h(px(32.))
+        .rounded_md()
         .cursor_pointer()
         .flex()
         .items_center()
