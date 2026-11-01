@@ -348,6 +348,19 @@ fn test_cjk_emoji_click_char_col_and_drawer_offset() {
     // With split preview offset: 250 + 68 + 400 = 718px
     assert_eq!(calculate_editor_left_offset(true, 400.0), 718.0);
 
+    // Real call path simulation: viewport=1000, drawer=250, ratio=0.5
+    // available = 1000 - 250 = 750, split_offset = 750 * 0.5 = 375
+    // total offset = 250 + 68 + 375 = 693.0
+    let simulated_viewport_w = 1000.0;
+    let simulated_drawer_w = 250.0;
+    let simulated_ratio = 0.5;
+    let simulated_available_w = simulated_viewport_w - simulated_drawer_w;
+    let simulated_split_offset = simulated_available_w * simulated_ratio;
+    assert_eq!(
+        calculate_editor_left_offset(true, simulated_split_offset),
+        693.0
+    );
+
     // 2. ASCII click hit test:
     let ascii_str = "abcdef";
     assert_eq!(calculate_click_char_col(ascii_str, 0.0, font_size), 0);
@@ -419,6 +432,12 @@ fn test_cross_visual_line_syntax_inheritance_and_subline_scroll() {
     assert_eq!(calculate_subline_scroll_offset(0.0, 1, 4), 25.0);
     assert_eq!(calculate_subline_scroll_offset(0.0, 2, 4), 50.0);
     assert_eq!(calculate_subline_scroll_offset(0.0, 3, 4), 75.0);
+
+    // With inner_progress = 0.3 and total_sublines = 4:
+    // (0.3 + 0.0) * 100.0 = 30.0, (0.3 + 0.25) * 100.0 = 55.0, (0.3 + 0.5) * 100.0 = 80.0
+    assert!((calculate_subline_scroll_offset(0.3, 0, 4) - 30.0).abs() < 1e-4);
+    assert!((calculate_subline_scroll_offset(0.3, 1, 4) - 55.0).abs() < 1e-4);
+    assert!((calculate_subline_scroll_offset(0.3, 2, 4) - 80.0).abs() < 1e-4);
 
     // Clamping to 100.0:
     assert_eq!(calculate_subline_scroll_offset(0.5, 3, 4), 100.0);

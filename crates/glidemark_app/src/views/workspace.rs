@@ -1826,7 +1826,13 @@ impl Render for WorkspaceView {
                                             )
                                             .into_any_element()
                                     } else {
-                                        let editor_left_offset = crate::views::editor::calculate_editor_left_offset(self.state.drawer_open, 0.0);
+                                        let drawer_w = if self.state.drawer_open { 250.0 } else { 0.0 };
+                                        let available_w = (f32::from(window.viewport_size().width) - drawer_w).max(0.0);
+                                        let split_preview_left_offset = match view_mode {
+                                            ViewMode::Split => available_w * self.split_ratio,
+                                            _ => 0.0,
+                                        };
+                                        let editor_left_offset = crate::views::editor::calculate_editor_left_offset(self.state.drawer_open, split_preview_left_offset);
                                         match view_mode {
                                             ViewMode::Source => div()
                                                 .size_full()
