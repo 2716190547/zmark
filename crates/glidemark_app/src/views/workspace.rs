@@ -142,7 +142,7 @@ impl WorkspaceView {
 
     pub fn compute_max_cols(&self, window: &Window) -> usize {
         let unit_width = (self.state.preferences.font_size * 0.6).max(1.0);
-        let drawer_w = if self.state.drawer_open { px(240.) } else { px(0.) };
+        let drawer_w = if self.state.drawer_open { px(250.) } else { px(0.) };
         let available_w = match self.state.view_mode {
             ViewMode::Split => (window.viewport_size().width - drawer_w) * self.split_ratio,
             _ => window.viewport_size().width - drawer_w,
@@ -1826,7 +1826,7 @@ impl Render for WorkspaceView {
                                             )
                                             .into_any_element()
                                     } else {
-                                        let editor_left_offset = crate::views::editor::calculate_editor_left_offset(self.state.drawer_open);
+                                        let editor_left_offset = crate::views::editor::calculate_editor_left_offset(self.state.drawer_open, 0.0);
                                         match view_mode {
                                             ViewMode::Source => div()
                                                 .size_full()
@@ -2072,7 +2072,7 @@ pub fn canvas_title_offset(view_mode: ViewMode, drawer_open: bool) -> f32 {
 pub fn calculate_subline_scroll_offset(inner_progress: f32, subline_idx: usize, total_sublines: usize) -> f32 {
     let total = total_sublines.max(1);
     let subline_fraction = (subline_idx as f32) / (total as f32);
-    (inner_progress + subline_fraction / (total as f32)).clamp(0.0, 1.0) * 100.0
+    (inner_progress + subline_fraction).clamp(0.0, 1.0) * 100.0
 }
 
 /// Resolves background and text colors for view mode switcher tabs.

@@ -341,10 +341,12 @@ fn test_cjk_emoji_click_char_col_and_drawer_offset() {
     let font_size = 14.0;
 
     // 1. Drawer offset contract:
-    // When drawer is open: 240px drawer + 68px editor gutter/padding = 308px
-    assert_eq!(calculate_editor_left_offset(true), 308.0);
+    // When drawer is open: 250px drawer + 68px editor gutter/padding = 318px
+    assert_eq!(calculate_editor_left_offset(true, 0.0), 318.0);
     // When drawer is collapsed: 68px
-    assert_eq!(calculate_editor_left_offset(false), 68.0);
+    assert_eq!(calculate_editor_left_offset(false, 0.0), 68.0);
+    // With split preview offset: 250 + 68 + 400 = 718px
+    assert_eq!(calculate_editor_left_offset(true, 400.0), 718.0);
 
     // 2. ASCII click hit test:
     let ascii_str = "abcdef";
@@ -412,16 +414,12 @@ fn test_cross_visual_line_syntax_inheritance_and_subline_scroll() {
     assert_eq!(head_sub1[0].kind, MarkdownTokenKind::HeadingText);
 
     // 3. Subline scroll progress calculation:
-    let offset_sub0 = calculate_subline_scroll_offset(0.0, 0, 5);
-    let offset_sub1 = calculate_subline_scroll_offset(0.0, 1, 5);
-    let offset_sub2 = calculate_subline_scroll_offset(0.0, 2, 5);
-    let offset_sub3 = calculate_subline_scroll_offset(0.0, 3, 5);
-    let offset_sub4 = calculate_subline_scroll_offset(0.0, 4, 5);
+    // With inner_progress = 0.0 and total_sublines = 4:
+    assert_eq!(calculate_subline_scroll_offset(0.0, 0, 4), 0.0);
+    assert_eq!(calculate_subline_scroll_offset(0.0, 1, 4), 25.0);
+    assert_eq!(calculate_subline_scroll_offset(0.0, 2, 4), 50.0);
+    assert_eq!(calculate_subline_scroll_offset(0.0, 3, 4), 75.0);
 
-    assert_eq!(offset_sub0, 0.0);
-    assert!(offset_sub1 > offset_sub0);
-    assert!(offset_sub2 > offset_sub1);
-    assert!(offset_sub3 > offset_sub2);
-    assert!(offset_sub4 > offset_sub3);
-    assert!(offset_sub4 <= 100.0);
+    // Clamping to 100.0:
+    assert_eq!(calculate_subline_scroll_offset(0.5, 3, 4), 100.0);
 }

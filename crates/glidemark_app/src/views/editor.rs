@@ -461,8 +461,8 @@ pub fn calculate_click_char_col(subline_str: &str, x_offset: f32, font_size: f32
     subline_str.chars().count()
 }
 
-pub fn calculate_editor_left_offset(drawer_open: bool) -> f32 {
-    (if drawer_open { 240.0 } else { 0.0 }) + 68.0
+pub fn calculate_editor_left_offset(drawer_open: bool, split_preview_left_offset: f32) -> f32 {
+    (if drawer_open { 250.0 } else { 0.0 }) + 68.0 + split_preview_left_offset
 }
 
 pub fn slice_tokens_for_visual_subline(
