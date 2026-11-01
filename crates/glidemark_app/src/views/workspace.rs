@@ -140,8 +140,18 @@ impl WorkspaceView {
         });
     }
 
+    pub fn compute_max_cols(&self, window: &Window) -> usize {
+        let unit_width = (self.state.preferences.font_size * 0.6).max(1.0);
+        let drawer_w = if self.state.drawer_open { px(240.) } else { px(0.) };
+        let available_w = match self.state.view_mode {
+            ViewMode::Split => (window.viewport_size().width - drawer_w) * self.split_ratio,
+            _ => window.viewport_size().width - drawer_w,
+        };
+        ((f32::from(available_w) - 68.0).max(100.0) / unit_width).floor() as usize
+    }
+
     /// Synchronizes editor wheel scrolling to the preview pane with 100ms echo suppression.
-    pub fn handle_editor_scroll_wheel(&mut self, _event: &ScrollWheelEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn handle_editor_scroll_wheel(&mut self, _event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.state.view_mode != ViewMode::Split || self.state.doc.is_parse_stale() || self.state.doc.parsed.anchors.is_empty() {
             return;
         }
@@ -153,16 +163,19 @@ impl WorkspaceView {
         }
         self.last_scroll_origin = Some((ScrollOrigin::Editor, now));
 
+        let max_cols = self.compute_max_cols(window);
+        let visual_lines = self.state.editor.get_visual_lines(max_cols);
+
         let scroll_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
-        let line_height = crate::views::editor::calculate_line_row_height(
+        let row_h = crate::views::editor::calculate_line_row_height(
             self.state.preferences.font_size,
             self.state.preferences.line_height,
         ).max(1.0);
-        let top_line_index = (scroll_y / line_height).floor() as usize;
-        let line = top_line_index + 1;
+        let top_vis_index = (scroll_y / row_h).floor() as usize;
+        let phys_line = visual_lines.get(top_vis_index).map(|vl| vl.physical_line_idx + 1).unwrap_or(1);
 
         let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc.parsed.anchors.clone());
-        let (block_index, _) = map.source_line_to_preview_progress(line);
+        let (block_index, _) = map.source_line_to_preview_progress(phys_line);
         self.preview_list.scroll_to(ListOffset {
             item_ix: block_index,
             offset_in_item: px(0.),
@@ -1044,6 +1057,9 @@ impl Render for WorkspaceView {
         self.window_handle = Some(window.window_handle());
         let is_fullscreen = window.is_fullscreen();
 
+        let max_cols = self.compute_max_cols(window);
+        let visual_lines = self.state.editor.get_visual_lines(max_cols);
+
         let theme = &self.state.theme;
         let strings = self.state.strings;
         let view_mode = self.state.view_mode;
@@ -1052,9 +1068,11 @@ impl Render for WorkspaceView {
         let parse_paused = self.parse_paused;
 
         let view_click = cx.entity().clone();
-        let on_click_line = Arc::new(move |line: usize, col: usize, _window: &mut Window, cx: &mut App| {
+        let vl_for_click = visual_lines.clone();
+        let on_click_line = Arc::new(move |vis_idx: usize, vis_col: usize, _window: &mut Window, cx: &mut App| {
             view_click.update(cx, |this, cx| {
-                this.state.editor.set_cursor(line, col);
+                let (phys_line, phys_col) = crate::editor_engine::visual_to_physical(vis_idx, vis_col, &vl_for_click);
+                this.state.editor.set_cursor(phys_line, phys_col);
                 cx.notify();
             });
         });
@@ -1480,8 +1498,14 @@ impl Render for WorkspaceView {
                     }
                     "left" => this.state.editor.move_left(),
                     "right" => this.state.editor.move_right(),
-                    "up" => this.state.editor.move_up(),
-                    "down" => this.state.editor.move_down(),
+                    "up" => {
+                        let max_cols = this.compute_max_cols(window);
+                        this.state.editor.move_up_visual(max_cols);
+                    }
+                    "down" => {
+                        let max_cols = this.compute_max_cols(window);
+                        this.state.editor.move_down_visual(max_cols);
+                    }
                     "home" => this.state.editor.move_to_line_start(),
                     "end" => this.state.editor.move_to_line_end(),
                     _ => {
@@ -1797,6 +1821,7 @@ impl Render for WorkspaceView {
                                                 .size_full()
                                                 .child(render_editor_pane(
                                                     self.state.editor.lines.clone(),
+                                                    visual_lines.clone(),
                                                     self.state.editor.cursor(),
                                                     theme,
                                                     self.state.preferences.font_size,
@@ -1840,6 +1865,7 @@ impl Render for WorkspaceView {
                                                         }))
                                                         .child(render_editor_pane(
                                                             self.state.editor.lines.clone(),
+                                                            visual_lines.clone(),
                                                             self.state.editor.cursor(),
                                                             theme,
                                                             self.state.preferences.font_size,

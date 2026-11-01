@@ -4,10 +4,235 @@ const MAX_UNDO_STEPS: usize = 100;
 const MAX_UNDO_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualLine {
+    pub physical_line_idx: usize,
+    pub subline_idx: usize,
+    pub char_start: usize,
+    pub char_len: usize,
+    pub is_first: bool,
+}
+
+pub fn char_unit_width(ch: char) -> usize {
+    let u = ch as u32;
+    // ASCII printable
+    if (0x20..=0x7E).contains(&u) {
+        return 1;
+    }
+    // Zero-width or control characters
+    if u < 0x20 || (0x7F..=0x9F).contains(&u) || u == 0x200B || u == 0xFEFF {
+        return 0;
+    }
+    // CJK Unified Ideographs, Hangul, Hiragana, Katakana, Fullwidth Forms, CJK symbols & punctuation, Emojis
+    if (0x1100..=0x115F).contains(&u)
+        || (0x2E80..=0xA4CF).contains(&u)
+        || (0xAC00..=0xD7A3).contains(&u)
+        || (0xF900..=0xFAFF).contains(&u)
+        || (0xFE10..=0xFE19).contains(&u)
+        || (0xFE30..=0xFE6F).contains(&u)
+        || (0xFF01..=0xFF60).contains(&u)
+        || (0xFFE0..=0xFFE6).contains(&u)
+        || (0x1F300..=0x1F9FF).contains(&u)
+        || (0x20000..=0x2FA1F).contains(&u)
+    {
+        return 2;
+    }
+    1
+}
+
+pub fn wrap_line_to_visual(
+    physical_line_idx: usize,
+    line_str: &str,
+    max_cols: usize,
+) -> Vec<VisualLine> {
+    let max_cols = max_cols.max(1);
+    let chars: Vec<char> = line_str.chars().collect();
+    if chars.is_empty() {
+        return vec![VisualLine {
+            physical_line_idx,
+            subline_idx: 0,
+            char_start: 0,
+            char_len: 0,
+            is_first: true,
+        }];
+    }
+
+    let mut visual_lines = Vec::new();
+    let mut subline_idx = 0;
+    let mut char_start = 0;
+    let mut current_idx = 0;
+    let mut current_cols = 0;
+    let mut last_break_char = None;
+
+    while current_idx < chars.len() {
+        let ch = chars[current_idx];
+        let w = char_unit_width(ch);
+
+        if current_cols + w > max_cols && current_cols > 0 {
+            let break_at = if let Some(b) = last_break_char {
+                if b > char_start && b <= current_idx {
+                    b
+                } else {
+                    current_idx
+                }
+            } else {
+                current_idx
+            };
+
+            visual_lines.push(VisualLine {
+                physical_line_idx,
+                subline_idx,
+                char_start,
+                char_len: break_at - char_start,
+                is_first: subline_idx == 0,
+            });
+
+            subline_idx += 1;
+            char_start = break_at;
+            current_idx = break_at;
+            current_cols = 0;
+            last_break_char = None;
+            continue;
+        }
+
+        current_cols += w;
+        current_idx += 1;
+
+        if ch == ' '
+            || ch == '\t'
+            || char_unit_width(ch) == 2
+            || ch == '-'
+            || ch == '/'
+            || ch == '_'
+            || ch == ','
+            || ch == '.'
+            || ch == ';'
+        {
+            last_break_char = Some(current_idx);
+        }
+    }
+
+    if char_start < chars.len() || visual_lines.is_empty() {
+        visual_lines.push(VisualLine {
+            physical_line_idx,
+            subline_idx,
+            char_start,
+            char_len: chars.len() - char_start,
+            is_first: subline_idx == 0,
+        });
+    }
+
+    visual_lines
+}
+
+pub fn physical_to_visual(
+    phys_line: usize,
+    phys_col: usize,
+    visual_lines: &[VisualLine],
+) -> (usize, usize) {
+    let sublines: Vec<(usize, &VisualLine)> = visual_lines
+        .iter()
+        .enumerate()
+        .filter(|(_, vl)| vl.physical_line_idx == phys_line)
+        .collect();
+
+    if sublines.is_empty() {
+        return (0, 0);
+    }
+
+    for (idx, &(vis_idx, vl)) in sublines.iter().enumerate() {
+        let is_last = idx + 1 == sublines.len();
+        if phys_col >= vl.char_start && (phys_col < vl.char_start + vl.char_len || is_last) {
+            let rel_col = phys_col.saturating_sub(vl.char_start);
+            return (vis_idx, rel_col);
+        }
+    }
+
+    let (last_vis_idx, last_vl) = sublines.last().unwrap();
+    (*last_vis_idx, last_vl.char_len)
+}
+
+pub fn visual_to_physical(
+    vis_line_idx: usize,
+    vis_col: usize,
+    visual_lines: &[VisualLine],
+) -> (usize, usize) {
+    if visual_lines.is_empty() {
+        return (0, 0);
+    }
+    let vl = if vis_line_idx < visual_lines.len() {
+        &visual_lines[vis_line_idx]
+    } else {
+        visual_lines.last().unwrap()
+    };
+
+    let phys_line = vl.physical_line_idx;
+    let phys_col = vl.char_start + vis_col.min(vl.char_len);
+    (phys_line, phys_col)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VisualLineCache {
+    pub buffer_revision: usize,
+    pub max_cols: usize,
+    pub cached_visual_lines: Arc<Vec<VisualLine>>,
+}
+
+impl VisualLineCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get_or_compute(
+        &mut self,
+        lines: &[String],
+        revision: usize,
+        max_cols: usize,
+    ) -> Arc<Vec<VisualLine>> {
+        if self.cached_visual_lines.is_empty()
+            || self.buffer_revision != revision
+            || self.max_cols != max_cols
+        {
+            let mut result = Vec::new();
+            for (phys_idx, line) in lines.iter().enumerate() {
+                let wrapped = wrap_line_to_visual(phys_idx, line, max_cols);
+                result.extend(wrapped);
+            }
+            if result.is_empty() {
+                result.push(VisualLine {
+                    physical_line_idx: 0,
+                    subline_idx: 0,
+                    char_start: 0,
+                    char_len: 0,
+                    is_first: true,
+                });
+            }
+            self.buffer_revision = revision;
+            self.max_cols = max_cols;
+            self.cached_visual_lines = Arc::new(result);
+        }
+        self.cached_visual_lines.clone()
+    }
+
+    #[allow(dead_code)]
+    pub fn is_cached(&self, revision: usize, max_cols: usize) -> bool {
+        !self.cached_visual_lines.is_empty()
+            && self.buffer_revision == revision
+            && self.max_cols == max_cols
+    }
+
+    #[allow(dead_code)]
+    pub fn invalidate(&mut self) {
+        self.cached_visual_lines = Arc::new(Vec::new());
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorEngine {
     pub lines: Arc<Vec<String>>,
     pub cursor_line: usize,
     pub cursor_col: usize,
+    pub revision: usize,
+    pub visual_cache: VisualLineCache,
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
     undo_bytes: usize,
@@ -23,6 +248,8 @@ impl EditorEngine {
             lines: Arc::new(lines),
             cursor_line: last_line_idx,
             cursor_col: last_col,
+            revision: 0,
+            visual_cache: VisualLineCache::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_bytes: 0,
@@ -38,6 +265,7 @@ impl EditorEngine {
         self.redo_stack.clear();
         self.undo_bytes = 0;
         self.redo_bytes = 0;
+        self.revision += 1;
     }
 
     pub fn to_text(&self) -> String {
@@ -80,11 +308,13 @@ impl EditorEngine {
                 self.internal_insert_char(ch);
             }
         }
+        self.revision += 1;
     }
 
     pub fn insert_newline(&mut self) {
         self.push_snapshot();
         self.internal_newline();
+        self.revision += 1;
     }
 
     fn internal_insert_char(&mut self, ch: char) {
@@ -115,6 +345,7 @@ impl EditorEngine {
             chars.remove(self.cursor_col - 1);
             *line = chars.into_iter().collect();
             self.cursor_col -= 1;
+            self.revision += 1;
         } else if self.cursor_line > 0 {
             self.push_snapshot();
             let lines = Arc::make_mut(&mut self.lines);
@@ -124,6 +355,7 @@ impl EditorEngine {
             prev_line.push_str(&current);
             self.cursor_line -= 1;
             self.cursor_col = prev_len;
+            self.revision += 1;
         }
     }
 
@@ -135,11 +367,13 @@ impl EditorEngine {
             let mut chars: Vec<char> = line.chars().collect();
             chars.remove(self.cursor_col);
             *line = chars.into_iter().collect();
+            self.revision += 1;
         } else if self.cursor_line + 1 < self.lines.len() {
             self.push_snapshot();
             let lines = Arc::make_mut(&mut self.lines);
             let next = lines.remove(self.cursor_line + 1);
             lines[self.cursor_line].push_str(&next);
+            self.revision += 1;
         }
     }
 
@@ -162,6 +396,7 @@ impl EditorEngine {
         }
     }
 
+    #[allow(dead_code)]
     pub fn move_up(&mut self) {
         if self.cursor_line > 0 {
             self.cursor_line -= 1;
@@ -169,6 +404,7 @@ impl EditorEngine {
         }
     }
 
+    #[allow(dead_code)]
     pub fn move_down(&mut self) {
         if self.cursor_line + 1 < self.lines.len() {
             self.cursor_line += 1;
@@ -194,6 +430,7 @@ impl EditorEngine {
             self.lines = Arc::new(split_lines(&prev));
             self.cursor_line = self.cursor_line.min(self.lines.len() - 1);
             self.clamp_cursor();
+            self.revision += 1;
             true
         } else {
             false
@@ -210,9 +447,35 @@ impl EditorEngine {
             self.lines = Arc::new(split_lines(&next));
             self.cursor_line = self.cursor_line.min(self.lines.len() - 1);
             self.clamp_cursor();
+            self.revision += 1;
             true
         } else {
             false
+        }
+    }
+
+    pub fn get_visual_lines(&mut self, max_cols: usize) -> Arc<Vec<VisualLine>> {
+        let rev = self.revision;
+        self.visual_cache.get_or_compute(&self.lines, rev, max_cols)
+    }
+
+    pub fn move_up_visual(&mut self, max_cols: usize) {
+        let vis_lines = self.get_visual_lines(max_cols);
+        let (vis_idx, vis_col) = physical_to_visual(self.cursor_line, self.cursor_col, &vis_lines);
+        if vis_idx > 0 {
+            let (new_phys_line, new_phys_col) =
+                visual_to_physical(vis_idx - 1, vis_col, &vis_lines);
+            self.set_cursor(new_phys_line, new_phys_col);
+        }
+    }
+
+    pub fn move_down_visual(&mut self, max_cols: usize) {
+        let vis_lines = self.get_visual_lines(max_cols);
+        let (vis_idx, vis_col) = physical_to_visual(self.cursor_line, self.cursor_col, &vis_lines);
+        if vis_idx + 1 < vis_lines.len() {
+            let (new_phys_line, new_phys_col) =
+                visual_to_physical(vis_idx + 1, vis_col, &vis_lines);
+            self.set_cursor(new_phys_line, new_phys_col);
         }
     }
 }
@@ -247,5 +510,80 @@ mod tests {
         assert!(editor.undo_bytes <= MAX_UNDO_BYTES);
         assert!(editor.undo_stack.len() <= 8);
         assert!(editor.undo());
+    }
+
+    #[test]
+    fn test_char_unit_width() {
+        assert_eq!(char_unit_width('a'), 1);
+        assert_eq!(char_unit_width('Z'), 1);
+        assert_eq!(char_unit_width('1'), 1);
+        assert_eq!(char_unit_width(' '), 1);
+        assert_eq!(char_unit_width('\t'), 0);
+        assert_eq!(char_unit_width('\0'), 0);
+        assert_eq!(char_unit_width('\u{200B}'), 0);
+        assert_eq!(char_unit_width('中'), 2);
+        assert_eq!(char_unit_width('文'), 2);
+        assert_eq!(char_unit_width('🎉'), 2);
+        assert_eq!(char_unit_width('é'), 1);
+    }
+
+    #[test]
+    fn test_wrap_line_to_visual() {
+        let empty = wrap_line_to_visual(0, "", 10);
+        assert_eq!(empty.len(), 1);
+        assert_eq!(empty[0].char_len, 0);
+        assert!(empty[0].is_first);
+
+        let short = wrap_line_to_visual(1, "hello", 10);
+        assert_eq!(short.len(), 1);
+        assert_eq!(short[0].char_len, 5);
+        assert_eq!(short[0].char_start, 0);
+
+        let wrapped = wrap_line_to_visual(2, "hello world test wrap", 12);
+        assert!(wrapped.len() > 1);
+        assert!(wrapped[0].is_first);
+        assert!(!wrapped[1].is_first);
+
+        let cjk = wrap_line_to_visual(3, "你好世界测试换行", 8);
+        assert!(cjk.len() > 1);
+    }
+
+    #[test]
+    fn test_bidirectional_coordinate_mapping() {
+        let text = "hello world quick brown fox jumps over";
+        let vl = wrap_line_to_visual(0, text, 12);
+
+        for col in 0..text.chars().count() {
+            let (v_line, v_col) = physical_to_visual(0, col, &vl);
+            let (p_line, p_col) = visual_to_physical(v_line, v_col, &vl);
+            assert_eq!(p_line, 0);
+            assert_eq!(p_col, col);
+        }
+    }
+
+    #[test]
+    fn test_visual_line_cache_and_engine_navigation() {
+        let mut editor = EditorEngine::new("first line\nhello world long line here wrapping\nthird line");
+        assert_eq!(editor.revision, 0);
+
+        let _lines1 = editor.get_visual_lines(12);
+        assert!(editor.visual_cache.is_cached(0, 12));
+
+        editor.insert_text("!");
+        assert_eq!(editor.revision, 1);
+        assert!(!editor.visual_cache.is_cached(1, 12));
+
+        let lines2 = editor.get_visual_lines(12);
+        assert_eq!(lines2.len(), editor.get_visual_lines(12).len());
+
+        editor.visual_cache.invalidate();
+        assert!(!editor.visual_cache.is_cached(1, 12));
+
+        editor.set_cursor(1, 20);
+        editor.move_up_visual(12);
+        let (cur_line, _) = editor.cursor();
+        assert!(cur_line <= 1);
+
+        editor.move_down_visual(12);
     }
 }

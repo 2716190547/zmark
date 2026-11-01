@@ -1,6 +1,7 @@
 use gpui::prelude::*;
 use gpui::*;
 use std::sync::Arc;
+use crate::editor_engine::VisualLine;
 use crate::theme::ThemeColors;
 
 pub fn calculate_line_row_height(font_size: f32, line_height: f32) -> f32 {
@@ -20,6 +21,9 @@ pub enum MarkdownTokenKind {
     Bold,
     LinkText,
     LinkUrl,
+    Keyword,
+    StringLiteral,
+    Comment,
     Plain,
 }
 
@@ -222,6 +226,119 @@ pub fn tokenize_markdown_line(line: &str) -> Vec<MarkdownToken> {
     tokens
 }
 
+pub fn compute_fenced_code_lines(lines: &[String]) -> Vec<bool> {
+    let mut in_code = false;
+    let mut is_fenced = Vec::with_capacity(lines.len());
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_code = !in_code;
+            is_fenced.push(true);
+        } else {
+            is_fenced.push(in_code);
+        }
+    }
+    is_fenced
+}
+
+pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
+    if line.is_empty() {
+        return vec![MarkdownToken {
+            text: " ".to_string(),
+            kind: MarkdownTokenKind::Plain,
+        }];
+    }
+
+    const KEYWORDS: &[&str] = &[
+        "fn", "let", "pub", "struct", "impl", "mut", "if", "else", "return", "match",
+        "for", "in", "while", "loop", "const", "static", "enum", "type", "use", "mod",
+        "trait", "async", "await", "def", "class", "import", "from", "function", "var", "val",
+    ];
+
+    let mut tokens = Vec::new();
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        // Comments: //... or #...
+        if (chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '/') || chars[i] == '#' {
+            let comment_text: String = chars[i..].iter().collect();
+            tokens.push(MarkdownToken {
+                text: comment_text,
+                kind: MarkdownTokenKind::Comment,
+            });
+            break;
+        }
+
+        // Strings: "..." or '...'
+        if chars[i] == '"' || chars[i] == '\'' {
+            let quote = chars[i];
+            let start = i;
+            i += 1;
+            let mut escaped = false;
+            while i < chars.len() {
+                if escaped {
+                    escaped = false;
+                    i += 1;
+                } else if chars[i] == '\\' {
+                    escaped = true;
+                    i += 1;
+                } else if chars[i] == quote {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+            let str_text: String = chars[start..i].iter().collect();
+            tokens.push(MarkdownToken {
+                text: str_text,
+                kind: MarkdownTokenKind::StringLiteral,
+            });
+            continue;
+        }
+
+        // Identifiers / keywords: starts with alphabetic or '_'
+        if chars[i].is_alphabetic() || chars[i] == '_' {
+            let start = i;
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            let kind = if KEYWORDS.contains(&word.as_str()) {
+                MarkdownTokenKind::Keyword
+            } else {
+                MarkdownTokenKind::Plain
+            };
+            tokens.push(MarkdownToken {
+                text: word,
+                kind,
+            });
+            continue;
+        }
+
+        // Other characters (whitespace, punctuation, numbers, operators)
+        let start = i;
+        while i < chars.len()
+            && !chars[i].is_alphabetic()
+            && chars[i] != '_'
+            && chars[i] != '"'
+            && chars[i] != '\''
+            && !(chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '/')
+            && chars[i] != '#'
+        {
+            i += 1;
+        }
+        let other: String = chars[start..i].iter().collect();
+        tokens.push(MarkdownToken {
+            text: other,
+            kind: MarkdownTokenKind::Plain,
+        });
+    }
+
+    tokens
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActiveLineSegment {
     Token(MarkdownToken),
@@ -280,46 +397,52 @@ pub fn build_active_line_segments(tokens: &[MarkdownToken], cursor_col: usize) -
     segments
 }
 
-fn render_markdown_token_element(tok: &MarkdownToken, list_theme: &ThemeColors) -> impl IntoElement {
+fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> impl IntoElement {
     let mut el = div().child(tok.text.clone());
     match tok.kind {
+        MarkdownTokenKind::Keyword => {
+            el = el.text_color(theme.syntax_keyword).font_weight(FontWeight::BOLD);
+        }
+        MarkdownTokenKind::StringLiteral => {
+            el = el.text_color(theme.syntax_string);
+        }
+        MarkdownTokenKind::Comment => {
+            el = el.text_color(theme.syntax_comment).italic();
+        }
         MarkdownTokenKind::HeadingPrefix | MarkdownTokenKind::HeadingText => {
-            el = el.text_color(list_theme.accent).font_weight(FontWeight::BOLD);
+            el = el.text_color(theme.syntax_heading).font_weight(FontWeight::BOLD);
         }
         MarkdownTokenKind::BlockquotePrefix | MarkdownTokenKind::BlockquoteText => {
-            el = el.text_color(list_theme.text_muted);
+            el = el.text_color(theme.text_muted);
         }
         MarkdownTokenKind::InlineCode => {
-            el = el.text_color(list_theme.accent)
-                .bg(list_theme.warm_pill_bg().opacity(0.6))
+            el = el.text_color(theme.syntax_inline_code)
+                .bg(theme.code_bg)
                 .rounded(px(3.))
                 .px(px(4.));
         }
         MarkdownTokenKind::InlineCodeSplitLeft => {
-            el = el.text_color(list_theme.accent)
-                .bg(list_theme.warm_pill_bg().opacity(0.6))
+            el = el.text_color(theme.syntax_inline_code)
+                .bg(theme.code_bg)
                 .rounded_l(px(3.))
                 .pl(px(4.))
                 .pr_0();
         }
         MarkdownTokenKind::InlineCodeSplitRight => {
-            el = el.text_color(list_theme.accent)
-                .bg(list_theme.warm_pill_bg().opacity(0.6))
+            el = el.text_color(theme.syntax_inline_code)
+                .bg(theme.code_bg)
                 .rounded_r(px(3.))
                 .pr(px(4.))
                 .pl_0();
         }
         MarkdownTokenKind::Bold => {
-            el = el.text_color(list_theme.text_primary).font_weight(FontWeight::BOLD);
+            el = el.text_color(theme.text_primary).font_weight(FontWeight::BOLD);
         }
-        MarkdownTokenKind::LinkText => {
-            el = el.text_color(list_theme.accent).underline();
-        }
-        MarkdownTokenKind::LinkUrl => {
-            el = el.text_color(list_theme.text_muted);
+        MarkdownTokenKind::LinkText | MarkdownTokenKind::LinkUrl => {
+            el = el.text_color(theme.syntax_link).underline();
         }
         MarkdownTokenKind::Plain => {
-            el = el.text_color(list_theme.text_primary);
+            el = el.text_color(theme.text_primary);
         }
     }
     el
@@ -327,6 +450,7 @@ fn render_markdown_token_element(tok: &MarkdownToken, list_theme: &ThemeColors) 
 
 pub fn render_editor_pane(
     lines: Arc<Vec<String>>,
+    visual_lines: Arc<Vec<VisualLine>>,
     cursor: (usize, usize),
     theme: &ThemeColors,
     font_size: f32,
@@ -335,12 +459,12 @@ pub fn render_editor_pane(
     scroll_handle: &UniformListScrollHandle,
     on_click_line: Arc<dyn Fn(usize, usize, &mut Window, &mut App)>,
 ) -> impl IntoElement {
-    let line_count = lines.len().max(1);
+    let line_count = visual_lines.len().max(1);
     let (cursor_line, cursor_col) = cursor;
     let theme = theme.clone();
     let list_theme = theme.clone();
-    let scroll_x = (-f32::from(scroll_handle.0.borrow().base_handle.offset().x)).max(0.0);
     let sanitized_lh = glidemark_core::config::Preferences::sanitize_line_height(line_height);
+    let fenced_lines = Arc::new(compute_fenced_code_lines(&lines));
 
     div()
         .flex_1()
@@ -353,14 +477,31 @@ pub fn render_editor_pane(
         .child(
             uniform_list("editor_lines", line_count, move |range, _window, _cx| {
                 range
-                    .map(|line_idx| {
-                        let line = lines.get(line_idx).map(String::as_str).unwrap_or("");
-                        let is_active = line_idx == cursor_line;
-                        let on_click_line = on_click_line.clone();
+                    .map(|vis_idx| {
+                        let vl = visual_lines.get(vis_idx);
+                        let phys_idx = vl.map(|v| v.physical_line_idx).unwrap_or(0);
+                        let phys_line_str = lines.get(phys_idx).map(String::as_str).unwrap_or("");
+                        let subline_str: String = if let Some(v) = vl {
+                            phys_line_str.chars().skip(v.char_start).take(v.char_len).collect()
+                        } else {
+                            phys_line_str.to_string()
+                        };
 
+                        let is_last_subline_of_phys_line = visual_lines
+                            .get(vis_idx + 1)
+                            .map(|next| next.physical_line_idx != phys_idx)
+                            .unwrap_or(true);
+
+                        let is_active_subline = cursor_line == phys_idx
+                            && cursor_col >= vl.map(|v| v.char_start).unwrap_or(0)
+                            && (cursor_col < vl.map(|v| v.char_start + v.char_len).unwrap_or(0)
+                                || is_last_subline_of_phys_line);
+                        let rel_cursor_col = cursor_col.saturating_sub(vl.map(|v| v.char_start).unwrap_or(0));
+
+                        let on_click_line = on_click_line.clone();
                         let row_h = calculate_line_row_height(font_size, sanitized_lh);
+
                         let row = div()
-                            .min_w_full()
                             .flex()
                             .items_center()
                             .h(px(row_h))
@@ -368,17 +509,26 @@ pub fn render_editor_pane(
                             .rounded_sm()
                             .cursor_text()
                             .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
-                                let x_offset = (f32::from(event.position.x - px(68.)) + scroll_x).max(0.0);
+                                let x_offset = (f32::from(event.position.x - px(68.))).max(0.0);
                                 let char_width = font_size * 0.6;
-                                let col = (x_offset / char_width) as usize;
-                                on_click_line(line_idx, col, window, cx);
+                                let rel_col = (x_offset / char_width) as usize;
+                                on_click_line(vis_idx, rel_col, window, cx);
                             });
 
-                        let styled_row = if is_active {
+                        let styled_row = if is_active_subline {
                             row.bg(list_theme.bg)
                         } else {
                             row.hover(|s| s.bg(list_theme.bg))
                         };
+
+                        let show_line_num = vl.map(|v| v.is_first).unwrap_or(true);
+                        let gutter_text = if show_line_num {
+                            format!("{}", phys_idx + 1)
+                        } else {
+                            String::new()
+                        };
+
+                        let is_fenced = fenced_lines.get(phys_idx).copied().unwrap_or(false);
 
                         styled_row
                             .child(
@@ -390,18 +540,21 @@ pub fn render_editor_pane(
                                     .text_size(px(font_size * 0.85))
                                     .line_height(relative(sanitized_lh))
                                     .font_family("ui-monospace")
-                                    .text_color(if is_active { list_theme.accent } else { list_theme.text_muted })
-                                    .child((line_idx + 1).to_string()),
+                                    .text_color(if is_active_subline { list_theme.accent } else { list_theme.text_muted })
+                                    .child(gutter_text),
                             )
-                            .child(if is_active {
-                                let tokens = tokenize_markdown_line(line);
-                                let char_count = line.chars().count();
-                                let col = cursor_col.min(char_count);
+                            .child(if is_active_subline {
+                                let tokens = if is_fenced {
+                                    tokenize_code_line(&subline_str)
+                                } else {
+                                    tokenize_markdown_line(&subline_str)
+                                };
+                                let char_count = subline_str.chars().count();
+                                let col = rel_cursor_col.min(char_count);
                                 let segments = build_active_line_segments(&tokens, col);
 
                                 div()
                                     .flex_1()
-                                    .whitespace_nowrap()
                                     .text_size(px(font_size))
                                     .line_height(relative(sanitized_lh))
                                     .font_family("ui-monospace")
@@ -428,7 +581,7 @@ pub fn render_editor_pane(
 
                                                 if in_inline_code {
                                                     div()
-                                                        .bg(list_theme.warm_pill_bg().opacity(0.6))
+                                                        .bg(list_theme.code_bg)
                                                         .mx_0()
                                                         .flex()
                                                         .items_center()
@@ -452,10 +605,13 @@ pub fn render_editor_pane(
                                     }))
                                     .into_any_element()
                             } else {
-                                let tokens = tokenize_markdown_line(line);
+                                let tokens = if is_fenced {
+                                    tokenize_code_line(&subline_str)
+                                } else {
+                                    tokenize_markdown_line(&subline_str)
+                                };
                                 div()
                                     .flex_1()
-                                    .whitespace_nowrap()
                                     .text_size(px(font_size))
                                     .line_height(relative(sanitized_lh))
                                     .font_family("ui-monospace")
@@ -469,7 +625,6 @@ pub fn render_editor_pane(
                     })
                     .collect()
             })
-            .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
             .track_scroll(scroll_handle.clone())
             .flex_1()
             .w_full()
