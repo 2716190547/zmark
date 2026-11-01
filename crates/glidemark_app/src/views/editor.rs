@@ -448,6 +448,55 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
     el
 }
 
+pub fn calculate_click_char_col(subline_str: &str, x_offset: f32, font_size: f32) -> usize {
+    let base_unit_w = (font_size * 0.6).max(1.0);
+    let mut current_x = 0.0;
+    for (idx, ch) in subline_str.chars().enumerate() {
+        let w = (crate::editor_engine::char_unit_width(ch) as f32) * base_unit_w;
+        if current_x + w * 0.5 >= x_offset {
+            return idx;
+        }
+        current_x += w;
+    }
+    subline_str.chars().count()
+}
+
+pub fn calculate_editor_left_offset(drawer_open: bool) -> f32 {
+    (if drawer_open { 240.0 } else { 0.0 }) + 68.0
+}
+
+pub fn slice_tokens_for_visual_subline(
+    tokens: &[MarkdownToken],
+    sub_start: usize,
+    sub_len: usize,
+) -> Vec<MarkdownToken> {
+    if tokens.is_empty() || sub_len == 0 {
+        return Vec::new();
+    }
+    let sub_end = sub_start + sub_len;
+    let mut sliced = Vec::new();
+    let mut tok_start = 0;
+
+    for tok in tokens {
+        let tok_char_count = tok.text.chars().count();
+        let tok_end = tok_start + tok_char_count;
+
+        if tok_end > sub_start && tok_start < sub_end {
+            let c_start = sub_start.saturating_sub(tok_start);
+            let c_end = (sub_end.saturating_sub(tok_start)).min(tok_char_count);
+            if c_end > c_start {
+                let sub_text: String = tok.text.chars().skip(c_start).take(c_end - c_start).collect();
+                sliced.push(MarkdownToken {
+                    text: sub_text,
+                    kind: tok.kind.clone(),
+                });
+            }
+        }
+        tok_start = tok_end;
+    }
+    sliced
+}
+
 pub fn render_editor_pane(
     lines: Arc<Vec<String>>,
     visual_lines: Arc<Vec<VisualLine>>,
@@ -457,6 +506,7 @@ pub fn render_editor_pane(
     line_height: f32,
     is_dirty: bool,
     scroll_handle: &UniformListScrollHandle,
+    editor_left_offset: f32,
     on_click_line: Arc<dyn Fn(usize, usize, &mut Window, &mut App)>,
 ) -> impl IntoElement {
     let line_count = visual_lines.len().max(1);
@@ -500,6 +550,7 @@ pub fn render_editor_pane(
 
                         let on_click_line = on_click_line.clone();
                         let row_h = calculate_line_row_height(font_size, sanitized_lh);
+                        let subline_click = subline_str.clone();
 
                         let row = div()
                             .flex()
@@ -509,9 +560,8 @@ pub fn render_editor_pane(
                             .rounded_sm()
                             .cursor_text()
                             .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
-                                let x_offset = (f32::from(event.position.x - px(68.))).max(0.0);
-                                let char_width = font_size * 0.6;
-                                let rel_col = (x_offset / char_width) as usize;
+                                let x_offset = (f32::from(event.position.x) - editor_left_offset).max(0.0);
+                                let rel_col = calculate_click_char_col(&subline_click, x_offset, font_size);
                                 on_click_line(vis_idx, rel_col, window, cx);
                             });
 
@@ -529,6 +579,17 @@ pub fn render_editor_pane(
                         };
 
                         let is_fenced = fenced_lines.get(phys_idx).copied().unwrap_or(false);
+                        let phys_tokens = if is_fenced {
+                            tokenize_code_line(phys_line_str)
+                        } else {
+                            tokenize_markdown_line(phys_line_str)
+                        };
+                        let (sub_start, sub_len) = if let Some(v) = vl {
+                            (v.char_start, v.char_len)
+                        } else {
+                            (0, phys_line_str.chars().count())
+                        };
+                        let tokens = slice_tokens_for_visual_subline(&phys_tokens, sub_start, sub_len);
 
                         styled_row
                             .child(
@@ -544,11 +605,6 @@ pub fn render_editor_pane(
                                     .child(gutter_text),
                             )
                             .child(if is_active_subline {
-                                let tokens = if is_fenced {
-                                    tokenize_code_line(&subline_str)
-                                } else {
-                                    tokenize_markdown_line(&subline_str)
-                                };
                                 let char_count = subline_str.chars().count();
                                 let col = rel_cursor_col.min(char_count);
                                 let segments = build_active_line_segments(&tokens, col);
@@ -605,11 +661,6 @@ pub fn render_editor_pane(
                                     }))
                                     .into_any_element()
                             } else {
-                                let tokens = if is_fenced {
-                                    tokenize_code_line(&subline_str)
-                                } else {
-                                    tokenize_markdown_line(&subline_str)
-                                };
                                 div()
                                     .flex_1()
                                     .text_size(px(font_size))

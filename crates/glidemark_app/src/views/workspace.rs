@@ -172,13 +172,23 @@ impl WorkspaceView {
             self.state.preferences.line_height,
         ).max(1.0);
         let top_vis_index = (scroll_y / row_h).floor() as usize;
-        let phys_line = visual_lines.get(top_vis_index).map(|vl| vl.physical_line_idx + 1).unwrap_or(1);
+        let vl_opt = visual_lines.get(top_vis_index);
+        let phys_line_idx = vl_opt.map(|vl| vl.physical_line_idx).unwrap_or(0);
+        let phys_line = phys_line_idx + 1;
+        let subline_idx = vl_opt.map(|vl| vl.subline_idx).unwrap_or(0);
+        let total_sublines = visual_lines
+            .iter()
+            .filter(|vl| vl.physical_line_idx == phys_line_idx)
+            .count()
+            .max(1);
 
         let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc.parsed.anchors.clone());
-        let (block_index, _) = map.source_line_to_preview_progress(phys_line);
+        let (block_index, inner_progress) = map.source_line_to_preview_progress(phys_line);
+        let offset_px = calculate_subline_scroll_offset(inner_progress, subline_idx, total_sublines);
+
         self.preview_list.scroll_to(ListOffset {
             item_ix: block_index,
-            offset_in_item: px(0.),
+            offset_in_item: px(offset_px),
         });
         cx.notify();
     }
@@ -1816,6 +1826,7 @@ impl Render for WorkspaceView {
                                             )
                                             .into_any_element()
                                     } else {
+                                        let editor_left_offset = crate::views::editor::calculate_editor_left_offset(self.state.drawer_open);
                                         match view_mode {
                                             ViewMode::Source => div()
                                                 .size_full()
@@ -1828,6 +1839,7 @@ impl Render for WorkspaceView {
                                                     self.state.preferences.line_height,
                                                     is_dirty,
                                                     &self.editor_scroll_handle,
+                                                    editor_left_offset,
                                                     on_click_line,
                                                 ))
                                                 .into_any_element(),
@@ -1872,6 +1884,7 @@ impl Render for WorkspaceView {
                                                             self.state.preferences.line_height,
                                                             is_dirty,
                                                             &self.editor_scroll_handle,
+                                                            editor_left_offset,
                                                             on_click_line,
                                                         )),
                                                 )
@@ -2052,6 +2065,14 @@ pub fn canvas_title_offset(view_mode: ViewMode, drawer_open: bool) -> f32 {
         }
         ViewMode::Preview => 0.0,
     }
+}
+
+/// Calculates preview pane scroll offset (in pixels, scaled up to 100px per item)
+/// incorporating the fractional subline progress within a wrapped physical line.
+pub fn calculate_subline_scroll_offset(inner_progress: f32, subline_idx: usize, total_sublines: usize) -> f32 {
+    let total = total_sublines.max(1);
+    let subline_fraction = (subline_idx as f32) / (total as f32);
+    (inner_progress + subline_fraction / (total as f32)).clamp(0.0, 1.0) * 100.0
 }
 
 /// Resolves background and text colors for view mode switcher tabs.

@@ -4,8 +4,11 @@ use glidemark_app::editor_engine::{
 };
 use glidemark_app::theme::{ThemeColors, ALL_PALETTES};
 use glidemark_app::views::editor::{
-    compute_fenced_code_lines, tokenize_code_line, MarkdownTokenKind,
+    calculate_click_char_col, calculate_editor_left_offset, compute_fenced_code_lines,
+    slice_tokens_for_visual_subline, tokenize_code_line, tokenize_markdown_line,
+    MarkdownTokenKind,
 };
+use glidemark_app::views::workspace::calculate_subline_scroll_offset;
 
 #[test]
 fn test_visual_line_wrap_cjk_emoji_word_boundary() {
@@ -331,4 +334,94 @@ fn test_editor_horizontal_scroll_disabled_contract() {
         !settings_src.contains(".border_1()"),
         "settings.rs must have zero occurrences of .border_1()"
     );
+}
+
+#[test]
+fn test_cjk_emoji_click_char_col_and_drawer_offset() {
+    let font_size = 14.0;
+
+    // 1. Drawer offset contract:
+    // When drawer is open: 240px drawer + 68px editor gutter/padding = 308px
+    assert_eq!(calculate_editor_left_offset(true), 308.0);
+    // When drawer is collapsed: 68px
+    assert_eq!(calculate_editor_left_offset(false), 68.0);
+
+    // 2. ASCII click hit test:
+    let ascii_str = "abcdef";
+    assert_eq!(calculate_click_char_col(ascii_str, 0.0, font_size), 0);
+    assert_eq!(calculate_click_char_col(ascii_str, 4.0, font_size), 0);
+    assert_eq!(calculate_click_char_col(ascii_str, 5.0, font_size), 1);
+    assert_eq!(calculate_click_char_col(ascii_str, 200.0, font_size), 6);
+
+    // 3. CJK click hit test: each CJK char has unit width 2 (16.8px)
+    let cjk_str = "你好世界";
+    assert_eq!(calculate_click_char_col(cjk_str, 5.0, font_size), 0);
+    assert_eq!(calculate_click_char_col(cjk_str, 10.0, font_size), 1);
+    assert_eq!(calculate_click_char_col(cjk_str, 20.0, font_size), 1);
+    assert_eq!(calculate_click_char_col(cjk_str, 30.0, font_size), 2);
+    assert_eq!(calculate_click_char_col(cjk_str, 40.0, font_size), 2);
+    assert_eq!(calculate_click_char_col(cjk_str, 50.0, font_size), 3);
+    assert_eq!(calculate_click_char_col(cjk_str, 60.0, font_size), 4);
+    assert_eq!(calculate_click_char_col(cjk_str, 100.0, font_size), 4);
+
+    // 4. Emoji click hit test: 🦀 is 2 units, 'R', 'u', 's', 't' are 1 unit each
+    let emoji_str = "🦀Rust";
+    assert_eq!(calculate_click_char_col(emoji_str, 0.0, font_size), 0);
+    assert_eq!(calculate_click_char_col(emoji_str, 8.0, font_size), 0);
+    assert_eq!(calculate_click_char_col(emoji_str, 9.0, font_size), 1);
+    assert_eq!(calculate_click_char_col(emoji_str, 18.0, font_size), 1);
+    assert_eq!(calculate_click_char_col(emoji_str, 22.0, font_size), 2);
+}
+
+#[test]
+fn test_cross_visual_line_syntax_inheritance_and_subline_scroll() {
+    // 1. Cross-visual-line bold inheritance:
+    let line = "**bold text that wraps across lines**";
+    let phys_tokens = tokenize_markdown_line(line);
+    assert_eq!(phys_tokens.len(), 1);
+    assert_eq!(phys_tokens[0].kind, MarkdownTokenKind::Bold);
+
+    // Subline 0: first 15 chars "**bold text tha"
+    let sub0 = slice_tokens_for_visual_subline(&phys_tokens, 0, 15);
+    assert_eq!(sub0.len(), 1);
+    assert_eq!(sub0[0].kind, MarkdownTokenKind::Bold);
+    assert_eq!(sub0[0].text, "**bold text tha");
+
+    // Subline 1: remaining chars "t wraps across lines**"
+    let sub1 = slice_tokens_for_visual_subline(&phys_tokens, 15, line.chars().count() - 15);
+    assert_eq!(sub1.len(), 1);
+    assert_eq!(sub1[0].kind, MarkdownTokenKind::Bold);
+    assert_eq!(sub1[0].text, "t wraps across lines**");
+
+    // 2. Cross-visual-line heading inheritance:
+    let heading_line = "# Very long heading that wraps onto multiple visual lines";
+    let head_tokens = tokenize_markdown_line(heading_line);
+    assert_eq!(head_tokens.len(), 2);
+    assert_eq!(head_tokens[0].kind, MarkdownTokenKind::HeadingPrefix);
+    assert_eq!(head_tokens[1].kind, MarkdownTokenKind::HeadingText);
+
+    // Subline 0: covers "# Very long heading" (char 0 to 19)
+    let head_sub0 = slice_tokens_for_visual_subline(&head_tokens, 0, 19);
+    assert_eq!(head_sub0.len(), 2);
+    assert_eq!(head_sub0[0].kind, MarkdownTokenKind::HeadingPrefix);
+    assert_eq!(head_sub0[1].kind, MarkdownTokenKind::HeadingText);
+
+    // Subline 1: covers " that wraps onto multiple visual lines" (char 19 to end)
+    let head_sub1 = slice_tokens_for_visual_subline(&head_tokens, 19, heading_line.chars().count() - 19);
+    assert_eq!(head_sub1.len(), 1);
+    assert_eq!(head_sub1[0].kind, MarkdownTokenKind::HeadingText);
+
+    // 3. Subline scroll progress calculation:
+    let offset_sub0 = calculate_subline_scroll_offset(0.0, 0, 5);
+    let offset_sub1 = calculate_subline_scroll_offset(0.0, 1, 5);
+    let offset_sub2 = calculate_subline_scroll_offset(0.0, 2, 5);
+    let offset_sub3 = calculate_subline_scroll_offset(0.0, 3, 5);
+    let offset_sub4 = calculate_subline_scroll_offset(0.0, 4, 5);
+
+    assert_eq!(offset_sub0, 0.0);
+    assert!(offset_sub1 > offset_sub0);
+    assert!(offset_sub2 > offset_sub1);
+    assert!(offset_sub3 > offset_sub2);
+    assert!(offset_sub4 > offset_sub3);
+    assert!(offset_sub4 <= 100.0);
 }
