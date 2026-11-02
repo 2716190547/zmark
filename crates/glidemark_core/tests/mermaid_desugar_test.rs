@@ -205,3 +205,38 @@ flowchart TD
         svg
     );
 }
+
+#[test]
+fn test_node_brackets_containing_pipe_and_class_annotation() {
+    // 8. Test A[foo|bar]:::code --> B: verify :::code is stripped even when node text contains '|'
+    let diagram = r#"
+flowchart TD
+    A[foo|bar]:::code --> B
+"#;
+    let res = render_to_svg(diagram);
+    assert!(
+        res.is_ok(),
+        "Expected render_to_svg to succeed for A[foo|bar]:::code, got: {:?}",
+        res.err()
+    );
+    let svg = res.unwrap();
+    assert!(svg.contains("<svg") && svg.contains("</svg>"));
+    assert!(svg.contains("foo") && svg.contains("bar"));
+}
+
+#[test]
+fn test_escaped_pipe_in_diagram() {
+    // 9. Test diagram with escaped pipe \|
+    let diagram = r#"
+flowchart TD
+    A["Escaped \| Pipe"] -->|pipe with \| inside| B
+"#;
+    let res = render_to_svg(diagram);
+    assert!(
+        res.is_ok(),
+        "Expected render_to_svg to succeed with escaped pipe, got: {:?}",
+        res.err()
+    );
+    let svg = res.unwrap();
+    assert!(svg.contains("<svg") && svg.contains("</svg>"));
+}

@@ -781,9 +781,13 @@ fn strip_class_annotations(line: &str) -> String {
 
     while i < chars.len() {
         let c = chars[i];
+        let is_escaped = escaped;
+        escaped = false;
 
         if c == '\\' {
-            escaped = !escaped;
+            if !is_escaped {
+                escaped = true;
+            }
             out.push(c);
             i += 1;
             continue;
@@ -793,13 +797,10 @@ fn strip_class_annotations(line: &str) -> String {
             if !escaped {
                 in_quotes = !in_quotes;
             }
-            escaped = false;
             out.push(c);
             i += 1;
             continue;
         }
-
-        escaped = false;
 
         if in_quotes {
             handle_tag_bracket(c, &chars[i..], &mut out);
@@ -807,8 +808,8 @@ fn strip_class_annotations(line: &str) -> String {
             continue;
         }
 
-        // Outside quotes
-        if c == '|' {
+        // Outside quotes: pipe label toggle ONLY when unescaped and at root bracket depth
+        if c == '|' && bracket_depth == 0 && !is_escaped {
             in_pipe_label = !in_pipe_label;
             out.push(c);
             i += 1;
@@ -816,6 +817,16 @@ fn strip_class_annotations(line: &str) -> String {
         }
 
         if in_pipe_label {
+            if is_escaped && c == '|' {
+                if out.ends_with('\\') {
+                    out.pop();
+                    out.push_str("&#124;");
+                } else {
+                    out.push(c);
+                }
+                i += 1;
+                continue;
+            }
             handle_tag_bracket(c, &chars[i..], &mut out);
             i += 1;
             continue;
