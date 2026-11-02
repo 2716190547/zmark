@@ -195,3 +195,123 @@ fn test_preview_code_syntax_styling_contract() {
         "render_code_block must render lang_display"
     );
 }
+
+#[test]
+fn test_ticket_g0_selection_tokens() {
+    for palette in ALL_PALETTES {
+        for &is_dark in &[false, true] {
+            let theme = ThemeColors::resolve(palette.id, is_dark);
+            let sel_bg = theme.selection_bg();
+            let hov_bg = theme.hover_bg();
+            let sel_txt = theme.selection_text();
+
+            assert_eq!(
+                sel_bg,
+                theme.text_primary.opacity(0.07),
+                "selection_bg must derive text_primary.opacity(0.07) for {} (is_dark={})",
+                palette.id, is_dark
+            );
+            assert_eq!(
+                hov_bg,
+                theme.text_primary.opacity(0.04),
+                "hover_bg must derive text_primary.opacity(0.04) for {} (is_dark={})",
+                palette.id, is_dark
+            );
+            assert_eq!(
+                sel_txt,
+                theme.text_primary,
+                "selection_text must match text_primary for {} (is_dark={})",
+                palette.id, is_dark
+            );
+        }
+    }
+}
+
+fn srgb_to_linear(c: f64) -> f64 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn srgb_luminance(r: u8, g: u8, b: u8) -> f64 {
+    let r_lin = srgb_to_linear(r as f64 / 255.0);
+    let g_lin = srgb_to_linear(g as f64 / 255.0);
+    let b_lin = srgb_to_linear(b as f64 / 255.0);
+    0.2126 * r_lin + 0.7152 * g_lin + 0.0722 * b_lin
+}
+
+fn wcag_contrast(l1: f64, l2: f64) -> f64 {
+    let lighter = l1.max(l2);
+    let darker = l1.min(l2);
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+#[test]
+fn test_ticket_g0_syntax_code_matrix_and_contrast() {
+    // 1. Assert all 8 palettes across both light and dark modes have fully opaque syntax_code
+    for palette in ALL_PALETTES {
+        for &is_dark in &[false, true] {
+            let theme = ThemeColors::resolve(palette.id, is_dark);
+            assert_eq!(
+                theme.syntax_code.a, 1.0,
+                "Palette '{}' (is_dark={}) syntax_code must be fully opaque",
+                palette.id, is_dark
+            );
+        }
+    }
+
+    // 2. Default palette Miaoyan olive gold values and WCAG contrast >= 4.5:1
+    let def_light = ThemeColors::resolve("default", false);
+    assert_eq!(
+        def_light.syntax_code,
+        rgb(0x6b6b1e).into(),
+        "Default light syntax_code must be Miaoyan olive gold #6b6b1e"
+    );
+    let def_light_code_lum = srgb_luminance(0x6b, 0x6b, 0x1e);
+    let def_light_bg_lum = srgb_luminance(0xf5, 0xf4, 0xf0);
+    let cr_light = wcag_contrast(def_light_code_lum, def_light_bg_lum);
+    assert!(
+        cr_light >= 4.5,
+        "Default light syntax_code contrast ratio must be >= 4.5:1, got {:.2}",
+        cr_light
+    );
+
+    let def_dark = ThemeColors::resolve("default", true);
+    assert_eq!(
+        def_dark.syntax_code,
+        rgb(0xcfc458).into(),
+        "Default dark syntax_code must be Miaoyan olive gold dark #cfc458"
+    );
+    let def_dark_code_lum = srgb_luminance(0xcf, 0xc4, 0x58);
+    let def_dark_bg_lum = srgb_luminance(0x18, 0x17, 0x16);
+    let cr_dark = wcag_contrast(def_dark_code_lum, def_dark_bg_lum);
+    assert!(
+        cr_dark >= 4.5,
+        "Default dark syntax_code contrast ratio must be >= 4.5:1, got {:.2}",
+        cr_dark
+    );
+
+    // 3. Verify representative palette values from 8 palettes 16 colors matrix
+    assert_eq!(ThemeColors::resolve("claude", false).syntax_code, rgb(0x6b4e1b).into());
+    assert_eq!(ThemeColors::resolve("claude", true).syntax_code, rgb(0xe5b567).into());
+
+    assert_eq!(ThemeColors::resolve("macos", false).syntax_code, rgb(0x1b4d89).into());
+    assert_eq!(ThemeColors::resolve("macos", true).syntax_code, rgb(0x70b0ff).into());
+
+    assert_eq!(ThemeColors::resolve("tokyo-night", false).syntax_code, rgb(0x2e4374).into());
+    assert_eq!(ThemeColors::resolve("tokyo-night", true).syntax_code, rgb(0x8ba4e8).into());
+
+    assert_eq!(ThemeColors::resolve("nord", false).syntax_code, rgb(0x3b5373).into());
+    assert_eq!(ThemeColors::resolve("nord", true).syntax_code, rgb(0x98c4d8).into());
+
+    assert_eq!(ThemeColors::resolve("github", false).syntax_code, rgb(0x24292f).into());
+    assert_eq!(ThemeColors::resolve("github", true).syntax_code, rgb(0xd0d7de).into());
+
+    assert_eq!(ThemeColors::resolve("solarized", false).syntax_code, rgb(0x475b62).into());
+    assert_eq!(ThemeColors::resolve("solarized", true).syntax_code, rgb(0x93a1a1).into());
+
+    assert_eq!(ThemeColors::resolve("one-dark", false).syntax_code, rgb(0x383a42).into());
+    assert_eq!(ThemeColors::resolve("one-dark", true).syntax_code, rgb(0xabb2bf).into());
+}
