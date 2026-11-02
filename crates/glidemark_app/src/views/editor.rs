@@ -15,6 +15,7 @@ pub enum MarkdownTokenKind {
     HeadingText,
     BlockquotePrefix,
     BlockquoteText,
+    BulletPrefix,
     InlineCode,
     InlineCodeSplitLeft,
     InlineCodeSplitRight,
@@ -153,7 +154,74 @@ pub fn tokenize_markdown_line(line: &str) -> Vec<MarkdownToken> {
         return tokens;
     }
 
-    // Inline parsing
+    // List prefixes (task list, unordered list, ordered list)
+    let indent_len = line.bytes().take_while(|&b| b == b' ' || b == b'\t').count();
+    let trimmed = &line[indent_len..];
+
+    let list_prefix_len = if trimmed.starts_with("- [ ] ")
+        || trimmed.starts_with("- [x] ")
+        || trimmed.starts_with("- [X] ")
+        || trimmed.starts_with("* [ ] ")
+        || trimmed.starts_with("* [x] ")
+        || trimmed.starts_with("* [X] ")
+        || trimmed.starts_with("+ [ ] ")
+        || trimmed.starts_with("+ [x] ")
+        || trimmed.starts_with("+ [X] ")
+    {
+        Some(6)
+    } else if trimmed == "- [ ]"
+        || trimmed == "- [x]"
+        || trimmed == "- [X]"
+        || trimmed == "* [ ]"
+        || trimmed == "* [x]"
+        || trimmed == "* [X]"
+        || trimmed == "+ [ ]"
+        || trimmed == "+ [x]"
+        || trimmed == "+ [X]"
+    {
+        Some(5)
+    } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
+        Some(2)
+    } else {
+        let digit_count = trimmed.bytes().take_while(|b| b.is_ascii_digit()).count();
+        if digit_count >= 1 && digit_count <= 9 {
+            let after_digits = &trimmed[digit_count..];
+            if after_digits.starts_with(". ") {
+                Some(digit_count + 2)
+            } else if after_digits == "." {
+                Some(digit_count + 1)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some(prefix_len) = list_prefix_len {
+        let prefix = &trimmed[..prefix_len];
+        let remainder = &trimmed[prefix_len..];
+        let mut tokens = Vec::new();
+        if indent_len > 0 {
+            tokens.push(MarkdownToken {
+                text: line[..indent_len].to_string(),
+                kind: MarkdownTokenKind::Plain,
+            });
+        }
+        tokens.push(MarkdownToken {
+            text: prefix.to_string(),
+            kind: MarkdownTokenKind::BulletPrefix,
+        });
+        if !remainder.is_empty() {
+            tokens.extend(tokenize_inline(remainder));
+        }
+        return tokens;
+    }
+
+    tokenize_inline(line)
+}
+
+pub fn tokenize_inline(line: &str) -> Vec<MarkdownToken> {
     let mut tokens = Vec::new();
     let mut cursor = 0;
 
@@ -414,6 +482,9 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
         }
         MarkdownTokenKind::BlockquotePrefix | MarkdownTokenKind::BlockquoteText => {
             el = el.text_color(theme.text_muted);
+        }
+        MarkdownTokenKind::BulletPrefix => {
+            el = el.text_color(theme.syntax_bullet);
         }
         MarkdownTokenKind::InlineCode => {
             el = el.text_color(theme.syntax_inline_code)

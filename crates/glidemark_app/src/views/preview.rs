@@ -634,7 +634,7 @@ fn render_list_element(
                                 .text_right()
                                 .text_size(px(base_font_size))
                                 .font_family("ui-monospace")
-                                .text_color(theme.text_muted)
+                                .text_color(theme.syntax_bullet)
                                 .child(format!("{}.", idx + 1))
                         } else {
                             let bullet = match depth % 3 {
@@ -647,7 +647,7 @@ fn render_list_element(
                                 .w(px(12.))
                                 .text_center()
                                 .text_size(px(base_font_size))
-                                .text_color(theme.accent)
+                                .text_color(theme.syntax_bullet)
                                 .child(bullet)
                         })
                         .child(
