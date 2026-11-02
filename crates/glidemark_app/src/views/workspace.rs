@@ -221,7 +221,19 @@ impl WorkspaceView {
     pub fn on_document_swapped(&mut self, window: Option<&mut Window>, cx: &mut App) {
         self.parse_task = None;
         self.parse_paused = false;
-        self.close_lightbox(window, cx);
+        if let Some(image) = self.lightbox.close() {
+            if let Some(window) = window {
+                crate::views::lightbox::release_lightbox_image(image, window, cx);
+            } else if let Some(handle) = self.window_handle {
+                if handle.update(cx, |_view, window, cx| {
+                    crate::views::lightbox::release_lightbox_image(image.clone(), window, cx);
+                }).is_err() {
+                    image.remove_asset(cx);
+                }
+            } else {
+                image.remove_asset(cx);
+            }
+        }
         if self.state.view_mode != ViewMode::Source && self.state.doc.is_parse_stale() {
             self.parse_now_and_refresh();
         }
@@ -240,9 +252,9 @@ impl WorkspaceView {
         &self.state.theme
     }
 
-    pub fn close_lightbox(&mut self, _window: Option<&mut Window>, cx: &mut App) {
+    pub fn close_lightbox(&mut self, window: &mut Window, cx: &mut App) {
         if let Some(image) = self.lightbox.close() {
-            image.remove_asset(cx);
+            crate::views::lightbox::release_lightbox_image(image, window, cx);
         }
     }
 
@@ -254,7 +266,7 @@ impl WorkspaceView {
         cx: &mut App,
     ) {
         if let Some(old_img) = self.lightbox.close() {
-            old_img.remove_asset(cx);
+            crate::views::lightbox::release_lightbox_image(old_img, window, cx);
         }
 
         let scale_factor = window.scale_factor();
@@ -300,11 +312,11 @@ impl WorkspaceView {
         if let Some((hidpi_path, hidpi_svg)) = hidpi_res {
             let img = Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Svg, hidpi_svg.into_bytes()));
             if let Some(evicted) = self.lightbox.open_hidpi(actual_svg_path, hidpi_path, img, code_hash) {
-                evicted.remove_asset(cx);
+                crate::views::lightbox::release_lightbox_image(evicted, window, cx);
             }
         } else {
             if let Some(evicted) = self.lightbox.open(actual_svg_path, code_hash) {
-                evicted.remove_asset(cx);
+                crate::views::lightbox::release_lightbox_image(evicted, window, cx);
             }
         }
     }
@@ -1348,7 +1360,7 @@ impl Render for WorkspaceView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.lightbox.is_open {
                     if event.keystroke.key == "escape" {
-                        this.close_lightbox(Some(window), cx);
+                        this.close_lightbox(window, cx);
                         cx.notify();
                         return;
                     }

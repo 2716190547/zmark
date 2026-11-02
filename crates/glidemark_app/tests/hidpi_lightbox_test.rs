@@ -1,10 +1,15 @@
-use glidemark_app::views::lightbox::{LightboxDiagramCache, LightboxState};
-use glidemark_app::views::workspace::resolve_lightbox_svg_path;
+use glidemark_app::state::AppState;
+use glidemark_app::views::lightbox::{
+    release_lightbox_image, LightboxDiagramCache, LightboxState, TEST_DROP_IMAGE_COUNT,
+    TEST_RELEASE_CALL_COUNT,
+};
+use glidemark_app::views::workspace::{resolve_lightbox_svg_path, WorkspaceView};
 use glidemark_core::mermaid::{
     apply_texture_pixel_budget, calculate_hidpi_dimensions, scale_factor_to_bucket,
 };
-use gpui::{Image, ImageFormat};
+use gpui::{Image, ImageFormat, TestAppContext};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[test]
@@ -242,4 +247,193 @@ fn test_document_swapped_and_open_paths_release_vram_safely() {
     assert!(!state.is_open);
     assert_eq!(state.hidpi_image, None);
     assert_eq!(state.hidpi_svg_path, None);
+}
+
+struct TestImageView {
+    img: Arc<Image>,
+}
+
+impl gpui::Render for TestImageView {
+    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        gpui::img(gpui::ImageSource::Image(self.img.clone()))
+    }
+}
+
+#[gpui::test]
+async fn test_release_lightbox_image_texture_drop_and_asset_cache_behavior(cx: &mut TestAppContext) {
+    let svg_bytes1 = b"<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"100\" height=\"100\" fill=\"red\"/></svg>".to_vec();
+    let img1 = Arc::new(Image::from_bytes(ImageFormat::Svg, svg_bytes1));
+
+    let img1_clone = img1.clone();
+    let (_view, cx) = cx.add_window_view(|_window, _cx| {
+        TestImageView { img: img1_clone }
+    });
+    cx.run_until_parked();
+
+    let initial_releases = TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst);
+    let initial_drops = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
+
+    cx.update(|window, app| {
+        let cached1 = img1.clone().get_render_image(window, app);
+        assert!(cached1.is_some(), "get_render_image should return cached render image after paint");
+
+        // 3. Negative control: img2 with distinct bytes only calls remove_asset -> does NOT drop texture via cx.drop_image
+        let svg_bytes2 = b"<svg width=\"50\" height=\"50\" xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"25\" cy=\"25\" r=\"20\" fill=\"blue\"/></svg>".to_vec();
+        let img2 = Arc::new(Image::from_bytes(ImageFormat::Svg, svg_bytes2));
+        let count_before_remove = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
+        img2.clone().remove_asset(app);
+        assert_eq!(
+            TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst),
+            count_before_remove,
+            "remove_asset alone must NOT trigger drop_image"
+        );
+
+        // 4. Unified release function release_lightbox_image on img1:
+        // Must call cx.drop_image AND remove_asset
+        release_lightbox_image(img1.clone(), window, app);
+
+        assert_eq!(
+            TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst),
+            initial_drops + 1,
+            "release_lightbox_image must call cx.drop_image"
+        );
+        assert_eq!(
+            TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst),
+            initial_releases + 1,
+            "release_lightbox_image call count must increment"
+        );
+        // After release, asset cache is also cleared
+        assert!(img1.clone().get_render_image(window, app).is_none());
+    });
+}
+
+#[gpui::test]
+async fn test_workspace_lightbox_three_paths_release_vram_and_atlas(cx: &mut TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let state = AppState::new_isolated(glidemark_core::document::Document::new_scratch());
+        WorkspaceView::new(state, cx)
+    });
+
+    let temp_dir = std::env::temp_dir().join("glidemark_test_three_paths");
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let sample_svg = temp_dir.join("sample.svg");
+    std::fs::write(&sample_svg, r#"<svg width="200" height="150" viewBox="0 0 200 150"><circle cx="50" cy="50" r="40"/></svg>"#).unwrap();
+
+    // Record window_handle on workspace
+    cx.update(|window, app| {
+        view.update(app, |ws, _cx| {
+            ws.window_handle = Some(window.window_handle());
+        });
+    });
+
+    // Path 1: close_lightbox
+    let drops_before = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
+    let releases_before = TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst);
+
+    let img_p1 = cx.update(|window, app| {
+        view.update(app, |ws, cx| {
+            ws.open_lightbox(sample_svg.clone(), 1001, window, cx);
+            cx.notify();
+        });
+        view.read(app).lightbox.hidpi_image.clone().expect("hidpi_image must be open")
+    });
+
+    // Run layout & paint of WorkspaceView (which renders the open lightbox img element)
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        assert!(img_p1.clone().get_render_image(window, app).is_some());
+
+        // Call close_lightbox
+        view.update(app, |ws, cx| {
+            ws.close_lightbox(window, cx);
+            cx.notify();
+        });
+
+        assert!(!view.read(app).lightbox.is_open);
+        assert_eq!(TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst), releases_before + 1);
+        assert_eq!(TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst), drops_before + 1);
+        assert!(img_p1.clone().get_render_image(window, app).is_none());
+    });
+
+    // Path 2: open_lightbox replacement at top
+    let drops_before = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
+    let releases_before = TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst);
+
+    let img_p2a = cx.update(|window, app| {
+        view.update(app, |ws, cx| {
+            ws.open_lightbox(sample_svg.clone(), 1002, window, cx);
+            cx.notify();
+        });
+        view.read(app).lightbox.hidpi_image.clone().expect("hidpi_image 1002 must be open")
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        assert!(img_p2a.clone().get_render_image(window, app).is_some());
+
+        // Open another diagram while 1002 is still open:
+        // Top of open_lightbox must close and release 1002!
+        view.update(app, |ws, cx| {
+            ws.open_lightbox(sample_svg.clone(), 1003, window, cx);
+            cx.notify();
+        });
+        assert_eq!(TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst), releases_before + 1);
+        assert_eq!(TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst), drops_before + 1);
+        assert!(img_p2a.clone().get_render_image(window, app).is_none());
+    });
+
+    // Path 3: on_document_swapped (with Some(window))
+    let drops_before = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
+    let releases_before = TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst);
+
+    let img_p3 = cx.update(|_window, app| {
+        view.read(app).lightbox.hidpi_image.clone().expect("hidpi_image 1003 must be open")
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        assert!(img_p3.clone().get_render_image(window, app).is_some());
+
+        view.update(app, |ws, cx| {
+            ws.on_document_swapped(Some(window), cx);
+            cx.notify();
+        });
+        assert!(!view.read(app).lightbox.is_open);
+        assert_eq!(TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst), releases_before + 1);
+        assert_eq!(TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst), drops_before + 1);
+        assert!(img_p3.clone().get_render_image(window, app).is_none());
+    });
+
+    // Path 4: on_document_swapped (with None, using window_handle)
+    let drops_before = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
+    let releases_before = TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst);
+
+    let img_p4 = cx.update(|window, app| {
+        view.update(app, |ws, cx| {
+            ws.open_lightbox(sample_svg.clone(), 1004, window, cx);
+            cx.notify();
+        });
+        view.read(app).lightbox.hidpi_image.clone().expect("hidpi_image 1004 must be open")
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        assert!(img_p4.clone().get_render_image(window, app).is_some());
+    });
+
+    // Simulate async prompt return: view.update on AppContext without holding window
+    view.update(cx, |ws, cx| {
+        ws.on_document_swapped(None, cx);
+    });
+
+    cx.update(|window, app| {
+        assert!(!view.read(app).lightbox.is_open);
+        assert_eq!(TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst), releases_before + 1);
+        assert_eq!(TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst), drops_before + 1);
+        assert!(img_p4.clone().get_render_image(window, app).is_none());
+    });
+
+    let _ = std::fs::remove_file(sample_svg);
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }

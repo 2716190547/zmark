@@ -60,6 +60,27 @@ impl LightboxDiagramCache {
 pub static LIGHTBOX_DIAGRAM_CACHE: LazyLock<Mutex<LightboxDiagramCache>> =
     LazyLock::new(|| Mutex::new(LightboxDiagramCache::new(1)));
 
+pub static TEST_RELEASE_CALL_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+pub static TEST_DROP_IMAGE_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Unified release function for lightbox images:
+/// 1. Retrieves cached `RenderImage` without triggering load via `get_render_image(window, cx)`.
+/// 2. If present, calls `cx.drop_image(render, Some(window))` to remove GPU texture from sprite atlas.
+/// 3. Calls `img.remove_asset(cx)` to purge from loading assets cache.
+pub fn release_lightbox_image(img: Arc<gpui::Image>, window: &mut Window, cx: &mut App) {
+    TEST_RELEASE_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+    if let Some(render_image) = img.clone().get_render_image(window, cx) {
+        TEST_DROP_IMAGE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        cx.drop_image(render_image, Some(window));
+    }
+    img.remove_asset(cx);
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LightboxState {
     pub is_open: bool,
@@ -219,7 +240,7 @@ pub fn render_lightbox(
         .justify_center()
         .overflow_hidden()
         .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-            this.close_lightbox(Some(window), cx);
+            this.close_lightbox(window, cx);
             cx.notify();
         }))
         .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
@@ -395,7 +416,7 @@ pub fn render_lightbox(
                                 .cursor_pointer()
                                 .hover(|s| s.bg(rgba(0xffffff20)).text_color(rgb(0xf87171)))
                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                                    this.close_lightbox(Some(window), cx);
+                                    this.close_lightbox(window, cx);
                                     cx.notify();
                                 }))
                                 .child(format!("{} (Esc)", strings.lightbox_close))

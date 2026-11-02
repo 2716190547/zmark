@@ -9,3 +9,4 @@ gpui = "0.2.2"
 
 [dev-dependencies]
 tempfile = "3.17"
+gpui = { version = "0.2.2", features = ["test-support", "runtime_shaders"] }
