@@ -47,6 +47,7 @@ fn test_topbar_icons_optical_weight_balance_matrix() {
     // Expected optical balance matrix per ADR 0035 Decision 3:
     // - code.svg: viewBox stroke-width 2.25 -> 1.50px rendered stroke at 16px
     // - columns-2.svg: viewBox stroke-width 2.25 -> 1.50px rendered stroke at 16px
+    // - panel-left.svg: viewBox stroke-width 2.25 -> 1.50px rendered stroke at 16px (sparse outer-box icon matching columns-2)
     // - download.svg: viewBox stroke-width 2.25 -> 1.50px rendered stroke at 16px
     // - book-open.svg: viewBox stroke-width 2.0 -> 1.33px rendered stroke at 16px
     // - save.svg: viewBox stroke-width 2.0 -> 1.33px rendered stroke at 16px
@@ -54,6 +55,7 @@ fn test_topbar_icons_optical_weight_balance_matrix() {
     let icon_matrix: &[(&str, f32, f32)] = &[
         ("icons/code.svg", 2.25, 1.50),
         ("icons/columns-2.svg", 2.25, 1.50),
+        ("icons/panel-left.svg", 2.25, 1.50),
         ("icons/download.svg", 2.25, 1.50),
         ("icons/book-open.svg", 2.0, 1.3333334),
         ("icons/save.svg", 2.0, 1.3333334),

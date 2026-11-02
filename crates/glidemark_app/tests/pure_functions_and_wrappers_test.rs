@@ -4,68 +4,66 @@ use glidemark_app::views::preview::should_wrap_code_block;
 use glidemark_app::views::workspace::topbar_save_button_color;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Phase G P2-a: Unit tests for should_wrap_code_block pure function
+/// Phase G P1 & P2: Unit tests for should_wrap_code_block pure function per ADR 0036 §3
 #[test]
 fn test_should_wrap_code_block_rules_and_case_trim_insensitivity() {
-    // 1. Unannotated or empty language code blocks must wrap (return true)
+    // 1. None, empty string, or whitespace-only code blocks must retain horizontal scroll (return false)
     assert!(
-        should_wrap_code_block(None),
-        "None (no language specified) must wrap"
+        !should_wrap_code_block(None),
+        "None (no language specified) must NOT wrap (preserve horizontal scroll for ASCII trees)"
     );
     assert!(
-        should_wrap_code_block(Some("")),
-        "Empty string language must wrap"
+        !should_wrap_code_block(Some("")),
+        "Empty string language must NOT wrap"
     );
     assert!(
-        should_wrap_code_block(Some("   ")),
-        "Whitespace-only language must wrap"
-    );
-
-    // 2. Text language (case and whitespace-insensitive) must wrap (return true)
-    assert!(
-        should_wrap_code_block(Some("text")),
-        "'text' language must wrap"
-    );
-    assert!(
-        should_wrap_code_block(Some("TEXT")),
-        "'TEXT' (uppercase) language must wrap"
-    );
-    assert!(
-        should_wrap_code_block(Some("Text")),
-        "'Text' (titlecase) language must wrap"
-    );
-    assert!(
-        should_wrap_code_block(Some("  text  ")),
-        "'  text  ' (padded with whitespace) language must wrap"
-    );
-    assert!(
-        should_wrap_code_block(Some("  TEXT  ")),
-        "'  TEXT  ' (padded uppercase) language must wrap"
+        !should_wrap_code_block(Some("   ")),
+        "Whitespace-only language must NOT wrap"
     );
 
-    // 3. Programming languages must scroll horizontally (return false)
+    // 2. Text language (case and whitespace-insensitive) must retain horizontal scroll (return false)
     assert!(
-        !should_wrap_code_block(Some("python")),
-        "'python' language must NOT wrap (horizontal scroll)"
+        !should_wrap_code_block(Some("text")),
+        "'text' language must NOT wrap (preserve horizontal scroll for ASCII trees)"
     );
     assert!(
-        !should_wrap_code_block(Some("rust")),
-        "'rust' language must NOT wrap"
+        !should_wrap_code_block(Some("TEXT")),
+        "'TEXT' (uppercase) language must NOT wrap"
     );
     assert!(
-        !should_wrap_code_block(Some("javascript")),
-        "'javascript' language must NOT wrap"
+        !should_wrap_code_block(Some("Text")),
+        "'Text' (titlecase) language must NOT wrap"
     );
     assert!(
-        !should_wrap_code_block(Some("  python  ")),
-        "'  python  ' (padded) language must NOT wrap"
+        !should_wrap_code_block(Some("  text  ")),
+        "'  text  ' (padded with whitespace) language must NOT wrap"
+    );
+    assert!(
+        !should_wrap_code_block(Some("  TEXT  ")),
+        "'  TEXT  ' (padded uppercase) language must NOT wrap"
     );
 
-    // 4. ADR 0036 constraint assertion:
-    // Mermaid blocks are handled separately by render_mermaid_element as interactive widgets
-    // with pan/zoom and do not enter should_wrap_code_block.
-    let is_mermaid = "mermaid".eq_ignore_ascii_case("mermaid");
-    assert!(is_mermaid, "Mermaid blocks are routed directly to interactive renderer");
+    // 3. Programming languages must soft-wrap (return true)
+    assert!(
+        should_wrap_code_block(Some("python")),
+        "'python' language must wrap (whitespace_normal)"
+    );
+    assert!(
+        should_wrap_code_block(Some("rust")),
+        "'rust' language must wrap"
+    );
+    assert!(
+        should_wrap_code_block(Some("javascript")),
+        "'javascript' language must wrap"
+    );
+    assert!(
+        should_wrap_code_block(Some("  python  ")),
+        "'  python  ' (padded) language must wrap"
+    );
+    assert!(
+        should_wrap_code_block(Some("Python")),
+        "'Python' (capitalized) language must wrap"
+    );
 }
 
 /// Phase G P2-b: Unit tests for topbar_save_button_color pure function

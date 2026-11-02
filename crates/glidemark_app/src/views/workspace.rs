@@ -231,6 +231,7 @@ impl WorkspaceView {
                     image.remove_asset(cx);
                 }
             } else {
+                // Unreachable in practice: window_handle is initialized upon window creation; retained as asset cache fallback.
                 image.remove_asset(cx);
             }
         }
