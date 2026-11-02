@@ -684,6 +684,24 @@ fn render_list_element(
         .into_any_element()
 }
 
+/// Determines whether a code block should soft-wrap (`whitespace_normal`)
+/// or retain horizontal scroll (`overflow_x_scroll().whitespace_nowrap()`).
+///
+/// Under ADR 0036 review specification:
+/// - `None`, `""`, `"text"` (case and whitespace-insensitive) return `true` (soft-wrap).
+/// - Programming languages such as `"python"`, `"rust"`, etc. return `false` (horizontal scroll).
+/// - Note: Mermaid diagrams do not enter this function as they are rendered
+///   as interactive diagram widgets with pan/zoom lightbox capabilities.
+pub fn should_wrap_code_block(lang: Option<&str>) -> bool {
+    match lang {
+        None => true,
+        Some(l) => {
+            let s = l.trim().to_lowercase();
+            s.is_empty() || s == "text"
+        }
+    }
+}
+
 fn render_code_block(
     lang: Option<&str>,
     code: &str,
@@ -704,12 +722,7 @@ fn render_code_block(
     let code_to_copy = code.to_string();
     let code_text = if code.is_empty() { " ".to_string() } else { code.to_string() };
 
-    let should_wrap = lang
-        .map(|l| {
-            let s = l.trim().to_lowercase();
-            !s.is_empty() && s != "text"
-        })
-        .unwrap_or(false);
+    let should_wrap = should_wrap_code_block(lang);
 
     let group_name: SharedString = format!("code_block_{}", hash).into();
 

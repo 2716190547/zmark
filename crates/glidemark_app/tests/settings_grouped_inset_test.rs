@@ -1,33 +1,3 @@
-use glidemark_app::assets::AppAssets;
-use gpui::AssetSource;
-
-/// 1. `test_search_svg_asset_loaded_and_listed`:
-///    - Use `glidemark_app::assets::AppAssets`.
-///    - Assert `AppAssets.list("")` contains `"icons/search.svg"`.
-///    - Assert `AppAssets.load("icons/search.svg")` returns `Ok(Some(bytes))` and `!bytes.is_empty()`.
-#[test]
-fn test_search_svg_asset_loaded_and_listed() {
-    let assets = AppAssets;
-    let list = assets.list("").expect("AppAssets::list should succeed");
-    assert!(
-        list.iter().any(|p| p.as_ref() == "icons/search.svg"),
-        "AppAssets.list(\"\") must contain 'icons/search.svg'"
-    );
-
-    let loaded = assets
-        .load("icons/search.svg")
-        .expect("AppAssets::load should succeed");
-    assert!(
-        loaded.is_some(),
-        "AppAssets.load('icons/search.svg') must return Some"
-    );
-    let bytes = loaded.unwrap();
-    assert!(
-        !bytes.is_empty(),
-        "Loaded bytes for 'icons/search.svg' must not be empty"
-    );
-}
-
 /// 2. `test_settings_flattened_structure_without_grouping_cards`:
 ///    - Inspect `crates/glidemark_app/src/views/settings.rs` via `include_str!`.
 ///    - Assert `rounded_2xl` is completely removed (no outer grouping cards).

@@ -472,7 +472,7 @@ impl ThemeColors {
                 bg: rgb(0xfdf6e3).into(),
                 surface: rgb(0xeee8d5).into(),
                 border: rgb(0x93a1a1).into(),
-                text_primary: rgb(0x657b83).into(),
+                text_primary: rgb(0x586e75).into(),
                 text_muted: rgb(0x93a1a1).into(),
                 accent: rgb(0x268bd2).into(),
                 code_bg: rgb(0xeee8d5).into(),

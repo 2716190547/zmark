@@ -1,6 +1,6 @@
 use glidemark_app::assets::AppAssets;
-use glidemark_app::state::{AppState, DocKey, ViewMode};
-use glidemark_app::views::workspace::{adaptive_header_padding, canvas_title_offset};
+use glidemark_app::state::{AppState, DocKey};
+use glidemark_app::views::workspace::{adaptive_header_padding, CANVAS_TITLE_LEFT_MARGIN};
 use glidemark_core::document::Document;
 use glidemark_core::i18n::{get_strings, SupportedLocale};
 use gpui::AssetSource;
@@ -346,30 +346,27 @@ fn test_workspace_header_18px_bold_and_16px_toolbar_icons() {
     let is_macos = true;
     let is_fullscreen = false;
 
-    // Collapsed drawer: 76.0 (macOS inset) + 28.0 (btn_expand_drawer) + 6.0 (gap_1p5) + 0.0 (offset) + 8.0 (px_2) == 118.0
+    // Collapsed drawer: 76.0 (macOS inset) + 28.0 (btn_expand_drawer) + 6.0 (gap_1p5) + 8.0 (px_2) == 118.0
     let padding_collapsed = adaptive_header_padding(is_macos, is_fullscreen, false);
     assert_eq!(padding_collapsed, 76.0);
     let expand_btn_w = 28.0;
     let gap_w = 6.0;
-    let offset_collapsed = canvas_title_offset(ViewMode::Source, false);
-    assert_eq!(offset_collapsed, 0.0);
     let title_inner_padding = 8.0;
     let total_collapsed =
-        padding_collapsed + expand_btn_w + gap_w + offset_collapsed + title_inner_padding;
+        padding_collapsed + expand_btn_w + gap_w + title_inner_padding;
     assert_eq!(
         total_collapsed, 118.0,
-        "Collapsed drawer safe zone math: 76 + 28 + 6 + 0 + 8 == 118"
+        "Collapsed drawer safe zone math: 76 + 28 + 6 + 8 == 118"
     );
 
-    // Open drawer: 8.0 (header pl) + 48.0 (canvas_title_offset) + 8.0 (px_2) == 64.0 (aligns with code gutter)
+    // Open drawer: 8.0 (header pl) + 8.0 (px_2) == 16.0 (CANVAS_TITLE_LEFT_MARGIN, aligns with content margin)
+    assert_eq!(CANVAS_TITLE_LEFT_MARGIN, 16.0);
     let padding_open = adaptive_header_padding(is_macos, is_fullscreen, true);
     assert_eq!(padding_open, 8.0);
-    let offset_open = canvas_title_offset(ViewMode::Source, true);
-    assert_eq!(offset_open, 48.0);
-    let total_open = padding_open + offset_open + title_inner_padding;
+    let total_open = padding_open + title_inner_padding;
     assert_eq!(
-        total_open, 64.0,
-        "Open drawer alignment math: 8 + 48 + 8 == 64"
+        total_open, CANVAS_TITLE_LEFT_MARGIN,
+        "Open drawer alignment math: 8 + 8 == 16 (CANVAS_TITLE_LEFT_MARGIN)"
     );
 }
 
@@ -484,7 +481,7 @@ fn test_file_tree_scan_populates_mtime_cached() {
 #[test]
 fn test_format_mtime_format_and_civil_calculation() {
     let now = std::time::SystemTime::now();
-    let formatted = glidemark_app::state::format_mtime(now).expect("format_mtime should succeed");
+    let formatted = glidemark_app::state::format_mtime(Some(now), now).expect("format_mtime should succeed");
     assert_eq!(formatted.len(), 16, "formatted now must be 16 characters");
     assert_eq!(&formatted[4..5], "/");
     assert_eq!(&formatted[7..8], "/");
@@ -493,7 +490,7 @@ fn test_format_mtime_format_and_civil_calculation() {
 
     // Epoch timestamp
     let epoch = std::time::SystemTime::UNIX_EPOCH;
-    let epoch_formatted = glidemark_app::state::format_mtime(epoch).expect("format epoch");
+    let epoch_formatted = glidemark_app::state::format_mtime(Some(epoch), now).expect("format epoch");
     assert_eq!(epoch_formatted.len(), 16);
 }
 

@@ -1,40 +1,30 @@
-use glidemark_app::state::ViewMode;
 use glidemark_app::views::editor::{
     build_active_line_segments, calculate_line_row_height, tokenize_markdown_line,
     ActiveLineSegment, MarkdownToken, MarkdownTokenKind,
 };
-use glidemark_app::views::workspace::canvas_title_offset;
+use glidemark_app::views::workspace::{adaptive_header_padding, CANVAS_TITLE_LEFT_MARGIN};
 
-/// Requirement 1: Canvas title offset aligns with editor gutter
-/// In Source/Split mode with drawer open, offset is 48.0 to align title with code column 1.
-/// In Preview mode, or when drawer is closed, offset is 0.0.
+/// Requirement 1: Canvas title left margin aligns with content margin (ADR 0036)
+/// In all view modes with drawer open, header padding (8px) + title inner padding (8px)
+/// equals CANVAS_TITLE_LEFT_MARGIN (16.0px), aligning title text with content margin.
 #[test]
-fn test_canvas_title_offset_aligns_with_editor_gutter() {
-    // 1. Drawer open state (core workflow):
-    let header_pl_open = 8.0;
-    let title_pill_px = 8.0; // px_2 inner padding
-    let editor_code_column_start = 16.0 + 36.0 + 12.0; // 16px padding + 36px line_no + 12px margin = 64.0
-    let actual_title_text_x = header_pl_open + canvas_title_offset(ViewMode::Source, true) + title_pill_px;
-    assert_eq!(actual_title_text_x, 64.0);
-    assert_eq!(actual_title_text_x, editor_code_column_start);
+fn test_canvas_title_left_margin_aligns_with_content_margin() {
+    assert_eq!(CANVAS_TITLE_LEFT_MARGIN, 16.0);
 
-    let split_title_text_x = header_pl_open + canvas_title_offset(ViewMode::Split, true) + title_pill_px;
-    assert_eq!(split_title_text_x, editor_code_column_start);
+    // 1. Drawer open state (aligns with 16px content margin across all modes):
+    let header_pl_open = adaptive_header_padding(true, false, true);
+    assert_eq!(header_pl_open, 8.0);
+    let title_pill_px = 8.0; // px_2 inner padding
+    let actual_title_text_x = header_pl_open + title_pill_px;
+    assert_eq!(actual_title_text_x, CANVAS_TITLE_LEFT_MARGIN);
 
     // 2. Drawer collapsed state (traffic light safety zone):
-    let header_pl_collapsed = 76.0; // macOS traffic light clearance
+    let header_pl_collapsed = adaptive_header_padding(true, false, false);
+    assert_eq!(header_pl_collapsed, 76.0); // macOS traffic light clearance
     let btn_expand_w = 28.0;
     let btn_gap = 6.0; // gap_1p5
-    let offset_collapsed = canvas_title_offset(ViewMode::Source, false);
-    assert_eq!(offset_collapsed, 0.0);
-    let actual_collapsed_title_x = header_pl_collapsed + btn_expand_w + btn_gap + offset_collapsed + title_pill_px;
+    let actual_collapsed_title_x = header_pl_collapsed + btn_expand_w + btn_gap + title_pill_px;
     assert!(actual_collapsed_title_x >= 110.0, "Title must sit safely past expand button and traffic lights");
-
-    // 3. Preview mode offset is 0.0:
-    assert_eq!(canvas_title_offset(ViewMode::Preview, true), 0.0);
-    assert_eq!(canvas_title_offset(ViewMode::Preview, false), 0.0);
-    assert_eq!(canvas_title_offset(ViewMode::Source, false), 0.0);
-    assert_eq!(canvas_title_offset(ViewMode::Split, false), 0.0);
 }
 
 /// Requirement 2: Dynamic line row height calculation and sanitization fallback

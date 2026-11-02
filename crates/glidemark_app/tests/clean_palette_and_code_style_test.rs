@@ -323,3 +323,28 @@ fn test_ticket_g0_syntax_code_matrix_and_contrast() {
     assert_eq!(ThemeColors::resolve("one-dark", false).syntax_code, rgb(0x383a42).into());
     assert_eq!(ThemeColors::resolve("one-dark", true).syntax_code, rgb(0xabb2bf).into());
 }
+
+fn hsla_luminance(c: gpui::Hsla) -> f64 {
+    let rgba = c.to_rgb();
+    let r_lin = srgb_to_linear(rgba.r as f64);
+    let g_lin = srgb_to_linear(rgba.g as f64);
+    let b_lin = srgb_to_linear(rgba.b as f64);
+    0.2126 * r_lin + 0.7152 * g_lin + 0.0722 * b_lin
+}
+
+#[test]
+fn test_eight_palettes_text_primary_bg_contrast_ratio() {
+    for palette in ALL_PALETTES {
+        for &is_dark in &[false, true] {
+            let theme = ThemeColors::resolve(palette.id, is_dark);
+            let text_lum = hsla_luminance(theme.text_primary);
+            let bg_lum = hsla_luminance(theme.bg);
+            let cr = wcag_contrast(text_lum, bg_lum);
+            assert!(
+                cr >= 4.5,
+                "Palette '{}' (is_dark={}) text_primary vs bg contrast ratio must be >= 4.5:1, got {:.2}",
+                palette.id, is_dark, cr
+            );
+        }
+    }
+}

@@ -1508,12 +1508,17 @@ pub fn count_tree_usage(nodes: &[FileTreeNode]) -> (usize, usize) {
     (entries, files)
 }
 
-/// Formats a file modification time as `YYYY/MM/DD HH:mm`.
-/// Uses native POSIX `localtime_r` on Unix (with civil timestamp calculation as fallback).
-/// Zero allocations / I/O during render loop.
-pub fn format_mtime(time: std::time::SystemTime) -> Option<String> {
+/// Formats an optional file modification time as `YYYY/MM/DD HH:mm`.
+///
+/// Pure function taking `mtime: Option<SystemTime>` and `now: SystemTime`:
+/// - Returns `None` if `mtime` is `None` or precedes `UNIX_EPOCH` (pre-epoch fallback).
+/// - Clamps future timestamps (`time > now`) to `now` to gracefully handle clock skew.
+/// - Uses native POSIX `localtime_r` on Unix with a deterministic civil calendar algorithm fallback.
+pub fn format_mtime(mtime: Option<std::time::SystemTime>, now: std::time::SystemTime) -> Option<String> {
     use std::time::UNIX_EPOCH;
-    let dur = time.duration_since(UNIX_EPOCH).ok()?;
+    let time = mtime?;
+    let effective_time = if time > now { now } else { time };
+    let dur = effective_time.duration_since(UNIX_EPOCH).ok()?;
     let secs = dur.as_secs() as i64;
 
     #[cfg(unix)]
@@ -1661,10 +1666,10 @@ pub fn scan_root_layer(
                     truncated = true;
                     break;
                 }
-                let mtime = fs::metadata(&p)
+                let raw_mtime = fs::metadata(&p)
                     .ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(format_mtime);
+                    .and_then(|m| m.modified().ok());
+                let mtime = format_mtime(raw_mtime, std::time::SystemTime::now());
                 nodes.push(FileTreeNode {
                     path: p,
                     name,

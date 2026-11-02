@@ -811,7 +811,7 @@ impl WorkspaceView {
                             .gap_1()
                             .child({
                                 let is_dirty = self.state.is_dirty();
-                                let save_icon_color = if is_dirty { theme.accent } else { theme.text_muted };
+                                let save_icon_color = topbar_save_button_color(is_dirty, theme);
                                 render_icon_button(
                                     "btn_save",
                                     format!("{} (⌘S)", strings.save_file),
@@ -1577,7 +1577,6 @@ impl Render for WorkspaceView {
                                     &loose_docs,
                                     &self.state.open_docs,
                                     self.state.active.as_ref(),
-                                    is_dirty,
                                     &self.state.doc.parsed.headings(),
                                     theme,
                                     strings,
@@ -2073,7 +2072,7 @@ pub fn adaptive_header_padding(is_macos: bool, is_fullscreen: bool, drawer_open:
     if !is_macos {
         8.0
     } else if drawer_open {
-        8.0
+        CANVAS_TITLE_LEFT_MARGIN - 8.0
     } else if is_fullscreen {
         12.0
     } else {
@@ -2081,31 +2080,17 @@ pub fn adaptive_header_padding(is_macos: bool, is_fullscreen: bool, drawer_open:
     }
 }
 
-/// Left margin offset for document title in canvas header to vertically align with
-/// the editor's code column 1 (ADR 0033).
-///
-/// Editor code column 1 starts at 64px from canvas left:
-/// 16px outer margin (p_4) + 36px line numbers (w_36) + 12px gap (mr_3) = 64px.
-/// Canvas header has 8px base padding, and title pill has 8px horizontal padding (px_2).
-///
-/// Offset calculations per view mode and drawer state:
-/// - `drawer_open == true` in Source/Split returns `48.0`:
-///   8px base padding + 48px offset + 8px title inner padding = 64px, aligning title text
-///   with 16px outer margin + 36px line numbers + 12px gap.
-/// - `drawer_open == false` returns `0.0`:
-///   macOS 76px traffic light safety inset + expand drawer button already push title past gutter.
-/// - Preview mode returns `0.0`.
-#[allow(dead_code)]
-pub fn canvas_title_offset(view_mode: ViewMode, drawer_open: bool) -> f32 {
-    match view_mode {
-        ViewMode::Source | ViewMode::Split => {
-            if drawer_open {
-                48.0
-            } else {
-                0.0
-            }
-        }
-        ViewMode::Preview => 0.0,
+/// Canvas document title left margin (in pixels, ADR 0036).
+/// Consistently aligns with the 16px content margin across Source, Split, and Preview.
+pub const CANVAS_TITLE_LEFT_MARGIN: f32 = 16.0;
+
+/// Resolves the icon color for the topbar save button (ADR 0036):
+/// Returns `theme.accent` when document is dirty, `theme.text_muted` when clean.
+pub fn topbar_save_button_color(is_dirty: bool, theme: &crate::theme::ThemeColors) -> Hsla {
+    if is_dirty {
+        theme.accent
+    } else {
+        theme.text_muted
     }
 }
 

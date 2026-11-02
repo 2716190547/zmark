@@ -26,7 +26,6 @@ impl AssetSource for AppAssets {
             "icons/info.svg" => Some(include_bytes!("../assets/icons/info.svg")),
             "icons/x.svg" => Some(include_bytes!("../assets/icons/x.svg")),
             "icons/maximize.svg" => Some(include_bytes!("../assets/icons/maximize.svg")),
-            "icons/search.svg" => Some(include_bytes!("../assets/icons/search.svg")),
             _ => None,
         };
         Ok(bytes.map(Cow::Borrowed))
@@ -54,7 +53,6 @@ impl AssetSource for AppAssets {
             "icons/info.svg".into(),
             "icons/x.svg".into(),
             "icons/maximize.svg".into(),
-            "icons/search.svg".into(),
         ])
     }
 }

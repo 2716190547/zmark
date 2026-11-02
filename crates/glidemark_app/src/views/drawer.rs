@@ -15,7 +15,6 @@ pub fn render_drawer(
     loose_docs: &[DocKey],
     open_docs: &[OpenDoc],
     active_key: Option<&DocKey>,
-    _is_active_dirty: bool,
     headings: &[HeadingItem],
     theme: &ThemeColors,
     strings: &'static I18nStrings,
