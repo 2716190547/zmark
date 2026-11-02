@@ -655,6 +655,621 @@ stateDiagram-v2
     }
 }
 
+struct EdgeMatch {
+    start: usize,
+    end: usize,
+    edge_str: String,
+}
+
+fn is_whitelisted(trimmed: &str) -> bool {
+    trimmed.starts_with("%%")
+        || trimmed.starts_with("classDef ")
+        || trimmed == "classDef"
+        || trimmed.starts_with("class ")
+        || trimmed == "class"
+        || trimmed.starts_with("style ")
+        || trimmed.starts_with("linkStyle ")
+        || trimmed.starts_with("direction ")
+        || trimmed.starts_with("subgraph ")
+        || trimmed == "subgraph"
+        || trimmed.starts_with("flowchart ")
+        || trimmed == "flowchart"
+        || trimmed.starts_with("graph ")
+        || trimmed == "graph"
+        || trimmed.starts_with("sequenceDiagram")
+        || trimmed.starts_with("classDiagram")
+        || trimmed.starts_with("stateDiagram")
+        || trimmed.starts_with("erDiagram")
+        || trimmed == "end"
+}
+
+fn is_line_ending_with_edge_operator(s: &str) -> bool {
+    let t = s.trim_end();
+    let t = if let Some(stripped) = t.strip_suffix('|') {
+        if let Some(open) = stripped.rfind('|') {
+            stripped[..open].trim_end()
+        } else {
+            t
+        }
+    } else {
+        t
+    };
+
+    t.ends_with("-->")
+        || t.ends_with("---")
+        || t.ends_with("-.->")
+        || t.ends_with("-.-")
+        || t.ends_with("==>")
+        || t.ends_with("===")
+        || t.ends_with("<-->")
+        || t.ends_with("->")
+        || t.ends_with("<-")
+        || t.ends_with("<->")
+}
+
+fn stitch_lines(code: &str) -> Vec<String> {
+    let mut result: Vec<String> = Vec::new();
+
+    for line in code.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            result.push(line.to_string());
+            continue;
+        }
+
+        if is_whitelisted(trimmed) {
+            result.push(line.to_string());
+            continue;
+        }
+
+        let mut stitched = false;
+        if let Some(prev_idx) = result.iter().rposition(|l| !l.trim().is_empty()) {
+            let prev_trimmed = result[prev_idx].trim();
+            if !is_whitelisted(prev_trimmed) {
+                let starts_with_amp = trimmed.starts_with('&');
+                let prev_ends_with_arrow = is_line_ending_with_edge_operator(&result[prev_idx]);
+
+                if starts_with_amp || prev_ends_with_arrow {
+                    let prev_trimmed_end = result[prev_idx].trim_end();
+                    result[prev_idx] = format!("{} {}", prev_trimmed_end, trimmed);
+                    stitched = true;
+                }
+            }
+        }
+
+        if !stitched {
+            result.push(line.to_string());
+        }
+    }
+
+    result
+}
+
+fn strip_class_annotations(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut in_quotes = false;
+    let mut bracket_depth = 0usize;
+    let mut escaped = false;
+
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        if c == '\\' {
+            escaped = !escaped;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+
+        if c == '"' {
+            if !escaped {
+                in_quotes = !in_quotes;
+            }
+            escaped = false;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+
+        escaped = false;
+
+        if in_quotes {
+            if c == '<' {
+                let rem: String = chars[i..].iter().take(6).collect();
+                let rem_lower = rem.to_lowercase();
+                if rem_lower.starts_with("<br>")
+                    || rem_lower.starts_with("<br/>")
+                    || rem_lower.starts_with("<br />")
+                {
+                    out.push(c);
+                } else {
+                    out.push_str("&lt;");
+                }
+            } else if c == '>' {
+                if out.ends_with("<br") || out.ends_with("<br/") || out.ends_with("<br ") {
+                    out.push(c);
+                } else {
+                    out.push_str("&gt;");
+                }
+            } else {
+                out.push(c);
+            }
+            i += 1;
+            continue;
+        }
+
+        // Outside quotes
+        match c {
+            '[' | '(' | '{' => {
+                bracket_depth += 1;
+                out.push(c);
+                i += 1;
+            }
+            ']' | ')' | '}' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                out.push(c);
+                i += 1;
+            }
+            '<' if bracket_depth > 0 => {
+                let rem: String = chars[i..].iter().take(6).collect();
+                let rem_lower = rem.to_lowercase();
+                if rem_lower.starts_with("<br>")
+                    || rem_lower.starts_with("<br/>")
+                    || rem_lower.starts_with("<br />")
+                {
+                    out.push(c);
+                } else {
+                    out.push_str("&lt;");
+                }
+                i += 1;
+            }
+            '>' if bracket_depth > 0 => {
+                if out.ends_with("<br") || out.ends_with("<br/") || out.ends_with("<br ") {
+                    out.push(c);
+                } else {
+                    out.push_str("&gt;");
+                }
+                i += 1;
+            }
+            ':' if bracket_depth == 0 => {
+                if i + 2 < chars.len() && chars[i + 1] == ':' && chars[i + 2] == ':' {
+                    let mut id_len = 0;
+                    while i + 3 + id_len < chars.len() {
+                        let ch = chars[i + 3 + id_len];
+                        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                            id_len += 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if id_len > 0 {
+                        out.push(' ');
+                        i += 3 + id_len;
+                        continue;
+                    }
+                }
+                out.push(c);
+                i += 1;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+
+    out
+}
+
+fn attach_pipe_label(rem: &str, arrow_len: usize, norm_arrow: &str) -> Option<(usize, String)> {
+    let after = &rem[arrow_len..];
+    let trimmed_start = after.trim_start();
+    if let Some(rest) = trimmed_start.strip_prefix('|') {
+        let ws_len = after.len() - trimmed_start.len();
+        let mut close_idx = None;
+        let mut prev = '\0';
+        for (i, c) in rest.char_indices() {
+            if c == '|' && prev != '\\' {
+                close_idx = Some(i);
+                break;
+            }
+            prev = c;
+        }
+
+        if let Some(c_idx) = close_idx {
+            let pipe_label_len = 1 + c_idx + 1;
+            let pipe_label_str = &trimmed_start[..pipe_label_len];
+            let total_len = arrow_len + ws_len + pipe_label_len;
+            return Some((total_len, format!("{}{}", norm_arrow, pipe_label_str)));
+        }
+    }
+
+    Some((arrow_len, norm_arrow.to_string()))
+}
+
+fn match_inline_label(rem: &str, prefix: &str, suffix: &str) -> Option<(usize, String)> {
+    if !rem.starts_with(prefix) {
+        return None;
+    }
+    let rest = &rem[prefix.len()..];
+    let mut in_quotes = false;
+    let mut bracket_depth = 0usize;
+    let mut escaped = false;
+
+    let mut i = 0;
+    while i < rest.len() {
+        let c = rest[i..].chars().next()?;
+        let c_len = c.len_utf8();
+
+        if c == '\\' {
+            escaped = !escaped;
+            i += c_len;
+            continue;
+        }
+
+        if c == '"' {
+            if !escaped {
+                in_quotes = !in_quotes;
+            }
+            escaped = false;
+            i += c_len;
+            continue;
+        }
+
+        escaped = false;
+
+        if !in_quotes {
+            match c {
+                '[' | '(' | '{' => {
+                    bracket_depth += 1;
+                }
+                ']' | ')' | '}' => {
+                    bracket_depth = bracket_depth.saturating_sub(1);
+                }
+                _ => {}
+            }
+
+            if bracket_depth == 0 && rest[i..].starts_with(suffix) {
+                let total_len = prefix.len() + i + suffix.len();
+                return Some((total_len, rem[..total_len].to_string()));
+            }
+        }
+
+        i += c_len;
+    }
+
+    None
+}
+
+fn try_match_edge(rem: &str) -> Option<(usize, String)> {
+    if rem.starts_with('<') {
+        if rem.starts_with("<==>") {
+            return attach_pipe_label(rem, 4, "<==>");
+        }
+        if rem.starts_with("<==") {
+            if let Some((len, full)) = match_inline_label(rem, "<==", "==>") {
+                return Some((len, full));
+            }
+        }
+        if rem.starts_with("<-.->") {
+            return attach_pipe_label(rem, 5, "<-.->");
+        }
+        if rem.starts_with("<-->") {
+            return attach_pipe_label(rem, 4, "<-->");
+        }
+        if rem.starts_with("<--") {
+            if let Some((len, full)) = match_inline_label(rem, "<--", "-->") {
+                return Some((len, full));
+            }
+            return attach_pipe_label(rem, 3, "<--");
+        }
+        if rem.starts_with("<->") {
+            return attach_pipe_label(rem, 3, "<-->");
+        }
+        if rem.starts_with("<-") {
+            return attach_pipe_label(rem, 2, "<--");
+        }
+        return None;
+    }
+
+    if rem.starts_with('=') {
+        if rem.starts_with("==>") {
+            return attach_pipe_label(rem, 3, "==>");
+        }
+        if rem.starts_with("===") {
+            return attach_pipe_label(rem, 3, "===");
+        }
+        if rem.starts_with("==") {
+            if let Some((len, full)) = match_inline_label(rem, "==", "==>") {
+                return Some((len, full));
+            }
+            if let Some((len, full)) = match_inline_label(rem, "==", "===") {
+                return Some((len, full));
+            }
+        }
+        return None;
+    }
+
+    if rem.starts_with("-.") {
+        if rem.starts_with("-.->") {
+            return attach_pipe_label(rem, 4, "-.->");
+        }
+        if rem.starts_with("-.-") {
+            return attach_pipe_label(rem, 3, "-.-");
+        }
+        if let Some((len, full)) = match_inline_label(rem, "-.", ".->") {
+            return Some((len, full));
+        }
+        return None;
+    }
+
+    if rem.starts_with("--") {
+        if rem.starts_with("-->") {
+            return attach_pipe_label(rem, 3, "-->");
+        }
+        if rem.starts_with("---") {
+            return attach_pipe_label(rem, 3, "---");
+        }
+        if let Some((len, full)) = match_inline_label(rem, "--", "-->") {
+            return Some((len, full));
+        }
+        if let Some((len, full)) = match_inline_label(rem, "--", "---") {
+            return Some((len, full));
+        }
+        return None;
+    }
+
+    if rem.starts_with("->") {
+        return attach_pipe_label(rem, 2, "-->");
+    }
+
+    None
+}
+
+fn split_node_group(group: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut bracket_depth = 0usize;
+    let mut escaped = false;
+
+    for c in group.chars() {
+        if c == '\\' {
+            escaped = !escaped;
+            current.push(c);
+            continue;
+        }
+
+        if c == '"' {
+            if !escaped {
+                in_quotes = !in_quotes;
+            }
+            escaped = false;
+            current.push(c);
+            continue;
+        }
+
+        escaped = false;
+
+        if in_quotes {
+            current.push(c);
+            continue;
+        }
+
+        match c {
+            '[' | '(' | '{' => {
+                bracket_depth += 1;
+                current.push(c);
+            }
+            ']' | ')' | '}' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                current.push(c);
+            }
+            '&' if bracket_depth == 0 => {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    parts.push(trimmed.to_string());
+                }
+                current.clear();
+            }
+            _ => {
+                current.push(c);
+            }
+        }
+    }
+
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        parts.push(trimmed.to_string());
+    }
+
+    if parts.is_empty() && !group.trim().is_empty() {
+        parts.push(group.trim().to_string());
+    }
+
+    parts
+}
+
+fn desugar_edges(line: &str) -> Vec<String> {
+    let indent_len = line.len() - line.trim_start().len();
+    let indent = &line[..indent_len];
+    let content = line[indent_len..].trim_end();
+
+    if content.is_empty() {
+        return vec![line.to_string()];
+    }
+
+    let mut matches: Vec<EdgeMatch> = Vec::new();
+    let mut in_quotes = false;
+    let mut bracket_depth = 0usize;
+    let mut escaped = false;
+
+    let mut pos = 0;
+    while pos < content.len() {
+        if !in_quotes && bracket_depth == 0 {
+            if let Some((match_len, normalized_edge)) = try_match_edge(&content[pos..]) {
+                matches.push(EdgeMatch {
+                    start: pos,
+                    end: pos + match_len,
+                    edge_str: normalized_edge,
+                });
+                pos += match_len;
+                continue;
+            }
+        }
+
+        let c = match content[pos..].chars().next() {
+            Some(ch) => ch,
+            None => break,
+        };
+        let c_len = c.len_utf8();
+
+        if c == '\\' {
+            escaped = !escaped;
+            pos += c_len;
+            continue;
+        }
+
+        if c == '"' {
+            if !escaped {
+                in_quotes = !in_quotes;
+            }
+            escaped = false;
+            pos += c_len;
+            continue;
+        }
+
+        escaped = false;
+
+        if !in_quotes {
+            match c {
+                '[' | '(' | '{' => bracket_depth += 1,
+                ']' | ')' | '}' => bracket_depth = bracket_depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+
+        pos += c_len;
+    }
+
+    if matches.is_empty() {
+        return vec![line.trim_end().to_string()];
+    }
+
+    let mut raw_groups = Vec::new();
+    let mut prev_end = 0;
+    for m in &matches {
+        raw_groups.push(&content[prev_end..m.start]);
+        prev_end = m.end;
+    }
+    raw_groups.push(&content[prev_end..]);
+
+    let node_groups: Vec<Vec<String>> = raw_groups
+        .into_iter()
+        .map(split_node_group)
+        .collect();
+
+    let mut result = Vec::new();
+    let default_empty = vec!["".to_string()];
+
+    for i in 0..matches.len() {
+        let from_nodes = if node_groups[i].is_empty() {
+            &default_empty
+        } else {
+            &node_groups[i]
+        };
+
+        let to_nodes = if node_groups[i + 1].is_empty() {
+            &default_empty
+        } else {
+            &node_groups[i + 1]
+        };
+
+        let edge = &matches[i].edge_str;
+
+        for from in from_nodes {
+            for to in to_nodes {
+                let line_str = match (from.is_empty(), to.is_empty()) {
+                    (true, true) => format!("{}{}", indent, edge),
+                    (true, false) => format!("{}{} {}", indent, edge, to),
+                    (false, true) => format!("{}{} {}", indent, from, edge),
+                    (false, false) => format!("{}{} {} {}", indent, from, edge, to),
+                };
+                result.push(line_str);
+            }
+        }
+    }
+
+    result
+}
+
+/// Desugars Mermaid diagram code into standard syntax accepted by rusty_mermaid.
+///
+/// Steps:
+/// 1. Line stitching preprocessor (& prefix or trailing arrow continuation).
+/// 2. Whitelist bypass for metadata/styles/subgraphs (with subgraph unquoting).
+/// 3. Class annotation stripping (`:::className`).
+/// 4. Edge extraction, arrow normalization, and Cartesian product expansion for `&`.
+pub fn sanitize_mermaid(code: &str) -> String {
+    let stitched = stitch_lines(code);
+    let mut out = String::with_capacity(code.len());
+
+    for line in stitched {
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            out.push_str(&line);
+            out.push('\n');
+            continue;
+        }
+
+        // Subgraph title unquoting (Requirement 1 & 3)
+        if trimmed.starts_with("subgraph ") {
+            if let Some(open) = line.find("[\"") {
+                if let Some(close) = line.rfind("\"]") {
+                    if close > open + 1 {
+                        let prefix = &line[..open + 1];
+                        let inner = &line[open + 2..close];
+                        let suffix = &line[close + 1..];
+                        out.push_str(prefix);
+                        out.push_str(inner);
+                        out.push_str(suffix);
+                        out.push('\n');
+                        continue;
+                    }
+                }
+            }
+            out.push_str(&line);
+            out.push('\n');
+            continue;
+        }
+
+        // Whitelist bypass (Requirement 3)
+        if is_whitelisted(trimmed) {
+            out.push_str(&line);
+            out.push('\n');
+            continue;
+        }
+
+        // Class annotation stripping (Requirement 4)
+        let stripped = strip_class_annotations(&line);
+
+        // Edge operator extraction & Cartesian Product Expansion (Requirement 5)
+        let desugared_lines = desugar_edges(&stripped);
+        for dl in desugared_lines {
+            out.push_str(&dl);
+            out.push('\n');
+        }
+    }
+
+    out
+}
+
 /// Renders a Mermaid diagram source to a standard, high-quality SVG vector graphic in pure Rust.
 pub fn render_to_svg(code: &str) -> Result<String, String> {
     render_to_svg_themed(code, false)
@@ -842,32 +1457,6 @@ fn extract_attr<'a>(s: &'a str, attr_prefix: &str) -> Option<&'a str> {
     let rest = &s[quote_start + 1..];
     let quote_end = rest.find(quote_char)?;
     Some(&rest[..quote_end])
-}
-
-fn sanitize_mermaid(code: &str) -> String {
-    let mut out = String::with_capacity(code.len());
-    for line in code.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("subgraph ") {
-            if let Some(open) = line.find("[\"") {
-                if let Some(close) = line.rfind("\"]") {
-                    if close > open + 1 {
-                        let prefix = &line[..open + 1];
-                        let inner = &line[open + 2..close];
-                        let suffix = &line[close + 1..];
-                        out.push_str(prefix);
-                        out.push_str(inner);
-                        out.push_str(suffix);
-                        out.push('\n');
-                        continue;
-                    }
-                }
-            }
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
 }
 
 /// Maps a window scale factor (e.g. 1.0, 1.25, 2.0) into discrete bucket IDs.
