@@ -240,9 +240,9 @@ impl WorkspaceView {
         &self.state.theme
     }
 
-    pub fn close_lightbox(&mut self, window: Option<&mut Window>, cx: &mut App) {
+    pub fn close_lightbox(&mut self, _window: Option<&mut Window>, cx: &mut App) {
         if let Some(image) = self.lightbox.close() {
-            cx.drop_image(image, window);
+            image.remove_asset(cx);
         }
     }
 
@@ -254,12 +254,14 @@ impl WorkspaceView {
         cx: &mut App,
     ) {
         if let Some(old_img) = self.lightbox.close() {
-            cx.drop_image(old_img, Some(window));
+            old_img.remove_asset(cx);
         }
 
         let scale_factor = window.scale_factor();
         let scale_bucket = glidemark_core::mermaid::scale_factor_to_bucket(scale_factor);
         let is_dark = self.theme(cx).is_dark;
+
+        let actual_svg_path = resolve_lightbox_svg_path(&svg_path, code_hash, is_dark);
 
         let cached_path = {
             let mut cache = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE.lock().unwrap();
@@ -269,7 +271,7 @@ impl WorkspaceView {
         let hidpi_res = if let Some(path) = cached_path.filter(|p| p.exists()) {
             std::fs::read_to_string(&path).ok().map(|content| (path, content))
         } else {
-            if let Ok(orig_svg) = std::fs::read_to_string(&svg_path) {
+            if let Ok(orig_svg) = std::fs::read_to_string(&actual_svg_path) {
                 let (orig_w, orig_h) = glidemark_core::mermaid::extract_svg_dimensions(&orig_svg);
                 let (target_w, target_h) =
                     glidemark_core::mermaid::calculate_hidpi_dimensions(orig_w, orig_h, scale_factor);
@@ -296,20 +298,13 @@ impl WorkspaceView {
         };
 
         if let Some((hidpi_path, hidpi_svg)) = hidpi_res {
-            let img = gpui::Image::from_bytes(gpui::ImageFormat::Svg, hidpi_svg.into_bytes());
-            let render_img = img.to_image_data(cx.svg_renderer()).ok();
-            if let Some(r_img) = render_img {
-                if let Some(evicted) = self.lightbox.open_hidpi(svg_path, hidpi_path, r_img, code_hash) {
-                    cx.drop_image(evicted, Some(window));
-                }
-            } else {
-                if let Some(evicted) = self.lightbox.open(svg_path, code_hash) {
-                    cx.drop_image(evicted, Some(window));
-                }
+            let img = Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Svg, hidpi_svg.into_bytes()));
+            if let Some(evicted) = self.lightbox.open_hidpi(actual_svg_path, hidpi_path, img, code_hash) {
+                evicted.remove_asset(cx);
             }
         } else {
-            if let Some(evicted) = self.lightbox.open(svg_path, code_hash) {
-                cx.drop_image(evicted, Some(window));
+            if let Some(evicted) = self.lightbox.open(actual_svg_path, code_hash) {
+                evicted.remove_asset(cx);
             }
         }
     }
@@ -605,7 +600,6 @@ impl WorkspaceView {
         let strings = self.state.strings;
         let is_renaming = self.is_renaming;
         let rename_buffer = self.rename_buffer.clone();
-        let title_offset = canvas_title_offset(view_mode, drawer_open);
 
         #[cfg(target_os = "macos")]
         let header_pl = px(adaptive_header_padding(is_macos, is_fullscreen, drawer_open));
@@ -630,7 +624,8 @@ impl WorkspaceView {
 
         div()
             .id("canvas_integrated_header")
-            .h(px(38.))
+            .h(px(46.))
+            .py(px(4.))
             .w_full()
             .pl(header_pl)
             .pr(header_pr)
@@ -661,7 +656,6 @@ impl WorkspaceView {
                     .child(if is_renaming && active_key.is_some() {
                         div()
                             .id("tab_rename_box")
-                            .when(title_offset > 0.0, |el| el.ml(px(title_offset)))
                             .px_2()
                             .py_0p5()
                             .bg(theme.bg)
@@ -700,7 +694,6 @@ impl WorkspaceView {
                         let tooltip = tooltip_text.clone();
                         div()
                             .id("canvas_document_title")
-                            .when(title_offset > 0.0, |el| el.ml(px(title_offset)))
                             .flex()
                             .items_center()
                             .gap_1p5()
@@ -804,16 +797,20 @@ impl WorkspaceView {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(render_icon_button(
-                                "btn_save",
-                                format!("{} (⌘S)", strings.save_file),
-                                false,
-                                theme,
-                                render_save_icon(theme.text_muted),
-                                cx.listener(|this, _, _window, cx| {
-                                    this.trigger_save(cx);
-                                }),
-                            ))
+                            .child({
+                                let is_dirty = self.state.is_dirty();
+                                let save_icon_color = if is_dirty { theme.accent } else { theme.text_muted };
+                                render_icon_button(
+                                    "btn_save",
+                                    format!("{} (⌘S)", strings.save_file),
+                                    false,
+                                    theme,
+                                    render_save_icon(save_icon_color),
+                                    cx.listener(|this, _, _window, cx| {
+                                        this.trigger_save(cx);
+                                    }),
+                                )
+                            })
                             .child(render_icon_button(
                                 "btn_export",
                                 format!("{} (⇧⌘E)", strings.export_html),
@@ -2016,12 +2013,38 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        base.bg(theme.warm_pill_bg())
+        base.bg(theme.selection_bg())
             .child(icon)
     } else {
-        base.hover(|s| s.bg(theme.warm_pill_hover()))
+        base.hover(|s| s.bg(theme.hover_bg()))
             .child(icon)
     }
+}
+
+/// Resolves the SVG path for the lightbox, ensuring that the `is_dark` variant
+/// matches the current theme active in the preview pane (ADR 0036).
+pub fn resolve_lightbox_svg_path(
+    svg_path: &std::path::Path,
+    code_hash: u64,
+    is_dark: bool,
+) -> std::path::PathBuf {
+    let expected_variant = if is_dark { "dark" } else { "light" };
+    let filename = format!("{:016x}_{}.svg", code_hash, expected_variant);
+
+    let preview_cache_dir = std::env::temp_dir().join("glidemark").join("mermaid");
+    let preview_candidate = preview_cache_dir.join(&filename);
+    if preview_candidate.exists() {
+        return preview_candidate;
+    }
+
+    if let Some(parent) = svg_path.parent() {
+        let parent_candidate = parent.join(&filename);
+        if parent_candidate.exists() {
+            return parent_candidate;
+        }
+    }
+
+    svg_path.to_path_buf()
 }
 
 /// Adaptive header padding calculation for window chrome clearance (ADR 0032).
@@ -2060,6 +2083,7 @@ pub fn adaptive_header_padding(is_macos: bool, is_fullscreen: bool, drawer_open:
 /// - `drawer_open == false` returns `0.0`:
 ///   macOS 76px traffic light safety inset + expand drawer button already push title past gutter.
 /// - Preview mode returns `0.0`.
+#[allow(dead_code)]
 pub fn canvas_title_offset(view_mode: ViewMode, drawer_open: bool) -> f32 {
     match view_mode {
         ViewMode::Source | ViewMode::Split => {
@@ -2083,12 +2107,12 @@ pub fn calculate_subline_scroll_offset(inner_progress: f32, subline_idx: usize, 
 
 /// Resolves background and text colors for view mode switcher tabs.
 ///
-/// Active tabs receive `theme.warm_pill_bg()` and `theme.warm_pill_text()` for the warm stone
-/// micro-capsule styling, strictly distinct from `theme.surface`.
+/// Active tabs receive `theme.selection_bg()` and `theme.selection_text()`
+/// strictly distinct from `theme.surface`.
 /// Inactive tabs receive transparent background and `theme.text_muted`.
 pub fn mode_tab_colors(active: bool, theme: &crate::theme::ThemeColors) -> (gpui::Hsla, gpui::Hsla) {
     if active {
-        (theme.warm_pill_bg(), theme.warm_pill_text())
+        (theme.selection_bg(), theme.selection_text())
     } else {
         (gpui::transparent_black(), theme.text_muted)
     }
@@ -2128,7 +2152,7 @@ where
             .child(icon)
     } else {
         base.text_color(text_color)
-            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+            .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
             .child(icon)
     }
 }

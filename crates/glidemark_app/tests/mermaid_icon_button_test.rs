@@ -133,72 +133,38 @@ fn test_mermaid_zoom_hint_i18n() {
     }
 }
 
-/// Test 4: Verify warm pill styling, opacity(0.75), and contrast for light & dark palettes.
+/// Test 4: Verify selection token styling and contrast for light & dark palettes (ADR 0036 Ticket G3).
 #[test]
 fn test_mermaid_zoom_button_styling_contrast() {
     // 1. Light Mode Palette
     let light_theme = ThemeColors::default_palette(false);
-    let light_bg = light_theme.warm_pill_bg();
-    let light_bg_translucent = light_bg.opacity(0.75);
-    let light_text = light_theme.warm_pill_text();
+    let light_bg = light_theme.selection_bg();
+    let light_hover = light_theme.hover_bg();
+    let light_text = light_theme.selection_text();
 
-    // Opacity checks
-    assert_eq!(light_bg.a, 1.0, "Base warm_pill_bg must be opaque");
-    assert!(
-        (light_bg_translucent.a - 0.75).abs() < 0.01,
-        "Translucent warm_pill_bg opacity must be 0.75, got {}",
-        light_bg_translucent.a
-    );
-    assert_eq!(light_text.a, 1.0, "warm_pill_text must be opaque");
-
-    // Contrast check (light background, dark text)
-    assert!(
-        light_bg.l > light_text.l,
-        "In light mode, background lightness ({}) must exceed text lightness ({})",
-        light_bg.l,
-        light_text.l
-    );
-    assert!(
-        light_bg.l - light_text.l > 0.4,
-        "Light mode contrast delta ({}) must be comfortably legible (> 0.4)",
-        light_bg.l - light_text.l
-    );
+    assert_eq!(light_bg, light_theme.text_primary.opacity(0.07));
+    assert_eq!(light_hover, light_theme.text_primary.opacity(0.04));
+    assert_eq!(light_text, light_theme.text_primary);
+    assert_eq!(light_text.a, 1.0, "selection_text must be opaque");
 
     // 2. Dark Mode Palette
     let dark_theme = ThemeColors::default_palette(true);
-    let dark_bg = dark_theme.warm_pill_bg();
-    let dark_bg_translucent = dark_bg.opacity(0.75);
-    let dark_text = dark_theme.warm_pill_text();
+    let dark_bg = dark_theme.selection_bg();
+    let dark_hover = dark_theme.hover_bg();
+    let dark_text = dark_theme.selection_text();
 
-    // Opacity checks
-    assert_eq!(dark_bg.a, 1.0, "Base warm_pill_bg must be opaque");
-    assert!(
-        (dark_bg_translucent.a - 0.75).abs() < 0.01,
-        "Translucent warm_pill_bg opacity must be 0.75, got {}",
-        dark_bg_translucent.a
-    );
-    assert_eq!(dark_text.a, 1.0, "warm_pill_text must be opaque");
-
-    // Contrast check (dark background, light text)
-    assert!(
-        dark_bg.l < dark_text.l,
-        "In dark mode, text lightness ({}) must exceed background lightness ({})",
-        dark_text.l,
-        dark_bg.l
-    );
-    assert!(
-        dark_text.l - dark_bg.l > 0.4,
-        "Dark mode contrast delta ({}) must be comfortably legible (> 0.4)",
-        dark_text.l - dark_bg.l
-    );
+    assert_eq!(dark_bg, dark_theme.text_primary.opacity(0.07));
+    assert_eq!(dark_hover, dark_theme.text_primary.opacity(0.04));
+    assert_eq!(dark_text, dark_theme.text_primary);
+    assert_eq!(dark_text.a, 1.0, "selection_text must be opaque");
 
     // Cross-mode distinctness
     assert_ne!(
         light_bg, dark_bg,
-        "Light and dark pill backgrounds must be distinct"
+        "Light and dark selection backgrounds must be distinct"
     );
     assert_ne!(
         light_text, dark_text,
-        "Light and dark pill texts must be distinct"
+        "Light and dark selection texts must be distinct"
     );
 }

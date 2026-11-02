@@ -1,8 +1,9 @@
 use glidemark_app::views::lightbox::{LightboxDiagramCache, LightboxState};
+use glidemark_app::views::workspace::resolve_lightbox_svg_path;
 use glidemark_core::mermaid::{
     apply_texture_pixel_budget, calculate_hidpi_dimensions, scale_factor_to_bucket,
 };
-use gpui::RenderImage;
+use gpui::{Image, ImageFormat};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -106,6 +107,44 @@ fn test_lightbox_diagram_cache_lru1_eviction_and_file_cleanup() {
 }
 
 #[test]
+fn test_open_lightbox_uses_same_is_dark_variant_as_preview() {
+    let code_hash: u64 = 0xa1b2c3d4e5f60718;
+    let temp_dir = std::env::temp_dir().join("glidemark_test_is_dark_match");
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let light_svg_path = temp_dir.join(format!("{:016x}_light.svg", code_hash));
+    let dark_svg_path = temp_dir.join(format!("{:016x}_dark.svg", code_hash));
+
+    std::fs::write(&light_svg_path, r##"<svg id="preview_light"><rect fill="#ffffff"/></svg>"##).unwrap();
+    std::fs::write(&dark_svg_path, r##"<svg id="preview_dark"><rect fill="#1e1e1e"/></svg>"##).unwrap();
+
+    // 1. Dark mode active: even when called with light_svg_path, resolving must return the dark variant
+    let resolved_dark = resolve_lightbox_svg_path(&light_svg_path, code_hash, true);
+    assert_eq!(resolved_dark, dark_svg_path);
+    let resolved_dark_content = std::fs::read_to_string(&resolved_dark).unwrap();
+    assert!(resolved_dark_content.contains("preview_dark"));
+    assert!(!resolved_dark_content.contains("preview_light"));
+
+    // 2. Light mode active: even when called with dark_svg_path, resolving must return the light variant
+    let resolved_light = resolve_lightbox_svg_path(&dark_svg_path, code_hash, false);
+    assert_eq!(resolved_light, light_svg_path);
+    let resolved_light_content = std::fs::read_to_string(&resolved_light).unwrap();
+    assert!(resolved_light_content.contains("preview_light"));
+    assert!(!resolved_light_content.contains("preview_dark"));
+
+    // 3. Fallback when matching variant does not exist on disk: retains original svg_path safely
+    let non_existent_hash: u64 = 0x9999999999999999;
+    let fallback_path = temp_dir.join(format!("{:016x}_custom.svg", non_existent_hash));
+    let resolved_fallback = resolve_lightbox_svg_path(&fallback_path, non_existent_hash, true);
+    assert_eq!(resolved_fallback, fallback_path);
+
+    // Clean up
+    let _ = std::fs::remove_file(light_svg_path);
+    let _ = std::fs::remove_file(dark_svg_path);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
 fn test_lightbox_state_lifecycle_and_image_release() {
     let mut state = LightboxState::new();
     assert!(!state.is_open);
@@ -118,24 +157,24 @@ fn test_lightbox_state_lifecycle_and_image_release() {
     // Open HiDPI
     let svg_path = PathBuf::from("/tmp/original.svg");
     let hidpi_path = PathBuf::from("/tmp/hidpi.svg");
-    let render_image = Arc::new(RenderImage::new(Vec::new()));
+    let image = Arc::new(Image::from_bytes(ImageFormat::Svg, b"<svg id=\"1\"/>".to_vec()));
 
     state.open_hidpi(
         svg_path.clone(),
         hidpi_path.clone(),
-        render_image.clone(),
+        image.clone(),
         9999,
     );
     assert!(state.is_open);
     assert_eq!(state.svg_path, Some(svg_path));
     assert_eq!(state.hidpi_svg_path, Some(hidpi_path));
-    assert_eq!(state.hidpi_image, Some(render_image.clone()));
+    assert_eq!(state.hidpi_image, Some(image.clone()));
     assert_eq!(state.code_hash, Some(9999));
     assert_eq!(state.zoom, 1.0);
 
     // First close returns old image
     let closed_img = state.close();
-    assert_eq!(closed_img, Some(render_image));
+    assert_eq!(closed_img, Some(image));
     assert!(!state.is_open);
     assert_eq!(state.hidpi_svg_path, None);
     assert_eq!(state.hidpi_image, None);
@@ -156,39 +195,39 @@ fn test_document_swapped_and_open_paths_release_vram_safely() {
     // 2. Open HiDPI image 1
     let svg1 = PathBuf::from("/tmp/doc1_diagram.svg");
     let hidpi1 = PathBuf::from("/tmp/doc1_hidpi.svg");
-    let img1 = Arc::new(RenderImage::new(Vec::new()));
+    let img1 = Arc::new(Image::from_bytes(ImageFormat::Svg, b"<svg id=\"doc1\"/>".to_vec()));
     let evicted0 = state.open_hidpi(svg1.clone(), hidpi1.clone(), img1.clone(), 101);
     assert_eq!(evicted0, None, "Initial open_hidpi should have no evicted image");
     assert_eq!(state.hidpi_image, Some(img1.clone()));
 
     // 3. Open another diagram (or plain open) without explicit close:
-    // Must return img1 so the caller can invoke cx.drop_image(img1)
+    // Must return img1 so the caller can invoke image.remove_asset(cx)
     let svg2 = PathBuf::from("/tmp/doc2_diagram.svg");
     let evicted1 = state.open(svg2.clone(), 102);
     assert_eq!(
         evicted1,
         Some(img1.clone()),
-        "Calling open() while holding a HiDPI image must return the previous image for drop_image"
+        "Calling open() while holding a HiDPI image must return the previous image for release"
     );
     assert_eq!(state.hidpi_image, None);
 
     // 4. Open HiDPI image 2
     let hidpi2 = PathBuf::from("/tmp/doc2_hidpi.svg");
-    let img2 = Arc::new(RenderImage::new(Vec::new()));
+    let img2 = Arc::new(Image::from_bytes(ImageFormat::Svg, b"<svg id=\"doc2\"/>".to_vec()));
     let evicted2 = state.open_hidpi(svg2.clone(), hidpi2.clone(), img2.clone(), 102);
     assert_eq!(evicted2, None);
     assert_eq!(state.hidpi_image, Some(img2.clone()));
 
     // 5. Open HiDPI image 3 while image 2 is active:
-    // Must return img2 so the caller can invoke cx.drop_image(img2)
+    // Must return img2 so the caller can invoke image.remove_asset(cx)
     let svg3 = PathBuf::from("/tmp/doc3_diagram.svg");
     let hidpi3 = PathBuf::from("/tmp/doc3_hidpi.svg");
-    let img3 = Arc::new(RenderImage::new(Vec::new()));
+    let img3 = Arc::new(Image::from_bytes(ImageFormat::Svg, b"<svg id=\"doc3\"/>".to_vec()));
     let evicted3 = state.open_hidpi(svg3.clone(), hidpi3.clone(), img3.clone(), 103);
     assert_eq!(
         evicted3,
         Some(img2),
-        "Calling open_hidpi() while holding another HiDPI image must return the old image for drop_image"
+        "Calling open_hidpi() while holding another HiDPI image must return the old image for release"
     );
     assert_eq!(state.hidpi_image, Some(img3.clone()));
 
@@ -198,7 +237,7 @@ fn test_document_swapped_and_open_paths_release_vram_safely() {
     assert_eq!(
         swapped_evicted,
         Some(img3),
-        "Document swapped must release the active HiDPI image for drop_image"
+        "Document swapped must release the active HiDPI image for release"
     );
     assert!(!state.is_open);
     assert_eq!(state.hidpi_image, None);

@@ -100,6 +100,7 @@ pub struct FileTreeNode {
     pub is_dir: bool,
     pub is_expanded: bool,
     pub children: Vec<FileTreeNode>,
+    pub mtime: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1507,6 +1508,72 @@ pub fn count_tree_usage(nodes: &[FileTreeNode]) -> (usize, usize) {
     (entries, files)
 }
 
+/// Formats a file modification time as `YYYY/MM/DD HH:mm`.
+/// Uses native POSIX `localtime_r` on Unix (with civil timestamp calculation as fallback).
+/// Zero allocations / I/O during render loop.
+pub fn format_mtime(time: std::time::SystemTime) -> Option<String> {
+    use std::time::UNIX_EPOCH;
+    let dur = time.duration_since(UNIX_EPOCH).ok()?;
+    let secs = dur.as_secs() as i64;
+
+    #[cfg(unix)]
+    {
+        #[repr(C)]
+        struct Tm {
+            tm_sec: i32,
+            tm_min: i32,
+            tm_hour: i32,
+            tm_mday: i32,
+            tm_mon: i32,
+            tm_year: i32,
+            tm_wday: i32,
+            tm_yday: i32,
+            tm_isdst: i32,
+            tm_gmtoff: i64,
+            tm_zone: *const std::os::raw::c_char,
+        }
+
+        extern "C" {
+            fn localtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm;
+        }
+
+        let mut tm = std::mem::MaybeUninit::<Tm>::zeroed();
+        let res = unsafe { localtime_r(&secs, tm.as_mut_ptr()) };
+        if !res.is_null() {
+            let tm = unsafe { tm.assume_init() };
+            return Some(format!(
+                "{:04}/{:02}/{:02} {:02}:{:02}",
+                tm.tm_year + 1900,
+                tm.tm_mon + 1,
+                tm.tm_mday,
+                tm.tm_hour,
+                tm.tm_min
+            ));
+        }
+    }
+
+    let s = secs.max(0) as u64;
+    let min = ((s / 60) % 60) as u32;
+    let hour = ((s / 3600) % 24) as u32;
+    let days = (s / 86400) as i64;
+
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    Some(format!(
+        "{:04}/{:02}/{:02} {:02}:{:02}",
+        y, m, d, hour, min
+    ))
+}
+
 #[allow(dead_code)]
 pub fn scan_root_layer(
     dir: &Path,
@@ -1581,6 +1648,7 @@ pub fn scan_root_layer(
                 is_dir: true,
                 is_expanded,
                 children,
+                mtime: None,
             });
         } else if file_type.is_file() {
             let is_markdown = p.extension()
@@ -1593,12 +1661,17 @@ pub fn scan_root_layer(
                     truncated = true;
                     break;
                 }
+                let mtime = fs::metadata(&p)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(format_mtime);
                 nodes.push(FileTreeNode {
                     path: p,
                     name,
                     is_dir: false,
                     is_expanded: false,
                     children: Vec::new(),
+                    mtime,
                 });
             } else {
                 // Ordinary non-markdown file: consumes entry quota

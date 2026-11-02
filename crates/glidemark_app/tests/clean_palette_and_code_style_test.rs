@@ -23,14 +23,14 @@ fn test_default_palette_neutral_colors() {
         "Default light code_bg must be #f6f8fa (Clean cool light gray)"
     );
     assert_eq!(
-        light.warm_pill_bg(),
-        rgb(0xeff1f4).into(),
-        "Default light warm_pill_bg must be #eff1f4"
+        light.selection_bg(),
+        light.text_primary.opacity(0.07),
+        "Default light selection_bg must be text_primary.opacity(0.07)"
     );
     assert_eq!(
-        light.warm_pill_text(),
-        rgb(0x1f2328).into(),
-        "Default light warm_pill_text must be #1f2328"
+        light.selection_text(),
+        light.text_primary,
+        "Default light selection_text must be text_primary"
     );
 
     let dark = ThemeColors::default_palette(true);
@@ -184,15 +184,23 @@ fn test_preview_code_syntax_styling_contract() {
     let code_block_pos = preview_src
         .find("fn render_code_block")
         .expect("preview.rs must contain render_code_block");
-    let code_block_section = &preview_src[code_block_pos..std::cmp::min(code_block_pos + 2500, preview_src.len())];
+    let code_block_section = &preview_src[code_block_pos..];
 
     assert!(
-        code_block_section.contains("FontWeight::BOLD"),
-        "render_code_block must specify FontWeight::BOLD for language display tag"
+        code_block_section.contains("theme.syntax_code"),
+        "render_code_block must render code text in theme.syntax_code"
     );
     assert!(
-        code_block_section.contains("lang_display"),
-        "render_code_block must render lang_display"
+        code_block_section.contains("theme.code_bg"),
+        "render_code_block must use theme.code_bg for background"
+    );
+    assert!(
+        !code_block_section.contains("lang_display"),
+        "render_code_block must not render lang_display header bar (ADR 0036 G3)"
+    );
+    assert!(
+        !code_block_section.contains("border_1"),
+        "render_code_block must not have border_1 (ADR 0036 G3)"
     );
 }
 

@@ -15,7 +15,7 @@ pub fn render_drawer(
     loose_docs: &[DocKey],
     open_docs: &[OpenDoc],
     active_key: Option<&DocKey>,
-    is_active_dirty: bool,
+    _is_active_dirty: bool,
     headings: &[HeadingItem],
     theme: &ThemeColors,
     strings: &'static I18nStrings,
@@ -124,49 +124,37 @@ pub fn render_drawer(
                         // ==========================================
                         if let Some(draft_doc) = open_docs.iter().find(|d| d.key.is_scratch()) {
                             let is_draft_active = active_key == Some(&draft_doc.key);
-                            let is_draft_dirty = if is_draft_active {
-                                is_active_dirty
-                            } else {
-                                draft_doc.doc.status == glidemark_core::document::DocumentStatus::Modified
-                            };
-
                             let draft_title = draft_doc.doc.display_name_with_fallback(strings.untitled_file);
                             let d_key = draft_doc.key.clone();
                             let t_switch_draft = on_select_doc.clone();
                             let t_close_draft = on_close_doc.clone();
 
-                            let mut draft_right = div().flex().items_center().gap_1();
-                            if is_draft_dirty {
-                                draft_right = draft_right.child(
-                                    div()
-                                        .w(px(6.))
-                                        .h(px(6.))
-                                        .rounded_full()
-                                        .bg(theme.accent),
-                                );
-                            }
                             let close_key = d_key.clone();
                             let on_close = t_close_draft.clone();
-                            draft_right = draft_right.child(
-                                div()
-                                    .id("btn_close_draft")
-                                    .w(px(16.))
-                                    .h(px(16.))
-                                    .rounded(px(3.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(px(12.))
-                                    .text_color(theme.text_muted)
-                                    .opacity(0.0)
-                                    .group_hover("drawer_draft_row", |s| s.opacity(1.0))
-                                    .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
-                                    .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
-                                        cx.stop_propagation();
-                                        on_close(&close_key, window, cx);
-                                    })
-                                    .child("×"),
-                            );
+                            let draft_right = div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .id("btn_close_draft")
+                                        .w(px(16.))
+                                        .h(px(16.))
+                                        .rounded(px(3.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(px(12.))
+                                        .text_color(theme.text_muted)
+                                        .opacity(0.0)
+                                        .group_hover("drawer_draft_row", |s| s.opacity(1.0))
+                                        .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
+                                        .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                                            cx.stop_propagation();
+                                            on_close(&close_key, window, cx);
+                                        })
+                                        .child("×"),
+                                );
 
                             let draft_tooltip_text = format!("{} (⌘N)", strings.draft_focus_hint);
                             let sel_key = d_key.clone();
@@ -193,13 +181,13 @@ pub fn render_drawer(
 
                             if is_draft_active {
                                 draft_item = draft_item
-                                    .bg(theme.warm_pill_bg())
-                                    .text_color(theme.warm_pill_text())
+                                    .bg(theme.selection_bg())
+                                    .text_color(theme.selection_text())
                                     .font_weight(FontWeight::MEDIUM);
                             } else {
                                 draft_item = draft_item
                                     .text_color(theme.text_primary)
-                                    .hover(|s| s.bg(theme.warm_pill_hover()));
+                                    .hover(|s| s.bg(theme.hover_bg()));
                             }
 
                             let draft_item = draft_item
@@ -214,7 +202,7 @@ pub fn render_drawer(
                                                 .path("icons/files.svg")
                                                 .size(px(13.))
                                                 .text_color(if is_draft_active {
-                                                    theme.warm_pill_text()
+                                                    theme.selection_text()
                                                 } else {
                                                     theme.text_muted
                                                 }),
@@ -276,7 +264,7 @@ pub fn render_drawer(
                                     .justify_between()
                                     .text_size(px(13.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .hover(|s| s.bg(theme.warm_pill_hover()))
+                                    .hover(|s| s.bg(theme.hover_bg()))
                                     .tooltip(move |_window, cx| {
                                         let t = root_path_str.clone();
                                         cx.new(|_| DrawerTooltipView { text: t }).into()
@@ -397,7 +385,6 @@ pub fn render_drawer(
                                             root_idx,
                                             open_docs,
                                             active_key,
-                                            is_active_dirty,
                                             theme,
                                             strings,
                                             &on_toggle_folder,
@@ -422,7 +409,7 @@ pub fn render_drawer(
                                                 .flex()
                                                 .items_center()
                                                 .gap_1p5()
-                                                .hover(|s| s.bg(theme.warm_pill_hover()))
+                                                .hover(|s| s.bg(theme.hover_bg()))
                                                 .tooltip(move |_window, cx| {
                                                     let t = strings.retry_scan.to_string();
                                                     cx.new(|_| DrawerTooltipView { text: t }).into()
@@ -484,15 +471,6 @@ pub fn render_drawer(
                             for (idx, p) in loose_file_paths.iter().enumerate() {
                                 let target_key = DocKey::Path((*p).clone());
                                 let is_active = active_key == Some(&target_key);
-                                let open_doc = open_docs.iter().find(|d| d.key == target_key);
-                                let is_dirty = if is_active {
-                                    is_active_dirty
-                                } else if let Some(od) = open_doc {
-                                    od.doc.status == glidemark_core::document::DocumentStatus::Modified
-                                } else {
-                                    false
-                                };
-
                                 let file_name = p
                                     .file_name()
                                     .and_then(|n| n.to_str())
@@ -527,13 +505,13 @@ pub fn render_drawer(
 
                                 if is_active {
                                     item = item
-                                        .bg(theme.warm_pill_bg())
-                                        .text_color(theme.warm_pill_text())
+                                        .bg(theme.selection_bg())
+                                        .text_color(theme.selection_text())
                                         .font_weight(FontWeight::MEDIUM);
                                 } else {
                                     item = item
                                         .text_color(theme.text_primary)
-                                        .hover(|s| s.bg(theme.warm_pill_hover()));
+                                        .hover(|s| s.bg(theme.hover_bg()));
                                 }
 
                                 let left_part = div()
@@ -546,7 +524,7 @@ pub fn render_drawer(
                                             .path("icons/files.svg")
                                             .size(px(13.))
                                             .text_color(if is_active {
-                                                theme.warm_pill_text()
+                                                theme.selection_text()
                                             } else {
                                                 theme.text_muted
                                             }),
@@ -558,37 +536,30 @@ pub fn render_drawer(
                                             .child(file_name),
                                     );
 
-                                let mut right_part = div().flex().items_center().gap_1();
-                                if is_dirty {
-                                    right_part = right_part.child(
+                                let right_part = div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
                                         div()
-                                            .w(px(6.))
-                                            .h(px(6.))
-                                            .rounded_full()
-                                            .bg(theme.accent),
+                                            .id(SharedString::from(format!("btn_close_loose_file_{}", idx)))
+                                            .w(px(16.))
+                                            .h(px(16.))
+                                            .rounded(px(3.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(12.))
+                                            .text_color(theme.text_muted)
+                                            .opacity(0.0)
+                                            .group_hover("drawer_loose_file_row", |s| s.opacity(1.0))
+                                            .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
+                                            .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                                                cx.stop_propagation();
+                                                on_close(&close_key, window, cx);
+                                            })
+                                            .child("×"),
                                     );
-                                }
-
-                                right_part = right_part.child(
-                                    div()
-                                        .id(SharedString::from(format!("btn_close_loose_file_{}", idx)))
-                                        .w(px(16.))
-                                        .h(px(16.))
-                                        .rounded(px(3.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .text_size(px(12.))
-                                        .text_color(theme.text_muted)
-                                        .opacity(0.0)
-                                        .group_hover("drawer_loose_file_row", |s| s.opacity(1.0))
-                                        .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
-                                        .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
-                                            cx.stop_propagation();
-                                            on_close(&close_key, window, cx);
-                                        })
-                                        .child("×"),
-                                );
 
                                 loose_section = loose_section.child(item.child(left_part).child(right_part));
                             }
@@ -640,7 +611,7 @@ pub fn render_drawer(
                                         .font_weight(font_weight)
                                         .text_color(text_color)
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.accent))
+                                        .hover(|s| s.bg(theme.hover_bg()).text_color(theme.accent))
                                         .tooltip(move |_window, cx| {
                                             let t = tooltip_heading.clone();
                                             cx.new(|_| DrawerTooltipView { text: t }).into()
@@ -669,7 +640,6 @@ fn render_file_tree_nodes(
     root_idx: usize,
     open_docs: &[OpenDoc],
     active_key: Option<&DocKey>,
-    is_active_dirty: bool,
     theme: &ThemeColors,
     strings: &'static I18nStrings,
     on_toggle_folder: &Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
@@ -757,7 +727,7 @@ fn render_file_tree_nodes(
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_muted)
-                    .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                    .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
                     .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                         on_toggle(root_idx, &p, window, cx);
                     })
@@ -773,7 +743,6 @@ fn render_file_tree_nodes(
                     root_idx,
                     open_docs,
                     active_key,
-                    is_active_dirty,
                     theme,
                     strings,
                     on_toggle_folder,
@@ -789,13 +758,6 @@ fn render_file_tree_nodes(
             let is_active = active_key == Some(&target_key);
             let open_doc = open_docs.iter().find(|d| d.key == target_key);
             let is_open = open_doc.is_some();
-            let is_dirty = if is_active {
-                is_active_dirty
-            } else if let Some(od) = open_doc {
-                od.doc.status == glidemark_core::document::DocumentStatus::Modified
-            } else {
-                false
-            };
 
             let file_name = node.name.clone();
             let tooltip_name = file_name.clone();
@@ -807,9 +769,10 @@ fn render_file_tree_nodes(
                 .id(SharedString::from(format!("drawer_tree_file_{}_{}_{}", root_idx, depth, node_idx)))
                 .group("drawer_file_row")
                 .w_full()
-                .h(px(28.))
+                .h(px(44.))
                 .pl(px(depth_indent + 8.0))
                 .pr_1p5()
+                .py_1()
                 .rounded(px(6.))
                 .cursor_pointer()
                 .flex()
@@ -827,36 +790,40 @@ fn render_file_tree_nodes(
 
             if is_active {
                 item = item
-                    .bg(theme.warm_pill_bg())
-                    .text_color(theme.warm_pill_text())
+                    .bg(theme.selection_bg())
+                    .text_color(theme.selection_text())
                     .font_weight(FontWeight::MEDIUM);
             } else {
                 item = item
                     .text_color(theme.text_primary)
-                    .hover(|s| s.bg(theme.warm_pill_hover()));
+                    .hover(|s| s.bg(theme.hover_bg()));
             }
 
-            let left_part = div()
+            let mut left_part = div()
                 .flex()
-                .items_center()
+                .flex_col()
+                .justify_center()
                 .min_w(px(0.))
                 .child(
                     div()
                         .min_w(px(0.))
                         .truncate()
+                        .text_size(px(13.))
                         .child(file_name),
                 );
 
-            let mut right_part = div().flex().items_center().gap_1();
-            if is_dirty {
-                right_part = right_part.child(
+            if let Some(ref mtime_str) = node.mtime {
+                left_part = left_part.child(
                     div()
-                        .w(px(6.))
-                        .h(px(6.))
-                        .rounded_full()
-                        .bg(theme.accent),
+                        .min_w(px(0.))
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(theme.text_muted)
+                        .child(mtime_str.clone()),
                 );
             }
+
+            let mut right_part = div().flex().items_center().gap_1();
 
             if is_open {
                 right_part = right_part.child(
@@ -934,16 +901,16 @@ where
         .justify_center()
         .on_mouse_down(MouseButton::Left, handler);
 
-    let color = if active { theme.warm_pill_text() } else { theme.text_muted };
+    let color = if active { theme.selection_text() } else { theme.text_muted };
     let icon_el = svg().path(icon_path).size(px(16.)).text_color(color);
 
     if active {
-        base.bg(theme.warm_pill_bg())
+        base.bg(theme.selection_bg())
             .rounded(px(6.))
             .child(icon_el)
     } else {
         base.rounded(px(6.))
-            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+            .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
             .child(icon_el)
     }
 }

@@ -446,8 +446,8 @@ fn render_mermaid_container(
             .flex()
             .items_center()
             .justify_center()
-            .bg(theme.warm_pill_bg().opacity(0.75))
-            .hover(|s| s.bg(theme.warm_pill_bg()))
+            .bg(theme.selection_bg())
+            .hover(|s| s.bg(theme.hover_bg()))
             .tooltip({
                 let t = strings.mermaid_zoom_hint.to_string();
                 move |_window, cx| cx.new(|_| CodeTooltipView { text: t.clone() }).into()
@@ -460,7 +460,7 @@ fn render_mermaid_container(
                 svg()
                     .path("icons/maximize.svg")
                     .size(px(14.))
-                    .text_color(theme.warm_pill_text()),
+                    .text_color(theme.selection_text()),
             );
 
         container = container
@@ -693,14 +693,6 @@ fn render_code_block(
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<&OnCopyCallback>,
 ) -> AnyElement {
-    let line_count = if code.is_empty() { 1 } else { code.lines().count() };
-    let lang_display = lang.unwrap_or("text").to_uppercase();
-    let line_numbers = (1..=line_count)
-        .map(|n| n.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let code_text = if code.is_empty() { " ".to_string() } else { code.to_string() };
-
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     code.hash(&mut hasher);
     let hash = hasher.finish();
@@ -710,116 +702,92 @@ fn render_code_block(
 
     let on_copy_cb = on_copy.cloned();
     let code_to_copy = code.to_string();
+    let code_text = if code.is_empty() { " ".to_string() } else { code.to_string() };
 
-    div()
+    let should_wrap = lang
+        .map(|l| {
+            let s = l.trim().to_lowercase();
+            !s.is_empty() && s != "text"
+        })
+        .unwrap_or(false);
+
+    let group_name: SharedString = format!("code_block_{}", hash).into();
+
+    let mut content = div()
+        .id(SharedString::from(format!("code_content_scroll_{}", hash)))
         .w_full()
         .min_w(px(0.))
-        .rounded_lg()
-        .border_1()
-        .border_color(theme.border)
+        .p_3()
+        .text_size(px(base_font_size * 0.85))
+        .font_family("ui-monospace")
+        .line_height(relative(1.5))
+        .text_color(theme.syntax_code)
+        .child(StyledText::new(code_text));
+
+    if should_wrap {
+        content = content.whitespace_normal();
+    } else {
+        content = content.overflow_x_scroll().whitespace_nowrap();
+    }
+
+    let copy_btn = div()
+        .id(SharedString::from(format!("copy_code_btn_{}", hash)))
+        .absolute()
+        .top(px(8.))
+        .right(px(8.))
+        .w(px(26.))
+        .h(px(26.))
+        .rounded_md()
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .opacity(if is_copied { 1.0 } else { 0.0 })
+        .group_hover(group_name.clone(), |s| s.opacity(1.0))
+        .bg(theme.selection_bg())
+        .hover(|s| s.bg(theme.hover_bg()))
+        .tooltip({
+            let is_copied = is_copied;
+            move |_window, cx| {
+                cx.new(|_| CodeTooltipView {
+                    text: if is_copied {
+                        strings.copied.to_string()
+                    } else {
+                        strings.copy_code.to_string()
+                    },
+                })
+                .into()
+            }
+        })
+        .on_click(move |_, window, cx| {
+            if let Some(ref cb) = on_copy_cb {
+                cb(code_to_copy.clone(), hash, window, cx);
+            }
+        })
+        .child(
+            svg()
+                .path(if is_copied {
+                    "icons/check.svg"
+                } else {
+                    "icons/copy.svg"
+                })
+                .size(px(13.))
+                .text_color(if is_copied {
+                    theme.accent
+                } else {
+                    theme.selection_text()
+                }),
+        );
+
+    div()
+        .id(SharedString::from(format!("code_block_{}", hash)))
+        .group(group_name)
+        .relative()
+        .w_full()
+        .min_w(px(0.))
+        .rounded_md()
         .bg(theme.code_bg)
-        .overflow_hidden()
-        .child(
-            div()
-                .px_2p5()
-                .py_2p5()
-                .bg(theme.surface)
-                .border_b_1()
-                .border_color(theme.border)
-                .flex()
-                .justify_between()
-                .items_center()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .px_1p5()
-                                .py_0p5()
-                                .rounded_sm()
-                                .bg(theme.bg)
-                                .border_1()
-                                .border_color(theme.border)
-                                .text_size(px(10.))
-                                .font_family("ui-monospace")
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme.accent)
-                                .child(lang_display),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .font_family("ui-monospace")
-                                .text_color(theme.text_muted)
-                                .child(format!("{} lines", line_count)),
-                        ),
-                )
-                .child(
-                    div()
-                        .id(SharedString::from(format!("copy_code_btn_{}", hash)))
-                        .tooltip({
-                            let is_copied = is_copied;
-                            move |_window, cx| {
-                                cx.new(|_| CodeTooltipView {
-                                    text: if is_copied { strings.copied.to_string() } else { strings.copy_code.to_string() },
-                                })
-                                .into()
-                            }
-                        })
-                        .cursor_pointer()
-                        .flex()
-                        .items_center()
-                        .on_click(move |_, window, cx| {
-                            if let Some(ref cb) = on_copy_cb {
-                                cb(code_to_copy.clone(), hash, window, cx);
-                            }
-                        })
-                        .child(
-                            svg()
-                                .path(if is_copied { "icons/check.svg" } else { "icons/copy.svg" })
-                                .size(px(13.))
-                                .text_color(if is_copied { theme.accent } else { theme.text_muted }),
-                        ),
-                ),
-        )
-        .child(
-            div()
-                .id("fenced_code_scroll")
-                .p_3()
-                .w_full()
-                .min_w(px(0.))
-                .flex()
-                .items_start()
-                .child(
-                    div()
-                        .w(px(32.))
-                        .flex_shrink_0()
-                        .pr_2()
-                        .mr_2()
-                        .border_r_1()
-                        .border_color(theme.border)
-                        .text_right()
-                        .text_size(px(base_font_size * 0.85))
-                        .font_family("ui-monospace")
-                        .line_height(relative(1.5))
-                        .text_color(theme.text_muted)
-                        .child(line_numbers),
-                )
-                .child(
-                    div()
-                        .id(SharedString::from(format!("code_content_scroll_{}", hash)))
-                        .flex_1()
-                        .min_w(px(0.))
-                        .overflow_x_scroll()
-                        .whitespace_nowrap()
-                        .text_size(px(base_font_size * 0.85))
-                        .font_family("ui-monospace")
-                        .line_height(relative(1.5))
-                        .text_color(theme.text_primary)
-                        .child(StyledText::new(code_text)),
-                ),
-        )
+        .child(content)
+        .child(copy_btn)
         .into_any_element()
 }

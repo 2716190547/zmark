@@ -29,7 +29,7 @@ fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
         "settings.rs must not contain any .border_1() hard borders"
     );
 
-    // 1. Verify render_nav_item has no .border_1() and uses warm_pill styles
+    // 1. Verify render_nav_item has no .border_1() and uses selection tokens
     let nav_pos = src
         .find("fn render_nav_item")
         .expect("render_nav_item definition must exist");
@@ -44,12 +44,12 @@ fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
         "render_nav_item must not contain .border_1() hard borders"
     );
     assert!(
-        nav_section.contains("warm_pill_bg"),
-        "render_nav_item must use warm_pill_bg"
+        nav_section.contains("selection_bg"),
+        "render_nav_item must use selection_bg"
     );
     assert!(
-        nav_section.contains("warm_pill_text"),
-        "render_nav_item must use warm_pill_text"
+        nav_section.contains("selection_text"),
+        "render_nav_item must use selection_text"
     );
 
     // 2. Verify render_mode_pill has no .border_1() and uses segmented derived tokens (Ticket F2)
@@ -83,7 +83,7 @@ fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
         "render_mode_pill must use transparent_black for inactive items"
     );
 
-    // 3. Verify palette list loop in render_appearance_tab has no .border_1() on palette cards
+    // 3. Verify palette list loop in render_appearance_tab has no .border_1() on palette cards, uses sample cards with 2px accent border for active
     let app_tab_pos = src
         .find("fn render_appearance_tab")
         .expect("render_appearance_tab definition must exist");
@@ -103,15 +103,15 @@ fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
         "Palette cards in render_appearance_tab must not contain .border_1() hard borders"
     );
     assert!(
-        palette_loop_section.contains("warm_pill_bg"),
-        "Palette cards in render_appearance_tab must use warm_pill_bg"
+        palette_loop_section.contains("border_2().border_color(theme.accent)"),
+        "Palette cards in render_appearance_tab must use border_2().border_color(theme.accent) for active card"
     );
     assert!(
-        palette_loop_section.contains("warm_pill_text"),
-        "Palette cards in render_appearance_tab must use warm_pill_text"
+        palette_loop_section.contains("chunks(2)"),
+        "Palette cards in render_appearance_tab must use chunks(2) for 2-column layout"
     );
 
-    // 4. Verify language cards in render_language_tab use warm_pill styles
+    // 4. Verify language cards in render_language_tab use selection tokens
     let lang_tab_pos = src
         .find("fn render_language_tab")
         .expect("render_language_tab definition must exist");
@@ -122,15 +122,15 @@ fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
     let lang_tab_section = &src[lang_tab_pos..lang_tab_end];
 
     assert!(
-        lang_tab_section.contains("warm_pill_bg"),
-        "Language cards in render_language_tab must use warm_pill_bg"
+        lang_tab_section.contains("selection_bg"),
+        "Language cards in render_language_tab must use selection_bg"
     );
     assert!(
-        lang_tab_section.contains("warm_pill_text"),
-        "Language cards in render_language_tab must use warm_pill_text"
+        lang_tab_section.contains("selection_text"),
+        "Language cards in render_language_tab must use selection_text"
     );
 
-    // 5. Verify auto_save and tab_size toggles in render_editor_save_tab use warm_pill styles
+    // 5. Verify auto_save and tab_size toggles in render_editor_save_tab use selection tokens and segmented tokens
     let editor_tab_pos = src
         .find("fn render_editor_save_tab")
         .expect("render_editor_save_tab definition must exist");
@@ -152,12 +152,8 @@ fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
 
     let auto_save_section = &editor_tab_section[auto_save_pos..tab_size_pos];
     assert!(
-        auto_save_section.contains("warm_pill_bg"),
-        "auto_save toggle must use warm_pill_bg"
-    );
-    assert!(
-        auto_save_section.contains("warm_pill_text"),
-        "auto_save toggle must use warm_pill_text"
+        auto_save_section.contains("render_ios_toggle"),
+        "auto_save toggle must use render_ios_toggle"
     );
 
     let tab_size_section = &editor_tab_section[tab_size_pos..line_height_pos];
@@ -172,6 +168,20 @@ fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
     assert!(
         tab_size_section.contains("segmented_track_bg"),
         "tab_size toggle container must use segmented_track_bg"
+    );
+
+    // 6. Verify zero warm_pill usages in entire settings.rs
+    assert!(
+        !src.contains("warm_pill_bg"),
+        "settings.rs must not contain warm_pill_bg"
+    );
+    assert!(
+        !src.contains("warm_pill_text"),
+        "settings.rs must not contain warm_pill_text"
+    );
+    assert!(
+        !src.contains("warm_pill_hover"),
+        "settings.rs must not contain warm_pill_hover"
     );
 }
 

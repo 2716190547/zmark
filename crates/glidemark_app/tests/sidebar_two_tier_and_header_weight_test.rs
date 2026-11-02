@@ -71,7 +71,7 @@ fn test_sidebar_two_tier_typography_and_arrow_removal() {
     let file_pos = src
         .find("drawer_tree_file_")
         .expect("drawer.rs must define drawer_tree_file_");
-    let file_section = &src[file_pos..(file_pos + 1200).min(src.len())];
+    let file_section = &src[file_pos..(file_pos + 2000).min(src.len())];
     assert!(
         file_section.contains("FontWeight::NORMAL"),
         "drawer_tree_file must use FontWeight::NORMAL"
@@ -442,5 +442,104 @@ fn test_app_state_create_file_in_dir_lifecycle() {
     assert!(
         err_res.is_err(),
         "create_file_in_dir on non-existent directory must return Err"
+    );
+}
+
+#[test]
+fn test_file_tree_scan_populates_mtime_cached() {
+    let temp_dir = tempdir().expect("Failed to create tempdir");
+    let test_file = temp_dir.path().join("Notes.md");
+    std::fs::write(&test_file, "# Notes\n\nSome text").expect("write test file");
+
+    let sub_dir = temp_dir.path().join("SubFolder");
+    std::fs::create_dir(&sub_dir).expect("create subdir");
+
+    let mut budget = glidemark_app::state::ScanBudget::new(100, 100);
+    let expanded = std::collections::HashSet::new();
+    let (nodes, _truncated) = glidemark_app::state::scan_root_layer(
+        temp_dir.path(),
+        0,
+        &mut budget,
+        &expanded,
+        2,
+    );
+
+    // Markdown file node has cached mtime in YYYY/MM/DD HH:mm format
+    let file_node = nodes.iter().find(|n| !n.is_dir).expect("markdown file node must exist");
+    assert_eq!(file_node.name, "Notes.md");
+    assert!(file_node.mtime.is_some(), "Scanned markdown file node must cache mtime string");
+    let mtime_str = file_node.mtime.as_ref().unwrap();
+    assert_eq!(mtime_str.len(), 16, "mtime string must be 16 chars: YYYY/MM/DD HH:mm");
+    assert_eq!(&mtime_str[4..5], "/");
+    assert_eq!(&mtime_str[7..8], "/");
+    assert_eq!(&mtime_str[10..11], " ");
+    assert_eq!(&mtime_str[13..14], ":");
+
+    // Directory node has mtime None
+    let dir_node = nodes.iter().find(|n| n.is_dir).expect("dir node must exist");
+    assert_eq!(dir_node.name, "SubFolder");
+    assert!(dir_node.mtime.is_none(), "Directory node must have None mtime");
+}
+
+#[test]
+fn test_format_mtime_format_and_civil_calculation() {
+    let now = std::time::SystemTime::now();
+    let formatted = glidemark_app::state::format_mtime(now).expect("format_mtime should succeed");
+    assert_eq!(formatted.len(), 16, "formatted now must be 16 characters");
+    assert_eq!(&formatted[4..5], "/");
+    assert_eq!(&formatted[7..8], "/");
+    assert_eq!(&formatted[10..11], " ");
+    assert_eq!(&formatted[13..14], ":");
+
+    // Epoch timestamp
+    let epoch = std::time::SystemTime::UNIX_EPOCH;
+    let epoch_formatted = glidemark_app::state::format_mtime(epoch).expect("format epoch");
+    assert_eq!(epoch_formatted.len(), 16);
+}
+
+#[test]
+fn test_sidebar_two_line_file_items_and_single_line_folders() {
+    let src = include_str!("../src/views/drawer.rs");
+
+    // File items have 44px height (~40-44px per ADR 0036) and 2-line structure
+    let file_pos = src
+        .find("drawer_tree_file_")
+        .expect("drawer.rs must define drawer_tree_file_");
+    let file_section = &src[file_pos..(file_pos + 2000).min(src.len())];
+    assert!(
+        file_section.contains(".h(px(44.))"),
+        "drawer_tree_file must use 44px height for 2-line layout"
+    );
+    assert!(
+        file_section.contains(".text_size(px(13.))"),
+        "drawer_tree_file line 1 must use 13px font size"
+    );
+    assert!(
+        file_section.contains(".text_size(px(11.))"),
+        "drawer_tree_file line 2 must use 11px font size"
+    );
+    assert!(
+        file_section.contains("node.mtime"),
+        "drawer_tree_file must display cached node.mtime"
+    );
+
+    // Folder items remain single line 28px
+    let dir_pos = src
+        .find("drawer_tree_dir_")
+        .expect("drawer.rs must define drawer_tree_dir_");
+    let dir_section = &src[dir_pos..(dir_pos + 1200).min(src.len())];
+    assert!(
+        dir_section.contains(".h(px(28.))"),
+        "drawer_tree_dir must maintain single line 28px height"
+    );
+
+    // Draft items remain single line 28px
+    let draft_pos = src
+        .find("drawer_draft_item")
+        .expect("drawer.rs must define drawer_draft_item");
+    let draft_section = &src[draft_pos..(draft_pos + 1200).min(src.len())];
+    assert!(
+        draft_section.contains(".h(px(28.))"),
+        "drawer_draft_item must maintain single line 28px height"
     );
 }

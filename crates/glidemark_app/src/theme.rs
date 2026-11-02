@@ -28,7 +28,6 @@ pub struct ThemeColors {
     #[allow(dead_code)]
     pub syntax_link: Hsla,
     pub syntax_bullet: Hsla,
-    #[allow(dead_code)]
     pub syntax_code: Hsla,
 }
 
@@ -36,6 +35,7 @@ pub struct PaletteDescriptor {
     pub id: &'static str,
     #[allow(dead_code)]
     pub name: &'static str,
+    #[allow(dead_code)]
     pub preview_color: Hsla,
 }
 
@@ -67,48 +67,18 @@ impl HslaExt for Hsla {
 
 impl ThemeColors {
     /// Adaptive selection background: neutral translucent tint
-    #[allow(dead_code)]
     pub fn selection_bg(&self) -> Hsla {
         self.text_primary.opacity(0.07)
     }
 
     /// Adaptive hover background: subtle translucent highlight
-    #[allow(dead_code)]
     pub fn hover_bg(&self) -> Hsla {
         self.text_primary.opacity(0.04)
     }
 
     /// Adaptive selection text color: primary foreground
-    #[allow(dead_code)]
     pub fn selection_text(&self) -> Hsla {
         self.text_primary
-    }
-
-    /// Low-contrast cool neutral pill background: `#EFF1F4` (light) / `#272B33` (dark)
-    pub fn warm_pill_bg(&self) -> Hsla {
-        if self.is_dark {
-            rgb(0x272b33).into()
-        } else {
-            rgb(0xeff1f4).into()
-        }
-    }
-
-    /// Soft translucent hover highlight: low-contrast warm stone tint
-    pub fn warm_pill_hover(&self) -> Hsla {
-        if self.is_dark {
-            rgba(0xffffff0f).into() // ~6% white in dark mode
-        } else {
-            rgba(0x0000000d).into() // ~5% black in light mode
-        }
-    }
-
-    /// Primary text for subtle pill: `#1F2328` (light) / `#F0F2F5` (dark)
-    pub fn warm_pill_text(&self) -> Hsla {
-        if self.is_dark {
-            rgb(0xf0f2f5).into()
-        } else {
-            rgb(0x1f2328).into()
-        }
     }
 
     /// Adaptive segmented control track background:

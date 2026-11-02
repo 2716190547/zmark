@@ -163,8 +163,6 @@ pub struct I18nStrings {
     pub lightbox_reset: &'static str,
     pub lightbox_fit_window: &'static str,
     pub lightbox_close: &'static str,
-    pub search_settings: &'static str,
-    pub search_no_results: &'static str,
 }
 
 pub fn localize_palette_name<'a>(id: &'a str, strings: &'a I18nStrings) -> &'a str {
@@ -288,8 +286,6 @@ static ZH_CN: I18nStrings = I18nStrings {
     lightbox_reset: "重置",
     lightbox_fit_window: "适应窗口",
     lightbox_close: "关闭灯箱",
-    search_settings: "搜索设置",
-    search_no_results: "未找到相关设置",
 };
 
 static ZH_TW: I18nStrings = I18nStrings {
@@ -384,8 +380,6 @@ static ZH_TW: I18nStrings = I18nStrings {
     lightbox_reset: "重設",
     lightbox_fit_window: "符合視窗",
     lightbox_close: "關閉燈箱",
-    search_settings: "搜尋設定",
-    search_no_results: "未找到相關設定",
 };
 
 static EN: I18nStrings = I18nStrings {
@@ -480,8 +474,6 @@ static EN: I18nStrings = I18nStrings {
     lightbox_reset: "Reset",
     lightbox_fit_window: "Fit to Window",
     lightbox_close: "Close Lightbox",
-    search_settings: "Search Settings",
-    search_no_results: "No matching settings found",
 };
 
 static JA: I18nStrings = I18nStrings {
@@ -576,8 +568,6 @@ static JA: I18nStrings = I18nStrings {
     lightbox_reset: "リセット",
     lightbox_fit_window: "ウィンドウに合わせる",
     lightbox_close: "ライトボックスを閉じる",
-    search_settings: "設定を検索",
-    search_no_results: "一致する設定が見つかりません",
 };
 
 static KO: I18nStrings = I18nStrings {
@@ -672,8 +662,6 @@ static KO: I18nStrings = I18nStrings {
     lightbox_reset: "재설정",
     lightbox_fit_window: "창에 맞추기",
     lightbox_close: "라이트박스 닫기",
-    search_settings: "설정 검색",
-    search_no_results: "일치하는 설정이 없습니다",
 };
 
 static FR: I18nStrings = I18nStrings {
@@ -768,8 +756,6 @@ static FR: I18nStrings = I18nStrings {
     lightbox_reset: "Réinitialiser",
     lightbox_fit_window: "Adapter à la fenêtre",
     lightbox_close: "Fermer la visionneuse",
-    search_settings: "Rechercher dans les paramètres",
-    search_no_results: "Aucun paramètre correspondant trouvé",
 };
 
 static DE: I18nStrings = I18nStrings {
@@ -864,8 +850,6 @@ static DE: I18nStrings = I18nStrings {
     lightbox_reset: "Zurücksetzen",
     lightbox_fit_window: "An Fenster anpassen",
     lightbox_close: "Lightbox schließen",
-    search_settings: "Einstellungen durchsuchen",
-    search_no_results: "Keine passenden Einstellungen gefunden",
 };
 
 static ES: I18nStrings = I18nStrings {
@@ -960,8 +944,6 @@ static ES: I18nStrings = I18nStrings {
     lightbox_reset: "Restablecer",
     lightbox_fit_window: "Ajustar a la ventana",
     lightbox_close: "Cerrar caja de luz",
-    search_settings: "Buscar en ajustes",
-    search_no_results: "No se encontraron ajustes coincidentes",
 };
 
 static RU: I18nStrings = I18nStrings {
@@ -1056,8 +1038,6 @@ static RU: I18nStrings = I18nStrings {
     lightbox_reset: "Сброс",
     lightbox_fit_window: "По размеру окна",
     lightbox_close: "Закрыть просмотр",
-    search_settings: "Поиск настроек",
-    search_no_results: "Настройки не найдены",
 };
 
 static PT: I18nStrings = I18nStrings {
@@ -1152,6 +1132,4 @@ static PT: I18nStrings = I18nStrings {
     lightbox_reset: "Redefinir",
     lightbox_fit_window: "Ajustar à janela",
     lightbox_close: "Fechar caixa de luz",
-    search_settings: "Pesquisar nas definições",
-    search_no_results: "Nenhuma definição correspondente encontrada",
 };

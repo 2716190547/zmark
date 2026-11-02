@@ -65,7 +65,7 @@ pub struct LightboxState {
     pub is_open: bool,
     pub svg_path: Option<PathBuf>,
     pub hidpi_svg_path: Option<PathBuf>,
-    pub hidpi_image: Option<Arc<gpui::RenderImage>>,
+    pub hidpi_image: Option<Arc<gpui::Image>>,
     pub code_hash: Option<u64>,
     pub zoom: f32,
     pub pan_x: f32,
@@ -98,7 +98,7 @@ impl LightboxState {
         }
     }
 
-    pub fn open(&mut self, svg_path: PathBuf, code_hash: u64) -> Option<Arc<gpui::RenderImage>> {
+    pub fn open(&mut self, svg_path: PathBuf, code_hash: u64) -> Option<Arc<gpui::Image>> {
         let old_img = self.hidpi_image.take();
         self.is_open = true;
         self.svg_path = Some(svg_path);
@@ -117,9 +117,9 @@ impl LightboxState {
         &mut self,
         svg_path: PathBuf,
         hidpi_svg_path: PathBuf,
-        image: Arc<gpui::RenderImage>,
+        image: Arc<gpui::Image>,
         code_hash: u64,
-    ) -> Option<Arc<gpui::RenderImage>> {
+    ) -> Option<Arc<gpui::Image>> {
         let old_img = self.hidpi_image.take();
         self.is_open = true;
         self.svg_path = Some(svg_path);
@@ -135,7 +135,7 @@ impl LightboxState {
         old_img
     }
 
-    pub fn close(&mut self) -> Option<Arc<gpui::RenderImage>> {
+    pub fn close(&mut self) -> Option<Arc<gpui::Image>> {
         self.is_open = false;
         self.svg_path = None;
         self.hidpi_svg_path = None;
@@ -252,7 +252,7 @@ pub fn render_lightbox(
                 .rounded_xl()
                 .p_4()
                 .shadow_lg()
-                .bg(if theme.is_dark { theme.surface } else { rgb(0xffffff).into() })
+                .bg(theme.surface)
                 .cursor(if is_dragging { CursorStyle::ClosedHand } else { CursorStyle::OpenHand })
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
                     cx.stop_propagation(); // Don't trigger backdrop click
@@ -260,7 +260,7 @@ pub fn render_lightbox(
                     cx.notify();
                 }))
                 .children(state.hidpi_image.as_ref().map(|handle| {
-                    img(ImageSource::Render(handle.clone()))
+                    img(ImageSource::Image(handle.clone()))
                         .w(px(800.0 * zoom))
                         .max_w(px(800.0 * zoom))
                 }).or_else(|| {

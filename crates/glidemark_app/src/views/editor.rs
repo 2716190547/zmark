@@ -25,6 +25,8 @@ pub enum MarkdownTokenKind {
     Keyword,
     StringLiteral,
     Comment,
+    CodeDelimiter,
+    CodeText,
     Plain,
 }
 
@@ -102,6 +104,14 @@ pub fn tokenize_markdown_line(line: &str) -> Vec<MarkdownToken> {
         return vec![MarkdownToken {
             text: " ".to_string(),
             kind: MarkdownTokenKind::Plain,
+        }];
+    }
+
+    let trimmed = line.trim();
+    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        return vec![MarkdownToken {
+            text: line.to_string(),
+            kind: MarkdownTokenKind::CodeDelimiter,
         }];
     }
 
@@ -313,7 +323,15 @@ pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
     if line.is_empty() {
         return vec![MarkdownToken {
             text: " ".to_string(),
-            kind: MarkdownTokenKind::Plain,
+            kind: MarkdownTokenKind::CodeText,
+        }];
+    }
+
+    let trimmed = line.trim();
+    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        return vec![MarkdownToken {
+            text: line.to_string(),
+            kind: MarkdownTokenKind::CodeDelimiter,
         }];
     }
 
@@ -376,7 +394,7 @@ pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
             let kind = if KEYWORDS.contains(&word.as_str()) {
                 MarkdownTokenKind::Keyword
             } else {
-                MarkdownTokenKind::Plain
+                MarkdownTokenKind::CodeText
             };
             tokens.push(MarkdownToken {
                 text: word,
@@ -400,7 +418,7 @@ pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
         let other: String = chars[start..i].iter().collect();
         tokens.push(MarkdownToken {
             text: other,
-            kind: MarkdownTokenKind::Plain,
+            kind: MarkdownTokenKind::CodeText,
         });
     }
 
@@ -511,6 +529,12 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
         }
         MarkdownTokenKind::LinkText | MarkdownTokenKind::LinkUrl => {
             el = el.text_color(theme.syntax_link).underline();
+        }
+        MarkdownTokenKind::CodeDelimiter => {
+            el = el.text_color(theme.text_muted);
+        }
+        MarkdownTokenKind::CodeText => {
+            el = el.text_color(theme.syntax_code);
         }
         MarkdownTokenKind::Plain => {
             el = el.text_color(theme.text_primary);

@@ -3,7 +3,6 @@ use glidemark_app::theme::ThemeColors;
 use glidemark_app::views::workspace::{adaptive_header_padding, mode_tab_colors};
 use glidemark_core::document::Document;
 use glidemark_core::i18n::{get_strings, SupportedLocale};
-use gpui::rgb;
 use std::fs;
 use tempfile::tempdir;
 
@@ -140,56 +139,34 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
     state.set_view_mode(ViewMode::Split);
     assert_eq!(state.view_mode, ViewMode::Split);
 
-    // ThemeColors warm stone pill palette verification
+    // ThemeColors selection token verification (ADR 0036 Ticket G4)
     let light_theme = ThemeColors::resolve("default", false);
-    let light_bg = light_theme.warm_pill_bg();
-    let light_text = light_theme.warm_pill_text();
+    let light_bg = light_theme.selection_bg();
+    let light_text = light_theme.selection_text();
 
-    // Verify exact expected warm stone colors (#EFF1F4 light bg, #1F2328 light text)
-    assert_eq!(light_bg, rgb(0xeff1f4).into());
-    assert_eq!(light_text, rgb(0x1f2328).into());
-    assert_eq!(light_bg.a, 1.0, "Light warm pill bg must be fully opaque");
-    assert_eq!(light_text.a, 1.0, "Light warm pill text must be fully opaque");
-    assert_ne!(
-        light_bg, light_text,
-        "Warm pill background and text must be distinguishable in light mode"
-    );
-    assert!(
-        light_bg.l > light_text.l,
-        "Light mode warm stone background must have higher lightness than text"
-    );
+    assert_eq!(light_bg, light_theme.text_primary.opacity(0.07));
+    assert_eq!(light_text, light_theme.text_primary);
 
     let dark_theme = ThemeColors::resolve("default", true);
-    let dark_bg = dark_theme.warm_pill_bg();
-    let dark_text = dark_theme.warm_pill_text();
+    let dark_bg = dark_theme.selection_bg();
+    let dark_text = dark_theme.selection_text();
 
-    // Verify exact expected warm stone colors (#272B33 dark bg, #F0F2F5 dark text)
-    assert_eq!(dark_bg, rgb(0x272b33).into());
-    assert_eq!(dark_text, rgb(0xf0f2f5).into());
-    assert_eq!(dark_bg.a, 1.0, "Dark warm pill bg must be fully opaque");
-    assert_eq!(dark_text.a, 1.0, "Dark warm pill text must be fully opaque");
-    assert_ne!(
-        dark_bg, dark_text,
-        "Warm pill background and text must be distinguishable in dark mode"
-    );
-    assert!(
-        dark_bg.l < dark_text.l,
-        "Dark mode warm stone background must have lower lightness than text"
-    );
+    assert_eq!(dark_bg, dark_theme.text_primary.opacity(0.07));
+    assert_eq!(dark_text, dark_theme.text_primary);
 
     // Cross-mode distinctness
-    assert_ne!(light_bg, dark_bg, "Light and dark pill backgrounds must differ");
-    assert_ne!(light_text, dark_text, "Light and dark pill texts must differ");
+    assert_ne!(light_bg, dark_bg, "Light and dark selection backgrounds must differ");
+    assert_ne!(light_text, dark_text, "Light and dark selection texts must differ");
 
     // Verify consistency across all registered palettes
     for palette in glidemark_app::theme::ALL_PALETTES {
         let l_theme = ThemeColors::resolve(palette.id, false);
         let d_theme = ThemeColors::resolve(palette.id, true);
 
-        assert_ne!(l_theme.warm_pill_bg(), l_theme.warm_pill_text());
-        assert_ne!(d_theme.warm_pill_bg(), d_theme.warm_pill_text());
-        assert_eq!(l_theme.warm_pill_bg().a, 1.0);
-        assert_eq!(d_theme.warm_pill_bg().a, 1.0);
+        assert_eq!(l_theme.selection_bg(), l_theme.text_primary.opacity(0.07));
+        assert_eq!(d_theme.selection_bg(), d_theme.text_primary.opacity(0.07));
+        assert_eq!(l_theme.selection_text(), l_theme.text_primary);
+        assert_eq!(d_theme.selection_text(), d_theme.text_primary);
     }
 
     // Direct verification of mode_tab_colors production function (P1 requirement)
@@ -199,11 +176,11 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
         let (active_bg, active_text) = mode_tab_colors(true, &theme);
         let (_inactive_bg, inactive_text) = mode_tab_colors(false, &theme);
 
-        // Active background MUST be warm_pill_bg, NOT theme.surface
+        // Active background MUST be selection_bg, NOT theme.surface
         assert_eq!(
             active_bg,
-            theme.warm_pill_bg(),
-            "Active mode tab background must equal warm_pill_bg"
+            theme.selection_bg(),
+            "Active mode tab background must equal selection_bg"
         );
         assert_ne!(
             active_bg,
@@ -212,8 +189,8 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
         );
         assert_eq!(
             active_text,
-            theme.warm_pill_text(),
-            "Active mode tab text must equal warm_pill_text"
+            theme.selection_text(),
+            "Active mode tab text must equal selection_text"
         );
         assert_eq!(
             inactive_text,
