@@ -276,3 +276,30 @@ fn test_backwards_compatibility_without_line_height() {
         Preferences::load_from_path(&config_path).expect("should deserialize");
     assert!((pref.line_height - 1.6).abs() < f32::EPSILON);
 }
+
+#[test]
+fn test_settings_layout_two_columns_without_top_bar() {
+    let src = load_settings_source();
+
+    // Verify 44px top horizontal bar is thoroughly removed
+    assert!(
+        !src.contains("h(px(44.))"),
+        "settings.rs must not contain h(px(44.)) top titlebar"
+    );
+    assert!(
+        !src.contains("pl(px(80.))"),
+        "settings.rs must not contain pl(px(80.))"
+    );
+
+    // Verify root layout has direct flex_row
+    assert!(
+        src.contains("flex_row()"),
+        "settings.rs must use flex_row() for direct two-column layout"
+    );
+
+    // Verify sidebar has 36px top padding for native macOS traffic lights
+    assert!(
+        src.contains("pt(px(36.))"),
+        "settings.rs left sidebar must have pt(px(36.))"
+    );
+}

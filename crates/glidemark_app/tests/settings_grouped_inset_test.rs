@@ -597,3 +597,53 @@ fn test_settings_search_source_contract() {
         "settings.rs must have zero occurrences of '.border_1()'"
     );
 }
+
+/// 9. `test_settings_full_height_split_columns_and_no_44px_titlebar`:
+///    - Assert removal of 44px top titlebar and its associated classes (ADR 0035 Decision 1).
+///    - Assert left sidebar has pt(px(36.)) top safety margin for traffic lights.
+///    - Assert left sidebar width is 160px.
+///    - Assert direct horizontal flex layout with flex_row().
+///    - Assert workspace.rs open_settings_window preserves appears_transparent and traffic_light_position.
+#[test]
+fn test_settings_full_height_split_columns_and_no_44px_titlebar() {
+    let src = include_str!("../src/views/settings.rs");
+
+    // 1. Assert removal of 44px top titlebar and its associated classes
+    assert!(
+        !src.contains("h(px(44.))"),
+        "settings.rs must not contain h(px(44.)) top titlebar container"
+    );
+    assert!(
+        !src.contains("pl(px(80.))"),
+        "settings.rs must not contain pl(px(80.))"
+    );
+
+    // 2. Assert left sidebar has pt(px(36.)) top safety margin for traffic lights
+    assert!(
+        src.contains("pt(px(36.))"),
+        "settings.rs left sidebar must have pt(px(36.)) for native macOS traffic lights"
+    );
+
+    // 3. Assert left sidebar width is 160px
+    assert!(
+        src.contains("w(px(160.))"),
+        "settings.rs left sidebar must have 160px width"
+    );
+
+    // 4. Assert direct horizontal flex layout with flex_row()
+    assert!(
+        src.contains("flex_row()"),
+        "settings.rs root container must use flex_row() for full-height side-by-side columns"
+    );
+
+    // 5. Assert workspace.rs open_settings_window preserves transparent titlebar & traffic lights
+    let ws_src = include_str!("../src/views/workspace.rs");
+    assert!(
+        ws_src.contains("appears_transparent: true"),
+        "workspace.rs open_settings_window must set appears_transparent: true"
+    );
+    assert!(
+        ws_src.contains("traffic_light_position: Some(point(px(14.), px(14.)))"),
+        "workspace.rs open_settings_window must configure traffic_light_position at (14, 14)"
+    );
+}

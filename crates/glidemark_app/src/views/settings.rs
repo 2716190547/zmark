@@ -524,7 +524,7 @@ impl Render for SettingsWindowView {
             .bg(theme.bg)
             .text_color(theme.text_primary)
             .flex()
-            .flex_col()
+            .flex_row()
             .overflow_hidden()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 if !this.is_search_focused {
@@ -567,44 +567,20 @@ impl Render for SettingsWindowView {
                     }
                 }
             }))
-            // Top Window Title Bar with traffic-lights safe insets
+            // Left Sidebar Navigation (Edge-to-Edge full height with traffic-lights safe insets)
             .child(
                 div()
-                    .h(px(44.))
-                    .pl(px(80.))
-                    .pr_4()
-                    .border_b_1()
+                    .w(px(160.))
+                    .h_full()
+                    .border_r_1()
                     .border_color(theme.border)
                     .bg(theme.bg)
+                    .pt(px(36.))
+                    .px_2()
+                    .pb_2()
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.text_primary)
-                            .child(strings.settings),
-                    ),
-            )
-            // Two-column Split Body
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .flex()
-                    // Left Sidebar Navigation
-                    .child(
-                        div()
-                            .w(px(160.))
-                            .h_full()
-                            .border_r_1()
-                            .border_color(theme.border)
-                            .bg(theme.bg)
-                            .p_2()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
+                    .flex_col()
+                    .gap_1()
                             // Top Search Bar
                             .child({
                                 let view_search = cx.entity().clone();
@@ -852,7 +828,6 @@ impl Render for SettingsWindowView {
                                 }
                             })
                     })
-            )
     }
 }
 
