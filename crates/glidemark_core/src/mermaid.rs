@@ -746,9 +746,33 @@ fn stitch_lines(code: &str) -> Vec<String> {
     result
 }
 
+fn handle_tag_bracket(c: char, rem_chars: &[char], out: &mut String) {
+    if c == '<' {
+        let rem: String = rem_chars.iter().take(6).collect();
+        let rem_lower = rem.to_lowercase();
+        if rem_lower.starts_with("<br>")
+            || rem_lower.starts_with("<br/>")
+            || rem_lower.starts_with("<br />")
+        {
+            out.push(c);
+        } else {
+            out.push_str("&lt;");
+        }
+    } else if c == '>' {
+        if out.ends_with("<br") || out.ends_with("<br/") || out.ends_with("<br ") {
+            out.push(c);
+        } else {
+            out.push_str("&gt;");
+        }
+    } else {
+        out.push(c);
+    }
+}
+
 fn strip_class_annotations(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut in_quotes = false;
+    let mut in_pipe_label = false;
     let mut bracket_depth = 0usize;
     let mut escaped = false;
 
@@ -778,31 +802,26 @@ fn strip_class_annotations(line: &str) -> String {
         escaped = false;
 
         if in_quotes {
-            if c == '<' {
-                let rem: String = chars[i..].iter().take(6).collect();
-                let rem_lower = rem.to_lowercase();
-                if rem_lower.starts_with("<br>")
-                    || rem_lower.starts_with("<br/>")
-                    || rem_lower.starts_with("<br />")
-                {
-                    out.push(c);
-                } else {
-                    out.push_str("&lt;");
-                }
-            } else if c == '>' {
-                if out.ends_with("<br") || out.ends_with("<br/") || out.ends_with("<br ") {
-                    out.push(c);
-                } else {
-                    out.push_str("&gt;");
-                }
-            } else {
-                out.push(c);
-            }
+            handle_tag_bracket(c, &chars[i..], &mut out);
             i += 1;
             continue;
         }
 
         // Outside quotes
+        if c == '|' {
+            in_pipe_label = !in_pipe_label;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+
+        if in_pipe_label {
+            handle_tag_bracket(c, &chars[i..], &mut out);
+            i += 1;
+            continue;
+        }
+
+        // Outside quotes and outside pipe labels
         match c {
             '[' | '(' | '{' => {
                 bracket_depth += 1;
@@ -814,25 +833,8 @@ fn strip_class_annotations(line: &str) -> String {
                 out.push(c);
                 i += 1;
             }
-            '<' if bracket_depth > 0 => {
-                let rem: String = chars[i..].iter().take(6).collect();
-                let rem_lower = rem.to_lowercase();
-                if rem_lower.starts_with("<br>")
-                    || rem_lower.starts_with("<br/>")
-                    || rem_lower.starts_with("<br />")
-                {
-                    out.push(c);
-                } else {
-                    out.push_str("&lt;");
-                }
-                i += 1;
-            }
-            '>' if bracket_depth > 0 => {
-                if out.ends_with("<br") || out.ends_with("<br/") || out.ends_with("<br ") {
-                    out.push(c);
-                } else {
-                    out.push_str("&gt;");
-                }
+            '<' | '>' if bracket_depth > 0 => {
+                handle_tag_bracket(c, &chars[i..], &mut out);
                 i += 1;
             }
             ':' if bracket_depth == 0 => {

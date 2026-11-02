@@ -145,3 +145,63 @@ flowchart TD
         svg
     );
 }
+
+#[test]
+fn test_pipe_edge_labels_containing_colons() {
+    // 6. Test pipe edge labels containing ::: and :: (e.g. A -->|step:::code| B, A -->|std::vector:::tag| B)
+    let diagram = r#"
+flowchart TD
+    A -->|step:::code| B
+    B -->|std::vector:::tag| C
+"#;
+    let res = render_to_svg(diagram);
+    assert!(
+        res.is_ok(),
+        "Expected render_to_svg to succeed for pipe labels containing colons, got: {:?}",
+        res.err()
+    );
+    let svg = res.unwrap();
+    assert!(svg.contains("<svg") && svg.contains("</svg>"));
+    assert!(
+        svg.contains("step:::code"),
+        "SVG should retain pipe label 'step:::code': {}",
+        svg
+    );
+    assert!(
+        svg.contains("std::vector:::tag"),
+        "SVG should retain pipe label 'std::vector:::tag': {}",
+        svg
+    );
+}
+
+#[test]
+fn test_html_br_and_generic_brackets_in_node_and_edge_labels() {
+    // 7. Test <br>/<br/> preserved and generic <T> safely escaped in both nodes and pipe labels
+    let diagram = r#"
+flowchart TD
+    A["Node 1<br>Line 2<br/>Generic<T>"] -->|Edge<br/>Text with <int>| B["Node 2"]
+"#;
+    let res = render_to_svg(diagram);
+    assert!(
+        res.is_ok(),
+        "Expected render_to_svg to succeed with <br> and <T> in node/edge labels, got: {:?}",
+        res.err()
+    );
+    let svg = res.unwrap();
+    assert!(svg.contains("<svg") && svg.contains("</svg>"));
+    assert!(
+        svg.contains("Line 2"),
+        "SVG should contain Line 2: {}",
+        svg
+    );
+    assert!(
+        svg.contains("&lt;T&gt;") || svg.contains("Generic"),
+        "SVG should contain Generic<T>: {}",
+        svg
+    );
+    assert!(
+        svg.contains("&lt;int&gt;") || svg.contains("Text with"),
+        "SVG should contain Text with <int>: {}",
+        svg
+    );
+}
