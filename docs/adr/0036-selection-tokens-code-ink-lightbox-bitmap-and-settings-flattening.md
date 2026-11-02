@@ -27,6 +27,7 @@ Phase F 交付后，用户提供 4 张标注图（设置页、主窗口两栏、
 | `selection_text()` | `text_primary` |
 
 - 中性色派生，随 8 套调色板和明暗模式自适应，不引入新的硬编码色值。
+- **Solarized 浅色 `text_primary` 由 `#657b83` 调整为 `#586e75`**：原值对其 `bg` 对比度约 4.1:1，低于样张卡可读性门槛 4.5:1（见设置页一节）；这是该门槛的直接后果，不属于范围蔓延。
 - 所有侧栏行、设置导航、设置列表项、顶栏胶囊、预览区 Mermaid 放大按钮统一改用。
 - 备选“强调色 10% 叠加”被否决：选中行会随调色板变色，与妙言的中性风格不符。
 
@@ -40,6 +41,7 @@ Phase F 交付后，用户提供 4 张标注图（设置页、主窗口两栏、
 - 保留 `code_bg` 圆角底色；复制按钮改为鼠标悬停代码块时才在右上角出现。
 - **换行规则**：有语言标记且非 `text` 的块自动换行；无语言或 `text` 块保留 `overflow_x_scroll` + `whitespace_nowrap`（多为需要对齐的 ASCII 目录树，换行会破坏竖线对齐）。
 - Mermaid 块不受影响。
+- 判定函数 `should_wrap_code_block(lang) -> bool` 为纯函数：`Some(l)` 去首尾空白并转小写后，**非空且不等于 `text`** 返回 `true`（换行）；`None`、空串、`text` 返回 `false`（横向滚动）。
 
 ### 4. 灯箱位图通道修复
 - `open_lightbox` 不再调用 `Image::to_image_data`。改为 `gpui::Image::from_bytes(ImageFormat::Svg, ..)`，灯箱以 `img(ImageSource::Image(arc))` 加载，走 GPUI 的 `swap_rgba_pa_to_bgra` 路径。
