@@ -237,3 +237,25 @@ fn test_slice_tokens_for_visual_subline_with_bullet_prefix() {
     let sub1_text: String = sub1.iter().map(|t| t.text.as_str()).collect();
     assert_eq!(sub1_text, "very long ");
 }
+
+#[test]
+fn test_preview_task_list_checkbox_uses_syntax_bullet() {
+    let preview_src = include_str!("../src/views/preview.rs");
+    let task_item_pos = preview_src
+        .find("if let Some(checked) = item.checked")
+        .expect("task list checkbox branch must exist in preview.rs");
+    let task_item_section = &preview_src[task_item_pos..task_item_pos + 600];
+
+    assert!(
+        task_item_section.contains(".border_color(theme.syntax_bullet)"),
+        "Task item checkbox border must use theme.syntax_bullet"
+    );
+    assert!(
+        task_item_section.contains("theme.syntax_bullet } else { theme.bg }"),
+        "Task item checkbox background must use theme.syntax_bullet when checked"
+    );
+    assert!(
+        !task_item_section.contains(".border_color(theme.accent)"),
+        "Task item checkbox border must not use theme.accent"
+    );
+}
