@@ -43,7 +43,8 @@ Phase F 交付后，用户提供 4 张标注图（设置页、主窗口两栏、
 
 ### 4. 灯箱位图通道修复
 - `open_lightbox` 不再调用 `Image::to_image_data`。改为 `gpui::Image::from_bytes(ImageFormat::Svg, ..)`，灯箱以 `img(ImageSource::Image(arc))` 加载，走 GPUI 的 `swap_rgba_pa_to_bgra` 路径。
-- 关闭灯箱和文档切换时，使用 `Image::remove_asset(cx)` 释放（替代 C2b 的 `cx.drop_image(RenderImage)`）。`LightboxState` 中保存 `Arc<gpui::Image>` 取代 `Arc<RenderImage>`，C2b 的生命周期测试同步调整，释放语义保持：同一时刻最多一张 HiDPI 位图。
+- `LightboxState` 中保存 `Arc<gpui::Image>` 取代 `Arc<RenderImage>`。
+- **释放必须两步**（G 阶段审查发现并经 GPUI 0.2.2 源码核实）：`Image::remove_asset(cx)` 只清除 `App.loading_assets` 缓存，**不会**从 sprite atlas 移除 GPU 纹理，唯一的纹理移除点是 `Window::drop_image` / `App::drop_image(RenderImage)`。因此统一经一个释放函数处理：先在缓存仍存在时用 `Arc<Image>::get_render_image(window, cx)`（不触发加载）取回 `Arc<RenderImage>`，调用 `cx.drop_image(render, window)`，再调用 `remove_asset(cx)`。关闭、文档切换、`open` 替换三条路径都必须走该函数。释放语义保持 C2b：同一时刻最多一张 HiDPI 位图。
 - 灯箱卡片底色统一为 `theme.surface`（去掉浅色模式下的 `rgb(0xffffff)`），与预览区容器一致。
 - 备选“自己调 `render_pixmap` 后手动交换通道”被否决：需新增 `image`、`smallvec` 两个直接依赖，且重复实现 GPUI 内部逻辑。
 - 约束：先写复现测试（`hidpi_svg` 的 `is_dark` 与预览一致），再改实现。
@@ -78,7 +79,7 @@ G0 完成并提交后，G1 ~ G4 并发。全部合入后由主代理删除 `warm
 
 ## 结果 (Consequences)
 - 选中 / 悬停背景由两个 token 统一管理，新增调色板自动适配。
-- 灯箱与预览区颜色一致；释放路径从 `drop_image(RenderImage)` 改为 `remove_asset(Image)`，显存释放行为需由 C2b 测试继续保证。
+- 灯箱与预览区颜色一致；释放路径为 `get_render_image` → `drop_image` → `remove_asset` 三步，显存释放行为由行为测试（非字符串断言）保证。
 - 删除设置搜索后，如将来设置项增多，需要先做通用输入控件再重新引入。
 - 侧栏文件行高度由 28px 增加到约 44px，同屏可见文件数减少。
 - 删除红点后，自动保存关闭时顶栏保存按钮是唯一的未保存提示。
