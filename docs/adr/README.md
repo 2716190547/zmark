@@ -33,7 +33,7 @@
 | **0032** | [视觉层级精进、无感知全屏适配与 HiDPI 流程图重采样灯箱](0032-canvas-header-visual-refinement-and-hidpi-lightbox.md) | 已通过 (Accepted) | 全屏左边距动态感知、侧栏草稿去常驻化、头部大标题与视图模式平铺统一、HiDPI 矢量重采样与显存保护 |
 | **0033** | [现代化设置视窗、侧栏层级降噪、灯箱纸张画布与沉浸阅读排版](0033-modern-settings-drawer-refinement-and-editor-reading.md) | 已通过 (Accepted) | 灯箱纸张实体画布隔离透光、侧栏移除工作区标头与灰点并升级13px、设置窗口无框胶囊重构、编辑器对齐/1.6x行高/轻量语法高亮 |
 | **0034** | [纯净中性调色体系、Apple 原生分组设置与均高切分软折行](0034-miaoyan-palette-apple-settings-and-visual-line-wrap.md) | 已通过 (Accepted) | 妙言纯净中性调色重构消灭脏感、去除未保存红点、侧栏两级层级/文件夹状态开合/Hover新建、18px顶栏大标题、Apple Grouped Inset Cards设置卡片、均高视觉行切分软折行与多色语义高亮 |
-| **0035** | [无缝贯穿设置视窗、系统化调色推导、图标线宽归一、点部语义上色与 Mermaid 语法脱糖](0035-settings-layout-derived-palette-icon-stroke-and-mermaid-desugaring.md) | 提议中 (Proposed) | 彻底移除 44px 横栏实现全高无缝分栏；macOS 原生 Segmented Control 槽底浮雕调色推导；顶栏设置常亮修复与 16px 图标线宽 1.5~1.75px 归一；Markdown 列表/语法标缀点部专属色；Mermaid 复合连线 & 自动平铺展开与容错 |
+| **0035** | [无缝贯穿设置视窗、系统化调色推导、图标线宽归一、点部语义上色与 Mermaid 语法脱糖](0035-settings-layout-derived-palette-icon-stroke-and-mermaid-desugaring.md) | 已通过 (Accepted) | 彻底移除 44px 横栏实现全高无缝分栏；macOS 原生 Segmented Control 槽底浮雕调色推导；顶栏设置常亮修复与 16px 图标线宽 1.8~2.25 viewBox 光学归一；Markdown 列表/语法标缀点部专属色；Mermaid 复合连线 & 自动笛卡尔展开与容错 |
 
 ---
 
