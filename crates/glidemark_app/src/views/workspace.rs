@@ -831,7 +831,7 @@ impl WorkspaceView {
                             .child(render_icon_button(
                                 "btn_settings",
                                 format!("{} (⌘,)", strings.settings),
-                                self.settings_window.is_some(),
+                                false,
                                 theme,
                                 render_settings_icon(theme.text_muted),
                                 cx.listener(|this, _, _window, cx| {
