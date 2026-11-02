@@ -990,29 +990,36 @@ fn render_appearance_tab(
                             .rounded_2xl()
                             .bg(theme.bg)
                             .p_4()
-                            .flex()
-                            .gap_2()
-                            .child(render_mode_pill(
-                                strings.theme_auto,
-                                search_query,
-                                current_mode == ThemeMode::Auto,
-                                theme,
-                                move |_, window, cx| m1(ThemeMode::Auto, window, cx),
-                            ))
-                            .child(render_mode_pill(
-                                strings.theme_light,
-                                search_query,
-                                current_mode == ThemeMode::Light,
-                                theme,
-                                move |_, window, cx| m2(ThemeMode::Light, window, cx),
-                            ))
-                            .child(render_mode_pill(
-                                strings.theme_dark,
-                                search_query,
-                                current_mode == ThemeMode::Dark,
-                                theme,
-                                move |_, window, cx| m3(ThemeMode::Dark, window, cx),
-                            )),
+                            .child(
+                                div()
+                                    .w_full()
+                                    .bg(theme.segmented_track_bg())
+                                    .rounded_lg()
+                                    .p(px(2.))
+                                    .flex()
+                                    .gap_1()
+                                    .child(render_mode_pill(
+                                        strings.theme_auto,
+                                        search_query,
+                                        current_mode == ThemeMode::Auto,
+                                        theme,
+                                        move |_, window, cx| m1(ThemeMode::Auto, window, cx),
+                                    ))
+                                    .child(render_mode_pill(
+                                        strings.theme_light,
+                                        search_query,
+                                        current_mode == ThemeMode::Light,
+                                        theme,
+                                        move |_, window, cx| m2(ThemeMode::Light, window, cx),
+                                    ))
+                                    .child(render_mode_pill(
+                                        strings.theme_dark,
+                                        search_query,
+                                        current_mode == ThemeMode::Dark,
+                                        theme,
+                                        move |_, window, cx| m3(ThemeMode::Dark, window, cx),
+                                    )),
+                            ),
                     ),
             )
         })
@@ -1253,8 +1260,11 @@ fn render_editor_save_tab(
                         )
                         .child(
                             div()
+                                .bg(theme.segmented_track_bg())
+                                .rounded_lg()
+                                .p(px(2.))
                                 .flex()
-                                .gap_2()
+                                .gap_1()
                                 .child({
                                     let active = tab_size == 2;
                                     let pill = div()
@@ -1269,13 +1279,15 @@ fn render_editor_save_tab(
                                         .child("2 Spaces");
 
                                     if active {
-                                        pill.bg(theme.warm_pill_bg())
-                                            .text_color(theme.warm_pill_text())
-                                            .font_weight(FontWeight::SEMIBOLD)
+                                        pill.bg(theme.segmented_thumb_bg())
+                                            .border(px(1.))
+                                            .border_color(theme.segmented_thumb_border())
+                                            .text_color(theme.segmented_thumb_text())
+                                            .font_weight(FontWeight::MEDIUM)
                                     } else {
-                                        pill.bg(theme.surface)
-                                            .text_color(theme.text_muted)
-                                            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                                        pill.bg(gpui::transparent_black())
+                                            .text_color(theme.segmented_inactive_text())
+                                            .hover(|s| s.text_color(theme.text_primary))
                                     }
                                 })
                                 .child({
@@ -1292,13 +1304,15 @@ fn render_editor_save_tab(
                                         .child("4 Spaces");
 
                                     if active {
-                                        pill.bg(theme.warm_pill_bg())
-                                            .text_color(theme.warm_pill_text())
-                                            .font_weight(FontWeight::SEMIBOLD)
+                                        pill.bg(theme.segmented_thumb_bg())
+                                            .border(px(1.))
+                                            .border_color(theme.segmented_thumb_border())
+                                            .text_color(theme.segmented_thumb_text())
+                                            .font_weight(FontWeight::MEDIUM)
                                     } else {
-                                        pill.bg(theme.surface)
-                                            .text_color(theme.text_muted)
-                                            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                                        pill.bg(gpui::transparent_black())
+                                            .text_color(theme.segmented_inactive_text())
+                                            .hover(|s| s.text_color(theme.text_primary))
                                     }
                                 }),
                         ),
@@ -1335,13 +1349,16 @@ fn render_editor_save_tab(
                         )
                         .child(
                             div()
+                                .bg(theme.segmented_track_bg())
+                                .rounded_lg()
+                                .p(px(2.))
                                 .flex()
-                                .gap_2()
+                                .gap_1()
                                 .children([1.3f32, 1.4, 1.5, 1.6, 1.7].into_iter().map(|lh_opt| {
                                     let is_active = (line_height - lh_opt).abs() < 0.05;
                                     let on_set = on_set_line_height.clone();
                                     let pill = div()
-                                        .px_3()
+                                        .px_2p5()
                                         .py_1()
                                         .rounded_md()
                                         .text_xs()
@@ -1352,13 +1369,15 @@ fn render_editor_save_tab(
                                         .child(format!("{:.1}x", lh_opt));
 
                                     if is_active {
-                                        pill.bg(theme.warm_pill_bg())
-                                            .text_color(theme.warm_pill_text())
-                                            .font_weight(FontWeight::SEMIBOLD)
+                                        pill.bg(theme.segmented_thumb_bg())
+                                            .border(px(1.))
+                                            .border_color(theme.segmented_thumb_border())
+                                            .text_color(theme.segmented_thumb_text())
+                                            .font_weight(FontWeight::MEDIUM)
                                     } else {
-                                        pill.bg(theme.surface)
-                                            .text_color(theme.text_muted)
-                                            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
+                                        pill.bg(gpui::transparent_black())
+                                            .text_color(theme.segmented_inactive_text())
+                                            .hover(|s| s.text_color(theme.text_primary))
                                     }
                                 })),
                         ),
@@ -1603,7 +1622,7 @@ where
     let base = div()
         .flex_1()
         .py_1p5()
-        .rounded_lg()
+        .rounded_md()
         .text_xs()
         .cursor_pointer()
         .flex()
@@ -1611,21 +1630,17 @@ where
         .justify_center()
         .on_mouse_down(MouseButton::Left, handler);
 
-    let text_color = if active {
-        theme.warm_pill_text()
-    } else {
-        theme.text_muted
-    };
-
     if active {
-        base.bg(theme.warm_pill_bg())
-            .text_color(theme.warm_pill_text())
+        base.bg(theme.segmented_thumb_bg())
+            .border(px(1.))
+            .border_color(theme.segmented_thumb_border())
+            .text_color(theme.segmented_thumb_text())
             .font_weight(FontWeight::MEDIUM)
-            .child(render_highlighted_text(label, search_query, text_color, theme))
+            .child(render_highlighted_text(label, search_query, theme.segmented_thumb_text(), theme))
     } else {
-        base.bg(theme.surface)
-            .text_color(theme.text_muted)
-            .hover(|s| s.bg(theme.warm_pill_hover()).text_color(theme.text_primary))
-            .child(render_highlighted_text(label, search_query, text_color, theme))
+        base.bg(gpui::transparent_black())
+            .text_color(theme.segmented_inactive_text())
+            .hover(|s| s.text_color(theme.text_primary))
+            .child(render_highlighted_text(label, search_query, theme.segmented_inactive_text(), theme))
     }
 }

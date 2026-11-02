@@ -47,6 +47,21 @@ pub const ALL_PALETTES: &[PaletteDescriptor] = &[
     PaletteDescriptor { id: "one-dark", name: "One Dark Pro", preview_color: Hsla { h: 220.0 / 360.0, s: 0.60, l: 0.55, a: 1.0 } },
 ];
 
+pub trait HslaExt {
+    fn lighten(&self, amount: f32) -> Hsla;
+}
+
+impl HslaExt for Hsla {
+    fn lighten(&self, amount: f32) -> Hsla {
+        Hsla {
+            h: self.h,
+            s: self.s,
+            l: (self.l + amount).clamp(0.0, 1.0),
+            a: self.a,
+        }
+    }
+}
+
 impl ThemeColors {
     /// Low-contrast cool neutral pill background: `#EFF1F4` (light) / `#272B33` (dark)
     pub fn warm_pill_bg(&self) -> Hsla {
@@ -73,6 +88,51 @@ impl ThemeColors {
         } else {
             rgb(0x1f2328).into()
         }
+    }
+
+    /// Adaptive segmented control track background:
+    /// - Light mode: `text_primary.opacity(0.06)`
+    /// - Dark mode: `surface.lighten(0.03)`
+    pub fn segmented_track_bg(&self) -> Hsla {
+        if self.is_dark {
+            self.surface.lighten(0.03)
+        } else {
+            self.text_primary.opacity(0.06)
+        }
+    }
+
+    /// Adaptive segmented control active thumb background:
+    /// - Light mode: `surface` (pure white card)
+    /// - Dark mode: `surface.lighten(0.08)` (bright embossed layer)
+    pub fn segmented_thumb_bg(&self) -> Hsla {
+        if self.is_dark {
+            self.surface.lighten(0.08)
+        } else {
+            self.surface
+        }
+    }
+
+    /// Adaptive segmented control active thumb hairline border:
+    /// - Light mode: `border.opacity(0.45)`
+    /// - Dark mode: `border.opacity(0.65)`
+    pub fn segmented_thumb_border(&self) -> Hsla {
+        if self.is_dark {
+            self.border.opacity(0.65)
+        } else {
+            self.border.opacity(0.45)
+        }
+    }
+
+    /// Adaptive segmented control active thumb text color:
+    /// High-contrast primary text color.
+    pub fn segmented_thumb_text(&self) -> Hsla {
+        self.text_primary
+    }
+
+    /// Adaptive segmented control inactive option text color:
+    /// Muted text color.
+    pub fn segmented_inactive_text(&self) -> Hsla {
+        self.text_muted
     }
 
     pub fn resolve(palette_id: &str, is_dark: bool) -> Self {

@@ -52,7 +52,7 @@ fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
         "render_nav_item must use warm_pill_text"
     );
 
-    // 2. Verify render_mode_pill has no .border_1() and uses warm_pill styles
+    // 2. Verify render_mode_pill has no .border_1() and uses segmented derived tokens (Ticket F2)
     let mode_pos = src
         .find("fn render_mode_pill")
         .expect("render_mode_pill definition must exist");
@@ -67,12 +67,20 @@ fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
         "render_mode_pill must not contain .border_1() hard borders"
     );
     assert!(
-        mode_section.contains("warm_pill_bg"),
-        "render_mode_pill must use warm_pill_bg"
+        mode_section.contains("segmented_thumb_bg"),
+        "render_mode_pill must use segmented_thumb_bg"
     );
     assert!(
-        mode_section.contains("warm_pill_text"),
-        "render_mode_pill must use warm_pill_text"
+        mode_section.contains("segmented_thumb_text"),
+        "render_mode_pill must use segmented_thumb_text"
+    );
+    assert!(
+        mode_section.contains("segmented_thumb_border"),
+        "render_mode_pill must use segmented_thumb_border"
+    );
+    assert!(
+        mode_section.contains("transparent_black"),
+        "render_mode_pill must use transparent_black for inactive items"
     );
 
     // 3. Verify palette list loop in render_appearance_tab has no .border_1() on palette cards
@@ -154,13 +162,50 @@ fn test_settings_source_has_no_hard_borders_on_nav_mode_and_palettes() {
 
     let tab_size_section = &editor_tab_section[tab_size_pos..line_height_pos];
     assert!(
-        tab_size_section.contains("warm_pill_bg"),
-        "tab_size toggle must use warm_pill_bg"
+        tab_size_section.contains("segmented_thumb_bg"),
+        "tab_size toggle must use segmented_thumb_bg"
     );
     assert!(
-        tab_size_section.contains("warm_pill_text"),
-        "tab_size toggle must use warm_pill_text"
+        tab_size_section.contains("segmented_thumb_text"),
+        "tab_size toggle must use segmented_thumb_text"
     );
+    assert!(
+        tab_size_section.contains("segmented_track_bg"),
+        "tab_size toggle container must use segmented_track_bg"
+    );
+}
+
+#[test]
+fn test_theme_colors_segmented_derived_tokens() {
+    for is_dark in [false, true] {
+        for pal in ["default", "claude", "macos", "tokyo-night", "nord", "github", "solarized", "one-dark"] {
+            let theme = glidemark_app::theme::ThemeColors::resolve(pal, is_dark);
+            let track_bg = theme.segmented_track_bg();
+            let thumb_bg = theme.segmented_thumb_bg();
+            let thumb_border = theme.segmented_thumb_border();
+            let thumb_text = theme.segmented_thumb_text();
+            let inactive_text = theme.segmented_inactive_text();
+
+            if is_dark {
+                // In dark mode: track_bg has surface lightness + 0.03
+                assert!((track_bg.l - (theme.surface.l + 0.03)).abs() < 1e-4);
+                // thumb_bg has surface lightness + 0.08
+                assert!((thumb_bg.l - (theme.surface.l + 0.08)).abs() < 1e-4);
+                // thumb_border opacity is 0.65
+                assert_eq!(thumb_border.a, 0.65);
+            } else {
+                // In light mode: track_bg opacity is 0.06
+                assert_eq!(track_bg.a, 0.06);
+                // thumb_bg is surface
+                assert_eq!(thumb_bg.l, theme.surface.l);
+                // thumb_border opacity is 0.45
+                assert_eq!(thumb_border.a, 0.45);
+            }
+
+            assert_eq!(thumb_text, theme.text_primary);
+            assert_eq!(inactive_text, theme.text_muted);
+        }
+    }
 }
 
 #[test]

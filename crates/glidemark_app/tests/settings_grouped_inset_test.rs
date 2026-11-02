@@ -647,3 +647,37 @@ fn test_settings_full_height_split_columns_and_no_44px_titlebar() {
         "workspace.rs open_settings_window must configure traffic_light_position at (14, 14)"
     );
 }
+
+/// 10. `test_segmented_control_track_and_thumb_embossed_contract`:
+///    - Assert settings.rs uses segmented_track_bg() for segmented control containers.
+///    - Assert settings.rs uses segmented_thumb_bg() and segmented_thumb_border() for active items.
+///    - Assert settings.rs uses transparent_black() and segmented_inactive_text() for inactive items.
+#[test]
+fn test_segmented_control_track_and_thumb_embossed_contract() {
+    let src = include_str!("../src/views/settings.rs");
+
+    assert!(
+        src.contains("theme.segmented_track_bg()"),
+        "settings.rs must use theme.segmented_track_bg() for segmented control tracks"
+    );
+    assert!(
+        src.contains("theme.segmented_thumb_bg()"),
+        "settings.rs must use theme.segmented_thumb_bg() for active segmented thumbs"
+    );
+    assert!(
+        src.contains("theme.segmented_thumb_border()"),
+        "settings.rs must use theme.segmented_thumb_border() for active segmented thumb borders"
+    );
+    assert!(
+        src.contains("theme.segmented_thumb_text()"),
+        "settings.rs must use theme.segmented_thumb_text() for active segmented thumb text"
+    );
+    assert!(
+        src.contains("theme.segmented_inactive_text()"),
+        "settings.rs must use theme.segmented_inactive_text() for inactive segmented options"
+    );
+    assert!(
+        src.contains("gpui::transparent_black()"),
+        "settings.rs must use transparent_black() for inactive segmented option backgrounds"
+    );
+}
