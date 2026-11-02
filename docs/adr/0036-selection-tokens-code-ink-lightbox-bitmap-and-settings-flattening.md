@@ -1,7 +1,7 @@
 # ADR 0036: 选中态语义 Token、代码墨色、灯箱位图通道修复与设置页扁平化
 
 ## 状态
-已提议 (Proposed) - 待执行端按工单 G0 ~ G4 实施，审查端终验后改为 Accepted
+已通过 (Accepted) - G0 ~ G4 已实施，审查端终验通过（提交 c3470c8 ~ 2af03da）
 
 ## 上下文 (Context)
 Phase F 交付后，用户提供 4 张标注图（设置页、主窗口两栏、灯箱、妙言参考），提出以下问题：
@@ -81,7 +81,7 @@ G0 完成并提交后，G1 ~ G4 并发。全部合入后由主代理删除 `warm
 
 ## 结果 (Consequences)
 - 选中 / 悬停背景由两个 token 统一管理，新增调色板自动适配。
-- 灯箱与预览区颜色一致；释放路径为 `get_render_image` → `drop_image` → `remove_asset` 三步，显存释放行为由行为测试（非字符串断言）保证。
+- 灯箱与预览区颜色一致；释放路径为 `get_render_image` → `drop_image` → `remove_asset` 三步，纹理释放由三条生产路径统一经 `release_lightbox_image` 保证；测试以 `get_render_image` 缓存状态和 `drop_image` 调用计数验证，但 gpui 0.2.2 的 `TestAtlas` 为 `pub(crate)`、`App::drop_image` 无返回值，无法在公开 API 下直接断言 sprite atlas 内容，该缺口已知并接受。
 - 删除设置搜索后，如将来设置项增多，需要先做通用输入控件再重新引入。
 - 侧栏文件行高度由 28px 增加到约 44px，同屏可见文件数减少。
 - 删除红点后，自动保存关闭时顶栏保存按钮是唯一的未保存提示。
