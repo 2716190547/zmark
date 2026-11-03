@@ -3,6 +3,8 @@
 ## 状态
 已通过 (Accepted) - G0 ~ G4 已实施，审查端终验通过（提交 c3470c8 ~ 2af03da）
 
+Phase H 后续变更（2026-11-03）：本 ADR 保留 Phase G 的历史决策。第 1 节默认/Claude 选中色、第 5 节标题统一 16px 对齐及第 7 节侧栏搜索推迟，由 [ADR 0037](0037-real-text-layout-and-virtualized-preview-selection.md) 及其关联验收记录替代；代码墨色、换行、灯箱资源释放、设置搜索删除等其余约定继续有效。
+
 ## 上下文 (Context)
 Phase F 交付后，用户提供 4 张标注图（设置页、主窗口两栏、灯箱、妙言参考），提出以下问题：
 
