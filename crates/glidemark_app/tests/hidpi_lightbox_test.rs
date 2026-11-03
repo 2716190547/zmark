@@ -1,26 +1,27 @@
 use glidemark_app::state::AppState;
 use glidemark_app::views::lightbox::{
-    release_lightbox_image, LightboxDiagramCache, LightboxImageHandle, LightboxState,
+    release_lightbox_image, LightboxDiagramCache, LightboxState,
     TEST_DROP_IMAGE_COUNT, TEST_RELEASE_CALL_COUNT,
 };
 use glidemark_app::views::workspace::{resolve_lightbox_svg_path, WorkspaceView};
 use glidemark_core::mermaid::{
-    apply_texture_pixel_budget, calculate_hidpi_dimensions, scale_factor_to_bucket,
+    apply_texture_pixel_budget, calculate_hidpi_dimensions,
+    GPUI_SVG_DECODER_SCALE,
 };
-use gpui::{Image, ImageFormat, ImgResourceLoader, Resource, TestAppContext};
+use gpui::{ImgResourceLoader, Resource, TestAppContext};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn test_hidpi_dimensions_multi_scale() {
     let scales = [1.0f32, 1.25f32, 1.5f32, 2.0f32, 3.0f32];
     for &scale in &scales {
         let (w, h) = calculate_hidpi_dimensions(1200.0, 800.0, scale);
-        let bucket = scale_factor_to_bucket(scale);
-        let effective_scale = (bucket as f64) / 2.0;
-        let physical_w = w * effective_scale;
-        let physical_h = h * effective_scale;
+        let physical_w = w * GPUI_SVG_DECODER_SCALE;
+        let physical_h = h * GPUI_SVG_DECODER_SCALE;
         assert!(
             physical_w * physical_h <= 16_000_000.0 + 1e-4,
             "16MP budget exceeded at scale {}: {}x{} = {}",
@@ -45,9 +46,8 @@ fn test_hidpi_dimensions_multi_scale() {
 
     // Extreme input (10000x8000) constrained to <= 16MP and max side 4000
     let (ext_w, ext_h) = calculate_hidpi_dimensions(10000.0, 8000.0, 2.0);
-    let effective_scale = (scale_factor_to_bucket(2.0) as f64) / 2.0;
-    let phys_w = ext_w * effective_scale;
-    let phys_h = ext_h * effective_scale;
+    let phys_w = ext_w * GPUI_SVG_DECODER_SCALE;
+    let phys_h = ext_h * GPUI_SVG_DECODER_SCALE;
     assert!(phys_w * phys_h <= 16_000_000.0 + 1e-4);
     assert!(phys_w <= 4000.0 + 1e-4);
     assert!(phys_h <= 4000.0 + 1e-4);
@@ -154,7 +154,6 @@ fn test_lightbox_state_lifecycle_and_image_release() {
     let mut state = LightboxState::new();
     assert!(!state.is_open);
     assert_eq!(state.hidpi_svg_path, None);
-    assert_eq!(state.hidpi_image, None);
 
     // Close when empty returns None
     assert_eq!(state.close(), None);
@@ -171,16 +170,14 @@ fn test_lightbox_state_lifecycle_and_image_release() {
     assert!(state.is_open);
     assert_eq!(state.svg_path, Some(svg_path));
     assert_eq!(state.hidpi_svg_path, Some(hidpi_path.clone()));
-    assert_eq!(state.hidpi_image, None);
     assert_eq!(state.code_hash, Some(9999));
     assert_eq!(state.zoom, 1.0);
 
-    // First close returns old handle
+    // First close returns old exclusive path
     let closed_img = state.close();
-    assert_eq!(closed_img, Some(LightboxImageHandle::Path(hidpi_path)));
+    assert_eq!(closed_img, Some(hidpi_path));
     assert!(!state.is_open);
     assert_eq!(state.hidpi_svg_path, None);
-    assert_eq!(state.hidpi_image, None);
 
     // Second close returns None
     let second_closed = state.close();
@@ -192,7 +189,6 @@ fn test_document_swapped_and_open_paths_release_vram_safely() {
     let mut state = LightboxState::new();
 
     // 1. Initial state has no image
-    assert_eq!(state.hidpi_image, None);
     assert_eq!(state.close(), None);
 
     // 2. Open HiDPI image 1
@@ -202,21 +198,22 @@ fn test_document_swapped_and_open_paths_release_vram_safely() {
     assert_eq!(evicted0, None, "Initial open_hidpi should have no evicted image");
     assert_eq!(state.hidpi_svg_path, Some(hidpi1.clone()));
 
-    // 3. Open another diagram (or plain open) without explicit close:
-    // Must return hidpi1 so the caller can invoke release
+    // 3. Open another diagram via plain open() without explicit close:
+    // Must return hidpi1 so caller can invoke release
     let svg2 = PathBuf::from("/tmp/doc2_diagram.svg");
     let evicted1 = state.open(svg2.clone(), 102);
     assert_eq!(
         evicted1,
-        Some(LightboxImageHandle::Path(hidpi1)),
-        "Calling open() while holding a HiDPI image must return the previous image for release"
+        Some(hidpi1),
+        "Calling open() while holding an exclusive HiDPI image must return it for release"
     );
     assert_eq!(state.hidpi_svg_path, None);
 
-    // 4. Open HiDPI image 2
+    // 4. Open HiDPI image 2:
+    // Previous state was plain open() (fallback/shared svg_path), so no exclusive image was held
     let hidpi2 = PathBuf::from("/tmp/doc2_hidpi.svg");
     let evicted2 = state.open_hidpi(svg2.clone(), hidpi2.clone(), 102);
-    assert_eq!(evicted2, Some(LightboxImageHandle::Path(svg2)));
+    assert_eq!(evicted2, None, "Previous plain open had no exclusive HiDPI image to evict");
     assert_eq!(state.hidpi_svg_path, Some(hidpi2.clone()));
 
     // 5. Open HiDPI image 3 while image 2 is active:
@@ -226,8 +223,8 @@ fn test_document_swapped_and_open_paths_release_vram_safely() {
     let evicted3 = state.open_hidpi(svg3.clone(), hidpi3.clone(), 103);
     assert_eq!(
         evicted3,
-        Some(LightboxImageHandle::Path(hidpi2)),
-        "Calling open_hidpi() while holding another HiDPI image must return the old image for release"
+        Some(hidpi2),
+        "Calling open_hidpi() while holding another exclusive HiDPI image must return it for release"
     );
     assert_eq!(state.hidpi_svg_path, Some(hidpi3.clone()));
 
@@ -236,56 +233,64 @@ fn test_document_swapped_and_open_paths_release_vram_safely() {
     let swapped_evicted = state.close();
     assert_eq!(
         swapped_evicted,
-        Some(LightboxImageHandle::Path(hidpi3)),
-        "Document swapped must release the active HiDPI image for release"
+        Some(hidpi3),
+        "Document swapped must release the active exclusive HiDPI image"
     );
     assert!(!state.is_open);
-    assert_eq!(state.hidpi_image, None);
     assert_eq!(state.hidpi_svg_path, None);
-}
-
-struct TestImageView {
-    img: Arc<Image>,
-}
-
-impl gpui::Render for TestImageView {
-    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
-        gpui::img(gpui::ImageSource::Image(self.img.clone()))
-    }
 }
 
 #[gpui::test]
 async fn test_release_lightbox_image_texture_drop_and_asset_cache_behavior(cx: &mut TestAppContext) {
-    let svg_bytes1 = b"<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"100\" height=\"100\" fill=\"red\"/></svg>".to_vec();
-    let img1 = Arc::new(Image::from_bytes(ImageFormat::Svg, svg_bytes1));
+    let _lock = TEST_LOCK.lock().unwrap();
+    let temp_dir = std::env::temp_dir().join("glidemark_test_release_behavior");
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let sample_svg1 = temp_dir.join("sample1.svg");
+    let sample_svg2 = temp_dir.join("sample2.svg");
+    std::fs::write(&sample_svg1, r#"<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" fill="red"/></svg>"#).unwrap();
+    std::fs::write(&sample_svg2, r#"<svg width="50" height="50" xmlns="http://www.w3.org/2000/svg"><circle cx="25" cy="25" r="20" fill="blue"/></svg>"#).unwrap();
 
-    let img1_clone = img1.clone();
+    let p1 = sample_svg1.clone();
+    struct TestPathView {
+        path: PathBuf,
+    }
+    impl gpui::Render for TestPathView {
+        fn render(&mut self, _window: &mut gpui::Window, _cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+            gpui::img(self.path.clone())
+        }
+    }
+
     let (_view, cx) = cx.add_window_view(|_window, _cx| {
-        TestImageView { img: img1_clone }
+        TestPathView { path: p1 }
     });
-    cx.run_until_parked();
 
     let initial_releases = TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst);
     let initial_drops = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
 
     cx.update(|window, app| {
-        let cached1 = img1.clone().get_render_image(window, app);
-        assert!(cached1.is_some(), "get_render_image should return cached render image after paint");
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
 
-        // 3. Negative control: img2 with distinct bytes only calls remove_asset -> does NOT drop texture via cx.drop_image
-        let svg_bytes2 = b"<svg width=\"50\" height=\"50\" xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"25\" cy=\"25\" r=\"20\" fill=\"blue\"/></svg>".to_vec();
-        let img2 = Arc::new(Image::from_bytes(ImageFormat::Svg, svg_bytes2));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let res1 = Resource::Path(Arc::from(sample_svg1.as_path()));
+        let cached1 = window.get_asset::<ImgResourceLoader>(&res1, app);
+        assert!(cached1.is_some(), "get_asset should return cached render image after paint");
+
+        // Negative control: sample_svg2 calls remove_asset -> does NOT drop texture via cx.drop_image
+        let res2 = Resource::Path(Arc::from(sample_svg2.as_path()));
         let count_before_remove = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
-        img2.clone().remove_asset(app);
+        app.remove_asset::<ImgResourceLoader>(&res2);
         assert_eq!(
             TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst),
             count_before_remove,
             "remove_asset alone must NOT trigger drop_image"
         );
 
-        // 4. Unified release function release_lightbox_image on img1:
+        // Unified release function release_lightbox_image on sample_svg1:
         // Must call cx.drop_image AND remove_asset
-        release_lightbox_image(img1.clone(), window, app);
+        release_lightbox_image(&sample_svg1, window, app);
 
         assert_eq!(
             TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst),
@@ -298,12 +303,17 @@ async fn test_release_lightbox_image_texture_drop_and_asset_cache_behavior(cx: &
             "release_lightbox_image call count must increment"
         );
         // After release, asset cache is also cleared
-        assert!(img1.clone().get_render_image(window, app).is_none());
+        assert!(window.get_asset::<ImgResourceLoader>(&res1, app).is_none());
     });
+
+    let _ = std::fs::remove_file(sample_svg1);
+    let _ = std::fs::remove_file(sample_svg2);
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[gpui::test]
 async fn test_workspace_lightbox_three_paths_release_vram_and_atlas(cx: &mut TestAppContext) {
+    let _lock = TEST_LOCK.lock().unwrap();
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let state = AppState::new_isolated(glidemark_core::document::Document::new_scratch());
         WorkspaceView::new(state, cx)

@@ -328,18 +328,20 @@ impl WorkspaceView {
         self.preview_selection = None;
         self.is_preview_selecting = false;
         self.search_focused = false;
-        if let Some(image) = self.lightbox.close() {
+        if let Some(exclusive_path) = self.lightbox.close() {
             if let Some(window) = window {
-                crate::views::lightbox::release_lightbox_image(image, window, cx);
+                crate::views::lightbox::release_lightbox_image(&exclusive_path, window, cx);
             } else if let Some(handle) = self.window_handle {
+                let p_clone = exclusive_path.clone();
                 if handle.update(cx, |_view, window, cx| {
-                    crate::views::lightbox::release_lightbox_image(image.clone(), window, cx);
+                    crate::views::lightbox::release_lightbox_image(&p_clone, window, cx);
                 }).is_err() {
-                    image.remove_asset(cx);
+                    let resource = gpui::Resource::Path(std::sync::Arc::from(exclusive_path.as_path()));
+                    cx.remove_asset::<gpui::ImgResourceLoader>(&resource);
                 }
             } else {
-                // Unreachable in practice: window_handle is initialized upon window creation; retained as asset cache fallback.
-                image.remove_asset(cx);
+                let resource = gpui::Resource::Path(std::sync::Arc::from(exclusive_path.as_path()));
+                cx.remove_asset::<gpui::ImgResourceLoader>(&resource);
             }
         }
         if self.state.view_mode != ViewMode::Source && self.state.doc.is_parse_stale() {
@@ -511,8 +513,8 @@ impl WorkspaceView {
     }
 
     pub fn close_lightbox(&mut self, window: &mut Window, cx: &mut App) {
-        if let Some(image) = self.lightbox.close() {
-            crate::views::lightbox::release_lightbox_image(image, window, cx);
+        if let Some(exclusive_path) = self.lightbox.close() {
+            crate::views::lightbox::release_lightbox_image(&exclusive_path, window, cx);
         }
     }
 
@@ -523,13 +525,31 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if let Some(old_img) = self.lightbox.close() {
-            crate::views::lightbox::release_lightbox_image(old_img, window, cx);
+        let scale_factor = window.scale_factor();
+        self.open_lightbox_with_scale(svg_path, code_hash, scale_factor, window, cx);
+    }
+
+    pub fn open_lightbox_with_scale(
+        &mut self,
+        svg_path: std::path::PathBuf,
+        code_hash: u64,
+        scale_factor: f32,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(old_exclusive) = self.lightbox.close() {
+            crate::views::lightbox::release_lightbox_image(&old_exclusive, window, cx);
         }
 
-        let scale_factor = window.scale_factor();
+        let is_sys_dark = matches!(
+            window.appearance(),
+            gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+        );
+        self.state.update_appearance(is_sys_dark);
+
         let scale_bucket = glidemark_core::mermaid::scale_factor_to_bucket(scale_factor);
         let is_dark = self.theme(cx).is_dark;
+        self.lightbox.is_dark = Some(is_dark);
 
         let actual_svg_path = resolve_lightbox_svg_path(&svg_path, code_hash, is_dark);
 
@@ -548,20 +568,26 @@ impl WorkspaceView {
                 let hidpi_svg =
                     glidemark_core::mermaid::apply_texture_pixel_budget(&orig_svg, target_w, target_h);
                 let cache_dir = std::env::temp_dir().join("glidemark").join("mermaid_hidpi");
-                let _ = std::fs::create_dir_all(&cache_dir);
                 let filename = format!(
-                    "{:016x}_{}_{}.svg",
+                    "{:016x}_{}_{}_v2.svg",
                     code_hash,
                     if is_dark { "dark" } else { "light" },
                     scale_bucket
                 );
                 let out_path = cache_dir.join(filename);
-                let _ = std::fs::write(&out_path, &hidpi_svg);
+
+                if std::fs::create_dir_all(&cache_dir).is_ok()
+                    && std::fs::write(&out_path, &hidpi_svg).is_ok()
+                    && out_path.is_file()
                 {
-                    let mut cache = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE.lock().unwrap();
-                    cache.insert((code_hash, is_dark, scale_bucket), out_path.clone());
+                    {
+                        let mut cache = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE.lock().unwrap();
+                        cache.insert((code_hash, is_dark, scale_bucket), out_path.clone());
+                    }
+                    Some(out_path)
+                } else {
+                    None
                 }
-                Some(out_path)
             } else {
                 None
             }
@@ -569,11 +595,11 @@ impl WorkspaceView {
 
         if let Some(hidpi_path) = hidpi_path {
             if let Some(evicted) = self.lightbox.open_hidpi(actual_svg_path, hidpi_path, code_hash) {
-                crate::views::lightbox::release_lightbox_image(evicted, window, cx);
+                crate::views::lightbox::release_lightbox_image(&evicted, window, cx);
             }
         } else {
             if let Some(evicted) = self.lightbox.open(actual_svg_path, code_hash) {
-                crate::views::lightbox::release_lightbox_image(evicted, window, cx);
+                crate::views::lightbox::release_lightbox_image(&evicted, window, cx);
             }
         }
     }
@@ -1333,6 +1359,23 @@ impl Render for WorkspaceView {
         self.workspace_width = f32::from(window.viewport_size().width);
         self.window_handle = Some(window.window_handle());
         let is_fullscreen = window.is_fullscreen();
+
+        let current_is_dark = self.state.theme.is_dark;
+        if self.lightbox.is_open
+            && self.lightbox.is_dark.is_some()
+            && self.lightbox.is_dark != Some(current_is_dark)
+        {
+            if let (Some(code_hash), Some(svg_path)) = (self.lightbox.code_hash, self.lightbox.svg_path.clone()) {
+                let scale_factor = window.scale_factor();
+                let saved_zoom = self.lightbox.zoom;
+                let saved_pan_x = self.lightbox.pan_x;
+                let saved_pan_y = self.lightbox.pan_y;
+                self.open_lightbox_with_scale(svg_path, code_hash, scale_factor, window, cx);
+                self.lightbox.zoom = saved_zoom;
+                self.lightbox.pan_x = saved_pan_x;
+                self.lightbox.pan_y = saved_pan_y;
+            }
+        }
 
         if self.is_preview_selecting && !self.focus_handle.is_focused(window) {
             self.is_preview_selecting = false;

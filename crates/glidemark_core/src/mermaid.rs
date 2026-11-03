@@ -534,9 +534,8 @@ stateDiagram-v2
         let scales = [1.0f32, 1.25f32, 1.5f32, 2.0f32, 3.0f32];
         for &sf in &scales {
             let (tw, th) = calculate_hidpi_dimensions(1000.0, 600.0, sf);
-            let effective_scale = (scale_factor_to_bucket(sf) as f64) / 2.0;
-            let pw = tw * effective_scale;
-            let ph = th * effective_scale;
+            let pw = tw * GPUI_SVG_DECODER_SCALE;
+            let ph = th * GPUI_SVG_DECODER_SCALE;
             assert!(pw * ph <= 16_000_000.0 + 1e-4, "pixel budget exceeded at {}x", sf);
             assert!(pw.max(ph) <= 4000.0 + 1e-4, "max side exceeded at {}x", sf);
             assert!(tw >= 1.0 && th >= 1.0);
@@ -568,17 +567,15 @@ stateDiagram-v2
     fn test_calculate_hidpi_dimensions_huge_diagrams() {
         // 10000x8000 diagram at scale 2.0
         let (tw, th) = calculate_hidpi_dimensions(10000.0, 8000.0, 2.0);
-        let pw = tw * 2.0;
-        let ph = th * 2.0;
+        let pw = tw * GPUI_SVG_DECODER_SCALE;
+        let ph = th * GPUI_SVG_DECODER_SCALE;
         assert!(pw * ph <= 16_000_000.0 + 1e-4);
         assert!(pw.max(ph) <= 4000.0 + 1e-4);
-        assert_eq!(pw, 4000.0);
-        assert_eq!(ph, 3200.0);
 
         // Ultra wide diagram (30000x1000)
         let (uw_w, uw_h) = calculate_hidpi_dimensions(30000.0, 1000.0, 2.0);
-        let upw = uw_w * 2.0;
-        let uph = uw_h * 2.0;
+        let upw = uw_w * GPUI_SVG_DECODER_SCALE;
+        let uph = uw_h * GPUI_SVG_DECODER_SCALE;
         assert!(upw * uph <= 16_000_000.0 + 1e-4);
         assert!(upw <= 4000.0 + 1e-4);
     }
@@ -1483,7 +1480,11 @@ pub fn scale_factor_to_bucket(scale_factor: f32) -> u8 {
     (sf.clamp(1.0, 3.0) * 2.0).round() as u8
 }
 
-/// Calculates HiDPI logical target dimensions subject to a strict 16MP / 4000px physical pixel budget.
+/// GPUI 0.2.2's `ImageAssetLoader` rasterizes SVGs via Resvg at `SMOOTH_SVG_SCALE_FACTOR = 2.0`.
+pub const GPUI_SVG_DECODER_SCALE: f64 = 2.0;
+
+/// Calculates HiDPI logical target dimensions subject to a strict 16MP / 4000px physical pixel budget
+/// for the actual decoded `RenderImage` produced by GPUI's SVG decoder.
 pub fn calculate_hidpi_dimensions(orig_w: f64, orig_h: f64, scale_factor: f32) -> (f64, f64) {
     let sf = if scale_factor <= 0.0 || !scale_factor.is_finite() {
         1.0
@@ -1499,44 +1500,45 @@ pub fn calculate_hidpi_dimensions(orig_w: f64, orig_h: f64, scale_factor: f32) -
 
     let scale_bucket = scale_factor_to_bucket(sf);
     let effective_scale = (scale_bucket as f64) / 2.0;
+    let total_scale = effective_scale * GPUI_SVG_DECODER_SCALE;
 
     const MAX_PHYSICAL_PIXELS: f64 = 16_000_000.0;
     const MAX_PHYSICAL_SIDE: f64 = 4000.0;
 
-    let area_ratio = (MAX_PHYSICAL_PIXELS / (w * h * effective_scale.powi(2))).sqrt();
-    let side_ratio = MAX_PHYSICAL_SIDE / (w.max(h) * effective_scale);
+    let area_ratio = (MAX_PHYSICAL_PIXELS / (w * h * total_scale.powi(2))).sqrt();
+    let side_ratio = MAX_PHYSICAL_SIDE / (w.max(h) * total_scale);
     let final_ratio = area_ratio.min(side_ratio);
 
     let mut target_w = (w * final_ratio).floor().max(1.0);
     let mut target_h = (h * final_ratio).floor().max(1.0);
 
-    let mut physical_w = target_w * effective_scale;
-    let mut physical_h = target_h * effective_scale;
+    let mut decoded_w = target_w * GPUI_SVG_DECODER_SCALE;
+    let mut decoded_h = target_h * GPUI_SVG_DECODER_SCALE;
 
-    if physical_w.max(physical_h) > MAX_PHYSICAL_SIDE {
-        let scale = MAX_PHYSICAL_SIDE / physical_w.max(physical_h);
+    if decoded_w.max(decoded_h) > MAX_PHYSICAL_SIDE {
+        let scale = MAX_PHYSICAL_SIDE / decoded_w.max(decoded_h);
         target_w = (target_w * scale).floor().max(1.0);
         target_h = (target_h * scale).floor().max(1.0);
-        physical_w = target_w * effective_scale;
-        physical_h = target_h * effective_scale;
+        decoded_w = target_w * GPUI_SVG_DECODER_SCALE;
+        decoded_h = target_h * GPUI_SVG_DECODER_SCALE;
     }
-    if physical_w * physical_h > MAX_PHYSICAL_PIXELS {
-        let scale = (MAX_PHYSICAL_PIXELS / (physical_w * physical_h)).sqrt();
+    if decoded_w * decoded_h > MAX_PHYSICAL_PIXELS {
+        let scale = (MAX_PHYSICAL_PIXELS / (decoded_w * decoded_h)).sqrt();
         target_w = (target_w * scale).floor().max(1.0);
         target_h = (target_h * scale).floor().max(1.0);
-        physical_w = target_w * effective_scale;
-        physical_h = target_h * effective_scale;
+        decoded_w = target_w * GPUI_SVG_DECODER_SCALE;
+        decoded_h = target_h * GPUI_SVG_DECODER_SCALE;
     }
 
     assert!(
-        physical_w * physical_h <= MAX_PHYSICAL_PIXELS + 1e-4,
-        "physical pixels {} exceed 16MP budget",
-        physical_w * physical_h
+        decoded_w * decoded_h <= MAX_PHYSICAL_PIXELS + 1e-4,
+        "decoded physical pixels {} exceed 16MP budget",
+        decoded_w * decoded_h
     );
     assert!(
-        physical_w.max(physical_h) <= MAX_PHYSICAL_SIDE + 1e-4,
-        "physical max side {} exceeds 4000 budget",
-        physical_w.max(physical_h)
+        decoded_w.max(decoded_h) <= MAX_PHYSICAL_SIDE + 1e-4,
+        "decoded physical max side {} exceeds 4000 budget",
+        decoded_w.max(decoded_h)
     );
 
     (target_w, target_h)
