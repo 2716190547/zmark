@@ -60,72 +60,96 @@ async fn test_lightbox_matches_preview_bgra_pixels_opaque_and_alpha(cx: &mut Tes
     let temp_dir = std::env::temp_dir().join("glidemark_test_color_opaque_alpha");
     let _ = std::fs::create_dir_all(&temp_dir);
     let code_hash: u64 = 0x9370db_ecf2dc_0001;
+
+    // 1. Reference color decoding using a separate Resource key:
+    // Decodes baseline BGRA colors without touching the lightbox candidate target.
+    let reference_svg_path = temp_dir.join("reference_colors.svg");
+    std::fs::write(&reference_svg_path, test_svg_content()).unwrap();
+
+    let reference_resource = Resource::Path(Arc::from(reference_svg_path.as_path()));
+    let reference_future = cx.update(|_window, app| -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Arc<gpui::RenderImage>, gpui::ImageCacheError>> + Send>> {
+        Box::pin(ImageAssetLoader::load(reference_resource, app))
+    });
+    let reference_render_image = reference_future
+        .await
+        .expect("reference SVG decode must succeed");
+
+    let reference_bytes = reference_render_image
+        .as_bytes(0)
+        .expect("reference render image bytes");
+    let reference_opaque = &reference_bytes[0..4];
+    let reference_alpha = reference_bytes
+        .chunks_exact(4)
+        .find(|p| p[3] > 100 && p[3] < 200)
+        .expect("reference translucent pixel with alpha ~153 must exist");
+
+    assert_eq!(
+        reference_opaque,
+        &[219, 112, 147, 255],
+        "reference purple must decode to BGRA [219, 112, 147, 255]"
+    );
+    assert_eq!(
+        reference_alpha,
+        &[219, 241, 236, 153],
+        "reference translucent must decode to BGRA [219, 241, 236, 153]"
+    );
+
+    // 2. Open lightbox with diagram SVG path
     let svg_path = temp_dir.join(format!("{:016x}_light.svg", code_hash));
     std::fs::write(&svg_path, test_svg_content()).unwrap();
 
-    // 1. Verify preview rendered image decode produces correct BGRA pixels:
-    // - Opaque purple: [219, 112, 147, 255]
-    // - Translucent: [219, 241, 236, 153] (A around 153)
-    let preview_resource = Resource::Path(Arc::from(svg_path.as_path()));
-    let preview_future = cx.update(|_window, app| -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Arc<gpui::RenderImage>, gpui::ImageCacheError>> + Send>> {
-        Box::pin(ImageAssetLoader::load(preview_resource, app))
-    });
-    let preview_render_image = preview_future
-        .await
-        .expect("preview SVG decode must succeed");
-
-    let preview_bytes = preview_render_image
-        .as_bytes(0)
-        .expect("preview render image bytes");
-    let preview_opaque = &preview_bytes[0..4];
-    let preview_alpha = preview_bytes
-        .chunks_exact(4)
-        .find(|p| p[3] > 100 && p[3] < 200)
-        .expect("preview translucent pixel with alpha ~153 must exist");
-
-    assert_eq!(
-        preview_opaque,
-        &[219, 112, 147, 255],
-        "preview purple must decode to BGRA [219, 112, 147, 255]"
-    );
-    assert_eq!(
-        preview_alpha,
-        &[219, 241, 236, 153],
-        "preview translucent must decode to BGRA [219, 241, 236, 153]"
-    );
-
-    // 2. Open lightbox
     let candidate_path = cx.update(|window, app| {
         view.update(app, |ws, cx| {
             ws.open_lightbox(svg_path.clone(), code_hash, window, cx);
             cx.notify();
         });
-        view.read(app)
+        let ws = view.read(app);
+        assert!(
+            ws.lightbox.hidpi_svg_path.is_some(),
+            "lightbox must produce an exclusive HiDPI target path"
+        );
+        let path = ws
             .lightbox
             .displayed_path()
             .cloned()
-            .expect("displayed_path must be set upon open")
+            .expect("displayed_path must be set upon open");
+        assert_ne!(
+            path, svg_path,
+            "exclusive HiDPI path must not equal input diagram SVG path"
+        );
+        assert_ne!(
+            path, reference_svg_path,
+            "target path must not equal reference SVG path"
+        );
+        path
     });
 
-    // P2-4: Element-loaded proof.
-    // BEFORE window.draw paints the img element, get_asset for candidate_path must be None!
+    let target_res = Resource::Path(Arc::from(candidate_path.as_path()));
+
+    // Controlled timing:
+    // In a single callback:
+    // 1. Purge target key from ImgResourceLoader so any subsequent load can ONLY originate from the element
+    // 2. Immediately execute window.draw(app) to trigger the element paint
+    // Note on GPUI 0.2.2 semantics: window.get_asset internally calls cx.fetch_asset().now_or_never().
+    // It is NOT a side-effect-free pure read. We intentionally do NOT call get_asset before draw to avoid
+    // self-loading side effects.
     cx.update(|window, app| {
-        let res = Resource::Path(Arc::from(candidate_path.as_path()));
-        assert!(
-            window.get_asset::<ImgResourceLoader>(&res, app).is_none(),
-            "candidate asset must NOT be loaded before element paint (P2-4 proof)"
-        );
+        app.remove_asset::<ImgResourceLoader>(&target_res);
         let _ = window.draw(app);
     });
     cx.run_until_parked();
 
-    // 3. Retrieve rendered image displayed by lightbox after element paint
+    // Query:
+    // The very first window.get_asset call after draw must immediately return Some(Ok(RenderImage)).
+    // If the element did not render (mutB) or used another channel (mutA), fetch_asset().now_or_never()
+    // synchronously returns None because no background executor runs after this point.
     let lightbox_render_image = cx
         .update(|window, app| {
-            let _ = window.draw(app);
-            retrieve_lightbox_render_image(Some(&candidate_path), window, app)
+            window
+                .get_asset::<ImgResourceLoader>(&target_res, app)
+                .and_then(|r| r.ok())
         })
-        .expect("lightbox must have a rendered image after element draw");
+        .expect("element must have loaded the target on paint (first get_asset returned None or Err)");
 
     let lightbox_bytes = lightbox_render_image
         .as_bytes(0)
@@ -136,12 +160,12 @@ async fn test_lightbox_matches_preview_bgra_pixels_opaque_and_alpha(cx: &mut Tes
         .find(|p| p[3] > 100 && p[3] < 200)
         .expect("lightbox translucent pixel with alpha ~153 must exist");
 
-    // 4. Asserts that lightbox pixels match preview's decoded BGRA pixels:
+    // Asserts that lightbox pixels match reference decoded BGRA pixels:
     // - Opaque purple must be [219, 112, 147, 255] (NOT RGBA [147, 112, 219, 255])
     // - Alpha pixel must be [219, 241, 236, 153] (NOT RGBA [142, 145, 132, 153])
     assert_eq!(
-        lightbox_opaque, preview_opaque,
-        "lightbox purple pixel must match preview decoded BGRA pixels"
+        lightbox_opaque, reference_opaque,
+        "lightbox purple pixel must match reference decoded BGRA pixels"
     );
     assert_eq!(
         lightbox_opaque,
@@ -150,8 +174,8 @@ async fn test_lightbox_matches_preview_bgra_pixels_opaque_and_alpha(cx: &mut Tes
     );
 
     assert_eq!(
-        lightbox_alpha, preview_alpha,
-        "lightbox translucent pixel must match preview decoded BGRA pixels"
+        lightbox_alpha, reference_alpha,
+        "lightbox translucent pixel must match reference decoded BGRA pixels"
     );
     assert_eq!(
         lightbox_alpha,
@@ -159,7 +183,10 @@ async fn test_lightbox_matches_preview_bgra_pixels_opaque_and_alpha(cx: &mut Tes
         "lightbox translucent pixel must be BGRA [219, 241, 236, 153] (NOT RGBA [142, 145, 132, 153])"
     );
 
+    // Private cleanup: only clean up files created for this test
+    let _ = std::fs::remove_file(reference_svg_path);
     let _ = std::fs::remove_file(svg_path);
+    let _ = std::fs::remove_file(&candidate_path);
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
