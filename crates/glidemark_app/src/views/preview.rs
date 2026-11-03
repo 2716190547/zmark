@@ -10,6 +10,34 @@ use crate::theme::ThemeColors;
 pub type OnCopyCallback = Arc<dyn Fn(String, u64, &mut Window, &mut App) + Send + Sync>;
 pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, &mut Window, &mut App) + Send + Sync>;
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PreviewSelectionRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[allow(dead_code)]
+impl PreviewSelectionRange {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+    pub fn normalized(&self) -> (usize, usize) {
+        (self.start.min(self.end), self.start.max(self.end))
+    }
+    pub fn contains(&self, block_ix: usize) -> bool {
+        let (min, max) = self.normalized();
+        min <= block_ix && block_ix <= max
+    }
+}
+
+#[allow(dead_code)]
+pub fn serialize_preview_selection(parsed: &ParsedDocument, range: PreviewSelectionRange) -> String {
+    let (min, max) = range.normalized();
+    parsed.extract_plain_text(min, max)
+}
+
+#[allow(dead_code)]
 pub fn render_preview_pane(
     parsed: Arc<ParsedDocument>,
     theme: &ThemeColors,
@@ -20,6 +48,33 @@ pub fn render_preview_pane(
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<OnCopyCallback>,
     on_open_lightbox: Option<OnOpenLightboxCallback>,
+) -> impl IntoElement {
+    render_preview_pane_with_selection(
+        parsed,
+        theme,
+        strings,
+        max_column_width,
+        font_size,
+        list_state,
+        copied_code_hash,
+        on_copy,
+        on_open_lightbox,
+        None,
+    )
+}
+
+#[allow(dead_code)]
+pub fn render_preview_pane_with_selection(
+    parsed: Arc<ParsedDocument>,
+    theme: &ThemeColors,
+    strings: &'static I18nStrings,
+    max_column_width: f32,
+    font_size: f32,
+    list_state: &ListState,
+    copied_code_hash: Option<(u64, std::time::Instant)>,
+    on_copy: Option<OnCopyCallback>,
+    on_open_lightbox: Option<OnOpenLightboxCallback>,
+    selection: Option<PreviewSelectionRange>,
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
@@ -42,6 +97,8 @@ pub fn render_preview_pane(
                     return div().into_any_element();
                 };
 
+                let is_selected = selection.map(|s| s.contains(ix)).unwrap_or(false);
+
                 div()
                     .w_full()
                     .px_8()
@@ -51,6 +108,7 @@ pub fn render_preview_pane(
                             .w_full()
                             .max_w(px(max_column_width))
                             .mx_auto()
+                            .when(is_selected, |el| el.bg(item_theme.selection_bg()).rounded_md())
                             .child(render_block_element(
                                 block,
                                 &item_theme,
@@ -240,7 +298,7 @@ fn render_styled_inlines(
                     .bg(theme.bg)
                     .flex()
                     .items_center()
-                    .gap_3()
+                    .gap_1p5()
                     .child(
                         svg()
                             .path("icons/image.svg")

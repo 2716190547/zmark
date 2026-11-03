@@ -94,6 +94,68 @@ pub enum BlockElement {
     Rule,
 }
 
+impl BlockElement {
+    pub fn to_plain_text(&self) -> String {
+        match self {
+            BlockElement::Heading { content, .. } => content.plain_text(),
+            BlockElement::Paragraph(content) => content.plain_text(),
+            BlockElement::FencedCode { code, .. } => code.clone(),
+            BlockElement::BlockQuote(elements) => elements
+                .iter()
+                .map(|el| el.to_plain_text())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            BlockElement::List { ordered, items } => {
+                let mut lines = Vec::new();
+                for (i, item) in items.iter().enumerate() {
+                    let prefix = if let Some(checked) = item.checked {
+                        format!("- [{}] ", if checked { "x" } else { " " })
+                    } else if *ordered {
+                        format!("{}. ", i + 1)
+                    } else {
+                        "- ".to_string()
+                    };
+                    let mut item_str = format!("{}{}", prefix, item.content.plain_text());
+                    if let Some(sub) = &item.sub_list {
+                        let sub_text = sub.to_plain_text();
+                        if !sub_text.is_empty() {
+                            for line in sub_text.lines() {
+                                item_str.push('\n');
+                                item_str.push_str("  ");
+                                item_str.push_str(line);
+                            }
+                        }
+                    }
+                    lines.push(item_str);
+                }
+                lines.join("\n")
+            }
+            BlockElement::Table { headers, rows } => {
+                let mut lines = Vec::new();
+                if !headers.is_empty() {
+                    let header_line = headers
+                        .iter()
+                        .map(|h| h.plain_text())
+                        .collect::<Vec<_>>()
+                        .join("\t");
+                    lines.push(header_line);
+                }
+                for row in rows {
+                    let row_line = row
+                        .iter()
+                        .map(|c| c.plain_text())
+                        .collect::<Vec<_>>()
+                        .join("\t");
+                    lines.push(row_line);
+                }
+                lines.join("\n")
+            }
+            BlockElement::Rule => String::new(),
+        }
+    }
+}
+
 /// A fully parsed Markdown document with synchronized source anchors.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedDocument {
@@ -114,6 +176,49 @@ impl ParsedDocument {
             }
         }
         list
+    }
+
+    pub fn extract_plain_text(&self, start_block: usize, end_block: usize) -> String {
+        if self.blocks.is_empty() {
+            return String::new();
+        }
+        let min = start_block.min(end_block);
+        let max = start_block.max(end_block);
+        if min >= self.blocks.len() {
+            return String::new();
+        }
+        let max = max.min(self.blocks.len() - 1);
+
+        let mut non_empty: Vec<(&BlockElement, String)> = Vec::new();
+        for block in &self.blocks[min..=max] {
+            let text = block.to_plain_text();
+            if !text.is_empty() {
+                non_empty.push((block, text));
+            }
+        }
+
+        if non_empty.is_empty() {
+            return String::new();
+        }
+
+        let mut result = String::new();
+        for (i, (block, text)) in non_empty.iter().enumerate() {
+            if i > 0 {
+                let prev_block = non_empty[i - 1].0;
+                let sep = if matches!(prev_block, BlockElement::List { .. })
+                    && matches!(block, BlockElement::List { .. })
+                {
+                    if result.ends_with('\n') { "" } else { "\n" }
+                } else if result.ends_with('\n') {
+                    "\n"
+                } else {
+                    "\n\n"
+                };
+                result.push_str(sep);
+            }
+            result.push_str(text);
+        }
+        result
     }
 }
 
