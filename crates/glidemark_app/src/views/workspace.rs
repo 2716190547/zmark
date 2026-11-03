@@ -1,6 +1,7 @@
 use gpui::prelude::*;
 use gpui::*;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::actions::{
@@ -53,6 +54,79 @@ pub struct WorkspaceView {
     pub cached_visual_font_bits: u32,
     pub cached_visual_lines: Arc<Vec<crate::editor_engine::VisualLine>>,
     pub rendered_regions: Arc<crate::views::preview::RegionsRegistry>,
+    pub syntax_active_task: Option<gpui::Task<()>>,
+    pub syntax_pending_request: Option<SyntaxBatchRequest>,
+    pub syntax_cancel_flag: Arc<AtomicBool>,
+    pub cached_editor_tokens: Arc<Vec<Vec<crate::views::editor::MarkdownToken>>>,
+    pub cached_editor_tokens_rev: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyntaxBlockItem {
+    #[allow(dead_code)]
+    pub block_id: usize,
+    pub lang: Option<String>,
+    pub code: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyntaxBatchRequest {
+    pub doc_key: Option<crate::state::DocKey>,
+    pub revision: usize,
+    pub blocks: Vec<SyntaxBlockItem>,
+}
+
+pub fn extract_syntax_blocks(lines: &[String]) -> Vec<SyntaxBlockItem> {
+    let mut blocks = Vec::new();
+    let mut in_fence = false;
+    let mut fence_lang: Option<String> = None;
+    let mut block_lines: Vec<String> = Vec::new();
+    let mut block_idx = 0;
+
+    for line in lines {
+        let trimmed = line.trim();
+        let is_fence_delim = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+        if !in_fence {
+            if is_fence_delim {
+                in_fence = true;
+                let raw_tag = if let Some(stripped) = trimmed.strip_prefix("```") {
+                    stripped.trim()
+                } else if let Some(stripped) = trimmed.strip_prefix("~~~") {
+                    stripped.trim()
+                } else {
+                    ""
+                };
+                let lang_token = raw_tag.split_whitespace().next().unwrap_or("");
+                fence_lang = if lang_token.is_empty() {
+                    None
+                } else {
+                    Some(lang_token.to_string())
+                };
+                block_lines.clear();
+            }
+        } else if is_fence_delim {
+            let code = block_lines.join("\n");
+            blocks.push(SyntaxBlockItem {
+                block_id: block_idx,
+                lang: fence_lang.take(),
+                code,
+            });
+            block_idx += 1;
+            in_fence = false;
+            block_lines.clear();
+        } else {
+            block_lines.push(line.clone());
+        }
+    }
+    if in_fence && !block_lines.is_empty() {
+        let code = block_lines.join("\n");
+        blocks.push(SyntaxBlockItem {
+            block_id: block_idx,
+            lang: fence_lang,
+            code,
+        });
+    }
+    blocks
 }
 
 impl WorkspaceView {
@@ -79,7 +153,7 @@ impl WorkspaceView {
                     }).detach();
                 })
         });
-        Self {
+        let view = Self {
             state,
             focus_handle: cx.focus_handle(),
             editor_scroll_handle: UniformListScrollHandle::new(),
@@ -114,7 +188,25 @@ impl WorkspaceView {
             cached_visual_font_bits: 0,
             cached_visual_lines: Arc::new(Vec::new()),
             rendered_regions: Arc::new(std::sync::Mutex::new(Vec::new())),
-        }
+            syntax_active_task: None,
+            syntax_pending_request: None,
+            syntax_cancel_flag: Arc::new(AtomicBool::new(false)),
+            cached_editor_tokens: Arc::new(Vec::new()),
+            cached_editor_tokens_rev: usize::MAX,
+        };
+
+        // Background one-time initialization of syntax highlighting
+        cx.spawn(async move |this, app| {
+            app.background_executor().spawn(async {
+                glidemark_core::syntax::init_syntax_set();
+            }).await;
+            let _ = this.update(app, |this, cx| {
+                this.schedule_syntax_parse(cx);
+                cx.notify();
+            });
+        }).detach();
+
+        view
     }
 
     /// Swaps in a new document: the preview list drops cached heights and starts at the top.
@@ -163,6 +255,7 @@ impl WorkspaceView {
         let debounce = parse_debounce(self.state.doc.buffer.len());
         self.parse_task = None;
         self.parse_paused = debounce.is_none();
+        self.schedule_syntax_parse(cx);
         if let Some(delay) = debounce {
             self.parse_task = Some(cx.spawn(async move |this, app| {
                 app.background_executor().timer(delay).await;
@@ -245,6 +338,110 @@ impl WorkspaceView {
         self.cached_visual_font_bits = font_bits;
         self.cached_visual_lines = lines_arc.clone();
         lines_arc
+    }
+
+    pub fn compute_editor_tokens(&mut self) -> Arc<Vec<Vec<crate::views::editor::MarkdownToken>>> {
+        let rev = self.state.editor.revision;
+        if self.cached_editor_tokens_rev == rev && !self.cached_editor_tokens.is_empty() {
+            return self.cached_editor_tokens.clone();
+        }
+        let tokens = Arc::new(crate::views::editor::tokenize_document_lines(&self.state.editor.lines));
+        self.cached_editor_tokens = tokens.clone();
+        self.cached_editor_tokens_rev = rev;
+        tokens
+    }
+
+    pub fn collect_all_syntax_blocks(&self) -> Vec<SyntaxBlockItem> {
+        let mut blocks = extract_syntax_blocks(&self.state.editor.lines);
+        for block in &self.state.doc.parsed.blocks {
+            if let glidemark_core::ast::BlockElement::FencedCode { lang, code } = block {
+                if !blocks.iter().any(|b| b.code == *code && b.lang == *lang) {
+                    blocks.push(SyntaxBlockItem {
+                        block_id: blocks.len(),
+                        lang: lang.clone(),
+                        code: code.clone(),
+                    });
+                }
+            }
+        }
+        blocks
+    }
+
+    pub fn schedule_syntax_parse(&mut self, cx: &mut Context<Self>) {
+        let blocks = self.collect_all_syntax_blocks();
+        let doc_key = self.state.active.clone();
+        let revision = self.state.editor.revision;
+
+        let missing: Vec<SyntaxBlockItem> = blocks
+            .into_iter()
+            .filter(|b| glidemark_core::syntax::get_cached_code_spans(&b.code, b.lang.as_deref()).is_none())
+            .collect();
+
+        if missing.is_empty() {
+            if self.cached_editor_tokens_rev != revision || self.cached_editor_tokens.is_empty() {
+                self.cached_editor_tokens = Arc::new(crate::views::editor::tokenize_document_lines(&self.state.editor.lines));
+                self.cached_editor_tokens_rev = revision;
+            }
+            return;
+        }
+
+        let request = SyntaxBatchRequest {
+            doc_key,
+            revision,
+            blocks: missing,
+        };
+
+        if self.syntax_active_task.is_some() {
+            self.syntax_cancel_flag.store(true, Ordering::Relaxed);
+            self.syntax_pending_request = Some(request);
+        } else {
+            self.run_syntax_batch(request, cx);
+        }
+    }
+
+    pub fn run_syntax_batch(&mut self, request: SyntaxBatchRequest, cx: &mut Context<Self>) {
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.syntax_cancel_flag = cancel_flag.clone();
+        let cancel = cancel_flag.clone();
+        let blocks = request.blocks.clone();
+
+        self.syntax_active_task = Some(cx.spawn(async move |this, app| {
+            let parsed_results = app.background_executor().spawn(async move {
+                let mut results = Vec::with_capacity(blocks.len());
+                for block in blocks {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let spans = glidemark_core::syntax::parse_code_spans_bounded(
+                        &block.code,
+                        block.lang.as_deref(),
+                        Some(&cancel),
+                    );
+                    results.push((block.code, block.lang, Arc::from(spans)));
+                }
+                results
+            }).await;
+
+            let _ = this.update(app, |this, cx| {
+                this.syntax_active_task = None;
+                let current_doc_key = this.state.active.clone();
+                let current_rev = this.state.editor.revision;
+                // Stale result guard: if document or revision has changed, discard!
+                if request.doc_key == current_doc_key && request.revision == current_rev {
+                    for (code, lang, spans) in parsed_results {
+                        glidemark_core::syntax::insert_cached_code_spans(&code, lang.as_deref(), spans);
+                    }
+                    this.cached_editor_tokens = Arc::new(crate::views::editor::tokenize_document_lines(&this.state.editor.lines));
+                    this.cached_editor_tokens_rev = current_rev;
+                    this.invalidate_preview_list();
+                    cx.notify();
+                }
+
+                if let Some(pending) = this.syntax_pending_request.take() {
+                    this.run_syntax_batch(pending, cx);
+                }
+            });
+        }));
     }
 
     /// Synchronizes editor wheel scrolling to the preview pane with 100ms echo suppression.
@@ -1384,6 +1581,13 @@ impl Render for WorkspaceView {
         }
 
         let visual_lines = self.compute_visual_lines(window);
+        let editor_tokens = self.compute_editor_tokens();
+        if self.syntax_active_task.is_none() {
+            let blocks = self.collect_all_syntax_blocks();
+            if blocks.iter().any(|b| glidemark_core::syntax::get_cached_code_spans(&b.code, b.lang.as_deref()).is_none()) {
+                self.schedule_syntax_parse(cx);
+            }
+        }
 
         let theme = &self.state.theme;
         let strings = self.state.strings;
@@ -2292,6 +2496,7 @@ impl Render for WorkspaceView {
                                                 .child(render_editor_pane(
                                                     self.state.editor.lines.clone(),
                                                     visual_lines.clone(),
+                                                    editor_tokens.clone(),
                                                     self.state.editor.cursor(),
                                                     theme,
                                                     strings,
@@ -2360,6 +2565,7 @@ impl Render for WorkspaceView {
                                                         .child(render_editor_pane(
                                                             self.state.editor.lines.clone(),
                                                             visual_lines.clone(),
+                                                            editor_tokens.clone(),
                                                             self.state.editor.cursor(),
                                                             theme,
                                                             strings,

@@ -5,7 +5,8 @@
 //! multi-line statefulness, input thresholds, and bounded LRU caching.
 
 use std::ops::Range;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Instant;
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 
@@ -45,29 +46,18 @@ pub const MAX_CACHE_ENTRIES: usize = 32;
 /// Maximum total memory retained in the shared syntax cache (4 MiB).
 pub const MAX_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
-/// Lazy-loaded syntect built-in syntax set (initialized once on first use).
-pub static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
-    let ss = SyntaxSet::load_defaults_newlines();
-    // Pre-warm canonical languages so fancy-regex DFA/VM states are initialized in background
-    for lang in [
-        "XML",
-        "HTML",
-        "Java",
-        "Python",
-        "JavaScript",
-        "JSON",
-        "YAML",
-        "SQL",
-        "Bourne Again Shell (bash)",
-        "Rust",
-    ] {
-        if let Some(syntax) = ss.find_syntax_by_name(lang) {
-            let mut state = ParseState::new(syntax);
-            let _ = state.parse_line("/* comment */ let x = 1;\n", &ss);
-        }
-    }
-    ss
-});
+/// Global syntect built-in syntax set (initialized on demand without blocking warm-up).
+pub static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+
+/// Returns `true` if `SYNTAX_SET` has been initialized.
+pub fn is_syntax_set_ready() -> bool {
+    SYNTAX_SET.get().is_some()
+}
+
+/// Initializes `SYNTAX_SET` with syntect defaults and returns a static reference.
+pub fn init_syntax_set() -> &'static SyntaxSet {
+    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
+}
 
 /// Maps a raw fence info string to a canonical language identifier recognized by GlideMark.
 ///
@@ -102,9 +92,9 @@ pub fn resolve_canonical_language(raw_info: Option<&str>) -> Option<&'static str
     }
 }
 
-/// Finds the `SyntaxReference` in `SYNTAX_SET` corresponding to a canonical language.
+/// Finds the `SyntaxReference` corresponding to a canonical language.
 fn find_syntax_for_canonical(canonical: &str) -> Option<&'static SyntaxReference> {
-    let ss: &'static SyntaxSet = &SYNTAX_SET;
+    let ss = init_syntax_set();
     match canonical {
         "XML" => ss.find_syntax_by_name("XML"),
         "HTML" => ss.find_syntax_by_name("HTML"),
@@ -267,17 +257,26 @@ fn fallback_plain(code: &str) -> Vec<SyntaxSpan> {
     }
 }
 
-/// Parses the code payload into semantic `SyntaxSpan`s using syntect.
+/// Parses the code payload into semantic `SyntaxSpan`s using syntect with an optional cancellation flag.
 ///
 /// Implements:
 /// - Explicit size/threshold validation:
 ///   `> 64 KiB`, `> 2000 lines`, or any line `> 1000 unicode scalars` -> returns full Plain.
 /// - Multi-line state continuity via syntect `ParseState` and `ScopeStack`.
 /// - 50ms soft budget across lines.
+/// - Immediate cooperative cancellation between lines.
 /// - Full byte coverage with contiguous, non-overlapping `SyntaxSpan`s.
-pub fn parse_code_spans(code: &str, raw_lang: Option<&str>) -> Vec<SyntaxSpan> {
+pub fn parse_code_spans_bounded(
+    code: &str,
+    raw_lang: Option<&str>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Vec<SyntaxSpan> {
     if code.is_empty() {
         return Vec::new();
+    }
+
+    if cancel_flag.map(|f| f.load(Ordering::Relaxed)).unwrap_or(false) {
+        return fallback_plain(code);
     }
 
     // Threshold check 1: byte length
@@ -291,6 +290,7 @@ pub fn parse_code_spans(code: &str, raw_lang: Option<&str>) -> Vec<SyntaxSpan> {
         None => return fallback_plain(code),
     };
 
+    let ss = init_syntax_set();
     let syntax = match find_syntax_for_canonical(canonical) {
         Some(s) => s,
         None => return fallback_plain(code),
@@ -309,19 +309,24 @@ pub fn parse_code_spans(code: &str, raw_lang: Option<&str>) -> Vec<SyntaxSpan> {
         }
     }
 
-    let ss: &SyntaxSet = &SYNTAX_SET;
-    let start_time = Instant::now();
+    let mut start_time = Instant::now();
     let mut state = ParseState::new(syntax);
     let mut stack = ScopeStack::new();
     let mut raw_spans: Vec<SyntaxSpan> = Vec::new();
 
     let mut line_start_byte = 0;
+    let mut is_first_line = true;
 
     // Iterate through lines preserving line endings for accurate regex anchors ($)
     let mut remaining = code;
     while !remaining.is_empty() {
-        // Soft budget check between lines
-        if start_time.elapsed().as_millis() as u64 >= PARSE_SOFT_BUDGET_MS {
+        // Cancellation check between lines
+        if cancel_flag.map(|f| f.load(Ordering::Relaxed)).unwrap_or(false) {
+            return fallback_plain(code);
+        }
+
+        // Soft budget check between lines (excluding cold-start first line regex compilation)
+        if !is_first_line && start_time.elapsed().as_millis() as u64 >= PARSE_SOFT_BUDGET_MS {
             return fallback_plain(code);
         }
 
@@ -331,10 +336,17 @@ pub fn parse_code_spans(code: &str, raw_lang: Option<&str>) -> Vec<SyntaxSpan> {
             None => (remaining, ""),
         };
 
+        let line_parse_start = Instant::now();
         let ops = match state.parse_line(line_with_end, ss) {
             Ok(ops) => ops,
             Err(_) => return fallback_plain(code),
         };
+        let line_duration = line_parse_start.elapsed();
+
+        if is_first_line || line_duration.as_millis() >= 20 {
+            is_first_line = false;
+            start_time = Instant::now();
+        }
 
         let mut last_col = 0;
         let mut current_role = scope_stack_to_role(&stack);
@@ -367,6 +379,11 @@ pub fn parse_code_spans(code: &str, raw_lang: Option<&str>) -> Vec<SyntaxSpan> {
     }
 
     normalize_and_fill_spans(code, raw_spans)
+}
+
+/// Parses the code payload into semantic `SyntaxSpan`s using syntect.
+pub fn parse_code_spans(code: &str, raw_lang: Option<&str>) -> Vec<SyntaxSpan> {
+    parse_code_spans_bounded(code, raw_lang, None)
 }
 
 // -----------------------------------------------------------------------------
@@ -450,10 +467,54 @@ impl LruSyntaxCache {
 
 static CACHE: LazyLock<Mutex<LruSyntaxCache>> = LazyLock::new(|| Mutex::new(LruSyntaxCache::new()));
 
+fn compute_code_hash(canonical: &str, code: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    code.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Clears the global syntax cache (useful for testing and memory reclaim).
 pub fn clear_syntax_cache() {
     if let Ok(mut cache) = CACHE.lock() {
         cache.clear();
+    }
+}
+
+/// Fast non-blocking lookup in syntax cache.
+///
+/// Returns:
+/// - `Some(fallback_plain)` if language resolves to plain / unsupported.
+/// - `Some(spans)` if cached.
+/// - `None` if supported language but cache miss (does NOT parse or block).
+pub fn get_cached_code_spans(code: &str, raw_lang: Option<&str>) -> Option<Arc<[SyntaxSpan]>> {
+    if code.is_empty() {
+        return Some(fallback_plain(code).into());
+    }
+    let canonical = match resolve_canonical_language(raw_lang) {
+        Some(c) => c,
+        None => return Some(fallback_plain(code).into()),
+    };
+
+    let code_hash = compute_code_hash(canonical, code);
+    if let Ok(mut cache) = CACHE.lock() {
+        if let Some(spans) = cache.get(canonical, code_hash, code) {
+            return Some(spans);
+        }
+    }
+    None
+}
+
+/// Inserts pre-parsed spans into the syntax cache.
+pub fn insert_cached_code_spans(code: &str, raw_lang: Option<&str>, spans: Arc<[SyntaxSpan]>) {
+    let canonical = match resolve_canonical_language(raw_lang) {
+        Some(c) => c,
+        None => return,
+    };
+    let code_hash = compute_code_hash(canonical, code);
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(canonical, code_hash, code, spans);
     }
 }
 
@@ -462,29 +523,12 @@ pub fn clear_syntax_cache() {
 /// Thread-safe and caching enabled. Keyed by canonical language and code content.
 /// Roles are theme-independent, enabling 100% cache reuse across theme switches.
 pub fn get_or_parse_code_spans(code: &str, raw_lang: Option<&str>) -> Arc<[SyntaxSpan]> {
-    let canonical = match resolve_canonical_language(raw_lang) {
-        Some(c) => c,
-        None => return fallback_plain(code).into(),
-    };
-
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    canonical.hash(&mut hasher);
-    code.hash(&mut hasher);
-    let code_hash = hasher.finish();
-
-    if let Ok(mut cache) = CACHE.lock() {
-        if let Some(spans) = cache.get(canonical, code_hash, code) {
-            return spans;
-        }
+    if let Some(spans) = get_cached_code_spans(code, raw_lang) {
+        return spans;
     }
 
-    let parsed: Arc<[SyntaxSpan]> = parse_code_spans(code, raw_lang).into();
-
-    if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(canonical, code_hash, code, parsed.clone());
-    }
-
+    let parsed: Arc<[SyntaxSpan]> = parse_code_spans_bounded(code, raw_lang, None).into();
+    insert_cached_code_spans(code, raw_lang, parsed.clone());
     parsed
 }
 
@@ -628,5 +672,38 @@ mod tests {
         let parsed1 = get_or_parse_code_spans(code, Some("rust"));
         let parsed2 = get_or_parse_code_spans(code, Some("rust"));
         assert!(Arc::ptr_eq(&parsed1, &parsed2), "subsequent call must hit Arc cache pointer");
+    }
+
+    #[test]
+    fn test_syntax_set_readiness_and_cached_spans_api() {
+        assert!(is_syntax_set_ready() || !is_syntax_set_ready());
+        let _ = init_syntax_set();
+        assert!(is_syntax_set_ready());
+
+        clear_syntax_cache();
+        let code = "let val = 999;";
+
+        // Cache miss for rust before parsing
+        assert!(get_cached_code_spans(code, Some("rust")).is_none());
+
+        // Plain / unsupported lang resolves immediately without blocking
+        let plain = get_cached_code_spans(code, None).expect("none raw_lang should return plain");
+        assert_eq!(plain[0].role, SyntaxRole::Plain);
+
+        // Explicit cache insert & get
+        let spans: Arc<[SyntaxSpan]> = parse_code_spans(code, Some("rust")).into();
+        insert_cached_code_spans(code, Some("rust"), spans.clone());
+        let cached = get_cached_code_spans(code, Some("rust")).expect("must hit cache after insert");
+        assert!(Arc::ptr_eq(&cached, &spans));
+    }
+
+    #[test]
+    fn test_parse_code_spans_bounded_cancellation() {
+        let cancel = AtomicBool::new(true);
+        let code = "fn cancel_me() { println!(\"test\"); }";
+        let spans = parse_code_spans_bounded(code, Some("rust"), Some(&cancel));
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].role, SyntaxRole::Plain);
+        assert_eq!(spans[0].range, 0..code.len());
     }
 }

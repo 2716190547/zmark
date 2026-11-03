@@ -1272,13 +1272,14 @@ pub fn render_styled_text_only(
     StyledText::new(text).with_highlights(highlights)
 }
 
-#[cfg(feature = "test-observation")]
 pub mod obs {
-    use gpui::{Bounds, Pixels};
+    use gpui::{Bounds, HighlightStyle, Pixels};
     use std::sync::{Mutex, OnceLock};
 
     type BoundsLog = Mutex<Vec<(String, Bounds<Pixels>)>>;
     type RangeLog = Mutex<Vec<(String, Option<std::ops::Range<usize>>)>>;
+    type CodeHighlightsLog = Mutex<Vec<(String, Vec<(std::ops::Range<usize>, HighlightStyle)>)>>;
+    type EditorTokensLog = Mutex<Vec<(usize, Vec<crate::views::editor::MarkdownToken>)>>;
 
     fn bounds_log() -> &'static BoundsLog {
         static L: OnceLock<BoundsLog> = OnceLock::new();
@@ -1288,10 +1289,21 @@ pub mod obs {
         static L: OnceLock<RangeLog> = OnceLock::new();
         L.get_or_init(Default::default)
     }
+    fn code_highlights_log() -> &'static CodeHighlightsLog {
+        static L: OnceLock<CodeHighlightsLog> = OnceLock::new();
+        L.get_or_init(Default::default)
+    }
+    fn editor_tokens_log() -> &'static EditorTokensLog {
+        static L: OnceLock<EditorTokensLog> = OnceLock::new();
+        L.get_or_init(Default::default)
+    }
+
     #[allow(dead_code)]
     pub fn reset() {
         bounds_log().lock().unwrap().clear();
         range_log().lock().unwrap().clear();
+        code_highlights_log().lock().unwrap().clear();
+        editor_tokens_log().lock().unwrap().clear();
     }
     #[allow(dead_code)]
     pub fn text_bounds(key: &str) -> Option<(f32, f32, f32, f32)> {
@@ -1308,11 +1320,31 @@ pub mod obs {
     pub fn highlights() -> Vec<(String, Option<std::ops::Range<usize>>)> {
         range_log().lock().unwrap().clone()
     }
+    #[allow(dead_code)]
+    pub fn last_code_highlights() -> Option<Vec<(std::ops::Range<usize>, HighlightStyle)>> {
+        code_highlights_log().lock().unwrap().last().map(|(_, h)| h.clone())
+    }
+    #[allow(dead_code)]
+    pub fn editor_tokens(phys_idx: usize) -> Option<Vec<crate::views::editor::MarkdownToken>> {
+        editor_tokens_log().lock().unwrap().iter().rev().find(|(idx, _)| *idx == phys_idx).map(|(_, t)| t.clone())
+    }
+    #[allow(dead_code)]
+    pub fn last_editor_tokens() -> Option<Vec<crate::views::editor::MarkdownToken>> {
+        editor_tokens_log().lock().unwrap().last().map(|(_, t)| t.clone())
+    }
+    #[allow(dead_code)]
     pub(crate) fn log_bounds(key: &str, bounds: Bounds<Pixels>) {
         bounds_log().lock().unwrap().push((key.to_string(), bounds));
     }
+    #[allow(dead_code)]
     pub(crate) fn log_highlight(text: &str, range: &Option<std::ops::Range<usize>>) {
         range_log().lock().unwrap().push((text.to_string(), range.clone()));
+    }
+    pub(crate) fn log_code_highlights(code: &str, highlights: &[(std::ops::Range<usize>, HighlightStyle)]) {
+        code_highlights_log().lock().unwrap().push((code.to_string(), highlights.to_vec()));
+    }
+    pub(crate) fn log_editor_tokens(phys_idx: usize, tokens: &[crate::views::editor::MarkdownToken]) {
+        editor_tokens_log().lock().unwrap().push((phys_idx, tokens.to_vec()));
     }
 }
 
@@ -1797,7 +1829,12 @@ fn render_code_block(
 
     let group_name: SharedString = format!("code_block_{}", hash).into();
 
-    let spans = glidemark_core::syntax::get_or_parse_code_spans(code, lang);
+    let spans = glidemark_core::syntax::get_cached_code_spans(code, lang).unwrap_or_else(|| {
+        Arc::from([glidemark_core::syntax::SyntaxSpan {
+            range: 0..code.len(),
+            role: glidemark_core::syntax::SyntaxRole::Plain,
+        }])
+    });
     let syntax_highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = spans
         .iter()
         .filter(|s| s.range.start < s.range.end && s.range.end <= code_text.len())
@@ -1822,6 +1859,8 @@ fn render_code_block(
     } else {
         syntax_highlights
     };
+
+    obs::log_code_highlights(&code_text, &highlights);
 
     let styled_text = if highlights.is_empty() {
         StyledText::new(code_text)

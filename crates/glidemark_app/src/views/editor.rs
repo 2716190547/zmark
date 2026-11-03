@@ -370,12 +370,8 @@ pub fn spans_to_code_tokens(
 #[allow(dead_code)]
 pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
     if line.is_empty() {
-        return vec![MarkdownToken {
-            text: " ".to_string(),
-            kind: MarkdownTokenKind::CodeText,
-        }];
+        return Vec::new();
     }
-
     let trimmed = line.trim();
     if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
         return vec![MarkdownToken {
@@ -383,7 +379,6 @@ pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
             kind: MarkdownTokenKind::CodeDelimiter,
         }];
     }
-
     let spans = glidemark_core::syntax::get_or_parse_code_spans(line, Some("rust"));
     spans_to_code_tokens(line, &spans)
 }
@@ -405,8 +400,13 @@ pub fn tokenize_document_lines<S: AsRef<str>>(lines: &[S]) -> Vec<Vec<MarkdownTo
             .map(|(_, l)| l.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        let spans =
-            glidemark_core::syntax::get_or_parse_code_spans(&full_code, fence_lang.as_deref());
+        let spans = glidemark_core::syntax::get_cached_code_spans(&full_code, fence_lang.as_deref())
+            .unwrap_or_else(|| {
+                Arc::from([glidemark_core::syntax::SyntaxSpan {
+                    range: 0..full_code.len(),
+                    role: glidemark_core::syntax::SyntaxRole::Plain,
+                }])
+            });
 
         let mut byte_offset = 0;
         for (idx, line_str) in block_lines.drain(..) {
@@ -1279,6 +1279,7 @@ pub fn slice_tokens_for_visual_subline(
 pub fn render_editor_pane(
     lines: Arc<Vec<String>>,
     visual_lines: Arc<Vec<VisualLine>>,
+    doc_tokens: Arc<Vec<Vec<MarkdownToken>>>,
     cursor: (usize, usize),
     theme: &ThemeColors,
     strings: &'static glidemark_core::i18n::I18nStrings,
@@ -1294,7 +1295,6 @@ pub fn render_editor_pane(
     let theme = theme.clone();
     let list_theme = theme.clone();
     let sanitized_lh = glidemark_core::config::Preferences::sanitize_line_height(line_height);
-    let doc_tokens = Arc::new(tokenize_document_lines(&lines));
 
     div()
         .flex_1()
@@ -1362,6 +1362,8 @@ pub fn render_editor_pane(
                                 let rel_col = calculate_click_char_col_tokens(window.text_system(), &tokens_click, x_offset, font_size);
                                 on_click_line(vis_idx, rel_col, window, cx);
                             });
+
+                        crate::views::preview::obs::log_editor_tokens(phys_idx, &tokens);
 
                         let styled_row = if is_active_subline {
                             row.bg(list_theme.bg)

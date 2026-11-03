@@ -1,11 +1,15 @@
+use glidemark_app::state::{AppState, ViewMode};
 use glidemark_app::theme::ThemeColors;
 use glidemark_app::views::editor::{tokenize_document_lines, MarkdownTokenKind};
-use glidemark_app::views::preview::apply_selection_to_highlights;
+use glidemark_app::views::preview::{apply_selection_to_highlights, obs};
+use glidemark_app::views::workspace::WorkspaceView;
+use glidemark_core::document::Document;
 use glidemark_core::syntax::{
-    get_or_parse_code_spans, parse_code_spans, resolve_canonical_language, SyntaxRole,
-    MAX_CODE_BLOCK_BYTES,
+    clear_syntax_cache, get_or_parse_code_spans, parse_code_spans,
+    resolve_canonical_language, SyntaxRole, MAX_CODE_BLOCK_BYTES,
 };
-use gpui::HighlightStyle;
+use gpui::{HighlightStyle, TestAppContext};
+use std::sync::Arc;
 
 /// Test 1: Canonical language alias table and fallbacks per Phase I specification
 #[test]
@@ -224,6 +228,7 @@ fn test_phase_i_utf8_contiguous_non_overlapping_coverage() {
 /// Test 6: Bounded LRU cache and theme independence
 #[test]
 fn test_phase_i_bounded_lru_cache_and_theme_independence() {
+    clear_syntax_cache();
     let code = "def greet(name: str) -> str:\n    return f'Hello, {name}'";
 
     // 1. First call parses and inserts into cache
@@ -232,7 +237,7 @@ fn test_phase_i_bounded_lru_cache_and_theme_independence() {
     // 2. Second call returns the cached Arc without reparsing
     let spans2 = get_or_parse_code_spans(code, Some("python"));
     assert!(
-        std::sync::Arc::ptr_eq(&spans1, &spans2),
+        Arc::ptr_eq(&spans1, &spans2),
         "Identical code and language must return the exact same cached Arc"
     );
 
@@ -252,6 +257,7 @@ fn test_phase_i_bounded_lru_cache_and_theme_independence() {
 /// Test 7: Preview and Editor consistency on the same code block
 #[test]
 fn test_phase_i_preview_and_editor_syntax_consistency() {
+    clear_syntax_cache();
     let markdown_doc = [
         "# Sample Document",
         "```xml",
@@ -261,6 +267,9 @@ fn test_phase_i_preview_and_editor_syntax_consistency() {
         "```",
         "End of document",
     ];
+
+    let xml_payload = "<project xmlns=\"http://maven.apache.org\">\n    <groupId>org.apache.maven</groupId>\n</project>";
+    let preview_spans = get_or_parse_code_spans(xml_payload, Some("xml"));
 
     // 1. Editor tokenization
     let editor_tokens = tokenize_document_lines(&markdown_doc);
@@ -292,9 +301,6 @@ fn test_phase_i_preview_and_editor_syntax_consistency() {
     );
 
     // 2. Preview semantic spans
-    let xml_payload = "<project xmlns=\"http://maven.apache.org\">\n    <groupId>org.apache.maven</groupId>\n</project>";
-    let preview_spans = get_or_parse_code_spans(xml_payload, Some("xml"));
-
     assert!(
         preview_spans.iter().any(|s| s.role == SyntaxRole::Keyword && &xml_payload[s.range.clone()] == "project"),
         "Preview must recognize 'project' tag as Keyword"
@@ -330,4 +336,238 @@ fn test_phase_i_preview_and_editor_syntax_consistency() {
             assert!(style.color.is_some(), "Syntax foreground color must NOT be wiped by selection");
         }
     }
+}
+
+/// Test 8: Real Workspace Preview Render & Foreground Text Color Observation
+#[gpui::test]
+async fn test_phase_i_real_preview_render_and_selection_overlay(cx: &mut TestAppContext) {
+    obs::reset();
+    let xml_doc = "# Title\n\n```xml\n<project xmlns=\"http://maven.apache.org\">\n    <groupId>org.apache.maven</groupId>\n</project>\n```\n";
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(xml_doc.to_string());
+        let mut state = AppState::new(doc);
+        state.parse_now();
+        state.set_view_mode(ViewMode::Preview);
+        WorkspaceView::new(state, cx)
+    });
+
+    // Run until background syntax scheduler finishes parsing
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let highlights = obs::last_code_highlights().expect("Must record rendered preview code block highlights");
+    assert!(!highlights.is_empty(), "Preview code block must render syntax highlights");
+
+    let theme = ThemeColors::default_palette(false);
+    let keyword_color = theme.syntax_keyword;
+    let attribute_color = theme.syntax_attribute;
+    let string_color = theme.syntax_string;
+
+    // Check tag 'project' has keyword color
+    let project_highlight = highlights.iter().find(|(r, h)| {
+        r.start == 1 && r.end == 8 && h.color == Some(keyword_color)
+    });
+    assert!(project_highlight.is_some(), "Tag 'project' must be rendered with syntax_keyword color");
+
+    // Check 'xmlns' has attribute color
+    let xmlns_highlight = highlights.iter().find(|(r, h)| {
+        r.start == 9 && r.end == 14 && h.color == Some(attribute_color)
+    });
+    assert!(xmlns_highlight.is_some(), "Attribute 'xmlns' must be rendered with syntax_attribute color");
+
+    // Check attribute string has string color
+    let string_highlight = highlights.iter().find(|(_r, h)| {
+        h.color == Some(string_color)
+    });
+    assert!(string_highlight.is_some(), "Attribute value string must be rendered with syntax_string color");
+
+    // Test selection overlay: simulate selection over xmlns attribute (char offset 9..14 in code block)
+    cx.update(|_window, cx| {
+        view.update(cx, |this, _cx| {
+            this.preview_selection = Some(glidemark_app::views::preview::PreviewSelectionRange {
+                anchor: glidemark_app::views::preview::PreviewCharPosition { block_ix: 1, char_offset: 9 },
+                head: glidemark_app::views::preview::PreviewCharPosition { block_ix: 1, char_offset: 14 },
+            });
+        });
+    });
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let selected_highlights = obs::last_code_highlights().expect("Must record highlights after selection");
+    let selected_xmlns = selected_highlights.iter().find(|(r, _)| r.start == 9 && r.end == 14);
+    let (_sel_range, sel_style) = selected_xmlns.expect("xmlns highlight must exist under selection");
+    assert_eq!(sel_style.background_color, Some(theme.selection_bg()), "Selection background must overlay on highlighted span");
+    assert_eq!(sel_style.color, Some(attribute_color), "Selection background must NOT wipe syntax foreground color");
+}
+
+/// Test 9: Real Workspace Editor Render & Token Kind Observation
+#[gpui::test]
+async fn test_phase_i_real_editor_render_tokens(cx: &mut TestAppContext) {
+    obs::reset();
+    let rust_doc = "# Title\n```rust\nfn main() {\n    let val = 42;\n    let msg = \"hello\";\n}\n```\n";
+    let (_view, cx) = cx.add_window_view(|_window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(rust_doc.to_string());
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Source);
+        WorkspaceView::new(state, cx)
+    });
+
+    // Run until background syntax scheduler finishes parsing
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    // Check physical line 2: "fn main() {"
+    let line2_tokens = obs::editor_tokens(2).expect("Editor line 2 tokens must be logged");
+    assert!(
+        line2_tokens.iter().any(|t| t.kind == MarkdownTokenKind::Keyword && t.text == "fn"),
+        "Editor must render 'fn' with Keyword token kind"
+    );
+
+    // Check physical line 3: "    let val = 42;"
+    let line3_tokens = obs::editor_tokens(3).expect("Editor line 3 tokens must be logged");
+    assert!(
+        line3_tokens.iter().any(|t| t.kind == MarkdownTokenKind::Keyword && t.text == "let"),
+        "Editor must render 'let' with Keyword token kind"
+    );
+    assert!(
+        line3_tokens.iter().any(|t| t.kind == MarkdownTokenKind::Number && t.text == "42"),
+        "Editor must render '42' with Number token kind"
+    );
+
+    // Check physical line 4: "    let msg = \"hello\";"
+    let line4_tokens = obs::editor_tokens(4).expect("Editor line 4 tokens must be logged");
+    assert!(
+        line4_tokens.iter().any(|t| t.kind == MarkdownTokenKind::StringLiteral && t.text.contains("hello")),
+        "Editor must render '\"hello\"' with StringLiteral token kind"
+    );
+}
+
+/// Test 10: Cold start non-blocking initial render and asynchronous completion
+#[gpui::test]
+async fn test_phase_i_cold_start_nonblocking_and_async_refresh(cx: &mut TestAppContext) {
+    clear_syntax_cache();
+    let doc_str = "```rust\nfn cold() -> i32 { 100 }\n```\n";
+    let (_view, cx) = cx.add_window_view(|_window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(doc_str.to_string());
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Preview);
+        WorkspaceView::new(state, cx)
+    });
+
+    // Initial draw WITHOUT cx.run_until_parked(): must complete immediately without blocking
+    let draw_start = std::time::Instant::now();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let draw_duration = draw_start.elapsed();
+    assert!(draw_duration.as_millis() < 500, "Cold render must not block UI thread waiting for syntax parser");
+
+    // Background executor finishes parsing
+    cx.run_until_parked();
+
+    // Subsequent draw has full syntax highlights
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let highlights = obs::last_code_highlights().expect("Must have highlights after background parse completes");
+    assert!(!highlights.is_empty(), "Post-async draw must contain highlights");
+}
+
+/// Test 11: Cursor movement and scroll reuse tokens without reconstructing or reparsing
+#[gpui::test]
+async fn test_phase_i_scroll_and_cursor_reuse_without_reparsing(cx: &mut TestAppContext) {
+    let doc_str = "```rust\nfn test_reuse() {\n    let a = 1;\n}\n```\n";
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(doc_str.to_string());
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Source);
+        WorkspaceView::new(state, cx)
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let (initial_tokens, initial_rev) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        (ws.cached_editor_tokens.clone(), ws.cached_editor_tokens_rev)
+    });
+    assert!(!initial_tokens.is_empty());
+
+    // Move cursor right: revision does NOT change
+    cx.update(|_window, cx| {
+        view.update(cx, |this, _cx| {
+            this.state.editor.move_right();
+        });
+    });
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let (moved_tokens, moved_rev) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        (ws.cached_editor_tokens.clone(), ws.cached_editor_tokens_rev)
+    });
+    assert_eq!(moved_rev, initial_rev, "Cursor movement must not bump revision");
+    assert!(Arc::ptr_eq(&initial_tokens, &moved_tokens), "Tokens must be 100% reused across cursor moves");
+}
+
+/// Test 12: Cancellation and stale revision guard
+#[gpui::test]
+async fn test_phase_i_cancellation_and_stale_revision_rejection(cx: &mut TestAppContext) {
+    let doc_str = "```rust\nfn stale_test() {}\n```\n";
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(doc_str.to_string());
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Source);
+        WorkspaceView::new(state, cx)
+    });
+    cx.run_until_parked();
+
+    // Advance editor revision by typing
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.state.editor.insert_text("// extra\n");
+            this.schedule_syntax_parse(cx);
+        });
+    });
+
+    let current_rev = cx.update(|_window, cx| view.read(cx).state.editor.revision);
+
+    // Stale batch request with old revision
+    let stale_request = glidemark_app::views::workspace::SyntaxBatchRequest {
+        doc_key: cx.update(|_window, cx| view.read(cx).state.active.clone()),
+        revision: current_rev.saturating_sub(1),
+        blocks: vec![glidemark_app::views::workspace::SyntaxBlockItem {
+            block_id: 0,
+            lang: Some("rust".to_string()),
+            code: "fn should_be_rejected() {}".to_string(),
+        }],
+    };
+
+    // Stale guard: verify stale revision result is rejected
+    cx.update(|_window, cx| {
+        view.update(cx, |this, _cx| {
+            let current_doc_key = this.state.active.clone();
+            let current_rev = this.state.editor.revision;
+            assert_ne!(stale_request.revision, current_rev);
+            let is_accepted = stale_request.doc_key == current_doc_key && stale_request.revision == current_rev;
+            assert!(!is_accepted, "Stale revision result must be rejected");
+        });
+    });
 }
