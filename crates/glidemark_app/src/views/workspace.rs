@@ -43,6 +43,10 @@ pub struct WorkspaceView {
     pub search_input: Option<Entity<crate::views::drawer::SearchInput>>,
     pub preview_selection: Option<crate::views::preview::PreviewSelectionRange>,
     pub is_preview_selecting: bool,
+    pub cached_visual_rev: usize,
+    pub cached_visual_width_bits: u64,
+    pub cached_visual_font_bits: u32,
+    pub cached_visual_lines: Arc<Vec<crate::editor_engine::VisualLine>>,
 }
 
 impl WorkspaceView {
@@ -94,6 +98,10 @@ impl WorkspaceView {
             search_input: Some(search_input),
             preview_selection: None,
             is_preview_selecting: false,
+            cached_visual_rev: usize::MAX,
+            cached_visual_width_bits: 0,
+            cached_visual_font_bits: 0,
+            cached_visual_lines: Arc::new(Vec::new()),
         }
     }
 
@@ -185,22 +193,42 @@ impl WorkspaceView {
         });
     }
 
-    pub fn compute_max_cols(&self, window: &Window) -> usize {
-        let font = gpui::font("ui-monospace");
-        let font_id = window.text_system().resolve_font(&font);
-        let font_size = px(self.state.preferences.font_size);
-        let ch_width = window
-            .text_system()
-            .ch_advance(font_id, font_size)
-            .map(|w| f32::from(w))
-            .unwrap_or_else(|_| (self.state.preferences.font_size * 0.6).max(1.0));
-        let unit_width = ch_width.max(1.0);
+    pub fn compute_editor_max_width_px(&self, window: &Window) -> f32 {
         let drawer_w = if self.state.drawer_open { px(crate::views::editor::DRAWER_WIDTH) } else { px(0.) };
         let available_w = match self.state.view_mode {
             ViewMode::Split => (window.viewport_size().width - drawer_w) * self.split_ratio,
             _ => window.viewport_size().width - drawer_w,
         };
-        ((f32::from(available_w) - crate::views::editor::EDITOR_TEXT_START_OFFSET).max(100.0) / unit_width).floor() as usize
+        (f32::from(available_w) - crate::views::editor::EDITOR_TEXT_START_OFFSET).max(100.0)
+    }
+
+    pub fn compute_visual_lines(&mut self, window: &Window) -> Arc<Vec<crate::editor_engine::VisualLine>> {
+        let max_width_px = self.compute_editor_max_width_px(window);
+        let font_size = self.state.preferences.font_size;
+        let rev = self.state.editor.revision;
+        let width_bits = max_width_px.round() as u64;
+        let font_bits = font_size.to_bits();
+
+        if !self.cached_visual_lines.is_empty()
+            && self.cached_visual_rev == rev
+            && self.cached_visual_width_bits == width_bits
+            && self.cached_visual_font_bits == font_bits
+        {
+            return self.cached_visual_lines.clone();
+        }
+
+        let lines = crate::views::editor::wrap_document_to_visual_layout(
+            window.text_system(),
+            &self.state.editor.lines,
+            max_width_px,
+            font_size,
+        );
+        let lines_arc = Arc::new(lines);
+        self.cached_visual_rev = rev;
+        self.cached_visual_width_bits = width_bits;
+        self.cached_visual_font_bits = font_bits;
+        self.cached_visual_lines = lines_arc.clone();
+        lines_arc
     }
 
     /// Synchronizes editor wheel scrolling to the preview pane with 100ms echo suppression.
@@ -216,8 +244,7 @@ impl WorkspaceView {
         }
         self.last_scroll_origin = Some((ScrollOrigin::Editor, now));
 
-        let max_cols = self.compute_max_cols(window);
-        let visual_lines = self.state.editor.get_visual_lines(max_cols);
+        let visual_lines = self.compute_visual_lines(window);
 
         let scroll_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
         let row_h = crate::views::editor::calculate_line_row_height(
@@ -1134,8 +1161,7 @@ impl Render for WorkspaceView {
         self.window_handle = Some(window.window_handle());
         let is_fullscreen = window.is_fullscreen();
 
-        let max_cols = self.compute_max_cols(window);
-        let visual_lines = self.state.editor.get_visual_lines(max_cols);
+        let visual_lines = self.compute_visual_lines(window);
 
         let theme = &self.state.theme;
         let strings = self.state.strings;
@@ -1482,54 +1508,7 @@ impl Render for WorkspaceView {
                             this.search_focused = false;
                             cx.notify();
                         }
-                        "backspace" => {
-                            let mut q = this.state.search_query.clone();
-                            q.pop();
-                            if let Some(ref input) = this.search_input {
-                                let query_str = q.clone();
-                                input.update(cx, |inp, _cx| {
-                                    inp.set_text(query_str);
-                                });
-                            }
-                            this.update_search_query(&q, cx);
-                        }
-                        "space" => {
-                            let mut q = this.state.search_query.clone();
-                            q.push(' ');
-                            if let Some(ref input) = this.search_input {
-                                let query_str = q.clone();
-                                input.update(cx, |inp, _cx| {
-                                    inp.set_text(query_str);
-                                });
-                            }
-                            this.update_search_query(&q, cx);
-                        }
-                        _ => {
-                            if let Some(ch) = &event.keystroke.key_char {
-                                let mut q = this.state.search_query.clone();
-                                q.push_str(ch);
-                                if let Some(ref input) = this.search_input {
-                                    let query_str = q.clone();
-                                    input.update(cx, |inp, _cx| {
-                                        inp.set_text(query_str);
-                                    });
-                                }
-                                this.update_search_query(&q, cx);
-                            } else if key.chars().count() == 1
-                                && !mods.control
-                                && !mods.platform
-                            {
-                                let mut q = this.state.search_query.clone();
-                                q.push_str(key);
-                                if let Some(ref input) = this.search_input {
-                                    let query_str = q.clone();
-                                    input.update(cx, |inp, _cx| {
-                                        inp.set_text(query_str);
-                                    });
-                                }
-                                this.update_search_query(&q, cx);
-                            }
-                        }
+                        _ => {}
                     }
                     return;
                 }
@@ -1673,12 +1652,12 @@ impl Render for WorkspaceView {
                     "left" => this.state.editor.move_left(),
                     "right" => this.state.editor.move_right(),
                     "up" => {
-                        let max_cols = this.compute_max_cols(window);
-                        this.state.editor.move_up_visual(max_cols);
+                        let visual_lines = this.compute_visual_lines(window);
+                        this.state.editor.move_up_visual_lines(&visual_lines);
                     }
                     "down" => {
-                        let max_cols = this.compute_max_cols(window);
-                        this.state.editor.move_down_visual(max_cols);
+                        let visual_lines = this.compute_visual_lines(window);
+                        this.state.editor.move_down_visual_lines(&visual_lines);
                     }
                     "home" => this.state.editor.move_to_line_start(),
                     "end" => this.state.editor.move_to_line_end(),

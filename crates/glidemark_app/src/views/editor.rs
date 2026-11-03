@@ -740,7 +740,6 @@ pub fn calculate_click_char_col_tokens(
 
 /// Measures actual rendered pixel width for each character in `tokens`, accounting for font
 /// shaping advances (such as `\t`) and inline code pill paddings.
-#[allow(dead_code)]
 pub fn compute_char_pixel_widths(
     text_system: &gpui::WindowTextSystem,
     tokens: &[MarkdownToken],
@@ -798,7 +797,6 @@ pub fn compute_char_pixel_widths(
 
 /// Wraps a physical line into visual lines using actual layout metrics (font advance, Tab width,
 /// and token paddings) against `max_width_px`.
-#[allow(dead_code)]
 pub fn wrap_line_to_visual_layout(
     text_system: &gpui::WindowTextSystem,
     physical_line_idx: usize,
@@ -818,6 +816,45 @@ pub fn wrap_line_to_visual_layout(
             })
         },
     )
+}
+
+/// Wraps all physical lines of a document into visual lines using actual layout metrics
+/// (font advance, Tab width, and token paddings) against `max_width_px`.
+pub fn wrap_document_to_visual_layout(
+    text_system: &gpui::WindowTextSystem,
+    lines: &[String],
+    max_width_px: f32,
+    font_size: f32,
+) -> Vec<VisualLine> {
+    let fenced_lines = compute_fenced_code_lines(lines);
+    let mut result = Vec::new();
+    for (phys_idx, line) in lines.iter().enumerate() {
+        let is_fenced = fenced_lines.get(phys_idx).copied().unwrap_or(false);
+        let tokens = if is_fenced {
+            tokenize_code_line(line)
+        } else {
+            tokenize_markdown_line(line)
+        };
+        let wrapped = wrap_line_to_visual_layout(
+            text_system,
+            phys_idx,
+            line,
+            &tokens,
+            max_width_px,
+            font_size,
+        );
+        result.extend(wrapped);
+    }
+    if result.is_empty() {
+        result.push(VisualLine {
+            physical_line_idx: 0,
+            subline_idx: 0,
+            char_start: 0,
+            char_len: 0,
+            is_first: true,
+        });
+    }
+    result
 }
 
 /// Computes the character column index closest to `x_offset` within `subline_str`

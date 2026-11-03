@@ -20,8 +20,33 @@ pub struct DrawerSearchParams {
     pub search_input: Option<Entity<SearchInput>>,
 }
 
+fn utf16_to_utf8_offset(s: &str, utf16_offset: usize) -> usize {
+    let mut utf8 = 0;
+    let mut utf16 = 0;
+    for ch in s.chars() {
+        if utf16 >= utf16_offset {
+            break;
+        }
+        utf16 += ch.len_utf16();
+        utf8 += ch.len_utf8();
+    }
+    utf8
+}
+
+fn utf8_to_utf16_offset(s: &str, utf8_offset: usize) -> usize {
+    let mut utf16 = 0;
+    let mut utf8 = 0;
+    for ch in s.chars() {
+        if utf8 >= utf8_offset {
+            break;
+        }
+        utf8 += ch.len_utf8();
+        utf16 += ch.len_utf16();
+    }
+    utf16
+}
+
 /// Search input component providing full Chinese IME support via `EntityInputHandler`.
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct SearchInput {
     pub focus_handle: FocusHandle,
@@ -32,11 +57,9 @@ pub struct SearchInput {
     pub marked_range: Option<Range<usize>>,
     pub last_layout: Option<ShapedLine>,
     pub last_bounds: Option<Bounds<Pixels>>,
-    pub is_selecting: bool,
     pub on_change: Option<Arc<dyn Fn(&str, &mut Window, &mut Context<Self>) + 'static>>,
 }
 
-#[allow(dead_code)]
 impl SearchInput {
     pub fn new(focus_handle: FocusHandle) -> Self {
         Self {
@@ -48,7 +71,6 @@ impl SearchInput {
             marked_range: None,
             last_layout: None,
             last_bounds: None,
-            is_selecting: false,
             on_change: None,
         }
     }
@@ -66,55 +88,58 @@ impl SearchInput {
         self
     }
 
-    pub fn content(&self) -> &str {
-        &self.content
-    }
-
+    #[allow(dead_code)]
     pub fn set_text(&mut self, text: impl Into<SharedString>) {
         self.content = text.into();
         self.selected_range = self.content.len()..self.content.len();
+        self.selection_reversed = false;
         self.marked_range = None;
     }
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.content = "".into();
         self.selected_range = 0..0;
+        self.selection_reversed = false;
         self.marked_range = None;
         cx.notify();
     }
 
     pub fn offset_from_utf16(&self, offset: usize) -> usize {
-        let mut utf8_offset = 0;
-        let mut utf16_count = 0;
-        for ch in self.content.chars() {
-            if utf16_count >= offset {
-                break;
-            }
-            utf16_count += ch.len_utf16();
-            utf8_offset += ch.len_utf8();
-        }
-        utf8_offset
+        utf16_to_utf8_offset(&self.content, offset)
     }
 
     pub fn offset_to_utf16(&self, offset: usize) -> usize {
-        let mut utf16_offset = 0;
-        let mut utf8_count = 0;
-        for ch in self.content.chars() {
-            if utf8_count >= offset {
-                break;
-            }
-            utf8_count += ch.len_utf8();
-            utf16_offset += ch.len_utf16();
-        }
-        utf16_offset
+        utf8_to_utf16_offset(&self.content, offset)
     }
 
     pub fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
+        let start = self.offset_to_utf16(range.start.min(range.end));
+        let end = self.offset_to_utf16(range.start.max(range.end));
+        start..end
     }
 
     pub fn range_from_utf16(&self, range_utf16: &Range<usize>) -> Range<usize> {
-        self.offset_from_utf16(range_utf16.start)..self.offset_from_utf16(range_utf16.end)
+        let start = self.offset_from_utf16(range_utf16.start.min(range_utf16.end));
+        let end = self.offset_from_utf16(range_utf16.start.max(range_utf16.end));
+        start..end
+    }
+
+    fn floor_char_boundary(&self, offset: usize) -> usize {
+        let offset = offset.min(self.content.len());
+        let mut i = offset;
+        while i > 0 && !self.content.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
+    }
+
+    fn ceil_char_boundary(&self, offset: usize) -> usize {
+        let offset = offset.min(self.content.len());
+        let mut i = offset;
+        while i < self.content.len() && !self.content.is_char_boundary(i) {
+            i += 1;
+        }
+        i
     }
 
     pub fn previous_boundary(&self, offset: usize) -> usize {
@@ -133,8 +158,9 @@ impl SearchInput {
     }
 
     pub fn move_to(&mut self, offset: usize) {
-        let offset = offset.min(self.content.len());
+        let offset = self.floor_char_boundary(offset);
         self.selected_range = offset..offset;
+        self.selection_reversed = false;
     }
 
     pub fn cursor_offset(&self) -> usize {
@@ -146,7 +172,7 @@ impl SearchInput {
     }
 
     pub fn select_to(&mut self, offset: usize) {
-        let offset = offset.min(self.content.len());
+        let offset = self.floor_char_boundary(offset);
         if self.selection_reversed {
             self.selected_range.start = offset;
         } else {
@@ -165,11 +191,14 @@ impl SearchInput {
             .or_else(|| self.marked_range.clone())
             .unwrap_or_else(|| self.selected_range.clone());
 
-        let start = range.start.min(self.content.len());
-        let end = range.end.min(self.content.len()).max(start);
+        let r_start = range.start.min(range.end);
+        let r_end = range.start.max(range.end);
+        let start = self.floor_char_boundary(r_start);
+        let end = self.ceil_char_boundary(r_end);
 
         self.content = format!("{}{}{}", &self.content[0..start], new_text, &self.content[end..]).into();
         self.selected_range = start + new_text.len()..start + new_text.len();
+        self.selection_reversed = false;
         self.marked_range = None;
     }
 
@@ -185,8 +214,10 @@ impl SearchInput {
             .or_else(|| self.marked_range.clone())
             .unwrap_or_else(|| self.selected_range.clone());
 
-        let start = range.start.min(self.content.len());
-        let end = range.end.min(self.content.len()).max(start);
+        let r_start = range.start.min(range.end);
+        let r_end = range.start.max(range.end);
+        let start = self.floor_char_boundary(r_start);
+        let end = self.ceil_char_boundary(r_end);
 
         self.content = format!("{}{}{}", &self.content[0..start], new_text, &self.content[end..]).into();
         if !new_text.is_empty() {
@@ -194,11 +225,18 @@ impl SearchInput {
         } else {
             self.marked_range = None;
         }
-        self.selected_range = new_selected_range_utf16
+
+        let sel_offset_start = new_selected_range_utf16
             .as_ref()
-            .map(|r| self.range_from_utf16(r))
-            .map(|new_range| new_range.start + start..new_range.end + start)
-            .unwrap_or_else(|| start + new_text.len()..start + new_text.len());
+            .map(|r| utf16_to_utf8_offset(new_text, r.start.min(r.end)))
+            .unwrap_or(new_text.len());
+        let sel_offset_end = new_selected_range_utf16
+            .as_ref()
+            .map(|r| utf16_to_utf8_offset(new_text, r.start.max(r.end)))
+            .unwrap_or(new_text.len());
+
+        self.selected_range = (start + sel_offset_start)..(start + sel_offset_end);
+        self.selection_reversed = false;
     }
 
     pub fn handle_unmark_text(&mut self) {
@@ -207,7 +245,11 @@ impl SearchInput {
 
     pub fn handle_backspace(&mut self) {
         if self.selected_range.is_empty() {
-            let prev = self.previous_boundary(self.cursor_offset());
+            let cursor = self.cursor_offset();
+            if cursor == 0 {
+                return;
+            }
+            let prev = self.previous_boundary(cursor);
             self.select_to(prev);
         }
         self.handle_replace_text(None, "");
@@ -215,7 +257,11 @@ impl SearchInput {
 
     pub fn handle_delete(&mut self) {
         if self.selected_range.is_empty() {
-            let next = self.next_boundary(self.cursor_offset());
+            let cursor = self.cursor_offset();
+            if cursor >= self.content.len() {
+                return;
+            }
+            let next = self.next_boundary(cursor);
             self.select_to(next);
         }
         self.handle_replace_text(None, "");
@@ -474,32 +520,43 @@ impl Render for SearchInput {
                     match key {
                         "v" | "V" => {
                             this.paste(window, cx);
+                            cx.stop_propagation();
                             return;
                         }
                         "c" | "C" => {
                             this.copy(window, cx);
+                            cx.stop_propagation();
                             return;
                         }
                         "x" | "X" => {
                             this.cut(window, cx);
+                            cx.stop_propagation();
                             return;
                         }
                         "a" | "A" => {
                             this.select_all(window, cx);
+                            cx.stop_propagation();
                             return;
                         }
                         _ => {}
                     }
                 }
                 match key {
-                    "backspace" => this.backspace(window, cx),
-                    "delete" => this.delete(window, cx),
+                    "backspace" => {
+                        this.backspace(window, cx);
+                        cx.stop_propagation();
+                    }
+                    "delete" => {
+                        this.delete(window, cx);
+                        cx.stop_propagation();
+                    }
                     "left" => {
                         if mods.shift {
                             this.select_left(window, cx);
                         } else {
                             this.left(window, cx);
                         }
+                        cx.stop_propagation();
                     }
                     "right" => {
                         if mods.shift {
@@ -507,17 +564,30 @@ impl Render for SearchInput {
                         } else {
                             this.right(window, cx);
                         }
+                        cx.stop_propagation();
                     }
-                    "home" => this.home(window, cx),
-                    "end" => this.end(window, cx),
+                    "home" => {
+                        this.home(window, cx);
+                        cx.stop_propagation();
+                    }
+                    "end" => {
+                        this.end(window, cx);
+                        cx.stop_propagation();
+                    }
                     "escape" => {
                         this.content = "".into();
                         this.selected_range = 0..0;
+                        this.selection_reversed = false;
                         this.marked_range = None;
                         this.notify_change(window, cx);
                         cx.notify();
+                        cx.stop_propagation();
                     }
-                    _ => {}
+                    _ => {
+                        if !mods.platform && !mods.control {
+                            cx.stop_propagation();
+                        }
+                    }
                 }
             }))
             .child(SearchInputElement {
@@ -526,12 +596,10 @@ impl Render for SearchInput {
     }
 }
 
-#[allow(dead_code)]
 pub struct SearchInputElement {
     pub input: Entity<SearchInput>,
 }
 
-#[allow(dead_code)]
 pub struct SearchInputPrepaintState {
     line: Option<ShapedLine>,
     cursor: Option<PaintQuad>,

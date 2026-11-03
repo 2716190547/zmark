@@ -227,6 +227,7 @@ impl VisualLineCache {
         Self::default()
     }
 
+    #[allow(dead_code)]
     pub fn get_or_compute(
         &mut self,
         lines: &[String],
@@ -511,6 +512,7 @@ impl EditorEngine {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_visual_lines(&mut self, max_cols: usize) -> Arc<Vec<VisualLine>> {
         let rev = self.revision;
         self.visual_cache.get_or_compute(&self.lines, rev, max_cols)
@@ -522,24 +524,34 @@ impl EditorEngine {
         self.visual_cache.get_or_compute_with_tab_width(&self.lines, rev, max_cols, tab_width)
     }
 
-    pub fn move_up_visual(&mut self, max_cols: usize) {
-        let vis_lines = self.get_visual_lines(max_cols);
-        let (vis_idx, vis_col) = physical_to_visual(self.cursor_line, self.cursor_col, &vis_lines);
+    pub fn move_up_visual_lines(&mut self, vis_lines: &[VisualLine]) {
+        let (vis_idx, vis_col) = physical_to_visual(self.cursor_line, self.cursor_col, vis_lines);
         if vis_idx > 0 {
             let (new_phys_line, new_phys_col) =
-                visual_to_physical(vis_idx - 1, vis_col, &vis_lines);
+                visual_to_physical(vis_idx - 1, vis_col, vis_lines);
             self.set_cursor(new_phys_line, new_phys_col);
         }
     }
 
-    pub fn move_down_visual(&mut self, max_cols: usize) {
-        let vis_lines = self.get_visual_lines(max_cols);
-        let (vis_idx, vis_col) = physical_to_visual(self.cursor_line, self.cursor_col, &vis_lines);
+    pub fn move_down_visual_lines(&mut self, vis_lines: &[VisualLine]) {
+        let (vis_idx, vis_col) = physical_to_visual(self.cursor_line, self.cursor_col, vis_lines);
         if vis_idx + 1 < vis_lines.len() {
             let (new_phys_line, new_phys_col) =
-                visual_to_physical(vis_idx + 1, vis_col, &vis_lines);
+                visual_to_physical(vis_idx + 1, vis_col, vis_lines);
             self.set_cursor(new_phys_line, new_phys_col);
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn move_up_visual(&mut self, max_cols: usize) {
+        let vis_lines = self.get_visual_lines(max_cols);
+        self.move_up_visual_lines(&vis_lines);
+    }
+
+    #[allow(dead_code)]
+    pub fn move_down_visual(&mut self, max_cols: usize) {
+        let vis_lines = self.get_visual_lines(max_cols);
+        self.move_down_visual_lines(&vis_lines);
     }
 }
 
@@ -666,5 +678,25 @@ mod tests {
         let pixel_wrapped = wrap_line_to_visual_measured(0, "hello world", 50.0, |_, _| 10.0);
         assert_eq!(pixel_wrapped.len(), 3);
         assert_eq!(pixel_wrapped[0].char_len, 5); // "hello" breaks before space
+    }
+
+    #[test]
+    fn test_move_visual_lines_direct() {
+        let mut editor = EditorEngine::new("line one is very long and will wrap across several sublines\nshort line two");
+        let measured_lines = wrap_line_to_visual(0, &editor.lines[0], 15);
+        assert!(measured_lines.len() > 1);
+
+        let mut all_vis = measured_lines;
+        let line2_vis = wrap_line_to_visual(1, &editor.lines[1], 15);
+        all_vis.extend(line2_vis);
+
+        editor.set_cursor(0, 0);
+        editor.move_down_visual_lines(&all_vis);
+        assert_eq!(editor.cursor_line, 0);
+        assert_eq!(editor.cursor_col, all_vis[1].char_start);
+
+        editor.move_up_visual_lines(&all_vis);
+        assert_eq!(editor.cursor_line, 0);
+        assert_eq!(editor.cursor_col, 0);
     }
 }

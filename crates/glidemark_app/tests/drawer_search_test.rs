@@ -505,17 +505,17 @@ async fn test_chinese_ime_entity_input_handler(cx: &mut gpui::TestAppContext) {
             });
 
         // 1. Initial state
-        assert_eq!(input.content(), "");
+        assert_eq!(input.content.as_ref(), "");
         assert_eq!(input.marked_range, None);
 
         // 2. Composition (typing Chinese pinyin "zhongwen")
         input.handle_replace_and_mark_text(None, "zhongwen", None);
-        assert_eq!(input.content(), "zhongwen");
+        assert_eq!(input.content.as_ref(), "zhongwen");
         assert_eq!(input.marked_range, Some(0..8));
 
         // 3. Confirm candidate (IME commits "中文")
         input.handle_replace_text(None, "中文");
-        assert_eq!(input.content(), "中文");
+        assert_eq!(input.content.as_ref(), "中文");
         assert_eq!(input.marked_range, None);
 
         // 4. Composition cancellation
@@ -528,18 +528,184 @@ async fn test_chinese_ime_entity_input_handler(cx: &mut gpui::TestAppContext) {
         input.set_text("test");
 
         input.handle_backspace();
-        assert_eq!(input.content(), "tes");
+        assert_eq!(input.content.as_ref(), "tes");
 
         input.handle_home();
         assert_eq!(input.selected_range, 0..0);
 
         input.handle_delete();
-        assert_eq!(input.content(), "es");
+        assert_eq!(input.content.as_ref(), "es");
 
         input.handle_end();
         assert_eq!(input.selected_range, 2..2);
 
         input.handle_paste_text(" pasted");
-        assert_eq!(input.content(), "es pasted");
+        assert_eq!(input.content.as_ref(), "es pasted");
+    });
+}
+
+#[gpui::test]
+async fn test_search_input_single_pipeline_cursor_and_selection(cx: &mut gpui::TestAppContext) {
+    use glidemark_app::views::drawer::SearchInput;
+    use gpui::EntityInputHandler;
+
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let focus = cx.focus_handle();
+        SearchInput::new(focus).with_placeholder("Search...")
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        view.update(cx, |input, cx| {
+            // Setup initial content "ab"
+            input.set_text("ab");
+            assert_eq!(input.content.as_ref(), "ab");
+            assert_eq!(input.selected_range, 2..2);
+
+            // a) Simulate input 'x' once via EntityInputHandler
+            input.replace_text_in_range(None, "x", window, cx);
+            assert_eq!(input.content.as_ref(), "abx", "Content must be 'abx', never 'abxx'");
+            assert_eq!(input.selected_range, 3..3);
+
+            // b) Move cursor left twice -> between 'a' and 'b' (index 1)
+            input.handle_left();
+            assert_eq!(input.selected_range, 2..2);
+            input.handle_left();
+            assert_eq!(input.selected_range, 1..1);
+
+            // Input 'z' once via EntityInputHandler
+            input.replace_text_in_range(None, "z", window, cx);
+            assert_eq!(
+                input.content.as_ref(),
+                "azbx",
+                "Content must be 'azbx', cursor must not jump to tail"
+            );
+            assert_eq!(
+                input.selected_range, 2..2,
+                "Cursor must be immediately after inserted 'z' (index 2)"
+            );
+
+            // c) Selection replacement: select range 1..3 ("zb") and input 'w'
+            input.selected_range = 1..3;
+            input.replace_text_in_range(None, "w", window, cx);
+            assert_eq!(
+                input.content.as_ref(),
+                "awx",
+                "Selection 1..3 ('zb') replaced by 'w' -> 'awx'"
+            );
+            assert_eq!(
+                input.selected_range, 2..2,
+                "Cursor must be at index 2 after replacing selection"
+            );
+
+            // d) Backspace / Delete in presence of selection only deletes selection
+            // d.1 Backspace on selection
+            input.set_text("hello world");
+            input.selected_range = 5..11; // " world"
+            input.handle_backspace();
+            assert_eq!(
+                input.content.as_ref(),
+                "hello",
+                "Backspace on selection 5..11 must delete only ' world'"
+            );
+            assert_eq!(input.selected_range, 5..5);
+
+            // d.2 Delete on selection
+            input.set_text("hello world");
+            input.selected_range = 0..6; // "hello "
+            input.handle_delete();
+            assert_eq!(
+                input.content.as_ref(),
+                "world",
+                "Delete on selection 0..6 must delete only 'hello '"
+            );
+            assert_eq!(input.selected_range, 0..0);
+
+            // e) IME composition lifecycle:
+            // e.1 replace_and_mark_text_in_range marks range
+            input.set_text("find: ");
+            input.replace_and_mark_text_in_range(None, "zhongwen", None, window, cx);
+            assert_eq!(input.content.as_ref(), "find: zhongwen");
+            assert_eq!(input.marked_range, Some(6..14));
+
+            // e.2 confirm candidate replaces marked range and clears marked_range
+            input.replace_text_in_range(None, "中文", window, cx);
+            assert_eq!(input.content.as_ref(), "find: 中文");
+            assert_eq!(input.marked_range, None);
+
+            // e.3 composition cancellation via unmark_text
+            input.replace_and_mark_text_in_range(None, "pinyin", None, window, cx);
+            assert_eq!(input.content.as_ref(), "find: 中文pinyin");
+            assert_eq!(input.marked_range, Some(12..18));
+            input.unmark_text(window, cx);
+            assert_eq!(input.marked_range, None);
+        });
+    });
+}
+
+#[gpui::test]
+async fn test_chinese_ime_relative_selection_with_cjk_prefix(cx: &mut gpui::TestAppContext) {
+    use glidemark_app::views::drawer::SearchInput;
+    use gpui::EntityInputHandler;
+
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let focus = cx.focus_handle();
+        SearchInput::new(focus).with_placeholder("Search...")
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        view.update(cx, |input, cx| {
+            // Content has 2 Chinese chars: "你好" (6 UTF-8 bytes, 2 UTF-16 code units)
+            input.set_text("你好");
+            assert_eq!(input.content.len(), 6);
+            assert_eq!(input.selected_range, 6..6);
+
+            // macOS IME calls replace_and_mark_text_in_range with new_selected_range_utf16:
+            // e.g. typing "ma" (2 UTF-16 code units), caret at 1..1 within "ma"
+            input.replace_and_mark_text_in_range(None, "ma", Some(1..1), window, cx);
+            assert_eq!(input.content.as_ref(), "你好ma");
+            assert_eq!(input.marked_range, Some(6..8));
+            // Caret should be at UTF-8 offset 7 (between 'm' and 'a'), NOT out-of-bounds 9..9!
+            assert_eq!(input.selected_range, 7..7);
+        });
+    });
+}
+
+#[gpui::test]
+async fn test_search_input_selection_reversal_and_movement(cx: &mut gpui::TestAppContext) {
+    use glidemark_app::views::drawer::SearchInput;
+
+    let (_view, cx) = cx.add_window_view(|_window, cx| {
+        let focus = cx.focus_handle();
+        SearchInput::new(focus)
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, cx| {
+        let focus = cx.focus_handle();
+        let mut input = SearchInput::new(focus);
+        input.set_text("abcdef");
+        input.move_to(3);
+        assert_eq!(input.selected_range, 3..3);
+        assert!(!input.selection_reversed);
+
+        // Shift+Left: select to 2
+        input.handle_select_left();
+        assert_eq!(input.selected_range, 2..3);
+        assert!(input.selection_reversed);
+        assert_eq!(input.cursor_offset(), 2);
+
+        // Press Left: collapses selection to start (2..2), resets selection_reversed
+        input.handle_left();
+        assert_eq!(input.selected_range, 2..2);
+        assert!(!input.selection_reversed, "selection_reversed must be reset to false on move");
+        assert_eq!(input.cursor_offset(), 2);
+
+        // Shift+Right: select to 3
+        input.handle_select_right();
+        assert_eq!(input.selected_range, 2..3);
+        assert!(!input.selection_reversed);
+        assert_eq!(input.cursor_offset(), 3);
     });
 }

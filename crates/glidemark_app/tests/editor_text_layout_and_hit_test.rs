@@ -1,4 +1,6 @@
-use glidemark_app::editor_engine::{wrap_line_to_visual, wrap_line_to_visual_with_tab_width};
+use glidemark_app::editor_engine::{
+    wrap_line_to_visual, wrap_line_to_visual_with_tab_width, EditorEngine,
+};
 use glidemark_app::views::editor::{
     calculate_click_char_col_tokens, calculate_cursor_x_offset_layout,
     calculate_cursor_x_offset_tokens, slice_tokens_for_visual_subline, token_paddings,
@@ -265,3 +267,121 @@ async fn test_cjk_mixed_text_and_multiple_inline_code_tokens(cx: &mut TestAppCon
         assert_eq!(token_paddings(&sub1[0].kind), (0.0, 4.0));
     });
 }
+
+#[gpui::test]
+async fn test_real_layout_wrapping_discrepancy_and_visual_navigation(cx: &mut TestAppContext) {
+    let (_view, cx) = cx.add_window_view(|_window, _cx| TestView);
+    cx.run_until_parked();
+
+    cx.update(|window, _app| {
+        let text_system = window.text_system();
+        let font_size = 14.0;
+        let char_w = 8.4; // 14.0 * 0.6 monospace char advance
+
+        // Case 1: Tab overestimation in old column wrapping vs real layout
+        // Line with 5 tabs and an inline code pill: "\t\t\t\t\t`code`" (11 chars)
+        let tab_code_line = "\t\t\t\t\t`code`";
+        let tokens_tab = tokenize_markdown_line(tab_code_line);
+
+        // At max_width_px = 120.0px:
+        // In real layout: 5 tabs * 8.4 = 42.0px, `code` = 50.4px + 8.0px padding = 58.4px.
+        // Total layout width = 100.4px <= 120.0px -> fits in 1 visual line!
+        let layout_wrapped = wrap_line_to_visual_layout(
+            text_system,
+            0,
+            tab_code_line,
+            &tokens_tab,
+            120.0,
+            font_size,
+        );
+        assert_eq!(
+            layout_wrapped.len(),
+            1,
+            "Real layout should fit 100.4px inside 120.0px in a single visual line"
+        );
+
+        // In old column wrapping with tab_width=4:
+        // max_cols = floor(120.0 / 8.4) = 14 cols.
+        // 5 tabs * 4 = 20 cols + 6 cols (`code`) = 26 cols > 14 cols -> prematurely wraps!
+        let max_cols_120 = (120.0 / char_w) as usize; // 14
+        let old_tab_wrapped = wrap_line_to_visual_with_tab_width(0, tab_code_line, max_cols_120, 4);
+        assert!(
+            old_tab_wrapped.len() > 1,
+            "Old tab_width=4 wrapping overestimates tabs and prematurely wraps"
+        );
+
+        // Case 2: InlineCode padding underestimation in old column wrapping vs real layout
+        // Line: "`1234`" (6 chars)
+        // With max_width_px = 55.0px, max_cols = 55.0 / 8.4 = 6 cols.
+        let code_line = "`1234`";
+        let tokens_code = tokenize_markdown_line(code_line);
+
+        // In real layout: 6 chars * 8.4 = 50.4px + 8.0px padding = 58.4px > 55.0px -> must wrap into 2 lines!
+        let layout_code_wrapped = wrap_line_to_visual_layout(
+            text_system,
+            0,
+            code_line,
+            &tokens_code,
+            55.0,
+            font_size,
+        );
+        assert!(
+            layout_code_wrapped.len() > 1,
+            "Real layout must wrap when inline code padding (8px) pushes 58.4px > 55.0px"
+        );
+
+        // In old column estimation (6 cols):
+        let max_cols_55 = (55.0 / char_w) as usize; // 6
+        let old_code_wrapped = wrap_line_to_visual_with_tab_width(0, code_line, max_cols_55, 4);
+        assert_eq!(
+            old_code_wrapped.len(),
+            1,
+            "Old column estimation ignored 8px padding, believing 6 chars fit in 6 cols"
+        );
+
+        // Case 3: EditorEngine visual navigation across real VisualLines
+        let mut engine = EditorEngine::new("long first line with text that wraps\nsecond line");
+        // Wrap first line at 100.0px
+        let line0 = &engine.lines[0];
+        let tok0 = tokenize_markdown_line(line0);
+        let real_vl0 = wrap_line_to_visual_layout(text_system, 0, line0, &tok0, 100.0, font_size);
+        assert!(real_vl0.len() > 1, "First line must wrap into multiple visual lines at 100px");
+
+        let line1 = &engine.lines[1];
+        let tok1 = tokenize_markdown_line(line1);
+        let real_vl1 = wrap_line_to_visual_layout(text_system, 1, line1, &tok1, 100.0, font_size);
+
+        let mut all_vis_lines = Vec::new();
+        all_vis_lines.extend(real_vl0);
+        all_vis_lines.extend(real_vl1);
+
+        // Position cursor at line 0, col 0 (top-left)
+        engine.set_cursor(0, 0);
+        assert_eq!(engine.cursor(), (0, 0));
+
+        // Move down across visual sublines
+        engine.move_down_visual_lines(&all_vis_lines);
+        let (down_line, down_col) = engine.cursor();
+        // Since line 0 wrapped, moving down should remain on physical line 0, but on subline 1
+        assert_eq!(down_line, 0);
+        assert_eq!(down_col, all_vis_lines[1].char_start);
+
+        // Move up visual lines returns back to line 0, col 0
+        engine.move_up_visual_lines(&all_vis_lines);
+        assert_eq!(engine.cursor(), (0, 0));
+
+        // Move down through all sublines to reach second physical line
+        for _ in 0..all_vis_lines.len() {
+            engine.move_down_visual_lines(&all_vis_lines);
+        }
+        let (bottom_line, _) = engine.cursor();
+        assert_eq!(bottom_line, 1);
+
+        // Move up back to start
+        for _ in 0..all_vis_lines.len() {
+            engine.move_up_visual_lines(&all_vis_lines);
+        }
+        assert_eq!(engine.cursor(), (0, 0));
+    });
+}
+
