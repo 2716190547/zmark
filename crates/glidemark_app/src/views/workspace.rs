@@ -8,10 +8,8 @@ use crate::actions::{
     ToggleSourceMode, ToggleSplitMode,
 };
 use crate::state::{parse_debounce, AppState, CloseDecision, ViewMode};
-use crate::views::drawer::render_drawer;
 use crate::views::editor::render_editor_pane;
 use crate::views::lightbox::{render_lightbox, LightboxState};
-use crate::views::preview::render_preview_pane;
 use crate::views::settings::SettingsWindowView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +39,8 @@ pub struct WorkspaceView {
     pub lightbox: LightboxState,
     pub window_handle: Option<AnyWindowHandle>,
     pub error_banner: Option<String>,
+    pub search_focused: bool,
+    pub preview_selection: Option<crate::views::preview::PreviewSelectionRange>,
 }
 
 impl WorkspaceView {
@@ -71,6 +71,8 @@ impl WorkspaceView {
             lightbox: LightboxState::new(),
             window_handle: None,
             error_banner: None,
+            search_focused: false,
+            preview_selection: None,
         }
     }
 
@@ -117,6 +119,8 @@ impl WorkspaceView {
     pub fn parse_now_and_refresh(&mut self) {
         self.parse_task = None;
         self.parse_paused = false;
+        self.preview_selection = None;
+        self.search_focused = false;
         self.state.sync_from_editor();
         if self.state.parse_now() {
             self.invalidate_preview_list();
@@ -229,6 +233,8 @@ impl WorkspaceView {
     pub fn on_document_swapped(&mut self, window: Option<&mut Window>, cx: &mut App) {
         self.parse_task = None;
         self.parse_paused = false;
+        self.preview_selection = None;
+        self.search_focused = false;
         if let Some(image) = self.lightbox.close() {
             if let Some(window) = window {
                 crate::views::lightbox::release_lightbox_image(image, window, cx);
@@ -611,6 +617,7 @@ impl WorkspaceView {
 
     fn render_canvas_header(
         &self,
+        window: &Window,
         theme: &crate::theme::ThemeColors,
         is_fullscreen: bool,
         cx: &mut Context<Self>,
@@ -622,10 +629,9 @@ impl WorkspaceView {
         let is_renaming = self.is_renaming;
         let rename_buffer = self.rename_buffer.clone();
 
-        #[cfg(target_os = "macos")]
-        let header_pl = px(adaptive_header_padding(is_macos, is_fullscreen, drawer_open));
-        #[cfg(not(target_os = "macos"))]
-        let header_pl = px(adaptive_header_padding(is_macos, is_fullscreen, drawer_open));
+        let viewport_w = f32::from(window.viewport_size().width);
+        let col_w = self.state.preferences.max_column_width;
+        let header_pl = px(calculate_title_header_padding(is_macos, is_fullscreen, drawer_open, view_mode, viewport_w, col_w));
 
         // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
         let header_pr = if !is_macos { px(138.) } else { px(12.) };
@@ -752,7 +758,6 @@ impl WorkspaceView {
                                     .font_weight(FontWeight::BOLD)
                                     .line_height(px(24.))
                                     .text_color(if active_key.is_some() { theme.text_primary } else { theme.text_muted })
-                                    .max_w(px(320.))
                                     .truncate()
                                     .child(title_text)
                             )
@@ -1407,6 +1412,57 @@ impl Render for WorkspaceView {
                     }
                 }
 
+                if this.search_focused {
+                    let key = event.keystroke.key.as_str();
+                    let mods = event.keystroke.modifiers;
+                    if mods.platform && (key == "c" || key == "C") {
+                        if !this.state.search_query.is_empty() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(this.state.search_query.clone()));
+                        }
+                        return;
+                    }
+                    match key {
+                        "escape" => {
+                            this.search_focused = false;
+                            this.state.clear_search();
+                            cx.notify();
+                        }
+                        "enter" => {
+                            this.search_focused = false;
+                            cx.notify();
+                        }
+                        "backspace" => {
+                            let mut q = this.state.search_query.clone();
+                            q.pop();
+                            this.state.set_search_query(&q);
+                            cx.notify();
+                        }
+                        "space" => {
+                            let mut q = this.state.search_query.clone();
+                            q.push(' ');
+                            this.state.set_search_query(&q);
+                            cx.notify();
+                        }
+                        _ => {
+                            if let Some(ch) = &event.keystroke.key_char {
+                                let mut q = this.state.search_query.clone();
+                                q.push_str(ch);
+                                this.state.set_search_query(&q);
+                                cx.notify();
+                            } else if key.chars().count() == 1
+                                && !mods.control
+                                && !mods.platform
+                            {
+                                let mut q = this.state.search_query.clone();
+                                q.push_str(key);
+                                this.state.set_search_query(&q);
+                                cx.notify();
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 if this.is_renaming {
                     match event.keystroke.key.as_str() {
                         "enter" => {
@@ -1507,6 +1563,21 @@ impl Render for WorkspaceView {
                         "2" => {
                             this.set_view_mode(ViewMode::Split, cx);
                         }
+                        "f" | "F" => {
+                            if !this.state.drawer_open {
+                                this.state.toggle_drawer();
+                            }
+                            this.search_focused = true;
+                            cx.notify();
+                        }
+                        "c" | "C" => {
+                            if let Some(sel) = this.preview_selection {
+                                let text = crate::views::preview::serialize_preview_selection(&this.state.doc.parsed, sel);
+                                if !text.is_empty() {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                                }
+                            }
+                        }
                         "3" => {
                             this.set_view_mode(ViewMode::Preview, cx);
                         }
@@ -1579,31 +1650,61 @@ impl Render for WorkspaceView {
                                 .border_color(theme.border)
                                 .bg(theme.bg)
                                 .overflow_hidden()
-                                .child(render_drawer(
-                                    is_fullscreen,
-                                    self.state.drawer_tab,
-                                    &self.state.workspace_roots,
-                                    &loose_docs,
-                                    &self.state.open_docs,
-                                    self.state.active.as_ref(),
-                                    &self.state.doc.parsed.headings(),
-                                    theme,
-                                    strings,
-                                    &self.drawer_scroll_handle,
-                                    on_select_tab,
-                                    on_toggle_root,
-                                    on_remove_root,
-                                    on_refresh_root,
-                                    on_toggle_folder,
-                                    on_select_file,
-                                    on_select_doc,
-                                    on_close_doc,
-                                    on_new_draft,
-                                    on_select_heading,
-                                    on_open_folder,
-                                    on_toggle_drawer,
-                                    on_new_file_in_dir,
-                                )),
+                                .child({
+                                    let view_search = cx.entity().clone();
+                                    let on_clear_search = {
+                                        let view = view_search.clone();
+                                        Arc::new(move |_window: &mut Window, cx: &mut App| {
+                                            view.update(cx, |this, cx| {
+                                                this.state.clear_search();
+                                                cx.notify();
+                                            });
+                                        })
+                                    };
+                                    let on_focus_search = {
+                                        let view = view_search;
+                                        Arc::new(move |_window: &mut Window, cx: &mut App| {
+                                            view.update(cx, |this, cx| {
+                                                this.search_focused = true;
+                                                cx.notify();
+                                            });
+                                        })
+                                    };
+                                    let search_params = crate::views::drawer::DrawerSearchParams {
+                                        search_query: self.state.search_query.clone(),
+                                        has_search_matches: self.state.has_search_matches(),
+                                        search_in_progress: self.state.search_in_progress,
+                                        search_truncated: self.state.search_truncated,
+                                        on_clear_search: Some(on_clear_search),
+                                        on_focus_search: Some(on_focus_search),
+                                    };
+                                    crate::views::drawer::render_drawer_with_search(
+                                        is_fullscreen,
+                                        self.state.drawer_tab,
+                                        &self.state.workspace_roots,
+                                        &loose_docs,
+                                        &self.state.open_docs,
+                                        self.state.active.as_ref(),
+                                        &self.state.doc.parsed.headings(),
+                                        theme,
+                                        strings,
+                                        &self.drawer_scroll_handle,
+                                        &search_params,
+                                        on_select_tab,
+                                        on_toggle_root,
+                                        on_remove_root,
+                                        on_refresh_root,
+                                        on_toggle_folder,
+                                        on_select_file,
+                                        on_select_doc,
+                                        on_close_doc,
+                                        on_new_draft,
+                                        on_select_heading,
+                                        on_open_folder,
+                                        on_toggle_drawer,
+                                        on_new_file_in_dir,
+                                    )
+                                }),
                         )
                         .with_animation(
                             if is_drawer_closing { "drawer_slide_out" } else { "drawer_slide_in" },
@@ -1626,7 +1727,7 @@ impl Render for WorkspaceView {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .child(self.render_canvas_header(theme, is_fullscreen, cx))
+                    .child(self.render_canvas_header(window, theme, is_fullscreen, cx))
                     // Error Feedback Banner
                     .when_some(self.error_banner.clone(), |el, err_msg| {
                         el.child(
@@ -1852,18 +1953,19 @@ impl Render for WorkspaceView {
                                                     visual_lines.clone(),
                                                     self.state.editor.cursor(),
                                                     theme,
+                                                    strings,
                                                     self.state.preferences.font_size,
                                                     self.state.preferences.line_height,
                                                     is_dirty,
                                                     &self.editor_scroll_handle,
                                                     editor_left_offset,
-                                                    on_click_line,
+                                                    on_click_line.clone(),
                                                 ))
                                                 .into_any_element(),
                                             ViewMode::Preview => div()
                                                 .size_full()
                                                 .min_w(px(0.))
-                                                .child(render_preview_pane(
+                                                .child(crate::views::preview::render_preview_pane_with_selection(
                                                     self.state.doc.parsed.clone(),
                                                     theme,
                                                     strings,
@@ -1873,6 +1975,7 @@ impl Render for WorkspaceView {
                                                     copied_code_hash,
                                                     Some(on_copy.clone()),
                                                     Some(on_open_lightbox.clone()),
+                                                    self.preview_selection,
                                                 ))
                                                 .into_any_element(),
                                             ViewMode::Split => div()
@@ -1897,6 +2000,7 @@ impl Render for WorkspaceView {
                                                             visual_lines.clone(),
                                                             self.state.editor.cursor(),
                                                             theme,
+                                                            strings,
                                                             self.state.preferences.font_size,
                                                             self.state.preferences.line_height,
                                                             is_dirty,
@@ -1947,7 +2051,7 @@ impl Render for WorkspaceView {
                                                         .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
                                                             this.handle_preview_scroll_wheel(event, window, cx);
                                                         }))
-                                                        .child(render_preview_pane(
+                                                        .child(crate::views::preview::render_preview_pane_with_selection(
                                                             self.state.doc.parsed.clone(),
                                                             theme,
                                                             strings,
@@ -1957,6 +2061,7 @@ impl Render for WorkspaceView {
                                                             copied_code_hash,
                                                             Some(on_copy),
                                                             Some(on_open_lightbox.clone()),
+                                                            self.preview_selection,
                                                         )),
                                                 )
                                                 .into_any_element(),
@@ -2080,6 +2185,36 @@ pub fn adaptive_header_padding(is_macos: bool, is_fullscreen: bool, drawer_open:
         12.0
     } else {
         76.0
+    }
+}
+
+/// Computes the exact title left padding according to Phase H specification:
+/// - Collapsed drawer: maintains traffic light clearance (76px normal on macOS)
+/// - Source / Split mode: aligns title with editor text start (EDITOR_TEXT_START_OFFSET = 68.0px)
+/// - Preview mode: aligns title with centered reading column
+pub fn calculate_title_header_padding(
+    is_macos: bool,
+    is_fullscreen: bool,
+    drawer_open: bool,
+    view_mode: ViewMode,
+    viewport_width: f32,
+    max_column_width: f32,
+) -> f32 {
+    if !drawer_open {
+        adaptive_header_padding(is_macos, is_fullscreen, false)
+    } else {
+        match view_mode {
+            ViewMode::Source | ViewMode::Split => {
+                crate::views::editor::EDITOR_TEXT_START_OFFSET - 8.0
+            }
+            ViewMode::Preview => {
+                let drawer_w = crate::views::editor::DRAWER_WIDTH;
+                let available_w = (viewport_width - drawer_w).max(0.0);
+                let col_w = max_column_width;
+                let left_margin = ((available_w - col_w) * 0.5).max(32.0);
+                (left_margin - 8.0).max(8.0)
+            }
+        }
     }
 }
 

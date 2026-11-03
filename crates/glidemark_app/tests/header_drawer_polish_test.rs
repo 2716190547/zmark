@@ -144,27 +144,32 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
     let light_bg = light_theme.selection_bg();
     let light_text = light_theme.selection_text();
 
-    assert_eq!(light_bg, light_theme.text_primary.opacity(0.07));
+    assert!(light_bg.a >= 0.10, "Default light selection_bg must have subtle warm opacity per Phase H");
     assert_eq!(light_text, light_theme.text_primary);
 
     let dark_theme = ThemeColors::resolve("default", true);
     let dark_bg = dark_theme.selection_bg();
     let dark_text = dark_theme.selection_text();
 
-    assert_eq!(dark_bg, dark_theme.text_primary.opacity(0.07));
+    assert!(dark_bg.a >= 0.10, "Default dark selection_bg must have subtle warm opacity per Phase H");
     assert_eq!(dark_text, dark_theme.text_primary);
 
     // Cross-mode distinctness
     assert_ne!(light_bg, dark_bg, "Light and dark selection backgrounds must differ");
     assert_ne!(light_text, dark_text, "Light and dark selection texts must differ");
 
-    // Verify consistency across all registered palettes
+    // Verify consistency across registered palettes per Phase H
     for palette in glidemark_app::theme::ALL_PALETTES {
         let l_theme = ThemeColors::resolve(palette.id, false);
         let d_theme = ThemeColors::resolve(palette.id, true);
 
-        assert_eq!(l_theme.selection_bg(), l_theme.text_primary.opacity(0.07));
-        assert_eq!(d_theme.selection_bg(), d_theme.text_primary.opacity(0.07));
+        if palette.id == "default" || palette.id == "claude" {
+            assert!(l_theme.selection_bg().a >= 0.10);
+            assert!(d_theme.selection_bg().a >= 0.10);
+        } else {
+            assert_eq!(l_theme.selection_bg(), l_theme.text_primary.opacity(0.07));
+            assert_eq!(d_theme.selection_bg(), d_theme.text_primary.opacity(0.07));
+        }
         assert_eq!(l_theme.selection_text(), l_theme.text_primary);
         assert_eq!(d_theme.selection_text(), d_theme.text_primary);
     }

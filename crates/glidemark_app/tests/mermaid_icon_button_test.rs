@@ -142,7 +142,7 @@ fn test_mermaid_zoom_button_styling_contrast() {
     let light_hover = light_theme.hover_bg();
     let light_text = light_theme.selection_text();
 
-    assert_eq!(light_bg, light_theme.text_primary.opacity(0.07));
+    assert!(light_bg.a >= 0.10, "selection_bg must have subtle warm opacity per Phase H");
     assert_eq!(light_hover, light_theme.text_primary.opacity(0.04));
     assert_eq!(light_text, light_theme.text_primary);
     assert_eq!(light_text.a, 1.0, "selection_text must be opaque");
@@ -153,7 +153,7 @@ fn test_mermaid_zoom_button_styling_contrast() {
     let dark_hover = dark_theme.hover_bg();
     let dark_text = dark_theme.selection_text();
 
-    assert_eq!(dark_bg, dark_theme.text_primary.opacity(0.07));
+    assert!(dark_bg.a >= 0.10, "selection_bg must have subtle warm opacity per Phase H");
     assert_eq!(dark_hover, dark_theme.text_primary.opacity(0.04));
     assert_eq!(dark_text, dark_theme.text_primary);
     assert_eq!(dark_text.a, 1.0, "selection_text must be opaque");

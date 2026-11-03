@@ -66,9 +66,27 @@ impl HslaExt for Hsla {
 }
 
 impl ThemeColors {
-    /// Adaptive selection background: neutral translucent tint
+    /// Adaptive selection background:
+    /// In default and claude palettes, slightly warm-tinted selection background per Phase H specification.
+    /// In other palettes, retain their native neutral translucent tint.
     pub fn selection_bg(&self) -> Hsla {
-        self.text_primary.opacity(0.07)
+        match self.id {
+            "default" => {
+                if self.is_dark {
+                    Hsla { h: 32.0 / 360.0, s: 0.35, l: 0.60, a: 0.16 }
+                } else {
+                    Hsla { h: 38.0 / 360.0, s: 0.45, l: 0.50, a: 0.12 }
+                }
+            }
+            "claude" => {
+                if self.is_dark {
+                    Hsla { h: 35.0 / 360.0, s: 0.45, l: 0.60, a: 0.18 }
+                } else {
+                    Hsla { h: 35.0 / 360.0, s: 0.55, l: 0.50, a: 0.14 }
+                }
+            }
+            _ => self.text_primary.opacity(0.07),
+        }
     }
 
     /// Adaptive hover background: subtle translucent highlight

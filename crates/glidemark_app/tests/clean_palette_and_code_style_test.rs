@@ -22,10 +22,9 @@ fn test_default_palette_neutral_colors() {
         rgb(0xf6f8fa).into(),
         "Default light code_bg must be #f6f8fa (Clean cool light gray)"
     );
-    assert_eq!(
-        light.selection_bg(),
-        light.text_primary.opacity(0.07),
-        "Default light selection_bg must be text_primary.opacity(0.07)"
+    assert!(
+        light.selection_bg().a >= 0.10,
+        "Default light selection_bg must have subtle warm opacity per Phase H"
     );
     assert_eq!(
         light.selection_text(),
@@ -213,12 +212,20 @@ fn test_ticket_g0_selection_tokens() {
             let hov_bg = theme.hover_bg();
             let sel_txt = theme.selection_text();
 
-            assert_eq!(
-                sel_bg,
-                theme.text_primary.opacity(0.07),
-                "selection_bg must derive text_primary.opacity(0.07) for {} (is_dark={})",
-                palette.id, is_dark
-            );
+            if palette.id == "default" || palette.id == "claude" {
+                assert!(
+                    sel_bg.a >= 0.10,
+                    "selection_bg must have subtle warm opacity for {} (is_dark={})",
+                    palette.id, is_dark
+                );
+            } else {
+                assert_eq!(
+                    sel_bg,
+                    theme.text_primary.opacity(0.07),
+                    "selection_bg must derive text_primary.opacity(0.07) for {} (is_dark={})",
+                    palette.id, is_dark
+                );
+            }
             assert_eq!(
                 hov_bg,
                 theme.text_primary.opacity(0.04),

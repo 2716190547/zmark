@@ -163,6 +163,12 @@ pub struct I18nStrings {
     pub lightbox_reset: &'static str,
     pub lightbox_fit_window: &'static str,
     pub lightbox_close: &'static str,
+    pub status_line: &'static str,
+    pub status_col: &'static str,
+    pub search_placeholder: &'static str,
+    pub search_no_results: &'static str,
+    pub search_scanning: &'static str,
+    pub search_incomplete: &'static str,
 }
 
 pub fn localize_palette_name<'a>(id: &'a str, strings: &'a I18nStrings) -> &'a str {
@@ -286,6 +292,12 @@ static ZH_CN: I18nStrings = I18nStrings {
     lightbox_reset: "重置",
     lightbox_fit_window: "适应窗口",
     lightbox_close: "关闭灯箱",
+    status_line: "行",
+    status_col: "列",
+    search_placeholder: "搜索文件...",
+    search_no_results: "无匹配文件",
+    search_scanning: "正在搜索...",
+    search_incomplete: "结果可能不完整",
 };
 
 static ZH_TW: I18nStrings = I18nStrings {
@@ -380,6 +392,12 @@ static ZH_TW: I18nStrings = I18nStrings {
     lightbox_reset: "重設",
     lightbox_fit_window: "符合視窗",
     lightbox_close: "關閉燈箱",
+    status_line: "行",
+    status_col: "列",
+    search_placeholder: "搜尋檔案...",
+    search_no_results: "無符合檔案",
+    search_scanning: "正在搜尋...",
+    search_incomplete: "結果可能不完整",
 };
 
 static EN: I18nStrings = I18nStrings {
@@ -474,6 +492,12 @@ static EN: I18nStrings = I18nStrings {
     lightbox_reset: "Reset",
     lightbox_fit_window: "Fit to Window",
     lightbox_close: "Close Lightbox",
+    status_line: "Ln",
+    status_col: "Col",
+    search_placeholder: "Search files...",
+    search_no_results: "No matching files",
+    search_scanning: "Searching...",
+    search_incomplete: "Results may be incomplete",
 };
 
 static JA: I18nStrings = I18nStrings {
@@ -568,6 +592,12 @@ static JA: I18nStrings = I18nStrings {
     lightbox_reset: "リセット",
     lightbox_fit_window: "ウィンドウに合わせる",
     lightbox_close: "ライトボックスを閉じる",
+    status_line: "行",
+    status_col: "列",
+    search_placeholder: "ファイルを検索...",
+    search_no_results: "一致するファイルがありません",
+    search_scanning: "検索中...",
+    search_incomplete: "結果が不完全な可能性があります",
 };
 
 static KO: I18nStrings = I18nStrings {
@@ -662,6 +692,12 @@ static KO: I18nStrings = I18nStrings {
     lightbox_reset: "재설정",
     lightbox_fit_window: "창에 맞추기",
     lightbox_close: "라이트박스 닫기",
+    status_line: "줄",
+    status_col: "열",
+    search_placeholder: "파일 검색...",
+    search_no_results: "일치하는 파일 없음",
+    search_scanning: "검색 중...",
+    search_incomplete: "결과가 불완전할 수 있습니다",
 };
 
 static FR: I18nStrings = I18nStrings {
@@ -756,6 +792,12 @@ static FR: I18nStrings = I18nStrings {
     lightbox_reset: "Réinitialiser",
     lightbox_fit_window: "Adapter à la fenêtre",
     lightbox_close: "Fermer la visionneuse",
+    status_line: "Lg",
+    status_col: "Col",
+    search_placeholder: "Rechercher des fichiers...",
+    search_no_results: "Aucun fichier correspondant",
+    search_scanning: "Recherche en cours...",
+    search_incomplete: "Résultats potentiellement incomplets",
 };
 
 static DE: I18nStrings = I18nStrings {
@@ -850,6 +892,12 @@ static DE: I18nStrings = I18nStrings {
     lightbox_reset: "Zurücksetzen",
     lightbox_fit_window: "An Fenster anpassen",
     lightbox_close: "Lightbox schließen",
+    status_line: "Zl",
+    status_col: "Sp",
+    search_placeholder: "Dateien suchen...",
+    search_no_results: "Keine übereinstimmenden Dateien",
+    search_scanning: "Suche läuft...",
+    search_incomplete: "Ergebnisse möglicherweise unvollständig",
 };
 
 static ES: I18nStrings = I18nStrings {
@@ -944,6 +992,12 @@ static ES: I18nStrings = I18nStrings {
     lightbox_reset: "Restablecer",
     lightbox_fit_window: "Ajustar a la ventana",
     lightbox_close: "Cerrar caja de luz",
+    status_line: "Lín",
+    status_col: "Col",
+    search_placeholder: "Buscar archivos...",
+    search_no_results: "No hay archivos coincidentes",
+    search_scanning: "Buscando...",
+    search_incomplete: "Los resultados pueden ser incompletos",
 };
 
 static RU: I18nStrings = I18nStrings {
@@ -1038,6 +1092,12 @@ static RU: I18nStrings = I18nStrings {
     lightbox_reset: "Сброс",
     lightbox_fit_window: "По размеру окна",
     lightbox_close: "Закрыть просмотр",
+    status_line: "Стр",
+    status_col: "Кол",
+    search_placeholder: "Поиск файлов...",
+    search_no_results: "Нет совпадающих файлов",
+    search_scanning: "Поиск...",
+    search_incomplete: "Результаты могут быть неполными",
 };
 
 static PT: I18nStrings = I18nStrings {
@@ -1132,4 +1192,10 @@ static PT: I18nStrings = I18nStrings {
     lightbox_reset: "Redefinir",
     lightbox_fit_window: "Ajustar à janela",
     lightbox_close: "Fechar caixa de luz",
+    status_line: "Lin",
+    status_col: "Col",
+    search_placeholder: "Pesquisar arquivos...",
+    search_no_results: "Nenhum arquivo correspondente",
+    search_scanning: "Pesquisando...",
+    search_incomplete: "Resultados podem estar incompletos",
 };

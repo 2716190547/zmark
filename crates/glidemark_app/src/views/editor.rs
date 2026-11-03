@@ -699,6 +699,7 @@ pub fn render_editor_pane(
     visual_lines: Arc<Vec<VisualLine>>,
     cursor: (usize, usize),
     theme: &ThemeColors,
+    strings: &'static glidemark_core::i18n::I18nStrings,
     font_size: f32,
     line_height: f32,
     is_dirty: bool,
@@ -859,12 +860,12 @@ pub fn render_editor_pane(
                 .border_1()
                 .border_color(theme.border)
                 .text_size(px(10.))
-                .font_family("ui-monospace")
+                .font_family("ui-sans-serif, system-ui")
                 .text_color(theme.text_muted)
                 .when(is_dirty, |el| {
                     el.child(div().w(px(5.)).h(px(5.)).rounded_full().bg(theme.accent))
                 })
-                .child(format!("Ln {}, Col {}", cursor_line + 1, cursor_col + 1)),
+                .child(format!("{} {}, {} {}", strings.status_line, cursor_line + 1, strings.status_col, cursor_col + 1)),
         )
 }
 
