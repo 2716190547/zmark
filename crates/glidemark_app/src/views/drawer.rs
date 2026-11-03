@@ -583,11 +583,7 @@ impl Render for SearchInput {
                         cx.notify();
                         cx.stop_propagation();
                     }
-                    _ => {
-                        if !mods.platform && !mods.control {
-                            cx.stop_propagation();
-                        }
-                    }
+                    _ => {}
                 }
             }))
             .child(SearchInputElement {

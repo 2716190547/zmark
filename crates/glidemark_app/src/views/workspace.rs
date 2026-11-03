@@ -43,6 +43,7 @@ pub struct WorkspaceView {
     pub search_input: Option<Entity<crate::views::drawer::SearchInput>>,
     pub preview_selection: Option<crate::views::preview::PreviewSelectionRange>,
     pub is_preview_selecting: bool,
+    pub document_layout_cache: crate::views::editor::DocumentLayoutCache,
     pub cached_visual_rev: usize,
     pub cached_visual_width_bits: u64,
     pub cached_visual_font_bits: u32,
@@ -98,6 +99,7 @@ impl WorkspaceView {
             search_input: Some(search_input),
             preview_selection: None,
             is_preview_selecting: false,
+            document_layout_cache: crate::views::editor::DocumentLayoutCache::new(),
             cached_visual_rev: usize::MAX,
             cached_visual_width_bits: 0,
             cached_visual_font_bits: 0,
@@ -217,7 +219,7 @@ impl WorkspaceView {
             return self.cached_visual_lines.clone();
         }
 
-        let lines = crate::views::editor::wrap_document_to_visual_layout(
+        let lines = self.document_layout_cache.update(
             window.text_system(),
             &self.state.editor.lines,
             max_width_px,
@@ -274,7 +276,7 @@ impl WorkspaceView {
     }
 
     /// Synchronizes preview wheel scrolling to the editor pane with 100ms echo suppression.
-    pub fn handle_preview_scroll_wheel(&mut self, _event: &ScrollWheelEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn handle_preview_scroll_wheel(&mut self, _event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.state.view_mode != ViewMode::Split || self.state.doc.is_parse_stale() || self.state.doc.parsed.anchors.is_empty() {
             return;
         }
@@ -289,8 +291,16 @@ impl WorkspaceView {
         let top_block = self.preview_list.logical_scroll_top().item_ix;
         let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc.parsed.anchors.clone());
         let target_line = map.preview_to_source_line(top_block, 0.0);
+        let phys_line_idx = target_line.saturating_sub(1);
+
+        let visual_lines = self.compute_visual_lines(window);
+        let target_vis_idx = visual_lines
+            .iter()
+            .position(|vl| vl.physical_line_idx == phys_line_idx)
+            .unwrap_or_else(|| visual_lines.len().saturating_sub(1));
+
         self.editor_scroll_handle.scroll_to_item_strict(
-            target_line.saturating_sub(1),
+            target_vis_idx,
             ScrollStrategy::Top,
         );
         cx.notify();
@@ -330,6 +340,16 @@ impl WorkspaceView {
         }
         self.state.set_view_mode(mode);
         cx.notify();
+    }
+
+    pub fn on_editor_click_line(&mut self, vis_idx: usize, vis_col: usize, window: &mut Window) {
+        window.focus(&self.focus_handle);
+        self.search_focused = false;
+        let vl = self.compute_visual_lines(window);
+        let (phys_line, phys_col) = crate::editor_engine::visual_to_physical(vis_idx, vis_col, &vl);
+        self.state.editor.set_cursor(phys_line, phys_col);
+        self.preview_selection = None;
+        self.is_preview_selecting = false;
     }
 
     pub fn theme(&self, _cx: &App) -> &crate::theme::ThemeColors {
@@ -1171,13 +1191,9 @@ impl Render for WorkspaceView {
         let parse_paused = self.parse_paused;
 
         let view_click = cx.entity().clone();
-        let vl_for_click = visual_lines.clone();
-        let on_click_line = Arc::new(move |vis_idx: usize, vis_col: usize, _window: &mut Window, cx: &mut App| {
+        let on_click_line = Arc::new(move |vis_idx: usize, vis_col: usize, window: &mut Window, cx: &mut App| {
             view_click.update(cx, |this, cx| {
-                let (phys_line, phys_col) = crate::editor_engine::visual_to_physical(vis_idx, vis_col, &vl_for_click);
-                this.state.editor.set_cursor(phys_line, phys_col);
-                this.preview_selection = None;
-                this.is_preview_selecting = false;
+                this.on_editor_click_line(vis_idx, vis_col, window);
                 cx.notify();
             });
         });
@@ -1484,7 +1500,15 @@ impl Render for WorkspaceView {
                     }
                 }
 
-                if this.search_focused {
+                let search_is_focused = this
+                    .search_input
+                    .as_ref()
+                    .map(|si| si.read(cx).focus_handle.is_focused(window))
+                    .unwrap_or(false);
+                let search_active = search_is_focused || (this.search_focused && !this.focus_handle.is_focused(window));
+                this.search_focused = search_active;
+
+                if search_active {
                     let key = event.keystroke.key.as_str();
                     let mods = event.keystroke.modifiers;
                     if mods.platform && (key == "c" || key == "C") {
@@ -1502,10 +1526,12 @@ impl Render for WorkspaceView {
                                     inp.clear(cx);
                                 });
                             }
+                            window.focus(&this.focus_handle);
                             cx.notify();
                         }
                         "enter" => {
                             this.search_focused = false;
+                            window.focus(&this.focus_handle);
                             cx.notify();
                         }
                         _ => {}
@@ -2051,6 +2077,11 @@ impl Render for WorkspaceView {
                                         match view_mode {
                                             ViewMode::Source => div()
                                                 .size_full()
+                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                    window.focus(&this.focus_handle);
+                                                    this.search_focused = false;
+                                                    cx.notify();
+                                                }))
                                                 .child(render_editor_pane(
                                                     self.state.editor.lines.clone(),
                                                     visual_lines.clone(),
@@ -2095,6 +2126,11 @@ impl Render for WorkspaceView {
                                                         .flex()
                                                         .flex_col()
                                                         .overflow_hidden()
+                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                            window.focus(&this.focus_handle);
+                                                            this.search_focused = false;
+                                                            cx.notify();
+                                                        }))
                                                         .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
                                                             this.handle_editor_scroll_wheel(event, window, cx);
                                                         }))
