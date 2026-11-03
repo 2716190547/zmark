@@ -538,8 +538,8 @@ impl WorkspaceView {
             cache.get(&(code_hash, is_dark, scale_bucket))
         };
 
-        let hidpi_res = if let Some(path) = cached_path.filter(|p| p.exists()) {
-            std::fs::read_to_string(&path).ok().map(|content| (path, content))
+        let hidpi_path = if let Some(path) = cached_path.filter(|p| p.exists()) {
+            Some(path)
         } else {
             if let Ok(orig_svg) = std::fs::read_to_string(&actual_svg_path) {
                 let (orig_w, orig_h) = glidemark_core::mermaid::extract_svg_dimensions(&orig_svg);
@@ -561,15 +561,14 @@ impl WorkspaceView {
                     let mut cache = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE.lock().unwrap();
                     cache.insert((code_hash, is_dark, scale_bucket), out_path.clone());
                 }
-                Some((out_path, hidpi_svg))
+                Some(out_path)
             } else {
                 None
             }
         };
 
-        if let Some((hidpi_path, hidpi_svg)) = hidpi_res {
-            let img = Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Svg, hidpi_svg.into_bytes()));
-            if let Some(evicted) = self.lightbox.open_hidpi(actual_svg_path, hidpi_path, img, code_hash) {
+        if let Some(hidpi_path) = hidpi_path {
+            if let Some(evicted) = self.lightbox.open_hidpi(actual_svg_path, hidpi_path, code_hash) {
                 crate::views::lightbox::release_lightbox_image(evicted, window, cx);
             }
         } else {

@@ -1,13 +1,13 @@
 use glidemark_app::state::AppState;
 use glidemark_app::views::lightbox::{
-    release_lightbox_image, LightboxDiagramCache, LightboxState, TEST_DROP_IMAGE_COUNT,
-    TEST_RELEASE_CALL_COUNT,
+    release_lightbox_image, LightboxDiagramCache, LightboxImageHandle, LightboxState,
+    TEST_DROP_IMAGE_COUNT, TEST_RELEASE_CALL_COUNT,
 };
 use glidemark_app::views::workspace::{resolve_lightbox_svg_path, WorkspaceView};
 use glidemark_core::mermaid::{
     apply_texture_pixel_budget, calculate_hidpi_dimensions, scale_factor_to_bucket,
 };
-use gpui::{Image, ImageFormat, TestAppContext};
+use gpui::{Image, ImageFormat, ImgResourceLoader, Resource, TestAppContext};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -162,24 +162,22 @@ fn test_lightbox_state_lifecycle_and_image_release() {
     // Open HiDPI
     let svg_path = PathBuf::from("/tmp/original.svg");
     let hidpi_path = PathBuf::from("/tmp/hidpi.svg");
-    let image = Arc::new(Image::from_bytes(ImageFormat::Svg, b"<svg id=\"1\"/>".to_vec()));
 
     state.open_hidpi(
         svg_path.clone(),
         hidpi_path.clone(),
-        image.clone(),
         9999,
     );
     assert!(state.is_open);
     assert_eq!(state.svg_path, Some(svg_path));
-    assert_eq!(state.hidpi_svg_path, Some(hidpi_path));
-    assert_eq!(state.hidpi_image, Some(image.clone()));
+    assert_eq!(state.hidpi_svg_path, Some(hidpi_path.clone()));
+    assert_eq!(state.hidpi_image, None);
     assert_eq!(state.code_hash, Some(9999));
     assert_eq!(state.zoom, 1.0);
 
-    // First close returns old image
+    // First close returns old handle
     let closed_img = state.close();
-    assert_eq!(closed_img, Some(image));
+    assert_eq!(closed_img, Some(LightboxImageHandle::Path(hidpi_path)));
     assert!(!state.is_open);
     assert_eq!(state.hidpi_svg_path, None);
     assert_eq!(state.hidpi_image, None);
@@ -200,48 +198,45 @@ fn test_document_swapped_and_open_paths_release_vram_safely() {
     // 2. Open HiDPI image 1
     let svg1 = PathBuf::from("/tmp/doc1_diagram.svg");
     let hidpi1 = PathBuf::from("/tmp/doc1_hidpi.svg");
-    let img1 = Arc::new(Image::from_bytes(ImageFormat::Svg, b"<svg id=\"doc1\"/>".to_vec()));
-    let evicted0 = state.open_hidpi(svg1.clone(), hidpi1.clone(), img1.clone(), 101);
+    let evicted0 = state.open_hidpi(svg1.clone(), hidpi1.clone(), 101);
     assert_eq!(evicted0, None, "Initial open_hidpi should have no evicted image");
-    assert_eq!(state.hidpi_image, Some(img1.clone()));
+    assert_eq!(state.hidpi_svg_path, Some(hidpi1.clone()));
 
     // 3. Open another diagram (or plain open) without explicit close:
-    // Must return img1 so the caller can invoke image.remove_asset(cx)
+    // Must return hidpi1 so the caller can invoke release
     let svg2 = PathBuf::from("/tmp/doc2_diagram.svg");
     let evicted1 = state.open(svg2.clone(), 102);
     assert_eq!(
         evicted1,
-        Some(img1.clone()),
+        Some(LightboxImageHandle::Path(hidpi1)),
         "Calling open() while holding a HiDPI image must return the previous image for release"
     );
-    assert_eq!(state.hidpi_image, None);
+    assert_eq!(state.hidpi_svg_path, None);
 
     // 4. Open HiDPI image 2
     let hidpi2 = PathBuf::from("/tmp/doc2_hidpi.svg");
-    let img2 = Arc::new(Image::from_bytes(ImageFormat::Svg, b"<svg id=\"doc2\"/>".to_vec()));
-    let evicted2 = state.open_hidpi(svg2.clone(), hidpi2.clone(), img2.clone(), 102);
-    assert_eq!(evicted2, None);
-    assert_eq!(state.hidpi_image, Some(img2.clone()));
+    let evicted2 = state.open_hidpi(svg2.clone(), hidpi2.clone(), 102);
+    assert_eq!(evicted2, Some(LightboxImageHandle::Path(svg2)));
+    assert_eq!(state.hidpi_svg_path, Some(hidpi2.clone()));
 
     // 5. Open HiDPI image 3 while image 2 is active:
-    // Must return img2 so the caller can invoke image.remove_asset(cx)
+    // Must return hidpi2 so the caller can invoke release
     let svg3 = PathBuf::from("/tmp/doc3_diagram.svg");
     let hidpi3 = PathBuf::from("/tmp/doc3_hidpi.svg");
-    let img3 = Arc::new(Image::from_bytes(ImageFormat::Svg, b"<svg id=\"doc3\"/>".to_vec()));
-    let evicted3 = state.open_hidpi(svg3.clone(), hidpi3.clone(), img3.clone(), 103);
+    let evicted3 = state.open_hidpi(svg3.clone(), hidpi3.clone(), 103);
     assert_eq!(
         evicted3,
-        Some(img2),
+        Some(LightboxImageHandle::Path(hidpi2)),
         "Calling open_hidpi() while holding another HiDPI image must return the old image for release"
     );
-    assert_eq!(state.hidpi_image, Some(img3.clone()));
+    assert_eq!(state.hidpi_svg_path, Some(hidpi3.clone()));
 
     // 6. Document swapped simulation:
     // When document is swapped, close_lightbox() calls state.close()
     let swapped_evicted = state.close();
     assert_eq!(
         swapped_evicted,
-        Some(img3),
+        Some(LightboxImageHandle::Path(hidpi3)),
         "Document swapped must release the active HiDPI image for release"
     );
     assert!(!state.is_open);
@@ -330,19 +325,22 @@ async fn test_workspace_lightbox_three_paths_release_vram_and_atlas(cx: &mut Tes
     let drops_before = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
     let releases_before = TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst);
 
-    let img_p1 = cx.update(|window, app| {
+    let path_p1 = cx.update(|window, app| {
         view.update(app, |ws, cx| {
             ws.open_lightbox(sample_svg.clone(), 1001, window, cx);
             cx.notify();
         });
-        view.read(app).lightbox.hidpi_image.clone().expect("hidpi_image must be open")
+        let _ = window.draw(app);
+        view.read(app).lightbox.displayed_path().cloned().expect("path must be open")
     });
 
     // Run layout & paint of WorkspaceView (which renders the open lightbox img element)
     cx.run_until_parked();
 
     cx.update(|window, app| {
-        assert!(img_p1.clone().get_render_image(window, app).is_some());
+        let _ = window.draw(app);
+        let res = Resource::Path(Arc::from(path_p1.as_path()));
+        assert!(window.get_asset::<ImgResourceLoader>(&res, app).is_some());
 
         // Call close_lightbox
         view.update(app, |ws, cx| {
@@ -353,24 +351,27 @@ async fn test_workspace_lightbox_three_paths_release_vram_and_atlas(cx: &mut Tes
         assert!(!view.read(app).lightbox.is_open);
         assert_eq!(TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst), releases_before + 1);
         assert_eq!(TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst), drops_before + 1);
-        assert!(img_p1.clone().get_render_image(window, app).is_none());
+        assert!(window.get_asset::<ImgResourceLoader>(&res, app).is_none());
     });
 
     // Path 2: open_lightbox replacement at top
     let drops_before = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
     let releases_before = TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst);
 
-    let img_p2a = cx.update(|window, app| {
+    let path_p2a = cx.update(|window, app| {
         view.update(app, |ws, cx| {
             ws.open_lightbox(sample_svg.clone(), 1002, window, cx);
             cx.notify();
         });
-        view.read(app).lightbox.hidpi_image.clone().expect("hidpi_image 1002 must be open")
+        let _ = window.draw(app);
+        view.read(app).lightbox.displayed_path().cloned().expect("path 1002 must be open")
     });
     cx.run_until_parked();
 
     cx.update(|window, app| {
-        assert!(img_p2a.clone().get_render_image(window, app).is_some());
+        let _ = window.draw(app);
+        let res2a = Resource::Path(Arc::from(path_p2a.as_path()));
+        assert!(window.get_asset::<ImgResourceLoader>(&res2a, app).is_some());
 
         // Open another diagram while 1002 is still open:
         // Top of open_lightbox must close and release 1002!
@@ -380,20 +381,23 @@ async fn test_workspace_lightbox_three_paths_release_vram_and_atlas(cx: &mut Tes
         });
         assert_eq!(TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst), releases_before + 1);
         assert_eq!(TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst), drops_before + 1);
-        assert!(img_p2a.clone().get_render_image(window, app).is_none());
+        assert!(window.get_asset::<ImgResourceLoader>(&res2a, app).is_none());
     });
 
     // Path 3: on_document_swapped (with Some(window))
     let drops_before = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
     let releases_before = TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst);
 
-    let img_p3 = cx.update(|_window, app| {
-        view.read(app).lightbox.hidpi_image.clone().expect("hidpi_image 1003 must be open")
+    let path_p3 = cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.read(app).lightbox.displayed_path().cloned().expect("path 1003 must be open")
     });
     cx.run_until_parked();
 
     cx.update(|window, app| {
-        assert!(img_p3.clone().get_render_image(window, app).is_some());
+        let _ = window.draw(app);
+        let res3 = Resource::Path(Arc::from(path_p3.as_path()));
+        assert!(window.get_asset::<ImgResourceLoader>(&res3, app).is_some());
 
         view.update(app, |ws, cx| {
             ws.on_document_swapped(Some(window), cx);
@@ -402,24 +406,27 @@ async fn test_workspace_lightbox_three_paths_release_vram_and_atlas(cx: &mut Tes
         assert!(!view.read(app).lightbox.is_open);
         assert_eq!(TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst), releases_before + 1);
         assert_eq!(TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst), drops_before + 1);
-        assert!(img_p3.clone().get_render_image(window, app).is_none());
+        assert!(window.get_asset::<ImgResourceLoader>(&res3, app).is_none());
     });
 
     // Path 4: on_document_swapped (with None, using window_handle)
     let drops_before = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
     let releases_before = TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst);
 
-    let img_p4 = cx.update(|window, app| {
+    let path_p4 = cx.update(|window, app| {
         view.update(app, |ws, cx| {
             ws.open_lightbox(sample_svg.clone(), 1004, window, cx);
             cx.notify();
         });
-        view.read(app).lightbox.hidpi_image.clone().expect("hidpi_image 1004 must be open")
+        let _ = window.draw(app);
+        view.read(app).lightbox.displayed_path().cloned().expect("path 1004 must be open")
     });
     cx.run_until_parked();
 
     cx.update(|window, app| {
-        assert!(img_p4.clone().get_render_image(window, app).is_some());
+        let _ = window.draw(app);
+        let res4 = Resource::Path(Arc::from(path_p4.as_path()));
+        assert!(window.get_asset::<ImgResourceLoader>(&res4, app).is_some());
     });
 
     // Simulate async prompt return: view.update on AppContext without holding window
@@ -428,10 +435,11 @@ async fn test_workspace_lightbox_three_paths_release_vram_and_atlas(cx: &mut Tes
     });
 
     cx.update(|window, app| {
+        let res4 = Resource::Path(Arc::from(path_p4.as_path()));
         assert!(!view.read(app).lightbox.is_open);
         assert_eq!(TEST_RELEASE_CALL_COUNT.load(Ordering::SeqCst), releases_before + 1);
         assert_eq!(TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst), drops_before + 1);
-        assert!(img_p4.clone().get_render_image(window, app).is_none());
+        assert!(window.get_asset::<ImgResourceLoader>(&res4, app).is_none());
     });
 
     let _ = std::fs::remove_file(sample_svg);

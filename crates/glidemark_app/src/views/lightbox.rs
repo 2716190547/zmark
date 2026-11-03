@@ -76,18 +76,78 @@ pub fn drop_image_from_atlas(cx: &mut App, render_image: Arc<gpui::RenderImage>,
     TEST_DROP_IMAGE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum LightboxImageHandle {
+    Path(PathBuf),
+    Image(Arc<gpui::Image>),
+}
+
+impl From<PathBuf> for LightboxImageHandle {
+    fn from(p: PathBuf) -> Self {
+        Self::Path(p)
+    }
+}
+
+impl From<&PathBuf> for LightboxImageHandle {
+    fn from(p: &PathBuf) -> Self {
+        Self::Path(p.clone())
+    }
+}
+
+impl From<&std::path::Path> for LightboxImageHandle {
+    fn from(p: &std::path::Path) -> Self {
+        Self::Path(p.to_path_buf())
+    }
+}
+
+impl From<Arc<gpui::Image>> for LightboxImageHandle {
+    fn from(img: Arc<gpui::Image>) -> Self {
+        Self::Image(img)
+    }
+}
+
+impl LightboxImageHandle {
+    pub fn remove_asset(&self, cx: &mut App) {
+        match self {
+            LightboxImageHandle::Path(path) => {
+                let resource = gpui::Resource::Path(std::sync::Arc::from(path.as_path()));
+                cx.remove_asset::<gpui::ImgResourceLoader>(&resource);
+            }
+            LightboxImageHandle::Image(img) => {
+                img.clone().remove_asset(cx);
+            }
+        }
+    }
+}
+
 /// Unified release function for lightbox images:
-/// 1. Retrieves cached `RenderImage` without triggering load via `get_render_image(window, cx)`.
+/// 1. If a file resource, retrieves cached `RenderImage` via `window.get_asset::<ImgResourceLoader>`.
+///    If an Image handle, retrieves cached `RenderImage` via `get_render_image(window, cx)`.
 /// 2. If present, calls `drop_image_from_atlas(cx, render, window)` to remove GPU texture from sprite atlas.
-/// 3. Calls `img.remove_asset(cx)` to purge from loading assets cache.
-pub fn release_lightbox_image(img: Arc<gpui::Image>, window: &mut Window, cx: &mut App) {
+/// 3. Purges from loading assets cache via `cx.remove_asset`.
+pub fn release_lightbox_image(
+    handle: impl Into<LightboxImageHandle>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     #[cfg(any(test, debug_assertions))]
     TEST_RELEASE_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-    if let Some(render_image) = img.clone().get_render_image(window, cx) {
-        drop_image_from_atlas(cx, render_image, window);
+    match handle.into() {
+        LightboxImageHandle::Path(path) => {
+            let resource = gpui::Resource::Path(std::sync::Arc::from(path.as_path()));
+            if let Some(Ok(render_image)) = window.get_asset::<gpui::ImgResourceLoader>(&resource, cx) {
+                drop_image_from_atlas(cx, render_image, window);
+            }
+            cx.remove_asset::<gpui::ImgResourceLoader>(&resource);
+        }
+        LightboxImageHandle::Image(img) => {
+            if let Some(render_image) = img.clone().get_render_image(window, cx) {
+                drop_image_from_atlas(cx, render_image, window);
+            }
+            img.remove_asset(cx);
+        }
     }
-    img.remove_asset(cx);
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -128,11 +188,26 @@ impl LightboxState {
         }
     }
 
-    pub fn open(&mut self, svg_path: PathBuf, code_hash: u64) -> Option<Arc<gpui::Image>> {
-        let old_img = self.hidpi_image.take();
+    pub fn displayed_path(&self) -> Option<&PathBuf> {
+        self.hidpi_svg_path.as_ref().or(self.svg_path.as_ref())
+    }
+
+    pub fn current_handle(&self) -> Option<LightboxImageHandle> {
+        if let Some(path) = self.displayed_path() {
+            Some(LightboxImageHandle::Path(path.clone()))
+        } else if let Some(ref img) = self.hidpi_image {
+            Some(LightboxImageHandle::Image(img.clone()))
+        } else {
+            None
+        }
+    }
+
+    pub fn open(&mut self, svg_path: PathBuf, code_hash: u64) -> Option<LightboxImageHandle> {
+        let old = self.current_handle();
         self.is_open = true;
         self.svg_path = Some(svg_path);
         self.hidpi_svg_path = None;
+        self.hidpi_image = None;
         self.code_hash = Some(code_hash);
         self.zoom = 1.0;
         self.pan_x = 0.0;
@@ -140,21 +215,20 @@ impl LightboxState {
         self.is_dragging = false;
         self.drag_start_mouse = None;
         self.drag_start_pan = (0.0, 0.0);
-        old_img
+        old
     }
 
     pub fn open_hidpi(
         &mut self,
         svg_path: PathBuf,
         hidpi_svg_path: PathBuf,
-        image: Arc<gpui::Image>,
         code_hash: u64,
-    ) -> Option<Arc<gpui::Image>> {
-        let old_img = self.hidpi_image.take();
+    ) -> Option<LightboxImageHandle> {
+        let old = self.current_handle();
         self.is_open = true;
         self.svg_path = Some(svg_path);
         self.hidpi_svg_path = Some(hidpi_svg_path);
-        self.hidpi_image = Some(image);
+        self.hidpi_image = None;
         self.code_hash = Some(code_hash);
         self.zoom = 1.0;
         self.pan_x = 0.0;
@@ -162,14 +236,15 @@ impl LightboxState {
         self.is_dragging = false;
         self.drag_start_mouse = None;
         self.drag_start_pan = (0.0, 0.0);
-        old_img
+        old
     }
 
-    pub fn close(&mut self) -> Option<Arc<gpui::Image>> {
+    pub fn close(&mut self) -> Option<LightboxImageHandle> {
+        let old = self.current_handle();
         self.is_open = false;
         self.svg_path = None;
         self.hidpi_svg_path = None;
-        let old_img = self.hidpi_image.take();
+        self.hidpi_image = None;
         self.code_hash = None;
         self.zoom = 1.0;
         self.pan_x = 0.0;
@@ -177,7 +252,7 @@ impl LightboxState {
         self.is_dragging = false;
         self.drag_start_mouse = None;
         self.drag_start_pan = (0.0, 0.0);
-        old_img
+        old
     }
 
     pub fn zoom_in(&mut self) {
@@ -232,7 +307,6 @@ pub fn render_lightbox(
     strings: &'static I18nStrings,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
-    let svg_path = state.svg_path.clone();
     let pan_x = state.pan_x;
     let pan_y = state.pan_y;
     let zoom = state.zoom;
@@ -289,13 +363,13 @@ pub fn render_lightbox(
                     this.lightbox.start_drag(f32::from(event.position.x), f32::from(event.position.y));
                     cx.notify();
                 }))
-                .children(state.hidpi_image.as_ref().map(|handle| {
-                    img(ImageSource::Image(handle.clone()))
+                .children(state.displayed_path().map(|path| {
+                    img(path.clone())
                         .w(px(800.0 * zoom))
                         .max_w(px(800.0 * zoom))
                 }).or_else(|| {
-                    svg_path.map(|path| {
-                        img(path)
+                    state.hidpi_image.as_ref().map(|handle| {
+                        img(ImageSource::Image(handle.clone()))
                             .w(px(800.0 * zoom))
                             .max_w(px(800.0 * zoom))
                     })
