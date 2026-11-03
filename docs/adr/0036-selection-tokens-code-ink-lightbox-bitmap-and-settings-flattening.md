@@ -5,6 +5,8 @@
 
 Phase H 后续变更（2026-11-03）：本 ADR 保留 Phase G 的历史决策。第 1 节默认/Claude 选中色、第 5 节标题统一 16px 对齐及第 7 节侧栏搜索推迟，由 [ADR 0037](0037-real-text-layout-and-virtualized-preview-selection.md) 及其关联验收记录替代；代码墨色、换行、灯箱资源释放、设置搜索删除等其余约定继续有效。
 
+灯箱颜色问题重开（2026-11-03）：Phase I 的实际像素对照已证伪第 4 节“ImageSource::Image 会走 swap_rgba_pa_to_bgra”的假设；GPUI 0.2.2 的 ImageDecoder 仍调用未转换 SVG 通道的 Image::to_image_data。旧修复不能视为解决颜色问题，像素证据及待实施方案见 [Phase I 规划](../plans/phase-i-color-and-media.md)。本条不改变已经核验的纹理释放要求。
+
 ## 上下文 (Context)
 Phase F 交付后，用户提供 4 张标注图（设置页、主窗口两栏、灯箱、妙言参考），提出以下问题：
 

@@ -4,6 +4,8 @@ STATUS: DONE — 独立终验通过，P1:0；含下列明确记录的 P2 与未�
 
 日期：2026-11-03。协调 `w3:p9`、执行 `w3:p8`、审查 `w3:p7`。代码截止 `1f68fa3`，规划依据为 [原规划](phase-h-interaction-and-reading.md) 及 [返工与验收门槛](phase-h-rework-2.md)。未 push、未建 PR、未改写历史。
 
+后续纠正：用户再次反馈灯箱颜色不一致，Phase I 的像素对照确认其仍然存在。下表灯箱项仅代表当时的回归判断，不能作为颜色已修复的证据；该问题已重开，根因见 [Phase I](phase-i-color-and-media.md)。
+
 ## 交付证据
 
 - 默认 `cargo test --workspace`：291 passed / 0 failed，43 个结果行；协调端与审查端均复跑。
