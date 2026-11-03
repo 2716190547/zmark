@@ -3,6 +3,9 @@ name = "glidemark_app"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+test-observation = []
+
 [dependencies]
 glidemark_core = { path = "../glidemark_core" }
 gpui = "0.2.2"
@@ -10,3 +13,21 @@ gpui = "0.2.2"
 [dev-dependencies]
 tempfile = "3.17"
 gpui = { version = "0.2.2", features = ["test-support", "runtime_shaders"] }
+
+[[test]]
+name = "phase_h_b1_real_geometry"
+path = "tests/phase_h_b1_real_geometry.rs"
+required-features = ["test-observation"]
+
+[[test]]
+name = "phase_h_b2_highlight_matches_copy"
+path = "tests/phase_h_b2_highlight_matches_copy.rs"
+required-features = ["test-observation"]
+
+[[test]]
+name = "phase_h_b3_autoscroll_real_events"
+path = "tests/phase_h_b3_autoscroll_real_events.rs"
+
+[[test]]
+name = "phase_h_b4_cmd_c_routing"
+path = "tests/phase_h_b4_cmd_c_routing.rs"

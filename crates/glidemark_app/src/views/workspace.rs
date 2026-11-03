@@ -40,6 +40,7 @@ pub struct WorkspaceView {
     pub window_handle: Option<AnyWindowHandle>,
     pub error_banner: Option<String>,
     pub search_focused: bool,
+    pub preview_focused: bool,
     pub search_input: Option<Entity<crate::views::drawer::SearchInput>>,
     pub preview_selection: Option<crate::views::preview::PreviewSelectionRange>,
     pub is_preview_selecting: bool,
@@ -51,6 +52,7 @@ pub struct WorkspaceView {
     pub cached_visual_width_bits: u64,
     pub cached_visual_font_bits: u32,
     pub cached_visual_lines: Arc<Vec<crate::editor_engine::VisualLine>>,
+    pub rendered_regions: Arc<crate::views::preview::RegionsRegistry>,
 }
 
 impl WorkspaceView {
@@ -99,6 +101,7 @@ impl WorkspaceView {
             window_handle: None,
             error_banner: None,
             search_focused: false,
+            preview_focused: false,
             search_input: Some(search_input),
             preview_selection: None,
             is_preview_selecting: false,
@@ -110,6 +113,7 @@ impl WorkspaceView {
             cached_visual_width_bits: 0,
             cached_visual_font_bits: 0,
             cached_visual_lines: Arc::new(Vec::new()),
+            rendered_regions: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -117,9 +121,11 @@ impl WorkspaceView {
     pub fn reset_preview_list(&mut self) {
         self.preview_selection = None;
         self.is_preview_selecting = false;
+        self.preview_focused = false;
         self.preview_autoscroll_task = None;
         self.preview_mouse_window_pos = None;
         self.preview_list.reset(self.state.doc.parsed.blocks.len());
+        self.rendered_regions.lock().unwrap().clear();
     }
 
     pub fn update_search_query(&mut self, query: &str, cx: &mut Context<Self>) {
@@ -348,6 +354,7 @@ impl WorkspaceView {
         }
         self.preview_selection = None;
         self.is_preview_selecting = false;
+        self.preview_focused = false;
         self.preview_autoscroll_task = None;
         self.preview_mouse_window_pos = None;
         self.state.set_view_mode(mode);
@@ -357,6 +364,7 @@ impl WorkspaceView {
     pub fn on_editor_click_line(&mut self, vis_idx: usize, vis_col: usize, window: &mut Window) {
         window.focus(&self.focus_handle);
         self.search_focused = false;
+        self.preview_focused = false;
         let vl = self.compute_visual_lines(window);
         let (phys_line, phys_col) = crate::editor_engine::visual_to_physical(vis_idx, vis_col, &vl);
         self.state.editor.set_cursor(phys_line, phys_col);
@@ -369,40 +377,74 @@ impl WorkspaceView {
     pub fn step_preview_autoscroll(
         &mut self,
         velocity: f32,
-        _mouse_pos: Point<Pixels>,
+        mouse_pos: Point<Pixels>,
         _bounds: Bounds<Pixels>,
         _cx: &mut Context<Self>,
     ) {
-        let mut top = self.preview_list.logical_scroll_top();
+        let num_blocks = self.state.doc.parsed.blocks.len();
+        if num_blocks == 0 {
+            self.preview_autoscroll_task = None;
+            return;
+        }
+
+        if velocity > 0.0 {
+            let max_rendered = self.rendered_regions
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|r| r.block_ix)
+                .max();
+            if let Some(max_bix) = max_rendered {
+                if max_bix + 2 >= num_blocks {
+                    self.preview_autoscroll_task = None;
+                    return;
+                }
+            }
+        }
+
+        let old_top = self.preview_list.logical_scroll_top();
+        let mut top = old_top;
         let new_offset = f32::from(top.offset_in_item) + velocity;
-        if new_offset < 0.0 {
-            if top.item_ix > 0 {
-                top.item_ix = top.item_ix.saturating_sub(1);
-                top.offset_in_item = px(0.0);
+
+        if velocity > 0.0 {
+            if top.item_ix + 1 >= num_blocks {
+                self.preview_autoscroll_task = None;
+                return;
+            }
+            let item_h = 24.0;
+            if new_offset >= item_h {
+                let advance = (new_offset / item_h).floor() as usize;
+                let target_ix = top.item_ix + advance;
+                if target_ix >= num_blocks.saturating_sub(1) {
+                    top.item_ix = num_blocks.saturating_sub(1);
+                    top.offset_in_item = px(0.0);
+                } else {
+                    top.item_ix = target_ix;
+                    top.offset_in_item = px(new_offset % item_h);
+                }
             } else {
-                top.offset_in_item = px(0.0);
+                top.offset_in_item = px(new_offset);
             }
         } else {
-            top.offset_in_item = px(new_offset);
+            if new_offset < 0.0 {
+                let item_h = 24.0;
+                let retreat = ((-new_offset) / item_h).ceil() as usize;
+                if retreat >= top.item_ix {
+                    top.item_ix = 0;
+                    top.offset_in_item = px(0.0);
+                } else {
+                    top.item_ix -= retreat;
+                    top.offset_in_item = px(item_h - ((-new_offset) % item_h));
+                }
+            } else {
+                top.offset_in_item = px(new_offset);
+            }
         }
         self.preview_list.scroll_to(top);
 
         if let Some(sel) = self.preview_selection {
-            let num_blocks = self.state.doc.parsed.blocks.len();
-            if num_blocks > 0 {
-                let target_block_ix = if velocity > 0.0 {
-                    (top.item_ix + 1).min(num_blocks - 1)
-                } else {
-                    top.item_ix.min(num_blocks - 1)
-                };
-                let char_offset = if velocity > 0.0 {
-                    self.state.doc.parsed.blocks.get(target_block_ix)
-                        .map(|b| b.to_plain_text().chars().count())
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
-                let head = crate::views::preview::PreviewCharPosition::new(target_block_ix, char_offset);
+            let reg = self.rendered_regions.lock().unwrap();
+            if let Some(head) = crate::views::preview::hit_test_point_across_all_regions(&reg, None, mouse_pos, &self.state.doc.parsed.blocks) {
                 self.preview_selection = Some(crate::views::preview::PreviewSelection::new(sel.anchor, head));
             }
         }
@@ -429,7 +471,7 @@ impl WorkspaceView {
                     loop {
                         app.background_executor().timer(std::time::Duration::from_millis(16)).await;
                         let keep_going = view.update(app, |this, cx| {
-                            if !this.is_preview_selecting {
+                            if !this.is_preview_selecting || this.preview_autoscroll_task.is_none() {
                                 this.preview_autoscroll_task = None;
                                 return false;
                             }
@@ -449,6 +491,9 @@ impl WorkspaceView {
                                 return false;
                             };
                             this.step_preview_autoscroll(vel, mouse_pos, bounds, cx);
+                            if this.preview_autoscroll_task.is_none() {
+                                return false;
+                            }
                             cx.notify();
                             true
                         }).unwrap_or(false);
@@ -1290,6 +1335,12 @@ impl Render for WorkspaceView {
         self.window_handle = Some(window.window_handle());
         let is_fullscreen = window.is_fullscreen();
 
+        if self.is_preview_selecting && !self.focus_handle.is_focused(window) {
+            self.is_preview_selecting = false;
+            self.preview_autoscroll_task = None;
+            self.preview_mouse_window_pos = None;
+        }
+
         let visual_lines = self.compute_visual_lines(window);
 
         let theme = &self.state.theme;
@@ -1756,7 +1807,12 @@ impl Render for WorkspaceView {
                             cx.notify();
                         }
                         "c" | "C" => {
-                            if this.state.view_mode != ViewMode::Source {
+                            let should_copy_preview = match this.state.view_mode {
+                                ViewMode::Preview => true,
+                                ViewMode::Split => this.preview_focused,
+                                ViewMode::Source => false,
+                            };
+                            if should_copy_preview {
                                 if let Some(sel) = this.preview_selection {
                                     let text = crate::views::preview::serialize_preview_selection(&this.state.doc.parsed, sel);
                                     if !text.is_empty() {
@@ -1810,6 +1866,7 @@ impl Render for WorkspaceView {
                 }
 
                 if handled {
+                    this.preview_focused = false;
                     if this.state.sync_from_editor() {
                         this.schedule_parse(cx);
                     }
@@ -2116,6 +2173,8 @@ impl Render for WorkspaceView {
                                         this.preview_selection = sel;
                                         this.is_preview_selecting = is_selecting;
                                         if is_selecting {
+                                            this.preview_focused = true;
+                                            window.focus(&this.focus_handle);
                                             this.preview_mouse_window_pos = Some(window.mouse_position());
                                             this.trigger_preview_autoscroll_if_needed(cx);
                                         } else {
@@ -2230,6 +2289,7 @@ impl Render for WorkspaceView {
                                                         preview_callbacks.clone(),
                                                         self.preview_selection,
                                                         self.is_preview_selecting,
+                                                        self.rendered_regions.clone(),
                                                     ))
                                                     .into_any_element()
                                             }
@@ -2339,6 +2399,7 @@ impl Render for WorkspaceView {
                                                                     preview_callbacks,
                                                                     self.preview_selection,
                                                                     self.is_preview_selecting,
+                                                                    self.rendered_regions.clone(),
                                                                 ))
                                                         }),
                                                 )

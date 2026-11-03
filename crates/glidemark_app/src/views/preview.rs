@@ -187,27 +187,126 @@ pub fn detect_edge_autoscroll(
     container_height: f32,
 ) -> Option<f32> {
     const EDGE_ZONE: f32 = 40.0;
+    const MAX_SPEED: f32 = 4.0;
     if mouse_y < container_top + EDGE_ZONE {
         let factor = ((container_top + EDGE_ZONE - mouse_y) / EDGE_ZONE).clamp(0.1, 1.0);
-        Some(-factor)
+        Some(-factor * MAX_SPEED)
     } else if mouse_y > container_top + container_height - EDGE_ZONE {
         let factor = ((mouse_y - (container_top + container_height - EDGE_ZONE)) / EDGE_ZONE).clamp(0.1, 1.0);
-        Some(factor)
+        Some(factor * MAX_SPEED)
     } else {
         None
     }
 }
 
-pub fn calculate_single_line_char_offset(
+#[derive(Clone, Debug)]
+pub struct TextLayoutRegion {
+    pub block_ix: usize,
+    pub bounds: Bounds<Pixels>,
+    pub text: String,
+    pub font_name: &'static str,
+    pub font_size: f32,
+    pub line_height_factor: f32,
+    pub padding_left: f32,
+    pub padding_top: f32,
+    pub padding_right: f32,
+    pub flat_char_offset: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct TextRegionInfo {
+    pub block_ix: usize,
+    pub text: String,
+    pub font_name: &'static str,
+    pub font_size: f32,
+    pub line_height_factor: f32,
+    pub padding_left: f32,
+    pub padding_top: f32,
+    pub padding_right: f32,
+    pub flat_char_offset: usize,
+}
+
+pub type RegionsRegistry = std::sync::Mutex<Vec<TextLayoutRegion>>;
+
+pub(crate) fn with_text_probe(el: gpui::Div, info: TextRegionInfo, regions: Arc<RegionsRegistry>) -> gpui::Div {
+    use gpui::prelude::*;
+    #[cfg(feature = "test-observation")]
+    let key = info.text.clone();
+    let probe = gpui::canvas(
+        move |bounds, _window, _cx| {
+            #[cfg(feature = "test-observation")]
+            obs::log_bounds(&key, bounds);
+
+            let mut reg = regions.lock().unwrap();
+            reg.retain(|r| !(r.block_ix == info.block_ix && r.flat_char_offset == info.flat_char_offset));
+            reg.push(TextLayoutRegion {
+                block_ix: info.block_ix,
+                bounds,
+                text: info.text.clone(),
+                font_name: info.font_name,
+                font_size: info.font_size,
+                line_height_factor: info.line_height_factor,
+                padding_left: info.padding_left,
+                padding_top: info.padding_top,
+                padding_right: info.padding_right,
+                flat_char_offset: info.flat_char_offset,
+            });
+        },
+        |_bounds, _paint, _window, _cx| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full();
+
+    el.relative().child(probe)
+}
+
+pub(crate) fn with_text_probe_stateful(el: gpui::Stateful<gpui::Div>, info: TextRegionInfo, regions: Arc<RegionsRegistry>) -> gpui::Stateful<gpui::Div> {
+    use gpui::prelude::*;
+    #[cfg(feature = "test-observation")]
+    let key = info.text.clone();
+    let probe = gpui::canvas(
+        move |bounds, _window, _cx| {
+            #[cfg(feature = "test-observation")]
+            obs::log_bounds(&key, bounds);
+
+            let mut reg = regions.lock().unwrap();
+            reg.retain(|r| !(r.block_ix == info.block_ix && r.flat_char_offset == info.flat_char_offset));
+            reg.push(TextLayoutRegion {
+                block_ix: info.block_ix,
+                bounds,
+                text: info.text.clone(),
+                font_name: info.font_name,
+                font_size: info.font_size,
+                line_height_factor: info.line_height_factor,
+                padding_left: info.padding_left,
+                padding_top: info.padding_top,
+                padding_right: info.padding_right,
+                flat_char_offset: info.flat_char_offset,
+            });
+        },
+        |_bounds, _paint, _window, _cx| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full();
+
+    el.relative().child(probe)
+}
+
+pub fn calculate_single_line_char_offset_with_font(
     text_system: &gpui::WindowTextSystem,
     line: &str,
     x_pos: f32,
+    font_name: &'static str,
     font_size: f32,
 ) -> usize {
     if line.is_empty() || x_pos <= 0.0 {
         return 0;
     }
-    let font = gpui::font("ui-sans-serif, system-ui");
+    let font = gpui::font(font_name);
     let font_size_px = gpui::px(font_size);
     let run = gpui::TextRun {
         len: line.len(),
@@ -228,48 +327,57 @@ pub fn calculate_single_line_char_offset(
         return line.chars().count();
     }
 
-    let mut prev_idx = 0;
-    let mut prev_x = gpui::px(0.);
-    for run in &shaped.runs {
-        for glyph in &run.glyphs {
-            if glyph.position.x >= target_x {
-                let byte_idx = if glyph.position.x - target_x < target_x - prev_x {
-                    glyph.index
-                } else {
-                    prev_idx
-                };
-                let clamped = byte_idx.min(line.len());
-                return line[..clamped].chars().count();
-            }
-            prev_idx = glyph.index;
-            prev_x = glyph.position.x;
+    let byte_indices: Vec<usize> = line.char_indices().map(|(i, _)| i).collect();
+    let char_count = byte_indices.len();
+    for (k, &b_idx) in byte_indices.iter().enumerate() {
+        let gx = shaped.x_for_index(b_idx);
+        let next_gx = if k + 1 < char_count {
+            shaped.x_for_index(byte_indices[k + 1])
+        } else {
+            shaped.width
+        };
+        let mid_x = (gx + next_gx) / 2.0;
+        if target_x < mid_x {
+            return k;
         }
     }
-    line.chars().count()
+    char_count
 }
 
-pub fn calculate_block_click_char_offset(
+#[allow(dead_code)]
+pub fn calculate_single_line_char_offset(
     text_system: &gpui::WindowTextSystem,
-    block_text: &str,
+    line: &str,
+    x_pos: f32,
+    font_size: f32,
+) -> usize {
+    calculate_single_line_char_offset_with_font(text_system, line, x_pos, "ui-sans-serif, system-ui", font_size)
+}
+
+pub fn calculate_text_click_char_offset(
+    text_system: &gpui::WindowTextSystem,
+    text: &str,
     x_pos: f32,
     y_pos: f32,
-    base_font_size: f32,
+    font_name: &'static str,
+    font_size: f32,
+    line_height_factor: f32,
     width_limit: Option<f32>,
 ) -> usize {
-    if block_text.is_empty() {
+    if text.is_empty() {
         return 0;
     }
     if y_pos <= 0.0 && x_pos <= 0.0 {
         return 0;
     }
 
-    let total_chars = block_text.chars().count();
-    let font = gpui::font("ui-sans-serif, system-ui");
-    let font_size_px = gpui::px(base_font_size);
+    let font = gpui::font(font_name);
+    let font_size_px = gpui::px(font_size);
+    let total_chars = text.chars().count();
 
     let mut visual_lines: Vec<(String, usize)> = Vec::new();
     let mut current_char_offset = 0;
-    let phys_lines: Vec<&str> = block_text.split('\n').collect();
+    let phys_lines: Vec<&str> = text.split('\n').collect();
 
     for (p_idx, phys_line) in phys_lines.iter().enumerate() {
         let phys_char_count = phys_line.chars().count();
@@ -317,7 +425,7 @@ pub fn calculate_block_click_char_offset(
                             p_idx,
                             phys_line,
                             max_w,
-                            |idx, _| char_widths.get(idx).copied().unwrap_or(base_font_size * 0.6),
+                            |idx, _| char_widths.get(idx).copied().unwrap_or(font_size * 0.6),
                         );
 
                         if !vls.is_empty() {
@@ -343,7 +451,7 @@ pub fn calculate_block_click_char_offset(
         return 0;
     }
 
-    let line_height = base_font_size * 1.75;
+    let line_height = font_size * line_height_factor;
     let line_idx = if y_pos <= 0.0 {
         0
     } else {
@@ -351,8 +459,208 @@ pub fn calculate_block_click_char_offset(
     };
 
     let (ref vl_str, vl_offset) = visual_lines[line_idx];
-    let line_offset = calculate_single_line_char_offset(text_system, vl_str, x_pos, base_font_size);
+    let line_offset = calculate_single_line_char_offset_with_font(text_system, vl_str, x_pos, font_name, font_size);
     (vl_offset + line_offset).min(total_chars)
+}
+
+#[allow(dead_code)]
+pub fn calculate_block_click_char_offset(
+    text_system: &gpui::WindowTextSystem,
+    block_text: &str,
+    x_pos: f32,
+    y_pos: f32,
+    base_font_size: f32,
+    width_limit: Option<f32>,
+) -> usize {
+    calculate_text_click_char_offset(
+        text_system,
+        block_text,
+        x_pos,
+        y_pos,
+        "ui-sans-serif, system-ui",
+        base_font_size,
+        1.75,
+        width_limit,
+    )
+}
+
+fn compute_offset_in_region(
+    text_system: &gpui::WindowTextSystem,
+    region: &TextLayoutRegion,
+    click_x: f32,
+    click_y: f32,
+    total_block_chars: usize,
+) -> usize {
+    let rx = f32::from(region.bounds.left()) + region.padding_left;
+    let ry = f32::from(region.bounds.top()) + region.padding_top;
+    let local_x = (click_x - rx).max(0.0);
+    let local_y = (click_y - ry).max(0.0);
+    let rw = (f32::from(region.bounds.size.width) - region.padding_left - region.padding_right).max(10.0);
+
+    let offset_in_region = calculate_text_click_char_offset(
+        text_system,
+        &region.text,
+        local_x,
+        local_y,
+        region.font_name,
+        region.font_size,
+        region.line_height_factor,
+        Some(rw),
+    );
+
+    (region.flat_char_offset + offset_in_region).min(total_block_chars)
+}
+
+pub fn hit_test_char_offset_in_block(
+    text_system: &gpui::WindowTextSystem,
+    regions: &[TextLayoutRegion],
+    block_ix: usize,
+    block_text: &str,
+    click_pos: Point<Pixels>,
+    base_font_size: f32,
+    block_bounds: Bounds<Pixels>,
+) -> usize {
+    let matching_regions: Vec<TextLayoutRegion> = regions
+        .iter()
+        .filter(|r| r.block_ix == block_ix)
+        .cloned()
+        .collect();
+
+    let click_x = f32::from(click_pos.x);
+    let click_y = f32::from(click_pos.y);
+
+    if matching_regions.is_empty() {
+        let local_x = (click_pos.x - block_bounds.left()).max(px(0.));
+        let local_y = (click_pos.y - block_bounds.top()).max(px(0.));
+        return calculate_text_click_char_offset(
+            text_system,
+            block_text,
+            f32::from(local_x),
+            f32::from(local_y),
+            "ui-sans-serif, system-ui",
+            base_font_size,
+            1.75,
+            Some(f32::from(block_bounds.size.width)),
+        );
+    }
+
+    if let Some(r) = matching_regions.iter().find(|r| {
+        let l = f32::from(r.bounds.left());
+        let t = f32::from(r.bounds.top());
+        let w = f32::from(r.bounds.size.width);
+        let h = f32::from(r.bounds.size.height);
+        click_x >= l && click_x <= l + w && click_y >= t && click_y <= t + h
+    }) {
+        return compute_offset_in_region(text_system, r, click_x, click_y, block_text.chars().count());
+    }
+
+    let y_matching: Vec<&TextLayoutRegion> = matching_regions
+        .iter()
+        .filter(|r| {
+            let t = f32::from(r.bounds.top());
+            let h = f32::from(r.bounds.size.height);
+            click_y >= t && click_y <= t + h
+        })
+        .collect();
+
+    if !y_matching.is_empty() {
+        let best = y_matching
+            .into_iter()
+            .min_by(|a, b| {
+                let a_center = f32::from(a.bounds.left()) + f32::from(a.bounds.size.width) / 2.0;
+                let b_center = f32::from(b.bounds.left()) + f32::from(b.bounds.size.width) / 2.0;
+                let da = (a_center - click_x).abs();
+                let db = (b_center - click_x).abs();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        return compute_offset_in_region(text_system, best, click_x, click_y, block_text.chars().count());
+    }
+
+    let best = matching_regions
+        .iter()
+        .min_by(|a, b| {
+            let a_mid = f32::from(a.bounds.top()) + f32::from(a.bounds.size.height) / 2.0;
+            let b_mid = f32::from(b.bounds.top()) + f32::from(b.bounds.size.height) / 2.0;
+            let da = (a_mid - click_y).abs();
+            let db = (b_mid - click_y).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap();
+
+    compute_offset_in_region(text_system, best, click_x, click_y, block_text.chars().count())
+}
+
+pub fn hit_test_point_across_all_regions(
+    regions: &[TextLayoutRegion],
+    text_system: Option<&gpui::WindowTextSystem>,
+    mouse_pos: Point<Pixels>,
+    blocks: &[BlockElement],
+) -> Option<PreviewCharPosition> {
+    if regions.is_empty() {
+        return None;
+    }
+    let click_x = f32::from(mouse_pos.x);
+    let click_y = f32::from(mouse_pos.y);
+
+    let matching_region = regions
+        .iter()
+        .filter(|r| {
+            let t = f32::from(r.bounds.top());
+            let h = f32::from(r.bounds.size.height);
+            click_y >= t && click_y <= t + h
+        })
+        .min_by(|a, b| {
+            let a_mid = f32::from(a.bounds.left()) + f32::from(a.bounds.size.width) / 2.0;
+            let b_mid = f32::from(b.bounds.left()) + f32::from(b.bounds.size.width) / 2.0;
+            let da = (a_mid - click_x).abs();
+            let db = (b_mid - click_x).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .or_else(|| {
+            regions.iter().min_by(|a, b| {
+                let a_mid = f32::from(a.bounds.top()) + f32::from(a.bounds.size.height) / 2.0;
+                let b_mid = f32::from(b.bounds.top()) + f32::from(b.bounds.size.height) / 2.0;
+                let da = (a_mid - click_y).abs();
+                let db = (b_mid - click_y).abs();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+        })?
+        .clone();
+
+    let block_len = blocks
+        .get(matching_region.block_ix)
+        .map(|b| b.to_plain_text().chars().count())
+        .unwrap_or(0);
+
+    let offset = if let Some(ts) = text_system {
+        compute_offset_in_region(ts, &matching_region, click_x, click_y, block_len)
+    } else {
+        let rx = f32::from(matching_region.bounds.left()) + matching_region.padding_left;
+        let ry = f32::from(matching_region.bounds.top()) + matching_region.padding_top;
+        let local_x = (click_x - rx).max(0.0);
+        let local_y = (click_y - ry).max(0.0);
+        let line_height = matching_region.font_size * matching_region.line_height_factor;
+        let line_idx = (local_y / line_height).floor() as usize;
+        let char_width = matching_region.font_size * 0.55;
+        let char_idx = (local_x / char_width).round() as usize;
+        let phys_lines: Vec<&str> = matching_region.text.split('\n').collect();
+        let target_line = line_idx.min(phys_lines.len().saturating_sub(1));
+        let mut off = 0;
+        for i in 0..target_line {
+            off += phys_lines[i].chars().count() + 1;
+        }
+        let line_chars = phys_lines.get(target_line).map(|l| l.chars().count()).unwrap_or(0);
+        off += char_idx.min(line_chars);
+        let raw = (matching_region.flat_char_offset + off).min(block_len);
+        if raw >= block_len && block_len > 0 {
+            block_len - 1
+        } else {
+            raw
+        }
+    };
+
+    Some(PreviewCharPosition::new(matching_region.block_ix, offset))
 }
 
 pub fn render_preview_pane_with_callbacks(
@@ -366,11 +674,14 @@ pub fn render_preview_pane_with_callbacks(
     callbacks: PreviewCallbacks,
     selection: Option<PreviewSelection>,
     is_selecting: bool,
+    regions: Arc<RegionsRegistry>,
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
     let item_parsed = parsed.clone();
     let item_callbacks = callbacks.clone();
+    let item_regions = regions.clone();
+    regions.lock().unwrap().clear();
 
     let mut pane = div()
         .flex_1()
@@ -428,6 +739,9 @@ pub fn render_preview_pane_with_callbacks(
                     item_callbacks.on_copy.as_ref(),
                     item_callbacks.on_open_lightbox.as_ref(),
                     selected_char_range,
+                    ix,
+                    0,
+                    item_regions.clone(),
                 ));
 
             if let Some(ref on_selection_change) = item_callbacks.on_selection_change {
@@ -438,36 +752,42 @@ pub fn render_preview_pane_with_callbacks(
                 let text_for_move = block_text.clone();
                 let bounds_cell_down = block_bounds_cell.clone();
                 let bounds_cell_move = block_bounds_cell.clone();
+                let regions_down = item_regions.clone();
+                let regions_move = item_regions.clone();
 
                 block_container = block_container
                     .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
-                        let bounds = bounds_cell_down.get();
-                        let local_x = (event.position.x - bounds.left()).max(px(0.));
-                        let local_y = (event.position.y - bounds.top()).max(px(0.));
-                        let offset = calculate_block_click_char_offset(
-                            window.text_system(),
-                            &text_for_down,
-                            f32::from(local_x),
-                            f32::from(local_y),
-                            font_size,
-                            Some(f32::from(bounds.size.width)),
-                        );
+                        let text_system = window.text_system();
+                        let offset = {
+                            let reg = regions_down.lock().unwrap();
+                            hit_test_char_offset_in_block(
+                                text_system,
+                                &reg,
+                                ix,
+                                &text_for_down,
+                                event.position,
+                                font_size,
+                                bounds_cell_down.get(),
+                            )
+                        };
                         let pos = PreviewCharPosition::new(ix, offset);
                         on_sel_down(Some(PreviewSelection::new(pos, pos)), true, window, cx);
                     })
                     .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
                         if is_selecting {
-                            let bounds = bounds_cell_move.get();
-                            let local_x = (event.position.x - bounds.left()).max(px(0.));
-                            let local_y = (event.position.y - bounds.top()).max(px(0.));
-                            let offset = calculate_block_click_char_offset(
-                                window.text_system(),
-                                &text_for_move,
-                                f32::from(local_x),
-                                f32::from(local_y),
-                                font_size,
-                                Some(f32::from(bounds.size.width)),
-                            );
+                            let text_system = window.text_system();
+                            let offset = {
+                                let reg = regions_move.lock().unwrap();
+                                hit_test_char_offset_in_block(
+                                    text_system,
+                                    &reg,
+                                    ix,
+                                    &text_for_move,
+                                    event.position,
+                                    font_size,
+                                    bounds_cell_move.get(),
+                                )
+                            };
                             let head = PreviewCharPosition::new(ix, offset);
                             if let Some(sel) = selection {
                                 on_sel_move(Some(PreviewSelection::new(sel.anchor, head)), true, window, cx);
@@ -507,6 +827,9 @@ fn render_block_element(
     on_copy: Option<&OnCopyCallback>,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
     selected_char_range: Option<std::ops::Range<usize>>,
+    block_ix: usize,
+    base_char_offset: usize,
+    regions: Arc<RegionsRegistry>,
 ) -> AnyElement {
     match block {
         BlockElement::Heading { level, content } => {
@@ -517,10 +840,11 @@ fn render_block_element(
                 _ => (1.1, false),
             };
 
+            let font_size = base_font_size * size_mult;
             let mut el = div()
                 .w_full()
                 .min_w(px(0.))
-                .text_size(px(base_font_size * size_mult))
+                .text_size(px(font_size))
                 .font_weight(FontWeight::BOLD)
                 .text_color(theme.text_primary)
                 .pt_3()
@@ -530,17 +854,51 @@ fn render_block_element(
                 el = el.border_b_1().border_color(theme.border);
             }
 
-            el.child(render_styled_inlines(content, theme, base_font_size * size_mult, selected_char_range))
-                .into_any_element()
+            el = el.child(render_styled_inlines(content, theme, font_size, selected_char_range));
+
+            with_text_probe(
+                el,
+                TextRegionInfo {
+                    block_ix,
+                    text: content.plain_text(),
+                    font_name: "ui-sans-serif, system-ui",
+                    font_size,
+                    line_height_factor: 1.75,
+                    padding_left: 0.0,
+                    padding_top: 12.0,
+                    padding_right: 0.0,
+                    flat_char_offset: base_char_offset,
+                },
+                regions,
+            )
+            .into_any_element()
         }
-        BlockElement::Paragraph(content) => div()
-            .w_full()
-            .min_w(px(0.))
-            .text_size(px(base_font_size))
-            .line_height(relative(1.75))
-            .text_color(theme.text_primary)
-            .child(render_styled_inlines(content, theme, base_font_size, selected_char_range))
-            .into_any_element(),
+        BlockElement::Paragraph(content) => {
+            let el = div()
+                .w_full()
+                .min_w(px(0.))
+                .text_size(px(base_font_size))
+                .line_height(relative(1.75))
+                .text_color(theme.text_primary)
+                .child(render_styled_inlines(content, theme, base_font_size, selected_char_range));
+
+            with_text_probe(
+                el,
+                TextRegionInfo {
+                    block_ix,
+                    text: content.plain_text(),
+                    font_name: "ui-sans-serif, system-ui",
+                    font_size: base_font_size,
+                    line_height_factor: 1.75,
+                    padding_left: 0.0,
+                    padding_top: 0.0,
+                    padding_right: 0.0,
+                    flat_char_offset: base_char_offset,
+                },
+                regions,
+            )
+            .into_any_element()
+        }
         BlockElement::FencedCode { lang, code } => {
             if lang.as_deref() == Some("mermaid") {
                 render_mermaid_diagram(code, theme, strings, base_font_size, on_open_lightbox)
@@ -554,6 +912,9 @@ fn render_block_element(
                     copied_code_hash,
                     on_copy,
                     selected_char_range,
+                    block_ix,
+                    base_char_offset,
+                    regions,
                 )
             }
         }
@@ -565,8 +926,8 @@ fn render_block_element(
             for b in blocks {
                 let text = b.to_plain_text();
                 let len = text.chars().count();
-                let child_range = if len == 0 {
-                    None
+                let (child_range, child_start) = if len == 0 {
+                    (None, cur_offset)
                 } else {
                     if !is_first_non_empty {
                         cur_offset += 1;
@@ -584,7 +945,7 @@ fn render_block_element(
                         }
                     });
                     cur_offset += len;
-                    r
+                    (r, block_start)
                 };
 
                 child_elements.push(render_block_element(
@@ -596,6 +957,9 @@ fn render_block_element(
                     on_copy,
                     on_open_lightbox,
                     child_range,
+                    block_ix,
+                    base_char_offset + child_start,
+                    regions.clone(),
                 ));
             }
 
@@ -624,6 +988,9 @@ fn render_block_element(
             on_copy,
             on_open_lightbox,
             selected_char_range,
+            block_ix,
+            base_char_offset,
+            regions,
         ),
         BlockElement::Table { headers, rows } => {
             let mut cur_offset = 0;
@@ -644,14 +1011,28 @@ fn render_block_element(
                 });
                 cur_offset += len + 1;
                 header_cells.push(
-                    div()
-                        .flex_1()
-                        .min_w(px(120.))
-                        .p_3()
-                        .font_weight(FontWeight::BOLD)
-                        .text_size(px(base_font_size * 0.95))
-                        .text_color(theme.text_primary)
-                        .child(render_styled_inlines(h, theme, base_font_size * 0.95, cell_range)),
+                    with_text_probe(
+                        div()
+                            .flex_1()
+                            .min_w(px(120.))
+                            .p_3()
+                            .font_weight(FontWeight::BOLD)
+                            .text_size(px(base_font_size * 0.95))
+                            .text_color(theme.text_primary)
+                            .child(render_styled_inlines(h, theme, base_font_size * 0.95, cell_range)),
+                        TextRegionInfo {
+                            block_ix,
+                            text: text.clone(),
+                            font_name: "ui-sans-serif, system-ui",
+                            font_size: base_font_size * 0.95,
+                            line_height_factor: 1.75,
+                            padding_left: 12.0,
+                            padding_top: 12.0,
+                            padding_right: 12.0,
+                            flat_char_offset: base_char_offset + cell_start,
+                        },
+                        regions.clone(),
+                    )
                 );
             }
 
@@ -674,13 +1055,27 @@ fn render_block_element(
                     });
                     cur_offset += len + 1;
                     cells.push(
-                        div()
-                            .flex_1()
-                            .min_w(px(120.))
-                            .p_3()
-                            .text_size(px(base_font_size * 0.95))
-                            .text_color(theme.text_primary)
-                            .child(render_styled_inlines(cell, theme, base_font_size * 0.95, cell_range)),
+                        with_text_probe(
+                            div()
+                                .flex_1()
+                                .min_w(px(120.))
+                                .p_3()
+                                .text_size(px(base_font_size * 0.95))
+                                .text_color(theme.text_primary)
+                                .child(render_styled_inlines(cell, theme, base_font_size * 0.95, cell_range)),
+                            TextRegionInfo {
+                                block_ix,
+                                text: text.clone(),
+                                font_name: "ui-sans-serif, system-ui",
+                                font_size: base_font_size * 0.95,
+                                line_height_factor: 1.75,
+                                padding_left: 12.0,
+                                padding_top: 12.0,
+                                padding_right: 12.0,
+                                flat_char_offset: base_char_offset + cell_start,
+                            },
+                            regions.clone(),
+                        )
                     );
                 }
                 row_cells.push(
@@ -862,6 +1257,9 @@ pub fn render_styled_text_only(
         }
     }
 
+    #[cfg(feature = "test-observation")]
+    obs::log_highlight(&text, &selected_char_range);
+
     if let Some(char_range) = selected_char_range {
         let byte_range = char_range_to_byte_range(&text, char_range);
         highlights = apply_selection_to_highlights(&text, &highlights, byte_range, theme.selection_bg());
@@ -872,6 +1270,50 @@ pub fn render_styled_text_only(
     }
 
     StyledText::new(text).with_highlights(highlights)
+}
+
+#[cfg(feature = "test-observation")]
+pub mod obs {
+    use gpui::{Bounds, Pixels};
+    use std::sync::{Mutex, OnceLock};
+
+    type BoundsLog = Mutex<Vec<(String, Bounds<Pixels>)>>;
+    type RangeLog = Mutex<Vec<(String, Option<std::ops::Range<usize>>)>>;
+
+    fn bounds_log() -> &'static BoundsLog {
+        static L: OnceLock<BoundsLog> = OnceLock::new();
+        L.get_or_init(Default::default)
+    }
+    fn range_log() -> &'static RangeLog {
+        static L: OnceLock<RangeLog> = OnceLock::new();
+        L.get_or_init(Default::default)
+    }
+    #[allow(dead_code)]
+    pub fn reset() {
+        bounds_log().lock().unwrap().clear();
+        range_log().lock().unwrap().clear();
+    }
+    #[allow(dead_code)]
+    pub fn text_bounds(key: &str) -> Option<(f32, f32, f32, f32)> {
+        bounds_log().lock().unwrap().iter().rev().find(|(k, _)| k == key).map(|(_, b)| {
+            (
+                f32::from(b.origin.x),
+                f32::from(b.origin.y),
+                f32::from(b.size.width),
+                f32::from(b.size.height),
+            )
+        })
+    }
+    #[allow(dead_code)]
+    pub fn highlights() -> Vec<(String, Option<std::ops::Range<usize>>)> {
+        range_log().lock().unwrap().clone()
+    }
+    pub(crate) fn log_bounds(key: &str, bounds: Bounds<Pixels>) {
+        bounds_log().lock().unwrap().push((key.to_string(), bounds));
+    }
+    pub(crate) fn log_highlight(text: &str, range: &Option<std::ops::Range<usize>>) {
+        range_log().lock().unwrap().push((text.to_string(), range.clone()));
+    }
 }
 
 pub const MAX_DIAGRAM_CACHE: usize = 64;
@@ -1107,6 +1549,9 @@ fn render_list_element(
     on_copy: Option<&OnCopyCallback>,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
     selected_char_range: Option<std::ops::Range<usize>>,
+    block_ix: usize,
+    base_char_offset: usize,
+    regions: Arc<RegionsRegistry>,
 ) -> AnyElement {
     let mut cur_offset = 0;
     let mut item_elements = Vec::with_capacity(items.len());
@@ -1245,9 +1690,12 @@ fn render_list_element(
                         on_copy,
                         on_open_lightbox,
                         sub_range,
+                        block_ix,
+                        base_char_offset + item_end + 3,
+                        regions.clone(),
                     )
                 } else {
-                    render_block_element(sub, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox, sub_range)
+                    render_block_element(sub, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox, sub_range, block_ix, base_char_offset + item_end + 3, regions.clone())
                 })
         });
 
@@ -1266,13 +1714,27 @@ fn render_list_element(
                         .gap_2()
                         .child(bullet_element)
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.))
-                                .text_size(px(base_font_size))
-                                .line_height(relative(1.6))
-                                .text_color(theme.text_primary)
-                                .child(render_styled_inlines(&item.content, theme, base_font_size, item_range)),
+                            with_text_probe(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .text_size(px(base_font_size))
+                                    .line_height(relative(1.6))
+                                    .text_color(theme.text_primary)
+                                    .child(render_styled_inlines(&item.content, theme, base_font_size, item_range)),
+                                TextRegionInfo {
+                                    block_ix,
+                                    text: content_text.clone(),
+                                    font_name: "ui-sans-serif, system-ui",
+                                    font_size: base_font_size,
+                                    line_height_factor: 1.6,
+                                    padding_left: 0.0,
+                                    padding_top: 0.0,
+                                    padding_right: 0.0,
+                                    flat_char_offset: base_char_offset + item_start,
+                                },
+                                regions.clone(),
+                            ),
                         ),
                 )
                 .children(sub_element),
@@ -1316,6 +1778,9 @@ fn render_code_block(
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<&OnCopyCallback>,
     selected_char_range: Option<std::ops::Range<usize>>,
+    block_ix: usize,
+    base_char_offset: usize,
+    regions: Arc<RegionsRegistry>,
 ) -> AnyElement {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     code.hash(&mut hasher);
@@ -1352,12 +1817,13 @@ fn render_code_block(
         StyledText::new(code_text).with_highlights(highlights)
     };
 
+    let code_font_size = base_font_size * 0.85;
     let mut content = div()
         .id(SharedString::from(format!("code_content_scroll_{}", hash)))
         .w_full()
         .min_w(px(0.))
         .p_3()
-        .text_size(px(base_font_size * 0.85))
+        .text_size(px(code_font_size))
         .font_family("ui-monospace")
         .line_height(relative(1.5))
         .text_color(theme.syntax_code)
@@ -1368,6 +1834,22 @@ fn render_code_block(
     } else {
         content = content.overflow_x_scroll().whitespace_nowrap();
     }
+
+    let content = with_text_probe_stateful(
+        content,
+        TextRegionInfo {
+            block_ix,
+            text: code.to_string(),
+            font_name: "ui-monospace",
+            font_size: code_font_size,
+            line_height_factor: 1.5,
+            padding_left: 12.0,
+            padding_top: 12.0,
+            padding_right: 12.0,
+            flat_char_offset: base_char_offset,
+        },
+        regions,
+    );
 
     let copy_btn = div()
         .id(SharedString::from(format!("copy_code_btn_{}", hash)))
