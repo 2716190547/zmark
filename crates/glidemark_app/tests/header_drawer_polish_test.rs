@@ -144,14 +144,18 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
     let light_bg = light_theme.selection_bg();
     let light_text = light_theme.selection_text();
 
-    assert!(light_bg.a >= 0.10, "Default light selection_bg must have subtle warm opacity per Phase H");
+    assert!(light_bg.h >= 25.0 / 360.0 && light_bg.h <= 45.0 / 360.0, "Default light selection_bg must have warm hue");
+    assert!(light_bg.s >= 0.30, "Default light selection_bg must have warm saturation");
+    assert!(light_bg.a >= 0.10 && light_bg.a <= 0.20, "Default light selection_bg must have subtle warm opacity");
     assert_eq!(light_text, light_theme.text_primary);
 
     let dark_theme = ThemeColors::resolve("default", true);
     let dark_bg = dark_theme.selection_bg();
     let dark_text = dark_theme.selection_text();
 
-    assert!(dark_bg.a >= 0.10, "Default dark selection_bg must have subtle warm opacity per Phase H");
+    assert!(dark_bg.h >= 25.0 / 360.0 && dark_bg.h <= 45.0 / 360.0, "Default dark selection_bg must have warm hue");
+    assert!(dark_bg.s >= 0.30, "Default dark selection_bg must have warm saturation");
+    assert!(dark_bg.a >= 0.10 && dark_bg.a <= 0.20, "Default dark selection_bg must have subtle warm opacity");
     assert_eq!(dark_text, dark_theme.text_primary);
 
     // Cross-mode distinctness
@@ -164,8 +168,12 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
         let d_theme = ThemeColors::resolve(palette.id, true);
 
         if palette.id == "default" || palette.id == "claude" {
-            assert!(l_theme.selection_bg().a >= 0.10);
-            assert!(d_theme.selection_bg().a >= 0.10);
+            let l_bg = l_theme.selection_bg();
+            let d_bg = d_theme.selection_bg();
+            assert!(l_bg.h >= 25.0 / 360.0 && l_bg.h <= 45.0 / 360.0);
+            assert!(l_bg.s >= 0.30);
+            assert!(d_bg.h >= 25.0 / 360.0 && d_bg.h <= 45.0 / 360.0);
+            assert!(d_bg.s >= 0.30);
         } else {
             assert_eq!(l_theme.selection_bg(), l_theme.text_primary.opacity(0.07));
             assert_eq!(d_theme.selection_bg(), d_theme.text_primary.opacity(0.07));

@@ -1,5 +1,6 @@
 use gpui::prelude::*;
 use gpui::*;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use glidemark_core::ast::HeadingItem;
@@ -16,19 +17,693 @@ pub struct DrawerSearchParams {
     pub search_truncated: bool,
     pub on_clear_search: Option<Arc<dyn Fn(&mut Window, &mut App)>>,
     pub on_focus_search: Option<Arc<dyn Fn(&mut Window, &mut App)>>,
+    pub search_input: Option<Entity<SearchInput>>,
 }
 
-impl DrawerSearchParams {
-    #[allow(dead_code)]
-    pub fn from_state(state: &crate::state::AppState, on_clear: Option<Arc<dyn Fn(&mut Window, &mut App)>>) -> Self {
+/// Search input component providing full Chinese IME support via `EntityInputHandler`.
+#[allow(dead_code)]
+#[derive(Clone)]
+pub struct SearchInput {
+    pub focus_handle: FocusHandle,
+    pub content: SharedString,
+    pub placeholder: SharedString,
+    pub selected_range: Range<usize>,
+    pub selection_reversed: bool,
+    pub marked_range: Option<Range<usize>>,
+    pub last_layout: Option<ShapedLine>,
+    pub last_bounds: Option<Bounds<Pixels>>,
+    pub is_selecting: bool,
+    pub on_change: Option<Arc<dyn Fn(&str, &mut Window, &mut Context<Self>) + 'static>>,
+}
+
+#[allow(dead_code)]
+impl SearchInput {
+    pub fn new(focus_handle: FocusHandle) -> Self {
         Self {
-            search_query: state.search_query.clone(),
-            has_search_matches: state.has_search_matches(),
-            search_in_progress: state.search_in_progress,
-            search_truncated: state.search_truncated,
-            on_clear_search: on_clear,
-            on_focus_search: None,
+            focus_handle,
+            content: "".into(),
+            placeholder: "Search files...".into(),
+            selected_range: 0..0,
+            selection_reversed: false,
+            marked_range: None,
+            last_layout: None,
+            last_bounds: None,
+            is_selecting: false,
+            on_change: None,
         }
+    }
+
+    pub fn with_placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
+        self.placeholder = placeholder.into();
+        self
+    }
+
+    pub fn on_change(
+        mut self,
+        callback: impl Fn(&str, &mut Window, &mut Context<Self>) + 'static,
+    ) -> Self {
+        self.on_change = Some(Arc::new(callback));
+        self
+    }
+
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    pub fn set_text(&mut self, text: impl Into<SharedString>) {
+        self.content = text.into();
+        self.selected_range = self.content.len()..self.content.len();
+        self.marked_range = None;
+    }
+
+    pub fn clear(&mut self, cx: &mut Context<Self>) {
+        self.content = "".into();
+        self.selected_range = 0..0;
+        self.marked_range = None;
+        cx.notify();
+    }
+
+    pub fn offset_from_utf16(&self, offset: usize) -> usize {
+        let mut utf8_offset = 0;
+        let mut utf16_count = 0;
+        for ch in self.content.chars() {
+            if utf16_count >= offset {
+                break;
+            }
+            utf16_count += ch.len_utf16();
+            utf8_offset += ch.len_utf8();
+        }
+        utf8_offset
+    }
+
+    pub fn offset_to_utf16(&self, offset: usize) -> usize {
+        let mut utf16_offset = 0;
+        let mut utf8_count = 0;
+        for ch in self.content.chars() {
+            if utf8_count >= offset {
+                break;
+            }
+            utf8_count += ch.len_utf8();
+            utf16_offset += ch.len_utf16();
+        }
+        utf16_offset
+    }
+
+    pub fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
+        self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
+    }
+
+    pub fn range_from_utf16(&self, range_utf16: &Range<usize>) -> Range<usize> {
+        self.offset_from_utf16(range_utf16.start)..self.offset_from_utf16(range_utf16.end)
+    }
+
+    pub fn previous_boundary(&self, offset: usize) -> usize {
+        self.content
+            .char_indices()
+            .rev()
+            .find_map(|(idx, _)| (idx < offset).then_some(idx))
+            .unwrap_or(0)
+    }
+
+    pub fn next_boundary(&self, offset: usize) -> usize {
+        self.content
+            .char_indices()
+            .find_map(|(idx, _)| (idx > offset).then_some(idx))
+            .unwrap_or(self.content.len())
+    }
+
+    pub fn move_to(&mut self, offset: usize) {
+        let offset = offset.min(self.content.len());
+        self.selected_range = offset..offset;
+    }
+
+    pub fn cursor_offset(&self) -> usize {
+        if self.selection_reversed {
+            self.selected_range.start
+        } else {
+            self.selected_range.end
+        }
+    }
+
+    pub fn select_to(&mut self, offset: usize) {
+        let offset = offset.min(self.content.len());
+        if self.selection_reversed {
+            self.selected_range.start = offset;
+        } else {
+            self.selected_range.end = offset;
+        }
+        if self.selected_range.end < self.selected_range.start {
+            self.selection_reversed = !self.selection_reversed;
+            self.selected_range = self.selected_range.end..self.selected_range.start;
+        }
+    }
+
+    pub fn handle_replace_text(&mut self, range_utf16: Option<Range<usize>>, new_text: &str) {
+        let range = range_utf16
+            .as_ref()
+            .map(|r| self.range_from_utf16(r))
+            .or_else(|| self.marked_range.clone())
+            .unwrap_or_else(|| self.selected_range.clone());
+
+        let start = range.start.min(self.content.len());
+        let end = range.end.min(self.content.len()).max(start);
+
+        self.content = format!("{}{}{}", &self.content[0..start], new_text, &self.content[end..]).into();
+        self.selected_range = start + new_text.len()..start + new_text.len();
+        self.marked_range = None;
+    }
+
+    pub fn handle_replace_and_mark_text(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        new_selected_range_utf16: Option<Range<usize>>,
+    ) {
+        let range = range_utf16
+            .as_ref()
+            .map(|r| self.range_from_utf16(r))
+            .or_else(|| self.marked_range.clone())
+            .unwrap_or_else(|| self.selected_range.clone());
+
+        let start = range.start.min(self.content.len());
+        let end = range.end.min(self.content.len()).max(start);
+
+        self.content = format!("{}{}{}", &self.content[0..start], new_text, &self.content[end..]).into();
+        if !new_text.is_empty() {
+            self.marked_range = Some(start..start + new_text.len());
+        } else {
+            self.marked_range = None;
+        }
+        self.selected_range = new_selected_range_utf16
+            .as_ref()
+            .map(|r| self.range_from_utf16(r))
+            .map(|new_range| new_range.start + start..new_range.end + start)
+            .unwrap_or_else(|| start + new_text.len()..start + new_text.len());
+    }
+
+    pub fn handle_unmark_text(&mut self) {
+        self.marked_range = None;
+    }
+
+    pub fn handle_backspace(&mut self) {
+        if self.selected_range.is_empty() {
+            let prev = self.previous_boundary(self.cursor_offset());
+            self.select_to(prev);
+        }
+        self.handle_replace_text(None, "");
+    }
+
+    pub fn handle_delete(&mut self) {
+        if self.selected_range.is_empty() {
+            let next = self.next_boundary(self.cursor_offset());
+            self.select_to(next);
+        }
+        self.handle_replace_text(None, "");
+    }
+
+    pub fn handle_left(&mut self) {
+        if self.selected_range.is_empty() {
+            let prev = self.previous_boundary(self.cursor_offset());
+            self.move_to(prev);
+        } else {
+            self.move_to(self.selected_range.start);
+        }
+    }
+
+    pub fn handle_right(&mut self) {
+        if self.selected_range.is_empty() {
+            let next = self.next_boundary(self.selected_range.end);
+            self.move_to(next);
+        } else {
+            self.move_to(self.selected_range.end);
+        }
+    }
+
+    pub fn handle_select_left(&mut self) {
+        let prev = self.previous_boundary(self.cursor_offset());
+        self.select_to(prev);
+    }
+
+    pub fn handle_select_right(&mut self) {
+        let next = self.next_boundary(self.cursor_offset());
+        self.select_to(next);
+    }
+
+    pub fn handle_select_all(&mut self) {
+        self.move_to(0);
+        self.select_to(self.content.len());
+    }
+
+    pub fn handle_home(&mut self) {
+        self.move_to(0);
+    }
+
+    pub fn handle_end(&mut self) {
+        self.move_to(self.content.len());
+    }
+
+    pub fn handle_paste_text(&mut self, text: &str) {
+        self.handle_replace_text(None, &text.replace('\n', " "));
+    }
+
+    pub fn backspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.handle_backspace();
+        self.notify_change(window, cx);
+        cx.notify();
+    }
+
+    pub fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.handle_delete();
+        self.notify_change(window, cx);
+        cx.notify();
+    }
+
+    pub fn left(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.handle_left();
+        cx.notify();
+    }
+
+    pub fn right(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.handle_right();
+        cx.notify();
+    }
+
+    pub fn select_left(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.handle_select_left();
+        cx.notify();
+    }
+
+    pub fn select_right(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.handle_select_right();
+        cx.notify();
+    }
+
+    pub fn select_all(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.handle_select_all();
+        cx.notify();
+    }
+
+    pub fn home(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.handle_home();
+        cx.notify();
+    }
+
+    pub fn end(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.handle_end();
+        cx.notify();
+    }
+
+    pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            self.handle_paste_text(&text);
+            self.notify_change(window, cx);
+            cx.notify();
+        }
+    }
+
+    pub fn copy(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.selected_range.is_empty() {
+            let text = self.content[self.selected_range.clone()].to_string();
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    pub fn cut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.selected_range.is_empty() {
+            let text = self.content[self.selected_range.clone()].to_string();
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            self.handle_replace_text(None, "");
+            self.notify_change(window, cx);
+            cx.notify();
+        }
+    }
+
+    fn notify_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ref cb) = self.on_change {
+            let cb = cb.clone();
+            let text = self.content.to_string();
+            cb(&text, window, cx);
+        }
+    }
+}
+
+impl EntityInputHandler for SearchInput {
+    fn text_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        actual_range: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let range = self.range_from_utf16(&range_utf16);
+        actual_range.replace(self.range_to_utf16(&range));
+        let start = range.start.min(self.content.len());
+        let end = range.end.min(self.content.len()).max(start);
+        Some(self.content[start..end].to_string())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: self.range_to_utf16(&self.selected_range),
+            reversed: self.selection_reversed,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        self.marked_range
+            .as_ref()
+            .map(|range| self.range_to_utf16(range))
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.handle_unmark_text();
+        cx.notify();
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.handle_replace_text(range_utf16, new_text);
+        self.notify_change(window, cx);
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        new_selected_range_utf16: Option<Range<usize>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.handle_replace_and_mark_text(range_utf16, new_text, new_selected_range_utf16);
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        let last_layout = self.last_layout.as_ref()?;
+        let range = self.range_from_utf16(&range_utf16);
+        let start_x = if range.start <= self.content.len() {
+            last_layout.x_for_index(range.start)
+        } else {
+            px(0.)
+        };
+        let end_x = if range.end <= self.content.len() {
+            last_layout.x_for_index(range.end)
+        } else {
+            start_x
+        };
+        Some(Bounds::from_corners(
+            point(bounds.left() + start_x, bounds.top()),
+            point(bounds.left() + end_x, bounds.bottom()),
+        ))
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        point: Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let line_point = self.last_bounds?.localize(&point)?;
+        let last_layout = self.last_layout.as_ref()?;
+        let utf8_index = last_layout.index_for_x(point.x - line_point.x)?;
+        Some(self.offset_to_utf16(utf8_index))
+    }
+}
+
+impl Focusable for SearchInput {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for SearchInput {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let focus_handle = self.focus_handle.clone();
+        div()
+            .id("drawer_search_input_view")
+            .flex()
+            .flex_1()
+            .items_center()
+            .track_focus(&focus_handle)
+            .cursor(CursorStyle::IBeam)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let key = event.keystroke.key.as_str();
+                let mods = event.keystroke.modifiers;
+                if mods.platform {
+                    match key {
+                        "v" | "V" => {
+                            this.paste(window, cx);
+                            return;
+                        }
+                        "c" | "C" => {
+                            this.copy(window, cx);
+                            return;
+                        }
+                        "x" | "X" => {
+                            this.cut(window, cx);
+                            return;
+                        }
+                        "a" | "A" => {
+                            this.select_all(window, cx);
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+                match key {
+                    "backspace" => this.backspace(window, cx),
+                    "delete" => this.delete(window, cx),
+                    "left" => {
+                        if mods.shift {
+                            this.select_left(window, cx);
+                        } else {
+                            this.left(window, cx);
+                        }
+                    }
+                    "right" => {
+                        if mods.shift {
+                            this.select_right(window, cx);
+                        } else {
+                            this.right(window, cx);
+                        }
+                    }
+                    "home" => this.home(window, cx),
+                    "end" => this.end(window, cx),
+                    "escape" => {
+                        this.content = "".into();
+                        this.selected_range = 0..0;
+                        this.marked_range = None;
+                        this.notify_change(window, cx);
+                        cx.notify();
+                    }
+                    _ => {}
+                }
+            }))
+            .child(SearchInputElement {
+                input: cx.entity().clone(),
+            })
+    }
+}
+
+#[allow(dead_code)]
+pub struct SearchInputElement {
+    pub input: Entity<SearchInput>,
+}
+
+#[allow(dead_code)]
+pub struct SearchInputPrepaintState {
+    line: Option<ShapedLine>,
+    cursor: Option<PaintQuad>,
+    selection: Option<PaintQuad>,
+}
+
+impl IntoElement for SearchInputElement {
+    type Element = Self;
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for SearchInputElement {
+    type RequestLayoutState = ();
+    type PrepaintState = SearchInputPrepaintState;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        style.size.height = window.line_height().into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let input = self.input.read(cx);
+        let content = input.content.clone();
+        let selected_range = input.selected_range.clone();
+        let cursor = input.cursor_offset();
+        let style = window.text_style();
+
+        let (display_text, text_color) = if content.is_empty() {
+            (input.placeholder.clone(), hsla(0., 0., 0., 0.35))
+        } else {
+            (content, style.color)
+        };
+
+        let run = TextRun {
+            len: display_text.len(),
+            font: style.font(),
+            color: text_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+
+        let runs = if let Some(marked_range) = input.marked_range.as_ref() {
+            let start = marked_range.start.min(display_text.len());
+            let end = marked_range.end.min(display_text.len()).max(start);
+            vec![
+                TextRun {
+                    len: start,
+                    ..run.clone()
+                },
+                TextRun {
+                    len: end - start,
+                    underline: Some(UnderlineStyle {
+                        color: Some(run.color),
+                        thickness: px(1.0),
+                        wavy: false,
+                    }),
+                    ..run.clone()
+                },
+                TextRun {
+                    len: display_text.len() - end,
+                    ..run
+                },
+            ]
+            .into_iter()
+            .filter(|run| run.len > 0)
+            .collect()
+        } else {
+            vec![run]
+        };
+
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let line = window
+            .text_system()
+            .shape_line(display_text, font_size, &runs, None);
+
+        let cursor_pos = line.x_for_index(cursor.min(line.len));
+        let (selection, cursor_quad) = if selected_range.is_empty() {
+            (
+                None,
+                Some(fill(
+                    Bounds::new(
+                        point(bounds.left() + cursor_pos, bounds.top()),
+                        size(px(2.), bounds.bottom() - bounds.top()),
+                    ),
+                    gpui::blue(),
+                )),
+            )
+        } else {
+            (
+                Some(fill(
+                    Bounds::from_corners(
+                        point(
+                            bounds.left() + line.x_for_index(selected_range.start.min(line.len)),
+                            bounds.top(),
+                        ),
+                        point(
+                            bounds.left() + line.x_for_index(selected_range.end.min(line.len)),
+                            bounds.bottom(),
+                        ),
+                    ),
+                    rgba(0x3311ff30),
+                )),
+                None,
+            )
+        };
+
+        SearchInputPrepaintState {
+            line: Some(line),
+            cursor: cursor_quad,
+            selection,
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let focus_handle = self.input.read(cx).focus_handle.clone();
+        window.handle_input(
+            &focus_handle,
+            ElementInputHandler::new(bounds, self.input.clone()),
+            cx,
+        );
+        if let Some(selection) = prepaint.selection.take() {
+            window.paint_quad(selection);
+        }
+        let line = prepaint.line.take().unwrap();
+        let _ = line.paint(bounds.origin, window.line_height(), window, cx);
+
+        if focus_handle.is_focused(window) {
+            if let Some(cursor) = prepaint.cursor.take() {
+                window.paint_quad(cursor);
+            }
+        }
+
+        self.input.update(cx, |input, _cx| {
+            input.last_layout = Some(line);
+            input.last_bounds = Some(bounds);
+        });
     }
 }
 
@@ -120,8 +795,145 @@ pub fn render_drawer_with_search(
     let is_macos = cfg!(target_os = "macos");
     let drawer_header_pl = px(crate::views::workspace::adaptive_header_padding(is_macos, is_fullscreen, false));
 
-    div()
-        .w(px(250.))
+    let is_searching = !search.search_query.is_empty();
+
+    let mut search_row = div()
+        .id("drawer_search_container")
+        .w_full()
+        .h(px(28.))
+        .px_2()
+        .rounded(px(6.))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.surface)
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_1p5();
+
+    if let Some(ref on_focus) = search.on_focus_search {
+        let on_focus_cb = on_focus.clone();
+        search_row = search_row
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                on_focus_cb(window, cx);
+            });
+    }
+
+    let search_left = div()
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .min_w(px(0.))
+        .flex_1()
+        .child(
+            svg()
+                .path("icons/search.svg")
+                .size(px(14.))
+                .text_color(theme.text_muted),
+        )
+        .child(if let Some(ref input) = search.search_input {
+            div()
+                .id("drawer_search_input_host")
+                .min_w(px(0.))
+                .flex_1()
+                .child(input.clone())
+                .into_any_element()
+        } else {
+            div()
+                .id("drawer_search_query_display")
+                .min_w(px(0.))
+                .flex_1()
+                .truncate()
+                .text_size(px(12.))
+                .font_weight(FontWeight::NORMAL)
+                .text_color(if is_searching {
+                    theme.text_primary
+                } else {
+                    theme.text_muted
+                })
+                .child(if is_searching {
+                    search.search_query.clone()
+                } else {
+                    strings.search_placeholder.to_string()
+                })
+                .into_any_element()
+        });
+
+    search_row = search_row.child(search_left);
+
+    if is_searching {
+        let on_clear = search.on_clear_search.clone();
+        let clear_btn = div()
+            .id("btn_clear_search")
+            .w(px(16.))
+            .h(px(16.))
+            .rounded(px(3.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .text_size(px(12.))
+            .text_color(theme.text_muted)
+            .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
+            .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                cx.stop_propagation();
+                if let Some(ref cb) = on_clear {
+                    cb(window, cx);
+                }
+            })
+            .child("×");
+        search_row = search_row.child(clear_btn);
+    }
+
+    let mut fixed_search_area = div()
+        .id("drawer_search_fixed_container")
+        .px_2()
+        .pt_2()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(search_row);
+
+    // Status indicators below search input
+    if !search.search_in_progress && is_searching && !search.has_search_matches {
+        fixed_search_area = fixed_search_area.child(
+            div()
+                .id("drawer_search_no_results")
+                .px_2()
+                .py_1()
+                .text_size(px(11.))
+                .text_color(theme.text_muted)
+                .child(strings.search_no_results),
+        );
+    }
+
+    if search.search_in_progress {
+        fixed_search_area = fixed_search_area.child(
+            div()
+                .id("drawer_search_scanning")
+                .px_2()
+                .py_0p5()
+                .text_size(px(11.))
+                .text_color(theme.text_muted)
+                .child(strings.search_scanning),
+        );
+    }
+
+    if search.search_truncated {
+        fixed_search_area = fixed_search_area.child(
+            div()
+                .id("drawer_search_incomplete")
+                .px_2()
+                .py_0p5()
+                .text_size(px(11.))
+                .text_color(theme.conflict_border)
+                .child(strings.search_incomplete),
+        );
+    }
+
+    let mut root_container = div()
+        .w(px(crate::views::editor::DRAWER_WIDTH))
         .h_full()
         .bg(theme.bg)
         .border_r_1()
@@ -180,162 +992,35 @@ pub fn render_drawer_with_search(
                             window.start_window_move();
                         }),
                 ),
-        )
-        // Scrollable Tab Body
-        .child(
-            div()
-                .id("drawer_content_scroll")
-                .track_scroll(scroll_handle)
-                .flex_1()
-                .min_h(px(0.))
-                .overflow_y_scroll()
-                .p_2()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(match active_tab {
-                    DrawerTab::Files => {
-                        let mut content = div().flex().flex_col().gap_1();
+        );
 
-                        // ==========================================
-                        // 0. Search Row
-                        // ==========================================
-                        let is_searching = !search.search_query.is_empty();
+    if active_tab == DrawerTab::Files {
+        root_container = root_container.child(fixed_search_area);
+    }
 
-                        let mut search_row = div()
-                            .id("drawer_search_container")
-                            .w_full()
-                            .h(px(28.))
-                            .px_2()
-                            .rounded(px(6.))
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.surface)
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_1p5();
+    root_container.child(
+        div()
+            .id("drawer_content_scroll")
+            .track_scroll(scroll_handle)
+            .flex_1()
+            .min_h(px(0.))
+            .overflow_y_scroll()
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(match active_tab {
+                DrawerTab::Files => {
+                    let mut content = div().flex().flex_col().gap_1();
 
-                        if let Some(ref on_focus) = search.on_focus_search {
-                            let on_focus_cb = on_focus.clone();
-                            search_row = search_row
-                                .cursor_pointer()
-                                .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
-                                    on_focus_cb(window, cx);
-                                });
-                        }
-
-                        let search_left = div()
-                            .flex()
-                            .items_center()
-                            .gap_1p5()
-                            .min_w(px(0.))
-                            .child(
-                                div()
-                                    .text_size(px(14.))
-                                    .text_color(theme.text_muted)
-                                    .child("🔍"),
-                            )
-                            .child(
-                                div()
-                                    .id("drawer_search_query_display")
-                                    .min_w(px(0.))
-                                    .truncate()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::NORMAL)
-                                    .text_color(if is_searching {
-                                        theme.text_primary
-                                    } else {
-                                        theme.text_muted
-                                    })
-                                    .child(if is_searching {
-                                        search.search_query.clone()
-                                    } else {
-                                        strings.search_placeholder.to_string()
-                                    }),
-                            );
-
-                        search_row = search_row.child(search_left);
-
-                        if is_searching {
-                            let on_clear = search.on_clear_search.clone();
-                            let clear_btn = div()
-                                .id("btn_clear_search")
-                                .w(px(16.))
-                                .h(px(16.))
-                                .rounded(px(3.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor_pointer()
-                                .text_size(px(12.))
-                                .text_color(theme.text_muted)
-                                .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
-                                .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
-                                    cx.stop_propagation();
-                                    if let Some(ref cb) = on_clear {
-                                        cb(window, cx);
-                                    }
-                                })
-                                .child("×");
-                            search_row = search_row.child(clear_btn);
-                        }
-
-                        content = content.child(search_row);
-
-                        // Status indicators below search input
-                        if is_searching && !search.has_search_matches {
-                            content = content.child(
-                                div()
-                                    .id("drawer_search_no_results")
-                                    .px_2()
-                                    .py_1()
-                                    .text_size(px(11.))
-                                    .text_color(theme.text_muted)
-                                    .child(strings.search_no_results),
-                            );
-                        }
-
-                        if search.search_in_progress {
-                            content = content.child(
-                                div()
-                                    .id("drawer_search_scanning")
-                                    .px_2()
-                                    .py_0p5()
-                                    .text_size(px(11.))
-                                    .text_color(theme.text_muted)
-                                    .child(strings.search_scanning),
-                            );
-                        }
-
-                        if search.search_truncated {
-                            content = content.child(
-                                div()
-                                    .id("drawer_search_incomplete")
-                                    .px_2()
-                                    .py_0p5()
-                                    .text_size(px(11.))
-                                    .text_color(theme.conflict_border)
-                                    .child(strings.search_incomplete),
-                            );
-                        }
-
-                        // ==========================================
-                        // 1. Draft Item (decentralized: rendered only when an active/open scratch doc exists)
-                        // ==========================================
-                        if let Some(draft_doc) = open_docs.iter().find(|d| d.key.is_scratch()) {
-                            let draft_title = draft_doc.doc.display_name_with_fallback(strings.untitled_file);
-                            let heading_match = draft_doc
-                                .doc
-                                .parsed
-                                .headings()
-                                .first()
-                                .map(|h| h.text.to_lowercase().contains(&search.search_query.to_lowercase()))
-                                .unwrap_or(false);
-                            let show_draft = search.search_query.is_empty()
-                                || draft_title.to_lowercase().contains(&search.search_query.to_lowercase())
-                                || heading_match;
-                            if show_draft {
+                    // ==========================================
+                    // 1. Draft Item (decentralized: rendered only when an active/open scratch doc exists)
+                    // ==========================================
+                    if let Some(draft_doc) = open_docs.iter().find(|d| d.key.is_scratch()) {
+                        let draft_title = draft_doc.doc.display_name_with_fallback(strings.untitled_file);
+                        let show_draft = search.search_query.is_empty()
+                            || draft_title.to_lowercase().contains(&search.search_query.to_lowercase());
+                        if show_draft {
                                 let is_draft_active = active_key == Some(&draft_doc.key);
                                 let d_key = draft_doc.key.clone();
                                 let t_switch_draft = on_select_doc.clone();

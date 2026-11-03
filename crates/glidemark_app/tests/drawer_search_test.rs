@@ -17,15 +17,21 @@ fn test_set_search_query_and_clear_search() {
     assert!(!state.search_truncated);
     assert!(state.has_search_matches());
 
-    // Setting query
+    // Setting query marks search_in_progress as true before background execution
     state.set_search_query("test_file");
     assert_eq!(state.search_query, "test_file");
     assert!(state.search_original_expanded.is_some());
+    assert!(state.search_in_progress);
 
-    // Clearing query
+    // Executing search marks search_in_progress as false
+    state.execute_search();
+    assert!(!state.search_in_progress);
+
+    // Clearing query restores search_in_progress to false
     state.clear_search();
     assert_eq!(state.search_query, "");
     assert!(state.search_original_expanded.is_none());
+    assert!(!state.search_in_progress);
     assert!(!state.search_truncated);
     assert!(state.has_search_matches());
 }
@@ -89,7 +95,7 @@ fn test_matching_across_roots_loose_and_drafts() {
     state.set_search_query("external_loose");
     assert!(state.has_search_matches(), "Should match loose doc");
 
-    // 3. Draft matching (scratch doc with display name or heading)
+    // 3. Draft matching: match filenames only; do NOT match draft content's first heading
     let mut scratch_doc = Document::new_scratch();
     scratch_doc.update_buffer("# My Daily Scratch\nDraft content".to_string());
     state.open_docs.push(OpenDoc {
@@ -98,7 +104,17 @@ fn test_matching_across_roots_loose_and_drafts() {
     });
 
     state.set_search_query("Daily");
-    assert!(state.has_search_matches(), "Should match scratch draft title");
+    assert!(
+        !state.has_search_matches(),
+        "Filename search must NOT match scratch draft first heading"
+    );
+
+    // Match scratch draft by display title (e.g. Untitled fallback)
+    state.set_search_query("Untitled");
+    assert!(
+        state.has_search_matches(),
+        "Should match scratch draft display title"
+    );
 
     // 4. Non-matching query
     state.set_search_query("completely_nonexistent_token_98765");
@@ -135,9 +151,13 @@ fn test_auto_expansion_and_restoration() {
     let src_node = state.workspace_roots[0].tree.iter().find(|n| n.name == "src").unwrap();
     assert!(!src_node.is_expanded, "src should be collapsed initially");
 
-    // Search for Button -> should auto-expand ancestor directories src and components
+    // Search for Button -> marks search in progress, executing search auto-expands ancestors
     state.set_search_query("Button");
     assert_eq!(state.search_query, "Button");
+    assert!(state.search_in_progress);
+
+    state.execute_search();
+    assert!(!state.search_in_progress);
     assert!(state.has_search_matches());
 
     let src_node_after = state.workspace_roots[0].tree.iter().find(|n| n.name == "src").unwrap();
@@ -179,6 +199,9 @@ fn test_restoration_preserves_pre_search_expanded_folders() {
 
     // Search for "old_spec" in archive
     state.set_search_query("old_spec");
+    assert!(state.search_in_progress);
+    state.execute_search();
+    assert!(!state.search_in_progress);
 
     let archive_node = state.workspace_roots[0].tree.iter().find(|n| n.name == "archive").unwrap();
     assert!(archive_node.is_expanded, "archive must be expanded during search");
@@ -217,6 +240,9 @@ fn test_search_truncated_flag() {
     });
 
     state.set_search_query("file");
+    assert!(state.search_in_progress);
+    state.execute_search();
+    assert!(!state.search_in_progress);
     assert!(state.search_truncated, "search_truncated must be true when root is truncated");
 
     state.clear_search();
@@ -286,6 +312,28 @@ fn test_drawer_render_contract() {
         src.contains("render_drawer_with_search"),
         "drawer.rs must export render_drawer_with_search"
     );
+
+    // 5. R4: Fixed search box container contract
+    assert!(
+        src.contains("drawer_search_fixed_container"),
+        "drawer.rs must define drawer_search_fixed_container"
+    );
+    let search_container_pos = src.find("drawer_search_fixed_container").unwrap();
+    let scroll_pos = src.find("drawer_content_scroll").unwrap();
+    assert!(
+        search_container_pos < scroll_pos,
+        "drawer_search_fixed_container must be placed BEFORE drawer_content_scroll"
+    );
+
+    // 6. R6: Zero-emoji assertion
+    assert!(
+        !src.contains('🔍'),
+        "drawer.rs must not contain search magnifying glass emoji (zero-emoji requirement)"
+    );
+    assert!(
+        src.contains("icons/search.svg"),
+        "drawer.rs must use icons/search.svg"
+    );
 }
 
 #[test]
@@ -294,7 +342,28 @@ fn test_drawer_search_params_from_state() {
     let mut state = AppState::new_isolated(doc);
     state.set_search_query("test");
 
-    let params = DrawerSearchParams::from_state(&state, None);
+    let params_in_progress = DrawerSearchParams {
+        search_query: state.search_query.clone(),
+        has_search_matches: state.has_search_matches(),
+        search_in_progress: state.search_in_progress,
+        search_truncated: state.search_truncated,
+        on_clear_search: None,
+        on_focus_search: None,
+        search_input: None,
+    };
+    assert_eq!(params_in_progress.search_query, "test");
+    assert!(params_in_progress.search_in_progress);
+
+    state.execute_search();
+    let params = DrawerSearchParams {
+        search_query: state.search_query.clone(),
+        has_search_matches: state.has_search_matches(),
+        search_in_progress: state.search_in_progress,
+        search_truncated: state.search_truncated,
+        on_clear_search: None,
+        on_focus_search: None,
+        search_input: None,
+    };
     assert_eq!(params.search_query, "test");
     assert!(!params.has_search_matches);
     assert!(!params.search_in_progress);
@@ -302,7 +371,175 @@ fn test_drawer_search_params_from_state() {
 
     // When query is empty, has_search_matches is true
     state.clear_search();
-    let params_empty = DrawerSearchParams::from_state(&state, None);
+    let params_empty = DrawerSearchParams {
+        search_query: state.search_query.clone(),
+        has_search_matches: state.has_search_matches(),
+        search_in_progress: state.search_in_progress,
+        search_truncated: state.search_truncated,
+        on_clear_search: None,
+        on_focus_search: None,
+        search_input: None,
+    };
     assert_eq!(params_empty.search_query, "");
     assert!(params_empty.has_search_matches);
+    assert!(!params_empty.search_in_progress);
+}
+
+#[test]
+fn test_background_search_lifecycle() {
+    let tmp = tempdir().unwrap();
+    let root_path = tmp.path().join("repo");
+    fs::create_dir_all(&root_path).unwrap();
+    fs::write(root_path.join("async_target.md"), "# Target").unwrap();
+
+    let doc = Document::new_scratch();
+    let mut state = AppState::new_isolated(doc);
+    state.add_workspace_root(root_path).unwrap();
+
+    // 1. Initial typing initiates search_in_progress
+    state.set_search_query("async_target");
+    let gen1 = state.search_generation;
+    assert!(state.search_in_progress);
+    assert_eq!(state.search_query, "async_target");
+
+    // 2. Background thread execution
+    let job = state.prepare_search_job().expect("Search job should be preparable");
+    let handle = std::thread::spawn(move || job.execute());
+    let result = handle.join().expect("Background search thread failed");
+
+    // 3. Applying results marks search_in_progress as false
+    let applied = state.apply_search_result(result);
+    assert!(applied);
+    assert!(!state.search_in_progress);
+    assert!(state.has_search_matches());
+
+    // 4. Stale results with old generation are rejected
+    state.set_search_query("newer_query");
+    let stale_job = glidemark_app::state::SearchJob {
+        generation: gen1, // Stale generation
+        query: "async_target".to_string(),
+        roots: Vec::new(),
+        scan_budget: state.scan_budget.clone(),
+    };
+    let stale_result = stale_job.execute();
+    let stale_applied = state.apply_search_result(stale_result);
+    assert!(!stale_applied, "Stale search result must be rejected");
+    assert!(state.search_in_progress);
+
+    // 5. Clear cancels in-progress search
+    state.clear_search();
+    assert!(!state.search_in_progress);
+}
+
+#[test]
+fn test_root_removal_during_search_does_not_shift_indices_or_panic() {
+    let tmp = tempdir().unwrap();
+    let root_a_path = tmp.path().join("root_a");
+    let root_b_path = tmp.path().join("root_b");
+    fs::create_dir_all(root_a_path.join("sub_a")).unwrap();
+    fs::create_dir_all(root_b_path.join("sub_b")).unwrap();
+    fs::write(root_a_path.join("sub_a").join("file_a.md"), "# File A").unwrap();
+    fs::write(root_b_path.join("sub_b").join("file_b.md"), "# File B").unwrap();
+
+    let root_a = fs::canonicalize(&root_a_path).unwrap();
+    let root_b = fs::canonicalize(&root_b_path).unwrap();
+
+    let doc = Document::new_scratch();
+    let mut state = AppState::new_isolated(doc);
+    state.add_workspace_root(root_a_path).unwrap();
+    state.add_workspace_root(root_b_path).unwrap();
+
+    // Mark sub_b expanded before search
+    for node in state.workspace_roots[1].tree.iter_mut() {
+        if node.name == "sub_b" {
+            node.is_expanded = true;
+        }
+    }
+
+    // Set search query: original expanded state is saved keyed by PathBuf
+    state.set_search_query("file");
+    assert!(state.search_original_expanded.is_some());
+    let saved = state.search_original_expanded.as_ref().unwrap();
+    assert!(saved.contains_key(&root_a));
+    assert!(saved.contains_key(&root_b));
+
+    // Remove root_a (index 0). root_b shifts from index 1 to index 0!
+    state.remove_workspace_root(0).unwrap();
+    assert_eq!(state.workspace_roots.len(), 1);
+    assert_eq!(state.workspace_roots[0].path, root_b);
+
+    // Verify root_a was cleanly removed from saved expanded map
+    let saved_after_remove = state.search_original_expanded.as_ref().unwrap();
+    assert!(!saved_after_remove.contains_key(&root_a), "Removed root must be removed from saved map");
+    assert!(saved_after_remove.contains_key(&root_b), "Remaining root must remain in saved map");
+
+    // Clearing search must not panic and must restore root_b's expansion
+    state.clear_search();
+    assert_eq!(state.search_query, "");
+    assert!(state.search_original_expanded.is_none());
+
+    let sub_b_restored = state.workspace_roots[0].tree.iter().find(|n| n.name == "sub_b").unwrap();
+    assert!(sub_b_restored.is_expanded, "root_b's sub_b folder must be restored properly without index shift");
+}
+
+#[gpui::test]
+async fn test_chinese_ime_entity_input_handler(cx: &mut gpui::TestAppContext) {
+    use glidemark_app::views::drawer::SearchInput;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (_view, cx) = cx.add_window_view(|_window, cx| {
+        let focus = cx.focus_handle();
+        SearchInput::new(focus).with_placeholder("Search...")
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, cx| {
+        let focus = cx.focus_handle();
+        let query_changed = std::sync::Arc::new(AtomicBool::new(false));
+        let qc = query_changed.clone();
+
+        let mut input = SearchInput::new(focus)
+            .with_placeholder("Search...")
+            .on_change(move |_q, _window, _cx| {
+                qc.store(true, Ordering::SeqCst);
+            });
+
+        // 1. Initial state
+        assert_eq!(input.content(), "");
+        assert_eq!(input.marked_range, None);
+
+        // 2. Composition (typing Chinese pinyin "zhongwen")
+        input.handle_replace_and_mark_text(None, "zhongwen", None);
+        assert_eq!(input.content(), "zhongwen");
+        assert_eq!(input.marked_range, Some(0..8));
+
+        // 3. Confirm candidate (IME commits "中文")
+        input.handle_replace_text(None, "中文");
+        assert_eq!(input.content(), "中文");
+        assert_eq!(input.marked_range, None);
+
+        // 4. Composition cancellation
+        input.handle_replace_and_mark_text(None, "pinyin", None);
+        assert!(input.marked_range.is_some());
+        input.handle_unmark_text();
+        assert_eq!(input.marked_range, None);
+
+        // 5. Backspace, delete, paste, cursor movement
+        input.set_text("test");
+
+        input.handle_backspace();
+        assert_eq!(input.content(), "tes");
+
+        input.handle_home();
+        assert_eq!(input.selected_range, 0..0);
+
+        input.handle_delete();
+        assert_eq!(input.content(), "es");
+
+        input.handle_end();
+        assert_eq!(input.selected_range, 2..2);
+
+        input.handle_paste_text(" pasted");
+        assert_eq!(input.content(), "es pasted");
+    });
 }

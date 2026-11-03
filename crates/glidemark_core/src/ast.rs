@@ -179,19 +179,54 @@ impl ParsedDocument {
     }
 
     pub fn extract_plain_text(&self, start_block: usize, end_block: usize) -> String {
+        let min = start_block.min(end_block);
+        let max = start_block.max(end_block);
+        self.extract_plain_text_char_range(min, 0, max, usize::MAX)
+    }
+
+    pub fn extract_plain_text_char_range(
+        &self,
+        start_block: usize,
+        start_char: usize,
+        end_block: usize,
+        end_char: usize,
+    ) -> String {
         if self.blocks.is_empty() {
             return String::new();
         }
-        let min = start_block.min(end_block);
-        let max = start_block.max(end_block);
-        if min >= self.blocks.len() {
+
+        // Support reverse dragging: normalize so (from_b, from_c) <= (to_b, to_c)
+        let ((from_b, from_c), (to_b, to_c)) = if (start_block, start_char) <= (end_block, end_char) {
+            ((start_block, start_char), (end_block, end_char))
+        } else {
+            ((end_block, end_char), (start_block, start_char))
+        };
+
+        if from_b >= self.blocks.len() {
             return String::new();
         }
-        let max = max.min(self.blocks.len() - 1);
+        let to_b = to_b.min(self.blocks.len() - 1);
+        if from_b > to_b {
+            return String::new();
+        }
 
         let mut non_empty: Vec<(&BlockElement, String)> = Vec::new();
-        for block in &self.blocks[min..=max] {
-            let text = block.to_plain_text();
+        for (idx, block) in self.blocks.iter().enumerate().skip(from_b).take(to_b - from_b + 1) {
+            let full_text = block.to_plain_text();
+            let char_len = full_text.chars().count();
+
+            let (c_start, c_end) = if from_b == to_b {
+                (from_c.min(char_len), to_c.min(char_len))
+            } else if idx == from_b {
+                (from_c.min(char_len), char_len)
+            } else if idx == to_b {
+                (0, to_c.min(char_len))
+            } else {
+                (0, char_len)
+            };
+
+            let c_start = c_start.min(c_end);
+            let text: String = full_text.chars().skip(c_start).take(c_end - c_start).collect();
             if !text.is_empty() {
                 non_empty.push((block, text));
             }

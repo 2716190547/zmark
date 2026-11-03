@@ -22,8 +22,17 @@ fn test_default_palette_neutral_colors() {
         rgb(0xf6f8fa).into(),
         "Default light code_bg must be #f6f8fa (Clean cool light gray)"
     );
+    let sel_light = light.selection_bg();
     assert!(
-        light.selection_bg().a >= 0.10,
+        sel_light.h >= 25.0 / 360.0 && sel_light.h <= 45.0 / 360.0,
+        "Default light selection_bg must have warm hue per Phase H"
+    );
+    assert!(
+        sel_light.s >= 0.30,
+        "Default light selection_bg must have warm saturation per Phase H"
+    );
+    assert!(
+        sel_light.a >= 0.10 && sel_light.a <= 0.20,
         "Default light selection_bg must have subtle warm opacity per Phase H"
     );
     assert_eq!(
@@ -214,9 +223,19 @@ fn test_ticket_g0_selection_tokens() {
 
             if palette.id == "default" || palette.id == "claude" {
                 assert!(
-                    sel_bg.a >= 0.10,
-                    "selection_bg must have subtle warm opacity for {} (is_dark={})",
-                    palette.id, is_dark
+                    sel_bg.h >= 25.0 / 360.0 && sel_bg.h <= 45.0 / 360.0,
+                    "selection_bg must have warm hue between 25° and 45° for {} (is_dark={}), got {}",
+                    palette.id, is_dark, sel_bg.h * 360.0
+                );
+                assert!(
+                    sel_bg.s >= 0.30,
+                    "selection_bg must have warm saturation >= 0.30 for {} (is_dark={}), got {}",
+                    palette.id, is_dark, sel_bg.s
+                );
+                assert!(
+                    sel_bg.a >= 0.10 && sel_bg.a <= 0.22,
+                    "selection_bg must have subtle warm opacity for {} (is_dark={}), got {}",
+                    palette.id, is_dark, sel_bg.a
                 );
             } else {
                 assert_eq!(

@@ -43,7 +43,22 @@ fn test_h3_selection_tokens_and_status_labels() {
             let theme = ThemeColors::resolve(palette.id, is_dark);
             let sel_bg = theme.selection_bg();
             if palette.id == "default" || palette.id == "claude" {
-                assert!(sel_bg.a >= 0.10, "Warm palette {} must have warm opacity", palette.id);
+                let hue_deg = sel_bg.h * 360.0;
+                assert!(
+                    hue_deg >= 25.0 && hue_deg <= 45.0,
+                    "Palette {} (dark={}) selection_bg hue {}° not in warm [25°, 45°]",
+                    palette.id, is_dark, hue_deg
+                );
+                assert!(
+                    sel_bg.s >= 0.30,
+                    "Palette {} (dark={}) selection_bg saturation {} below 0.30",
+                    palette.id, is_dark, sel_bg.s
+                );
+                assert!(
+                    sel_bg.a >= 0.10,
+                    "Palette {} (dark={}) selection_bg alpha {} below 0.10",
+                    palette.id, is_dark, sel_bg.a
+                );
             } else {
                 assert_eq!(sel_bg, theme.text_primary.opacity(0.07));
             }
@@ -69,19 +84,21 @@ async fn test_workspace_search_and_selection_integration(cx: &mut TestAppContext
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        view.update(app, |workspace, _cx| {
-            // Initial state
+        view.update(app, |workspace, cx| {
+            // Initial state: search is not focused, no preview selection, search input exists
             assert!(!workspace.search_focused);
             assert!(workspace.preview_selection.is_none());
+            assert!(workspace.search_input.is_some());
 
-            // Focus search
-            workspace.search_focused = true;
-            workspace.state.set_search_query("test");
+            // Update search query via Workspace async trigger
+            workspace.update_search_query("test", cx);
             assert_eq!(workspace.state.search_query, "test");
+            assert!(workspace.state.search_in_progress);
 
             // Clear search
             workspace.state.clear_search();
             assert_eq!(workspace.state.search_query, "");
+            assert!(!workspace.state.search_in_progress);
         });
     });
 }

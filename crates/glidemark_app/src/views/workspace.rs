@@ -40,7 +40,9 @@ pub struct WorkspaceView {
     pub window_handle: Option<AnyWindowHandle>,
     pub error_banner: Option<String>,
     pub search_focused: bool,
+    pub search_input: Option<Entity<crate::views::drawer::SearchInput>>,
     pub preview_selection: Option<crate::views::preview::PreviewSelectionRange>,
+    pub is_preview_selecting: bool,
 }
 
 impl WorkspaceView {
@@ -50,6 +52,23 @@ impl WorkspaceView {
             ListAlignment::Top,
             px(600.),
         );
+        let search_focus = cx.focus_handle();
+        let view_search = cx.entity().clone();
+        let search_placeholder = state.strings.search_placeholder;
+        let search_input = cx.new(|_| {
+            let view = view_search.clone();
+            crate::views::drawer::SearchInput::new(search_focus)
+                .with_placeholder(search_placeholder)
+                .on_change(move |new_q, _window, cx| {
+                    let view = view.clone();
+                    let q = new_q.to_string();
+                    cx.spawn(async move |_this, app| {
+                        let _ = view.update(app, |workspace, cx| {
+                            workspace.update_search_query(&q, cx);
+                        });
+                    }).detach();
+                })
+        });
         Self {
             state,
             focus_handle: cx.focus_handle(),
@@ -72,13 +91,34 @@ impl WorkspaceView {
             window_handle: None,
             error_banner: None,
             search_focused: false,
+            search_input: Some(search_input),
             preview_selection: None,
+            is_preview_selecting: false,
         }
     }
 
     /// Swaps in a new document: the preview list drops cached heights and starts at the top.
-    pub fn reset_preview_list(&self) {
+    pub fn reset_preview_list(&mut self) {
+        self.preview_selection = None;
+        self.is_preview_selecting = false;
         self.preview_list.reset(self.state.doc.parsed.blocks.len());
+    }
+
+    pub fn update_search_query(&mut self, query: &str, cx: &mut Context<Self>) {
+        self.state.set_search_query(query);
+        if let Some(job) = self.state.prepare_search_job() {
+            cx.spawn(async move |this, app| {
+                let result = app.background_executor().spawn(async move {
+                    job.execute()
+                }).await;
+                let _ = this.update(app, |view, cx| {
+                    if view.state.apply_search_result(result) {
+                        cx.notify();
+                    }
+                });
+            }).detach();
+        }
+        cx.notify();
     }
 
     /// Re-measures the preview after an edit, keeping the current scroll position.
@@ -120,6 +160,7 @@ impl WorkspaceView {
         self.parse_task = None;
         self.parse_paused = false;
         self.preview_selection = None;
+        self.is_preview_selecting = false;
         self.search_focused = false;
         self.state.sync_from_editor();
         if self.state.parse_now() {
@@ -234,6 +275,7 @@ impl WorkspaceView {
         self.parse_task = None;
         self.parse_paused = false;
         self.preview_selection = None;
+        self.is_preview_selecting = false;
         self.search_focused = false;
         if let Some(image) = self.lightbox.close() {
             if let Some(window) = window {
@@ -724,6 +766,7 @@ impl WorkspaceView {
                             .flex()
                             .items_center()
                             .gap_1p5()
+                            .min_w(px(0.))
                             .px_2()
                             .py_1()
                             .rounded_md()
@@ -780,6 +823,7 @@ impl WorkspaceView {
             .child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
                     .gap_2()
                     .child(
@@ -1106,6 +1150,8 @@ impl Render for WorkspaceView {
             view_click.update(cx, |this, cx| {
                 let (phys_line, phys_col) = crate::editor_engine::visual_to_physical(vis_idx, vis_col, &vl_for_click);
                 this.state.editor.set_cursor(phys_line, phys_col);
+                this.preview_selection = None;
+                this.is_preview_selecting = false;
                 cx.notify();
             });
         });
@@ -1314,7 +1360,7 @@ impl Render for WorkspaceView {
                 if this.is_resizing_split {
                     let w = this.workspace_width;
                     let x = f32::from(event.position.x);
-                    let left_offset = if this.state.drawer_open { 250.0 } else { 0.0 };
+                    let left_offset = if this.state.drawer_open { crate::views::editor::DRAWER_WIDTH } else { 0.0 };
                     let avail_w = (w - left_offset).max(100.0);
                     let offset_x = (x - left_offset).max(0.0);
                     this.split_ratio = (offset_x / avail_w).clamp(0.20, 0.80);
@@ -1425,6 +1471,11 @@ impl Render for WorkspaceView {
                         "escape" => {
                             this.search_focused = false;
                             this.state.clear_search();
+                            if let Some(ref input) = this.search_input {
+                                input.update(cx, |inp, cx| {
+                                    inp.clear(cx);
+                                });
+                            }
                             cx.notify();
                         }
                         "enter" => {
@@ -1434,29 +1485,49 @@ impl Render for WorkspaceView {
                         "backspace" => {
                             let mut q = this.state.search_query.clone();
                             q.pop();
-                            this.state.set_search_query(&q);
-                            cx.notify();
+                            if let Some(ref input) = this.search_input {
+                                let query_str = q.clone();
+                                input.update(cx, |inp, _cx| {
+                                    inp.set_text(query_str);
+                                });
+                            }
+                            this.update_search_query(&q, cx);
                         }
                         "space" => {
                             let mut q = this.state.search_query.clone();
                             q.push(' ');
-                            this.state.set_search_query(&q);
-                            cx.notify();
+                            if let Some(ref input) = this.search_input {
+                                let query_str = q.clone();
+                                input.update(cx, |inp, _cx| {
+                                    inp.set_text(query_str);
+                                });
+                            }
+                            this.update_search_query(&q, cx);
                         }
                         _ => {
                             if let Some(ch) = &event.keystroke.key_char {
                                 let mut q = this.state.search_query.clone();
                                 q.push_str(ch);
-                                this.state.set_search_query(&q);
-                                cx.notify();
+                                if let Some(ref input) = this.search_input {
+                                    let query_str = q.clone();
+                                    input.update(cx, |inp, _cx| {
+                                        inp.set_text(query_str);
+                                    });
+                                }
+                                this.update_search_query(&q, cx);
                             } else if key.chars().count() == 1
                                 && !mods.control
                                 && !mods.platform
                             {
                                 let mut q = this.state.search_query.clone();
                                 q.push_str(key);
-                                this.state.set_search_query(&q);
-                                cx.notify();
+                                if let Some(ref input) = this.search_input {
+                                    let query_str = q.clone();
+                                    input.update(cx, |inp, _cx| {
+                                        inp.set_text(query_str);
+                                    });
+                                }
+                                this.update_search_query(&q, cx);
                             }
                         }
                     }
@@ -1568,6 +1639,10 @@ impl Render for WorkspaceView {
                                 this.state.toggle_drawer();
                             }
                             this.search_focused = true;
+                            if let Some(ref input) = this.search_input {
+                                let handle = input.read(cx).focus_handle.clone();
+                                window.focus(&handle);
+                            }
                             cx.notify();
                         }
                         "c" | "C" => {
@@ -1644,7 +1719,7 @@ impl Render for WorkspaceView {
                         .overflow_hidden()
                         .child(
                             div()
-                                .w(px(250.))
+                                .w(px(crate::views::editor::DRAWER_WIDTH))
                                 .h_full()
                                 .border_r_1()
                                 .border_color(theme.border)
@@ -1652,18 +1727,29 @@ impl Render for WorkspaceView {
                                 .overflow_hidden()
                                 .child({
                                     let view_search = cx.entity().clone();
+                                    let si_clear = self.search_input.clone();
                                     let on_clear_search = {
                                         let view = view_search.clone();
                                         Arc::new(move |_window: &mut Window, cx: &mut App| {
+                                            if let Some(ref input) = si_clear {
+                                                input.update(cx, |inp, cx| {
+                                                    inp.clear(cx);
+                                                });
+                                            }
                                             view.update(cx, |this, cx| {
                                                 this.state.clear_search();
                                                 cx.notify();
                                             });
                                         })
                                     };
+                                    let si_focus = self.search_input.clone();
                                     let on_focus_search = {
                                         let view = view_search;
-                                        Arc::new(move |_window: &mut Window, cx: &mut App| {
+                                        Arc::new(move |window: &mut Window, cx: &mut App| {
+                                            if let Some(ref input) = si_focus {
+                                                let handle = input.read(cx).focus_handle.clone();
+                                                window.focus(&handle);
+                                            }
                                             view.update(cx, |this, cx| {
                                                 this.search_focused = true;
                                                 cx.notify();
@@ -1677,6 +1763,7 @@ impl Render for WorkspaceView {
                                         search_truncated: self.state.search_truncated,
                                         on_clear_search: Some(on_clear_search),
                                         on_focus_search: Some(on_focus_search),
+                                        search_input: self.search_input.clone(),
                                     };
                                     crate::views::drawer::render_drawer_with_search(
                                         is_fullscreen,
@@ -1711,7 +1798,7 @@ impl Render for WorkspaceView {
                             Animation::new(std::time::Duration::from_millis(180)).with_easing(ease_in_out),
                             move |el, delta| {
                                 let factor = if is_drawer_closing { 1.0 - delta } else { delta };
-                                el.w(px(250.0 * factor)).opacity(factor.clamp(0.0, 1.0))
+                                el.w(px(crate::views::editor::DRAWER_WIDTH * factor)).opacity(factor.clamp(0.0, 1.0))
                             },
                         ),
                 )
@@ -1910,6 +1997,43 @@ impl Render for WorkspaceView {
                                     })
                                 };
 
+                                let view_for_sel = cx.entity().clone();
+                                let on_selection_change: crate::views::preview::OnPreviewSelectionCallback = Arc::new(move |sel, is_selecting, _window, app| {
+                                    let view = view_for_sel.clone();
+                                    view.update(app, |this, cx| {
+                                        this.preview_selection = sel;
+                                        this.is_preview_selecting = is_selecting;
+                                        cx.notify();
+                                    });
+                                });
+
+                                let view_for_scroll = cx.entity().clone();
+                                let on_autoscroll: crate::views::preview::OnPreviewAutoscrollCallback = Arc::new(move |velocity, _window, app| {
+                                    let view = view_for_scroll.clone();
+                                    view.update(app, |this, _cx| {
+                                        let mut top = this.preview_list.logical_scroll_top();
+                                        let new_offset = f32::from(top.offset_in_item) + velocity;
+                                        if new_offset < 0.0 {
+                                            if top.item_ix > 0 {
+                                                top.item_ix = top.item_ix.saturating_sub(1);
+                                                top.offset_in_item = px(0.0);
+                                            } else {
+                                                top.offset_in_item = px(0.0);
+                                            }
+                                        } else {
+                                            top.offset_in_item = px(new_offset);
+                                        }
+                                        this.preview_list.scroll_to(top);
+                                    });
+                                });
+
+                                let preview_callbacks = crate::views::preview::PreviewCallbacks {
+                                    on_copy: Some(on_copy.clone()),
+                                    on_open_lightbox: Some(on_open_lightbox.clone()),
+                                    on_selection_change: Some(on_selection_change),
+                                    on_autoscroll: Some(on_autoscroll),
+                                };
+
                                 div()
                                     .flex_1()
                                     .min_w(px(0.))
@@ -1965,7 +2089,7 @@ impl Render for WorkspaceView {
                                             ViewMode::Preview => div()
                                                 .size_full()
                                                 .min_w(px(0.))
-                                                .child(crate::views::preview::render_preview_pane_with_selection(
+                                                .child(crate::views::preview::render_preview_pane_with_callbacks(
                                                     self.state.doc.parsed.clone(),
                                                     theme,
                                                     strings,
@@ -1973,9 +2097,9 @@ impl Render for WorkspaceView {
                                                     self.state.preferences.font_size,
                                                     &self.preview_list,
                                                     copied_code_hash,
-                                                    Some(on_copy.clone()),
-                                                    Some(on_open_lightbox.clone()),
+                                                    preview_callbacks.clone(),
                                                     self.preview_selection,
+                                                    self.is_preview_selecting,
                                                 ))
                                                 .into_any_element(),
                                             ViewMode::Split => div()
@@ -2051,7 +2175,7 @@ impl Render for WorkspaceView {
                                                         .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
                                                             this.handle_preview_scroll_wheel(event, window, cx);
                                                         }))
-                                                        .child(crate::views::preview::render_preview_pane_with_selection(
+                                                        .child(crate::views::preview::render_preview_pane_with_callbacks(
                                                             self.state.doc.parsed.clone(),
                                                             theme,
                                                             strings,
@@ -2059,9 +2183,9 @@ impl Render for WorkspaceView {
                                                             self.state.preferences.font_size,
                                                             &self.preview_list,
                                                             copied_code_hash,
-                                                            Some(on_copy),
-                                                            Some(on_open_lightbox.clone()),
+                                                            preview_callbacks,
                                                             self.preview_selection,
+                                                            self.is_preview_selecting,
                                                         )),
                                                 )
                                                 .into_any_element(),

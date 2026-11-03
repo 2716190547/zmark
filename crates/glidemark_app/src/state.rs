@@ -430,7 +430,9 @@ pub struct AppState {
     #[allow(dead_code)]
     pub search_query: String,
     #[allow(dead_code)]
-    pub search_original_expanded: Option<std::collections::HashMap<usize, std::collections::HashSet<std::path::PathBuf>>>,
+    pub search_original_expanded: Option<std::collections::HashMap<std::path::PathBuf, std::collections::HashSet<std::path::PathBuf>>>,
+    #[allow(dead_code)]
+    pub search_generation: u64,
     #[allow(dead_code)]
     pub search_in_progress: bool,
     #[allow(dead_code)]
@@ -520,6 +522,7 @@ impl AppState {
             error_message: None,
             search_query: String::new(),
             search_original_expanded: None,
+            search_generation: 0,
             search_in_progress: false,
             search_truncated: false,
         };
@@ -1075,6 +1078,9 @@ impl AppState {
                 self.workspace_roots.iter().map(|r| r.path.clone()).collect();
             return Err(format!("Failed to save preferences: {}", e));
         }
+        if let Some(ref mut saved) = self.search_original_expanded {
+            saved.remove(&removed.path);
+        }
         self.scan_budget.entries_left =
             (self.scan_budget.entries_left.saturating_add(removed.entries_used))
                 .min(ScanBudget::MAX_GLOBAL_ENTRIES);
@@ -1508,91 +1514,110 @@ impl AppState {
     #[allow(dead_code)]
     pub fn set_search_query(&mut self, query: &str) {
         self.search_query = query.to_string();
+        self.search_generation = self.search_generation.wrapping_add(1);
+
         if !query.is_empty() {
             // Save current expanded state on first keystroke
             if self.search_original_expanded.is_none() {
                 let mut saved = HashMap::new();
-                for (idx, r) in self.workspace_roots.iter().enumerate() {
+                for r in &self.workspace_roots {
                     let mut set = r.expanded_folders();
                     if r.is_expanded {
                         set.insert(r.path.clone());
                     }
-                    saved.insert(idx, set);
+                    saved.insert(r.path.clone(), set);
                 }
                 self.search_original_expanded = Some(saved);
             } else if let Some(ref saved) = self.search_original_expanded {
                 // If query changes while searching, restore each root to original state before re-expanding
-                for (idx, r) in self.workspace_roots.iter_mut().enumerate() {
-                    if let Some(orig) = saved.get(&idx) {
+                for r in self.workspace_roots.iter_mut() {
+                    if let Some(orig) = saved.get(&r.path) {
                         r.is_expanded = orig.contains(&r.path);
                         r.set_expanded_folders(orig);
                     }
                 }
             }
-
-            let query_lower = query.to_lowercase();
-            let mut any_truncated = false;
-
-            for root_idx in 0..self.workspace_roots.len() {
-                if self.workspace_roots[root_idx].is_missing {
-                    continue;
-                }
-                if self.workspace_roots[root_idx].truncated {
-                    any_truncated = true;
-                }
-                if self.workspace_roots[root_idx].deferred && self.workspace_roots[root_idx].tree.is_empty() {
-                    self.refresh_root(root_idx);
-                }
-
-                let root_rem_entries = ScanBudget::PER_ROOT_ENTRY_CAP
-                    .saturating_sub(self.workspace_roots[root_idx].entries_used);
-                let root_rem_files = ScanBudget::PER_ROOT_FILE_CAP
-                    .saturating_sub(self.workspace_roots[root_idx].files_used);
-                let avail_entries = root_rem_entries.min(self.scan_budget.entries_left);
-                let avail_files = root_rem_files.min(self.scan_budget.files_left);
-
-                let mut budget = ScanBudget::new(avail_entries, avail_files);
-                let mut is_truncated = self.workspace_roots[root_idx].truncated;
-                let mut entries_used = 0;
-                let mut files_used = 0;
-
-                let matched = expand_ancestors_for_matching_files(
-                    &mut self.workspace_roots[root_idx].tree,
-                    &query_lower,
-                    0,
-                    &mut budget,
-                    &mut entries_used,
-                    &mut files_used,
-                    &mut is_truncated,
-                );
-
-                self.workspace_roots[root_idx].entries_used += entries_used;
-                self.workspace_roots[root_idx].files_used += files_used;
-                self.scan_budget.entries_left = self.scan_budget.entries_left.saturating_sub(entries_used);
-                self.scan_budget.files_left = self.scan_budget.files_left.saturating_sub(files_used);
-
-                if is_truncated {
-                    self.workspace_roots[root_idx].truncated = true;
-                    any_truncated = true;
-                }
-                if matched {
-                    self.workspace_roots[root_idx].is_expanded = true;
-                }
-            }
-
-            self.search_truncated = any_truncated;
+            // Filesystem traversal must NOT run synchronously inside set_search_query on the UI thread
+            self.search_in_progress = true;
         } else {
             // Restore original expanded folders
             if let Some(saved) = self.search_original_expanded.take() {
-                for (idx, r) in self.workspace_roots.iter_mut().enumerate() {
-                    if let Some(orig) = saved.get(&idx) {
+                for r in self.workspace_roots.iter_mut() {
+                    if let Some(orig) = saved.get(&r.path) {
                         r.is_expanded = orig.contains(&r.path);
                         r.set_expanded_folders(orig);
                     }
                 }
             }
+            self.search_in_progress = false;
             self.search_truncated = false;
         }
+    }
+
+    pub fn prepare_search_job(&self) -> Option<SearchJob> {
+        if self.search_query.is_empty() {
+            return None;
+        }
+        Some(SearchJob {
+            generation: self.search_generation,
+            query: self.search_query.clone(),
+            roots: self.workspace_roots.clone(),
+            scan_budget: self.scan_budget.clone(),
+        })
+    }
+
+    pub fn apply_search_result(&mut self, result: SearchJobResult) -> bool {
+        if result.generation != self.search_generation || result.query != self.search_query {
+            return false;
+        }
+
+        for res_root in result.roots {
+            if let Some(existing) = self.workspace_roots.iter_mut().find(|r| r.path == res_root.path) {
+                existing.tree = res_root.tree;
+                existing.is_expanded = res_root.is_expanded;
+                existing.truncated = res_root.truncated;
+                existing.entries_used = res_root.entries_used;
+                existing.files_used = res_root.files_used;
+                existing.deferred = res_root.deferred;
+            }
+        }
+
+        self.scan_budget = result.scan_budget;
+        self.search_truncated = result.search_truncated;
+        self.search_in_progress = false;
+        true
+    }
+
+    #[allow(dead_code)]
+    pub fn execute_search(&mut self) -> bool {
+        if self.search_query.is_empty() {
+            self.search_in_progress = false;
+            return true;
+        }
+        if let Some(job) = self.prepare_search_job() {
+            let result = job.execute();
+            self.apply_search_result(result)
+        } else {
+            self.search_in_progress = false;
+            false
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn perform_search(&mut self) -> bool {
+        self.execute_search()
+    }
+
+    #[allow(dead_code)]
+    pub fn spawn_background_search<F>(&self, on_complete: F) -> Option<std::thread::JoinHandle<()>>
+    where
+        F: FnOnce(SearchJobResult) + Send + 'static,
+    {
+        let job = self.prepare_search_job()?;
+        Some(std::thread::spawn(move || {
+            let res = job.execute();
+            on_complete(res);
+        }))
     }
 
     #[allow(dead_code)]
@@ -1634,14 +1659,98 @@ impl AppState {
                 if title.to_lowercase().contains(&q) {
                     return true;
                 }
-                if let Some(h) = open_doc.doc.parsed.headings().first() {
-                    if h.text.to_lowercase().contains(&q) {
-                        return true;
-                    }
-                }
             }
         }
         false
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchJob {
+    pub generation: u64,
+    pub query: String,
+    pub roots: Vec<WorkspaceRoot>,
+    pub scan_budget: ScanBudget,
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchJobResult {
+    pub generation: u64,
+    pub query: String,
+    pub roots: Vec<WorkspaceRoot>,
+    pub scan_budget: ScanBudget,
+    pub search_truncated: bool,
+}
+
+impl SearchJob {
+    pub fn execute(mut self) -> SearchJobResult {
+        let query_lower = self.query.to_lowercase();
+        let mut any_truncated = false;
+
+        for root in self.roots.iter_mut() {
+            if root.is_missing {
+                continue;
+            }
+            if root.truncated {
+                any_truncated = true;
+            }
+            if root.deferred && root.tree.is_empty() {
+                let empty_set = HashSet::new();
+                let prev_e = self.scan_budget.entries_left;
+                let prev_f = self.scan_budget.files_left;
+                let (tree, is_trunc) = scan_root_layer(&root.path, 0, &mut self.scan_budget, &empty_set, 4);
+                let consumed_e = prev_e.saturating_sub(self.scan_budget.entries_left);
+                let consumed_f = prev_f.saturating_sub(self.scan_budget.files_left);
+                root.entries_used = consumed_e;
+                root.files_used = consumed_f;
+                root.deferred = false;
+                root.truncated = is_trunc;
+                root.tree = tree;
+            }
+
+            let root_rem_entries = ScanBudget::PER_ROOT_ENTRY_CAP
+                .saturating_sub(root.entries_used);
+            let root_rem_files = ScanBudget::PER_ROOT_FILE_CAP
+                .saturating_sub(root.files_used);
+            let avail_entries = root_rem_entries.min(self.scan_budget.entries_left);
+            let avail_files = root_rem_files.min(self.scan_budget.files_left);
+
+            let mut budget = ScanBudget::new(avail_entries, avail_files);
+            let mut is_truncated = root.truncated;
+            let mut entries_used = 0;
+            let mut files_used = 0;
+
+            let matched = expand_ancestors_for_matching_files(
+                &mut root.tree,
+                &query_lower,
+                0,
+                &mut budget,
+                &mut entries_used,
+                &mut files_used,
+                &mut is_truncated,
+            );
+
+            root.entries_used += entries_used;
+            root.files_used += files_used;
+            self.scan_budget.entries_left = self.scan_budget.entries_left.saturating_sub(entries_used);
+            self.scan_budget.files_left = self.scan_budget.files_left.saturating_sub(files_used);
+
+            if is_truncated {
+                root.truncated = true;
+                any_truncated = true;
+            }
+            if matched {
+                root.is_expanded = true;
+            }
+        }
+
+        SearchJobResult {
+            generation: self.generation,
+            query: self.query,
+            roots: self.roots,
+            scan_budget: self.scan_budget,
+            search_truncated: any_truncated,
+        }
     }
 }
 

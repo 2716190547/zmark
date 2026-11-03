@@ -566,82 +566,290 @@ pub fn byte_offset_to_char_index(s: &str, byte_offset: usize) -> usize {
     s[..clamped].chars().count()
 }
 
-/// Computes the character column index closest to `x_offset` within `subline_str`
-/// using GPUI's text system and actual font metrics.
-pub fn calculate_click_char_col_layout(
-    text_system: &gpui::WindowTextSystem,
-    subline_str: &str,
-    x_offset: f32,
-    font_size: f32,
-) -> usize {
-    if subline_str.is_empty() || x_offset <= 0.0 {
-        return 0;
+pub fn token_paddings(kind: &MarkdownTokenKind) -> (f32, f32) {
+    match kind {
+        MarkdownTokenKind::InlineCode => (4.0, 4.0),
+        MarkdownTokenKind::InlineCodeSplitLeft => (4.0, 0.0),
+        MarkdownTokenKind::InlineCodeSplitRight => (0.0, 4.0),
+        _ => (0.0, 0.0),
     }
-    let font = gpui::font("ui-monospace");
-    let font_size_px = gpui::px(font_size);
-    let run = gpui::TextRun {
-        len: subline_str.len(),
-        font,
-        color: gpui::black(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let shaped = text_system.shape_line(gpui::SharedString::from(subline_str.to_string()), font_size_px, &[run], None);
-    let target_x = gpui::px(x_offset);
-    if target_x >= shaped.width {
-        return subline_str.chars().count();
+}
+
+/// Computes the horizontal pixel offset where the cursor should be rendered for `char_col`
+/// within a subline comprised of `tokens`, taking into account font shaping and style paddings.
+pub fn calculate_cursor_x_offset_tokens(
+    text_system: &gpui::WindowTextSystem,
+    tokens: &[MarkdownToken],
+    char_col: usize,
+    font_size: f32,
+) -> f32 {
+    if tokens.is_empty() || char_col == 0 {
+        return 0.0;
     }
 
+    let font = gpui::font("ui-monospace");
+    let font_size_px = gpui::px(font_size);
+    let mut curr_char_idx = 0;
+    let mut curr_x = 0.0;
+
+    for (i, tok) in tokens.iter().enumerate() {
+        let tok_char_count = tok.text.chars().count();
+        let (left_pad, right_pad) = token_paddings(&tok.kind);
+        let is_last_tok = i + 1 == tokens.len();
+
+        let run = gpui::TextRun {
+            len: tok.text.len(),
+            font: font.clone(),
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = text_system.shape_line(
+            gpui::SharedString::from(tok.text.clone()),
+            font_size_px,
+            &[run],
+            None,
+        );
+        let text_w = f32::from(shaped.width);
+
+        if char_col < curr_char_idx + tok_char_count || is_last_tok {
+            let offset_in_tok = char_col.saturating_sub(curr_char_idx).min(tok_char_count);
+            let byte_idx = char_index_to_byte_offset(&tok.text, offset_in_tok);
+            let text_x = if offset_in_tok == tok_char_count {
+                text_w
+            } else {
+                f32::from(shaped.x_for_index(byte_idx))
+            };
+            let extra_right = if is_last_tok && char_col >= curr_char_idx + tok_char_count {
+                right_pad
+            } else {
+                0.0
+            };
+            return curr_x + left_pad + text_x + extra_right;
+        }
+
+        curr_x += left_pad + text_w + right_pad;
+        curr_char_idx += tok_char_count;
+    }
+
+    curr_x
+}
+
+fn closest_byte_index_in_shaped(shaped: &gpui::ShapedLine, target_x: gpui::Pixels) -> usize {
+    if shaped.len == 0 {
+        return 0;
+    }
     let mut prev_idx = 0;
     let mut prev_x = gpui::px(0.);
     for run in &shaped.runs {
         for glyph in &run.glyphs {
             if glyph.position.x >= target_x {
-                let byte_idx = if glyph.position.x - target_x < target_x - prev_x {
+                return if glyph.position.x - target_x < target_x - prev_x {
                     glyph.index
                 } else {
                     prev_idx
                 };
-                return byte_offset_to_char_index(subline_str, byte_idx);
             }
             prev_idx = glyph.index;
             prev_x = glyph.position.x;
         }
     }
 
-    let byte_idx = if shaped.width - target_x < target_x - prev_x {
+    if shaped.width - target_x < target_x - prev_x {
         shaped.len
     } else {
         prev_idx
-    };
-    byte_offset_to_char_index(subline_str, byte_idx)
+    }
+}
+
+/// Computes the character column index closest to `x_offset` within a subline comprised
+/// of `tokens`, taking into account font shaping and style paddings.
+pub fn calculate_click_char_col_tokens(
+    text_system: &gpui::WindowTextSystem,
+    tokens: &[MarkdownToken],
+    x_offset: f32,
+    font_size: f32,
+) -> usize {
+    if tokens.is_empty() || x_offset <= 0.0 {
+        return 0;
+    }
+
+    let font = gpui::font("ui-monospace");
+    let font_size_px = gpui::px(font_size);
+    let mut curr_char_idx = 0;
+    let mut curr_x = 0.0;
+
+    for (i, tok) in tokens.iter().enumerate() {
+        let tok_char_count = tok.text.chars().count();
+        let (left_pad, right_pad) = token_paddings(&tok.kind);
+        let is_last_tok = i + 1 == tokens.len();
+
+        let run = gpui::TextRun {
+            len: tok.text.len(),
+            font: font.clone(),
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = text_system.shape_line(
+            gpui::SharedString::from(tok.text.clone()),
+            font_size_px,
+            &[run],
+            None,
+        );
+        let text_w = f32::from(shaped.width);
+        let total_tok_w = left_pad + text_w + right_pad;
+
+        if !is_last_tok {
+            if x_offset < curr_x + total_tok_w {
+                if x_offset <= curr_x + left_pad {
+                    return curr_char_idx;
+                } else if x_offset >= curr_x + left_pad + text_w {
+                    return curr_char_idx + tok_char_count;
+                } else {
+                    let rel_x = x_offset - (curr_x + left_pad);
+                    let byte_idx = closest_byte_index_in_shaped(&shaped, gpui::px(rel_x));
+                    let char_offset = byte_offset_to_char_index(&tok.text, byte_idx);
+                    return curr_char_idx + char_offset;
+                }
+            }
+        } else {
+            // Last token
+            if x_offset >= curr_x + total_tok_w {
+                return curr_char_idx + tok_char_count;
+            } else if x_offset <= curr_x + left_pad {
+                return curr_char_idx;
+            } else if x_offset >= curr_x + left_pad + text_w {
+                return curr_char_idx + tok_char_count;
+            } else {
+                let rel_x = x_offset - (curr_x + left_pad);
+                let byte_idx = closest_byte_index_in_shaped(&shaped, gpui::px(rel_x));
+                let char_offset = byte_offset_to_char_index(&tok.text, byte_idx);
+                return curr_char_idx + char_offset;
+            }
+        }
+
+        curr_x += total_tok_w;
+        curr_char_idx += tok_char_count;
+    }
+
+    curr_char_idx
+}
+
+/// Measures actual rendered pixel width for each character in `tokens`, accounting for font
+/// shaping advances (such as `\t`) and inline code pill paddings.
+#[allow(dead_code)]
+pub fn compute_char_pixel_widths(
+    text_system: &gpui::WindowTextSystem,
+    tokens: &[MarkdownToken],
+    font_size: f32,
+) -> Vec<f32> {
+    let font = gpui::font("ui-monospace");
+    let font_size_px = gpui::px(font_size);
+    let mut widths = Vec::new();
+
+    for tok in tokens {
+        let (left_pad, right_pad) = token_paddings(&tok.kind);
+        let chars: Vec<char> = tok.text.chars().collect();
+        let char_count = chars.len();
+        if char_count == 0 {
+            continue;
+        }
+
+        let run = gpui::TextRun {
+            len: tok.text.len(),
+            font: font.clone(),
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = text_system.shape_line(
+            gpui::SharedString::from(tok.text.clone()),
+            font_size_px,
+            &[run],
+            None,
+        );
+
+        for (k, _) in chars.iter().enumerate() {
+            let start_byte = char_index_to_byte_offset(&tok.text, k);
+            let end_byte = char_index_to_byte_offset(&tok.text, k + 1);
+            let start_x = f32::from(shaped.x_for_index(start_byte));
+            let end_x = if k + 1 == char_count {
+                f32::from(shaped.width)
+            } else {
+                f32::from(shaped.x_for_index(end_byte))
+            };
+            let mut w = (end_x - start_x).max(0.0);
+            if k == 0 {
+                w += left_pad;
+            }
+            if k + 1 == char_count {
+                w += right_pad;
+            }
+            widths.push(w);
+        }
+    }
+
+    widths
+}
+
+/// Wraps a physical line into visual lines using actual layout metrics (font advance, Tab width,
+/// and token paddings) against `max_width_px`.
+#[allow(dead_code)]
+pub fn wrap_line_to_visual_layout(
+    text_system: &gpui::WindowTextSystem,
+    physical_line_idx: usize,
+    line_str: &str,
+    tokens: &[MarkdownToken],
+    max_width_px: f32,
+    font_size: f32,
+) -> Vec<VisualLine> {
+    let char_widths = compute_char_pixel_widths(text_system, tokens, font_size);
+    crate::editor_engine::wrap_line_to_visual_measured(
+        physical_line_idx,
+        line_str,
+        max_width_px,
+        |idx, ch| {
+            char_widths.get(idx).copied().unwrap_or_else(|| {
+                (crate::editor_engine::char_unit_width(ch) as f32) * (font_size * 0.6).max(1.0)
+            })
+        },
+    )
+}
+
+/// Computes the character column index closest to `x_offset` within `subline_str`
+/// using GPUI's text system and actual font metrics.
+#[allow(dead_code)]
+pub fn calculate_click_char_col_layout(
+    text_system: &gpui::WindowTextSystem,
+    subline_str: &str,
+    x_offset: f32,
+    font_size: f32,
+) -> usize {
+    let tokens = [MarkdownToken {
+        text: subline_str.to_string(),
+        kind: MarkdownTokenKind::Plain,
+    }];
+    calculate_click_char_col_tokens(text_system, &tokens, x_offset, font_size)
 }
 
 /// Computes the horizontal pixel offset where the cursor should be rendered for `char_col`
 /// within `subline_str` using GPUI's text system and actual font metrics.
+#[allow(dead_code)]
 pub fn calculate_cursor_x_offset_layout(
     text_system: &gpui::WindowTextSystem,
     subline_str: &str,
     char_col: usize,
     font_size: f32,
 ) -> f32 {
-    if subline_str.is_empty() || char_col == 0 {
-        return 0.0;
-    }
-    let byte_idx = char_index_to_byte_offset(subline_str, char_col);
-    let font = gpui::font("ui-monospace");
-    let font_size_px = gpui::px(font_size);
-    let run = gpui::TextRun {
-        len: subline_str.len(),
-        font,
-        color: gpui::black(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let shaped = text_system.shape_line(gpui::SharedString::from(subline_str.to_string()), font_size_px, &[run], None);
-    f32::from(shaped.x_for_index(byte_idx))
+    let tokens = [MarkdownToken {
+        text: subline_str.to_string(),
+        kind: MarkdownTokenKind::Plain,
+    }];
+    calculate_cursor_x_offset_tokens(text_system, &tokens, char_col, font_size)
 }
 
 #[allow(dead_code)]
@@ -683,9 +891,25 @@ pub fn slice_tokens_for_visual_subline(
             let c_end = (sub_end.saturating_sub(tok_start)).min(tok_char_count);
             if c_end > c_start {
                 let sub_text: String = tok.text.chars().skip(c_start).take(c_end - c_start).collect();
+                let kind = match tok.kind {
+                    MarkdownTokenKind::InlineCode => {
+                        let is_start = c_start == 0;
+                        let is_end = c_end == tok_char_count;
+                        if is_start && is_end {
+                            MarkdownTokenKind::InlineCode
+                        } else if is_start {
+                            MarkdownTokenKind::InlineCodeSplitLeft
+                        } else if is_end {
+                            MarkdownTokenKind::InlineCodeSplitRight
+                        } else {
+                            MarkdownTokenKind::InlineCode
+                        }
+                    }
+                    _ => tok.kind.clone(),
+                };
                 sliced.push(MarkdownToken {
                     text: sub_text,
-                    kind: tok.kind.clone(),
+                    kind,
                 });
             }
         }
@@ -746,29 +970,6 @@ pub fn render_editor_pane(
                                 || is_last_subline_of_phys_line);
                         let rel_cursor_col = cursor_col.saturating_sub(vl.map(|v| v.char_start).unwrap_or(0));
 
-                        let on_click_line = on_click_line.clone();
-                        let row_h = calculate_line_row_height(font_size, sanitized_lh);
-                        let subline_click = subline_str.clone();
-
-                        let row = div()
-                            .flex()
-                            .items_center()
-                            .h(px(row_h))
-                            .px_1()
-                            .rounded_sm()
-                            .cursor_text()
-                            .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
-                                let x_offset = (f32::from(event.position.x) - editor_left_offset).max(0.0);
-                                let rel_col = calculate_click_char_col_layout(window.text_system(), &subline_click, x_offset, font_size);
-                                on_click_line(vis_idx, rel_col, window, cx);
-                            });
-
-                        let styled_row = if is_active_subline {
-                            row.bg(list_theme.bg)
-                        } else {
-                            row.hover(|s| s.bg(list_theme.bg))
-                        };
-
                         let show_line_num = vl.map(|v| v.is_first).unwrap_or(true);
                         let gutter_text = if show_line_num {
                             format!("{}", phys_idx + 1)
@@ -789,10 +990,33 @@ pub fn render_editor_pane(
                         };
                         let tokens = slice_tokens_for_visual_subline(&phys_tokens, sub_start, sub_len);
 
+                        let on_click_line = on_click_line.clone();
+                        let row_h = calculate_line_row_height(font_size, sanitized_lh);
+                        let tokens_click = tokens.clone();
+
+                        let row = div()
+                            .flex()
+                            .items_center()
+                            .h(px(row_h))
+                            .px_1()
+                            .rounded_sm()
+                            .cursor_text()
+                            .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
+                                let x_offset = (f32::from(event.position.x) - editor_left_offset).max(0.0);
+                                let rel_col = calculate_click_char_col_tokens(window.text_system(), &tokens_click, x_offset, font_size);
+                                on_click_line(vis_idx, rel_col, window, cx);
+                            });
+
+                        let styled_row = if is_active_subline {
+                            row.bg(list_theme.bg)
+                        } else {
+                            row.hover(|s| s.bg(list_theme.bg))
+                        };
+
                         let cursor_x = if is_active_subline {
                             let char_count = subline_str.chars().count();
                             let col = rel_cursor_col.min(char_count);
-                            calculate_cursor_x_offset_layout(window.text_system(), &subline_str, col, font_size)
+                            calculate_cursor_x_offset_tokens(window.text_system(), &tokens, col, font_size)
                         } else {
                             0.0
                         };

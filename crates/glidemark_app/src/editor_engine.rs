@@ -42,12 +42,16 @@ pub fn char_unit_width(ch: char) -> usize {
     1
 }
 
-pub fn wrap_line_to_visual(
+pub fn wrap_line_to_visual_measured<F>(
     physical_line_idx: usize,
     line_str: &str,
-    max_cols: usize,
-) -> Vec<VisualLine> {
-    let max_cols = max_cols.max(1);
+    max_width: f32,
+    mut char_measure: F,
+) -> Vec<VisualLine>
+where
+    F: FnMut(usize, char) -> f32,
+{
+    let max_width = max_width.max(1.0);
     let chars: Vec<char> = line_str.chars().collect();
     if chars.is_empty() {
         return vec![VisualLine {
@@ -63,14 +67,14 @@ pub fn wrap_line_to_visual(
     let mut subline_idx = 0;
     let mut char_start = 0;
     let mut current_idx = 0;
-    let mut current_cols = 0;
+    let mut current_width = 0.0;
     let mut last_break_char = None;
 
     while current_idx < chars.len() {
         let ch = chars[current_idx];
-        let w = char_unit_width(ch);
+        let w = char_measure(current_idx, ch);
 
-        if current_cols + w > max_cols && current_cols > 0 {
+        if current_width + w > max_width && current_width > 0.0 {
             let break_at = if let Some(b) = last_break_char {
                 if b > char_start && b <= current_idx {
                     b
@@ -92,12 +96,12 @@ pub fn wrap_line_to_visual(
             subline_idx += 1;
             char_start = break_at;
             current_idx = break_at;
-            current_cols = 0;
+            current_width = 0.0;
             last_break_char = None;
             continue;
         }
 
-        current_cols += w;
+        current_width += w;
         current_idx += 1;
 
         if ch == ' '
@@ -125,6 +129,32 @@ pub fn wrap_line_to_visual(
     }
 
     visual_lines
+}
+
+#[allow(dead_code)]
+pub fn wrap_line_to_visual(
+    physical_line_idx: usize,
+    line_str: &str,
+    max_cols: usize,
+) -> Vec<VisualLine> {
+    wrap_line_to_visual_measured(physical_line_idx, line_str, max_cols.max(1) as f32, |_, ch| {
+        char_unit_width(ch) as f32
+    })
+}
+
+pub fn wrap_line_to_visual_with_tab_width(
+    physical_line_idx: usize,
+    line_str: &str,
+    max_cols: usize,
+    tab_width: usize,
+) -> Vec<VisualLine> {
+    wrap_line_to_visual_measured(physical_line_idx, line_str, max_cols.max(1) as f32, |_, ch| {
+        if ch == '\t' {
+            tab_width as f32
+        } else {
+            char_unit_width(ch) as f32
+        }
+    })
 }
 
 pub fn physical_to_visual(
@@ -173,11 +203,23 @@ pub fn visual_to_physical(
     (phys_line, phys_col)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisualLineCache {
     pub buffer_revision: usize,
     pub max_cols: usize,
+    pub tab_width: usize,
     pub cached_visual_lines: Arc<Vec<VisualLine>>,
+}
+
+impl Default for VisualLineCache {
+    fn default() -> Self {
+        Self {
+            buffer_revision: usize::MAX,
+            max_cols: 0,
+            tab_width: 4,
+            cached_visual_lines: Arc::new(Vec::new()),
+        }
+    }
 }
 
 impl VisualLineCache {
@@ -191,13 +233,24 @@ impl VisualLineCache {
         revision: usize,
         max_cols: usize,
     ) -> Arc<Vec<VisualLine>> {
+        self.get_or_compute_with_tab_width(lines, revision, max_cols, 4)
+    }
+
+    pub fn get_or_compute_with_tab_width(
+        &mut self,
+        lines: &[String],
+        revision: usize,
+        max_cols: usize,
+        tab_width: usize,
+    ) -> Arc<Vec<VisualLine>> {
         if self.cached_visual_lines.is_empty()
             || self.buffer_revision != revision
             || self.max_cols != max_cols
+            || self.tab_width != tab_width
         {
             let mut result = Vec::new();
             for (phys_idx, line) in lines.iter().enumerate() {
-                let wrapped = wrap_line_to_visual(phys_idx, line, max_cols);
+                let wrapped = wrap_line_to_visual_with_tab_width(phys_idx, line, max_cols, tab_width);
                 result.extend(wrapped);
             }
             if result.is_empty() {
@@ -211,6 +264,7 @@ impl VisualLineCache {
             }
             self.buffer_revision = revision;
             self.max_cols = max_cols;
+            self.tab_width = tab_width;
             self.cached_visual_lines = Arc::new(result);
         }
         self.cached_visual_lines.clone()
@@ -462,6 +516,12 @@ impl EditorEngine {
         self.visual_cache.get_or_compute(&self.lines, rev, max_cols)
     }
 
+    #[allow(dead_code)]
+    pub fn get_visual_lines_with_tab_width(&mut self, max_cols: usize, tab_width: usize) -> Arc<Vec<VisualLine>> {
+        let rev = self.revision;
+        self.visual_cache.get_or_compute_with_tab_width(&self.lines, rev, max_cols, tab_width)
+    }
+
     pub fn move_up_visual(&mut self, max_cols: usize) {
         let vis_lines = self.get_visual_lines(max_cols);
         let (vis_idx, vis_col) = physical_to_visual(self.cursor_line, self.cursor_col, &vis_lines);
@@ -588,5 +648,23 @@ mod tests {
         assert!(cur_line <= 1);
 
         editor.move_down_visual(12);
+    }
+
+    #[test]
+    fn test_wrap_line_to_visual_measured_and_tab_width() {
+        let text = "a\tb\tc";
+        // With tab_width = 4: 'a'(1) + '\t'(4) + 'b'(1) + '\t'(4) + 'c'(1) = 11 cols
+        let wrapped_tab4 = wrap_line_to_visual_with_tab_width(0, text, 6, 4);
+        assert!(wrapped_tab4.len() > 1);
+
+        // With tab_width = 1 (matching 1 monospace font advance): 1 + 1 + 1 + 1 + 1 = 5 cols
+        let wrapped_tab1 = wrap_line_to_visual_with_tab_width(0, text, 6, 1);
+        assert_eq!(wrapped_tab1.len(), 1);
+        assert_eq!(wrapped_tab1[0].char_len, 5);
+
+        // Measured with arbitrary float pixel widths: 11 chars * 10.0 = 110.0px, max_width 50.0px => 3 lines
+        let pixel_wrapped = wrap_line_to_visual_measured(0, "hello world", 50.0, |_, _| 10.0);
+        assert_eq!(pixel_wrapped.len(), 3);
+        assert_eq!(pixel_wrapped[0].char_len, 5); // "hello" breaks before space
     }
 }

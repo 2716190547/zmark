@@ -9,62 +9,303 @@ use crate::theme::ThemeColors;
 
 pub type OnCopyCallback = Arc<dyn Fn(String, u64, &mut Window, &mut App) + Send + Sync>;
 pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, &mut Window, &mut App) + Send + Sync>;
+pub type OnPreviewSelectionCallback = Arc<dyn Fn(Option<PreviewSelection>, bool, &mut Window, &mut App) + Send + Sync>;
+pub type OnPreviewAutoscrollCallback = Arc<dyn Fn(f32, &mut Window, &mut App) + Send + Sync>;
 
-#[allow(dead_code)]
+#[derive(Clone, Default)]
+pub struct PreviewCallbacks {
+    pub on_copy: Option<OnCopyCallback>,
+    pub on_open_lightbox: Option<OnOpenLightboxCallback>,
+    pub on_selection_change: Option<OnPreviewSelectionCallback>,
+    pub on_autoscroll: Option<OnPreviewAutoscrollCallback>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
+pub struct PreviewCharPosition {
+    pub block_ix: usize,
+    pub char_offset: usize,
+}
+
+impl PreviewCharPosition {
+    pub fn new(block_ix: usize, char_offset: usize) -> Self {
+        Self { block_ix, char_offset }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PreviewSelectionRange {
-    pub start: usize,
-    pub end: usize,
+pub struct PreviewSelection {
+    pub anchor: PreviewCharPosition,
+    pub head: PreviewCharPosition,
 }
 
-#[allow(dead_code)]
-impl PreviewSelectionRange {
-    pub fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
+pub type PreviewSelectionRange = PreviewSelection;
+
+impl PreviewSelection {
+    pub fn new(anchor: PreviewCharPosition, head: PreviewCharPosition) -> Self {
+        Self { anchor, head }
     }
-    pub fn normalized(&self) -> (usize, usize) {
-        (self.start.min(self.end), self.start.max(self.end))
+
+    /// Legacy constructor for block-level ranges.
+    #[allow(dead_code)]
+    pub fn from_blocks(start_block: usize, end_block: usize) -> Self {
+        if start_block <= end_block {
+            Self {
+                anchor: PreviewCharPosition::new(start_block, 0),
+                head: PreviewCharPosition::new(end_block, usize::MAX),
+            }
+        } else {
+            Self {
+                anchor: PreviewCharPosition::new(start_block, usize::MAX),
+                head: PreviewCharPosition::new(end_block, 0),
+            }
+        }
     }
+
+    pub fn normalized(&self) -> (PreviewCharPosition, PreviewCharPosition) {
+        if self.head < self.anchor {
+            (self.head, self.anchor)
+        } else {
+            (self.anchor, self.head)
+        }
+    }
+
+    pub fn char_range_for_block(&self, block_ix: usize, block_len: usize) -> Option<std::ops::Range<usize>> {
+        let (start, end) = self.normalized();
+        if block_ix < start.block_ix || block_ix > end.block_ix {
+            return None;
+        }
+        let (s_char, e_char) = if start.block_ix == end.block_ix {
+            (start.char_offset.min(block_len), end.char_offset.min(block_len))
+        } else if block_ix == start.block_ix {
+            (start.char_offset.min(block_len), block_len)
+        } else if block_ix == end.block_ix {
+            (0, end.char_offset.min(block_len))
+        } else {
+            (0, block_len)
+        };
+        if s_char >= e_char {
+            None
+        } else {
+            Some(s_char..e_char)
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn contains_block(&self, block_ix: usize) -> bool {
+        let (start, end) = self.normalized();
+        start.block_ix <= block_ix && block_ix <= end.block_ix
+    }
+
+    #[allow(dead_code)]
     pub fn contains(&self, block_ix: usize) -> bool {
-        let (min, max) = self.normalized();
-        min <= block_ix && block_ix <= max
+        self.contains_block(block_ix)
     }
 }
 
-#[allow(dead_code)]
-pub fn serialize_preview_selection(parsed: &ParsedDocument, range: PreviewSelectionRange) -> String {
-    let (min, max) = range.normalized();
-    parsed.extract_plain_text(min, max)
-}
-
-#[allow(dead_code)]
-pub fn render_preview_pane(
-    parsed: Arc<ParsedDocument>,
-    theme: &ThemeColors,
-    strings: &'static I18nStrings,
-    max_column_width: f32,
-    font_size: f32,
-    list_state: &ListState,
-    copied_code_hash: Option<(u64, std::time::Instant)>,
-    on_copy: Option<OnCopyCallback>,
-    on_open_lightbox: Option<OnOpenLightboxCallback>,
-) -> impl IntoElement {
-    render_preview_pane_with_selection(
-        parsed,
-        theme,
-        strings,
-        max_column_width,
-        font_size,
-        list_state,
-        copied_code_hash,
-        on_copy,
-        on_open_lightbox,
-        None,
+pub fn serialize_preview_selection(parsed: &ParsedDocument, range: PreviewSelection) -> String {
+    let (start, end) = range.normalized();
+    parsed.extract_plain_text_char_range(
+        start.block_ix,
+        start.char_offset,
+        end.block_ix,
+        end.char_offset,
     )
 }
 
-#[allow(dead_code)]
-pub fn render_preview_pane_with_selection(
+pub fn char_range_to_byte_range(s: &str, char_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    if char_range.start >= char_range.end {
+        return 0..0;
+    }
+    let mut byte_start = None;
+    let mut byte_end = None;
+    let mut current_char = 0;
+
+    for (b_idx, _) in s.char_indices() {
+        if current_char == char_range.start {
+            byte_start = Some(b_idx);
+        }
+        if current_char == char_range.end {
+            byte_end = Some(b_idx);
+            break;
+        }
+        current_char += 1;
+    }
+
+    let start = byte_start.unwrap_or_else(|| if current_char <= char_range.start { s.len() } else { 0 });
+    let end = byte_end.unwrap_or(s.len());
+    let start = start.min(end);
+    start..end
+}
+
+pub fn apply_selection_to_highlights(
+    text: &str,
+    existing_highlights: &[(std::ops::Range<usize>, HighlightStyle)],
+    selection_byte_range: std::ops::Range<usize>,
+    selection_bg: Hsla,
+) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    if selection_byte_range.start >= selection_byte_range.end || selection_byte_range.start >= text.len() {
+        return existing_highlights.to_vec();
+    }
+
+    let sel_start = selection_byte_range.start.min(text.len());
+    let sel_end = selection_byte_range.end.min(text.len());
+
+    let mut split_points = Vec::with_capacity(existing_highlights.len() * 2 + 4);
+    split_points.push(0);
+    split_points.push(text.len());
+    split_points.push(sel_start);
+    split_points.push(sel_end);
+
+    for (range, _) in existing_highlights {
+        split_points.push(range.start.min(text.len()));
+        split_points.push(range.end.min(text.len()));
+    }
+
+    split_points.sort_unstable();
+    split_points.dedup();
+
+    let mut result: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+
+    for i in 0..split_points.len().saturating_sub(1) {
+        let p_start = split_points[i];
+        let p_end = split_points[i + 1];
+        if p_start >= p_end {
+            continue;
+        }
+
+        let base_style = existing_highlights
+            .iter()
+            .find(|(r, _)| r.start <= p_start && p_end <= r.end)
+            .map(|(_, s)| s);
+
+        let is_selected = sel_start <= p_start && p_end <= sel_end;
+
+        let merged_style = match (base_style, is_selected) {
+            (None, false) => None,
+            (None, true) => Some(HighlightStyle {
+                background_color: Some(selection_bg),
+                ..Default::default()
+            }),
+            (Some(s), false) => Some(s.clone()),
+            (Some(s), true) => {
+                let mut combined = s.clone();
+                combined.background_color = Some(selection_bg);
+                Some(combined)
+            }
+        };
+
+        if let Some(style) = merged_style {
+            if let Some((prev_range, prev_style)) = result.last_mut() {
+                if prev_range.end == p_start && prev_style == &style {
+                    prev_range.end = p_end;
+                    continue;
+                }
+            }
+            result.push((p_start..p_end, style));
+        }
+    }
+
+    result
+}
+
+pub fn detect_edge_autoscroll(
+    mouse_y: f32,
+    container_top: f32,
+    container_height: f32,
+) -> Option<f32> {
+    const EDGE_ZONE: f32 = 40.0;
+    if mouse_y < container_top + EDGE_ZONE {
+        let factor = ((container_top + EDGE_ZONE - mouse_y) / EDGE_ZONE).clamp(0.1, 1.0);
+        Some(-factor)
+    } else if mouse_y > container_top + container_height - EDGE_ZONE {
+        let factor = ((mouse_y - (container_top + container_height - EDGE_ZONE)) / EDGE_ZONE).clamp(0.1, 1.0);
+        Some(factor)
+    } else {
+        None
+    }
+}
+
+pub fn calculate_single_line_char_offset(
+    text_system: &gpui::WindowTextSystem,
+    line: &str,
+    x_pos: f32,
+    font_size: f32,
+) -> usize {
+    if line.is_empty() || x_pos <= 0.0 {
+        return 0;
+    }
+    let font = gpui::font("ui-sans-serif, system-ui");
+    let font_size_px = gpui::px(font_size);
+    let run = gpui::TextRun {
+        len: line.len(),
+        font,
+        color: gpui::black(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let shaped = text_system.shape_line(
+        gpui::SharedString::from(line.to_string()),
+        font_size_px,
+        &[run],
+        None,
+    );
+    let target_x = gpui::px(x_pos);
+    if target_x >= shaped.width {
+        return line.chars().count();
+    }
+
+    let mut prev_idx = 0;
+    let mut prev_x = gpui::px(0.);
+    for run in &shaped.runs {
+        for glyph in &run.glyphs {
+            if glyph.position.x >= target_x {
+                let byte_idx = if glyph.position.x - target_x < target_x - prev_x {
+                    glyph.index
+                } else {
+                    prev_idx
+                };
+                let clamped = byte_idx.min(line.len());
+                return line[..clamped].chars().count();
+            }
+            prev_idx = glyph.index;
+            prev_x = glyph.position.x;
+        }
+    }
+    line.chars().count()
+}
+
+pub fn calculate_block_click_char_offset(
+    text_system: &gpui::WindowTextSystem,
+    block_text: &str,
+    x_pos: f32,
+    y_pos: f32,
+    base_font_size: f32,
+) -> usize {
+    if block_text.is_empty() {
+        return 0;
+    }
+    let total_chars = block_text.chars().count();
+    let lines: Vec<&str> = block_text.split('\n').collect();
+    if lines.len() > 1 {
+        let line_height = base_font_size * 1.6;
+        let line_idx = if y_pos <= 0.0 {
+            0
+        } else {
+            ((y_pos / line_height).floor() as usize).min(lines.len() - 1)
+        };
+        let mut char_count_before = 0;
+        for l in &lines[..line_idx] {
+            char_count_before += l.chars().count() + 1;
+        }
+        let line_offset = calculate_single_line_char_offset(text_system, lines[line_idx], x_pos, base_font_size);
+        (char_count_before + line_offset).min(total_chars)
+    } else {
+        calculate_single_line_char_offset(text_system, block_text, x_pos, base_font_size)
+    }
+}
+
+pub fn render_preview_pane_with_callbacks(
     parsed: Arc<ParsedDocument>,
     theme: &ThemeColors,
     strings: &'static I18nStrings,
@@ -72,17 +313,16 @@ pub fn render_preview_pane_with_selection(
     font_size: f32,
     list_state: &ListState,
     copied_code_hash: Option<(u64, std::time::Instant)>,
-    on_copy: Option<OnCopyCallback>,
-    on_open_lightbox: Option<OnOpenLightboxCallback>,
-    selection: Option<PreviewSelectionRange>,
+    callbacks: PreviewCallbacks,
+    selection: Option<PreviewSelection>,
+    is_selecting: bool,
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
     let item_parsed = parsed.clone();
-    let item_on_copy = on_copy.clone();
-    let item_on_lightbox = on_open_lightbox.clone();
+    let item_callbacks = callbacks.clone();
 
-    div()
+    let mut pane = div()
         .flex_1()
         .w_full()
         .min_w(px(0.))
@@ -90,44 +330,98 @@ pub fn render_preview_pane_with_selection(
         .h_full()
         .flex()
         .flex_col()
-        .bg(theme.surface)
-        .child(
-            list(list_state.clone(), move |ix, _window, _cx| {
-                let Some(block) = item_parsed.blocks.get(ix) else {
-                    return div().into_any_element();
-                };
+        .bg(theme.surface);
 
-                let is_selected = selection.map(|s| s.contains(ix)).unwrap_or(false);
+    if let Some(ref on_selection_change) = callbacks.on_selection_change {
+        let on_sel_up = on_selection_change.clone();
+        pane = pane.on_mouse_up(MouseButton::Left, move |_event, window, cx| {
+            if is_selecting {
+                on_sel_up(selection, false, window, cx);
+            }
+        });
+    }
 
-                div()
-                    .w_full()
-                    .px_8()
-                    .pb_4()
-                    .child(
-                        div()
-                            .w_full()
-                            .max_w(px(max_column_width))
-                            .mx_auto()
-                            .when(is_selected, |el| el.bg(item_theme.selection_bg()).rounded_md())
-                            .child(render_block_element(
-                                block,
-                                &item_theme,
-                                strings,
+    pane.child(
+        list(list_state.clone(), move |ix, _window, _cx| {
+            let Some(block) = item_parsed.blocks.get(ix) else {
+                return div().into_any_element();
+            };
+
+            let block_text = block.to_plain_text();
+            let block_char_len = block_text.chars().count();
+            let selected_char_range = selection.and_then(|s| s.char_range_for_block(ix, block_char_len));
+
+            let mut block_container = div()
+                .w_full()
+                .max_w(px(max_column_width))
+                .mx_auto()
+                .child(render_block_element(
+                    block,
+                    &item_theme,
+                    strings,
+                    font_size,
+                    copied_code_hash,
+                    item_callbacks.on_copy.as_ref(),
+                    item_callbacks.on_open_lightbox.as_ref(),
+                    selected_char_range,
+                ));
+
+            if let Some(ref on_selection_change) = item_callbacks.on_selection_change {
+                let on_sel_down = on_selection_change.clone();
+                let on_sel_move = on_selection_change.clone();
+                let on_autoscroll = item_callbacks.on_autoscroll.clone();
+                let text_for_down = block_text.clone();
+                let text_for_move = block_text.clone();
+
+                block_container = block_container
+                    .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
+                        let offset = calculate_block_click_char_offset(
+                            window.text_system(),
+                            &text_for_down,
+                            f32::from(event.position.x),
+                            f32::from(event.position.y),
+                            font_size,
+                        );
+                        let pos = PreviewCharPosition::new(ix, offset);
+                        on_sel_down(Some(PreviewSelection::new(pos, pos)), true, window, cx);
+                    })
+                    .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
+                        if is_selecting {
+                            let offset = calculate_block_click_char_offset(
+                                window.text_system(),
+                                &text_for_move,
+                                f32::from(event.position.x),
+                                f32::from(event.position.y),
                                 font_size,
-                                copied_code_hash,
-                                item_on_copy.as_ref(),
-                                item_on_lightbox.as_ref(),
-                            )),
-                    )
-                    .into_any_element()
-            })
-            .flex_1()
-            .w_full()
-            .min_w(px(0.))
-            .min_h(px(0.))
-            .pt_6()
-            .pb_6(),
-        )
+                            );
+                            let head = PreviewCharPosition::new(ix, offset);
+                            if let Some(sel) = selection {
+                                on_sel_move(Some(PreviewSelection::new(sel.anchor, head)), true, window, cx);
+                            }
+                            if let Some(ref auto_cb) = on_autoscroll {
+                                let mouse_y = f32::from(event.position.y);
+                                if let Some(vel) = detect_edge_autoscroll(mouse_y, 0.0, 800.0) {
+                                    auto_cb(vel, window, cx);
+                                }
+                            }
+                        }
+                    });
+            }
+
+            div()
+                .w_full()
+                .px_8()
+                .pb_4()
+                .child(block_container)
+                .into_any_element()
+        })
+        .flex_1()
+        .w_full()
+        .min_w(px(0.))
+        .min_h(px(0.))
+        .pt_6()
+        .pb_6(),
+    )
 }
 
 fn render_block_element(
@@ -138,6 +432,7 @@ fn render_block_element(
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<&OnCopyCallback>,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
+    selected_char_range: Option<std::ops::Range<usize>>,
 ) -> AnyElement {
     match block {
         BlockElement::Heading { level, content } => {
@@ -161,7 +456,7 @@ fn render_block_element(
                 el = el.border_b_1().border_color(theme.border);
             }
 
-            el.child(render_styled_inlines(content, theme, base_font_size * size_mult))
+            el.child(render_styled_inlines(content, theme, base_font_size * size_mult, selected_char_range))
                 .into_any_element()
         }
         BlockElement::Paragraph(content) => div()
@@ -170,7 +465,7 @@ fn render_block_element(
             .text_size(px(base_font_size))
             .line_height(relative(1.75))
             .text_color(theme.text_primary)
-            .child(render_styled_inlines(content, theme, base_font_size))
+            .child(render_styled_inlines(content, theme, base_font_size, selected_char_range))
             .into_any_element(),
         BlockElement::FencedCode { lang, code } => {
             if lang.as_deref() == Some("mermaid") {
@@ -184,6 +479,7 @@ fn render_block_element(
                     base_font_size,
                     copied_code_hash,
                     on_copy,
+                    selected_char_range,
                 )
             }
         }
@@ -201,7 +497,7 @@ fn render_block_element(
             .children(
                 blocks
                     .iter()
-                    .map(|b| render_block_element(b, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox)),
+                    .map(|b| render_block_element(b, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox, selected_char_range.clone())),
             )
             .into_any_element(),
         BlockElement::List { ordered, items } => render_list_element(
@@ -214,57 +510,103 @@ fn render_block_element(
             copied_code_hash,
             on_copy,
             on_open_lightbox,
+            selected_char_range,
         ),
-        BlockElement::Table { headers, rows } => div()
-            .id("preview_table_scroll")
-            .w_full()
-            .min_w(px(0.))
-            .overflow_x_scroll()
-            .my_2()
-            .child(
-                div()
-                    .w_full()
-                    .min_w(px(520.))
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme.border)
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    .child(
+        BlockElement::Table { headers, rows } => {
+            let mut cur_offset = 0;
+            let mut header_cells = Vec::new();
+            for h in headers {
+                let text = h.plain_text();
+                let len = text.chars().count();
+                let cell_start = cur_offset;
+                let cell_end = cur_offset + len;
+                let cell_range = selected_char_range.as_ref().and_then(|range| {
+                    if range.start < cell_end && range.end > cell_start {
+                        let s = range.start.saturating_sub(cell_start).min(len);
+                        let e = range.end.saturating_sub(cell_start).min(len);
+                        if s < e { Some(s..e) } else { None }
+                    } else {
+                        None
+                    }
+                });
+                cur_offset += len + 1;
+                header_cells.push(
+                    div()
+                        .flex_1()
+                        .min_w(px(120.))
+                        .p_3()
+                        .font_weight(FontWeight::BOLD)
+                        .text_size(px(base_font_size * 0.95))
+                        .text_color(theme.text_primary)
+                        .child(render_styled_inlines(h, theme, base_font_size * 0.95, cell_range)),
+                );
+            }
+
+            let mut row_cells = Vec::new();
+            for row in rows {
+                let mut cells = Vec::new();
+                for cell in row {
+                    let text = cell.plain_text();
+                    let len = text.chars().count();
+                    let cell_start = cur_offset;
+                    let cell_end = cur_offset + len;
+                    let cell_range = selected_char_range.as_ref().and_then(|range| {
+                        if range.start < cell_end && range.end > cell_start {
+                            let s = range.start.saturating_sub(cell_start).min(len);
+                            let e = range.end.saturating_sub(cell_start).min(len);
+                            if s < e { Some(s..e) } else { None }
+                        } else {
+                            None
+                        }
+                    });
+                    cur_offset += len + 1;
+                    cells.push(
                         div()
-                            .bg(theme.bg)
-                            .border_b_1()
-                            .border_color(theme.border)
-                            .flex()
-                            .children(headers.iter().map(|h| {
-                                div()
-                                    .flex_1()
-                                    .min_w(px(120.))
-                                    .p_3()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_size(px(base_font_size * 0.95))
-                                    .text_color(theme.text_primary)
-                                    .child(render_styled_inlines(h, theme, base_font_size * 0.95))
-                            })),
-                    )
-                    .children(rows.iter().map(|row| {
-                        div()
-                            .border_b_1()
-                            .border_color(theme.border)
-                            .flex()
-                            .children(row.iter().map(|cell| {
-                                div()
-                                    .flex_1()
-                                    .min_w(px(120.))
-                                    .p_3()
-                                    .text_size(px(base_font_size * 0.95))
-                                    .text_color(theme.text_primary)
-                                    .child(render_styled_inlines(cell, theme, base_font_size * 0.95))
-                            }))
-                    })),
-            )
-            .into_any_element(),
+                            .flex_1()
+                            .min_w(px(120.))
+                            .p_3()
+                            .text_size(px(base_font_size * 0.95))
+                            .text_color(theme.text_primary)
+                            .child(render_styled_inlines(cell, theme, base_font_size * 0.95, cell_range)),
+                    );
+                }
+                row_cells.push(
+                    div()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .flex()
+                        .children(cells),
+                );
+            }
+
+            div()
+                .id("preview_table_scroll")
+                .w_full()
+                .min_w(px(0.))
+                .overflow_x_scroll()
+                .my_2()
+                .child(
+                    div()
+                        .w_full()
+                        .min_w(px(520.))
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .overflow_hidden()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .bg(theme.bg)
+                                .border_b_1()
+                                .border_color(theme.border)
+                                .flex()
+                                .children(header_cells),
+                        )
+                        .children(row_cells),
+                )
+                .into_any_element()
+        }
         BlockElement::Rule => div()
             .w_full()
             .my_4()
@@ -278,6 +620,7 @@ fn render_styled_inlines(
     group: &InlineGroup,
     theme: &ThemeColors,
     font_size: f32,
+    selected_char_range: Option<std::ops::Range<usize>>,
 ) -> AnyElement {
     let has_image = group.0.iter().any(|item| matches!(item, InlineItem::Image { .. }));
     if has_image {
@@ -316,19 +659,20 @@ fn render_styled_inlines(
                     .into_any_element(),
                 other => {
                     let single = InlineGroup(vec![other.clone()]);
-                    render_styled_text_only(&single, theme, font_size).into_any_element()
+                    render_styled_text_only(&single, theme, font_size, selected_char_range.clone()).into_any_element()
                 }
             }))
             .into_any_element();
     }
 
-    render_styled_text_only(group, theme, font_size).into_any_element()
+    render_styled_text_only(group, theme, font_size, selected_char_range).into_any_element()
 }
 
-fn render_styled_text_only(
+pub fn render_styled_text_only(
     group: &InlineGroup,
     theme: &ThemeColors,
     _font_size: f32,
+    selected_char_range: Option<std::ops::Range<usize>>,
 ) -> StyledText {
     let mut text = String::new();
     let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
@@ -403,6 +747,11 @@ fn render_styled_text_only(
                 text.push_str(alt);
             }
         }
+    }
+
+    if let Some(char_range) = selected_char_range {
+        let byte_range = char_range_to_byte_range(&text, char_range);
+        highlights = apply_selection_to_highlights(&text, &highlights, byte_range, theme.selection_bg());
     }
 
     if text.is_empty() {
@@ -644,7 +993,9 @@ fn render_list_element(
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<&OnCopyCallback>,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
+    selected_char_range: Option<std::ops::Range<usize>>,
 ) -> AnyElement {
+    let mut cur_offset = 0;
     div()
         .w_full()
         .min_w(px(0.))
@@ -652,6 +1003,30 @@ fn render_list_element(
         .flex_col()
         .gap_1p5()
         .children(items.iter().enumerate().map(|(idx, item)| {
+            let prefix_len = if item.checked.is_some() {
+                6
+            } else if ordered {
+                format!("{}. ", idx + 1).chars().count()
+            } else {
+                2
+            };
+            let content_text = item.content.plain_text();
+            let content_len = content_text.chars().count();
+            let item_start = cur_offset + prefix_len;
+            let item_end = item_start + content_len;
+
+            let item_range = selected_char_range.as_ref().and_then(|range| {
+                if range.start < item_end && range.end > item_start {
+                    let s = range.start.saturating_sub(item_start).min(content_len);
+                    let e = range.end.saturating_sub(item_start).min(content_len);
+                    if s < e { Some(s..e) } else { None }
+                } else {
+                    None
+                }
+            });
+
+            cur_offset += prefix_len + content_len + 1;
+
             div()
                 .w_full()
                 .min_w(px(0.))
@@ -715,7 +1090,7 @@ fn render_list_element(
                                 .text_size(px(base_font_size))
                                 .line_height(relative(1.6))
                                 .text_color(theme.text_primary)
-                                .child(render_styled_inlines(&item.content, theme, base_font_size)),
+                                .child(render_styled_inlines(&item.content, theme, base_font_size, item_range)),
                         ),
                 )
                 .children(item.sub_list.as_ref().map(|sub| {
@@ -733,9 +1108,10 @@ fn render_list_element(
                                 copied_code_hash,
                                 on_copy,
                                 on_open_lightbox,
+                                selected_char_range.clone(),
                             )
                         } else {
-                            render_block_element(sub, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox)
+                            render_block_element(sub, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox, selected_char_range.clone())
                         })
                 }))
         }))
@@ -768,6 +1144,7 @@ fn render_code_block(
     base_font_size: f32,
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<&OnCopyCallback>,
+    selected_char_range: Option<std::ops::Range<usize>>,
 ) -> AnyElement {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     code.hash(&mut hasher);
@@ -784,6 +1161,26 @@ fn render_code_block(
 
     let group_name: SharedString = format!("code_block_{}", hash).into();
 
+    let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+    if let Some(char_range) = selected_char_range {
+        let byte_range = char_range_to_byte_range(&code_text, char_range);
+        if byte_range.start < byte_range.end {
+            highlights.push((
+                byte_range,
+                HighlightStyle {
+                    background_color: Some(theme.selection_bg()),
+                    ..Default::default()
+                },
+            ));
+        }
+    }
+
+    let styled_text = if highlights.is_empty() {
+        StyledText::new(code_text)
+    } else {
+        StyledText::new(code_text).with_highlights(highlights)
+    };
+
     let mut content = div()
         .id(SharedString::from(format!("code_content_scroll_{}", hash)))
         .w_full()
@@ -793,7 +1190,7 @@ fn render_code_block(
         .font_family("ui-monospace")
         .line_height(relative(1.5))
         .text_color(theme.syntax_code)
-        .child(StyledText::new(code_text));
+        .child(styled_text);
 
     if should_wrap {
         content = content.whitespace_normal();
