@@ -345,21 +345,9 @@ fn test_cjk_emoji_click_char_col_and_drawer_offset() {
     assert_eq!(calculate_editor_left_offset(true, 0.0), 318.0);
     // When drawer is collapsed: 68px
     assert_eq!(calculate_editor_left_offset(false, 0.0), 68.0);
-    // With split preview offset: 250 + 68 + 400 = 718px
-    assert_eq!(calculate_editor_left_offset(true, 400.0), 718.0);
-
-    // Real call path simulation: viewport=1000, drawer=250, ratio=0.5
-    // available = 1000 - 250 = 750, split_offset = 750 * 0.5 = 375
-    // total offset = 250 + 68 + 375 = 693.0
-    let simulated_viewport_w = 1000.0;
-    let simulated_drawer_w = 250.0;
-    let simulated_ratio = 0.5;
-    let simulated_available_w = simulated_viewport_w - simulated_drawer_w;
-    let simulated_split_offset = simulated_available_w * simulated_ratio;
-    assert_eq!(
-        calculate_editor_left_offset(true, simulated_split_offset),
-        693.0
-    );
+    // Split mode invariant: editor is on the left, so split offset does not shift editor origin
+    assert_eq!(calculate_editor_left_offset(true, 400.0), 318.0);
+    assert_eq!(calculate_editor_left_offset(false, 400.0), 68.0);
 
     // 2. ASCII click hit test:
     let ascii_str = "abcdef";

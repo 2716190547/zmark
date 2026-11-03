@@ -13,6 +13,9 @@ pub struct VisualLine {
 }
 
 pub fn char_unit_width(ch: char) -> usize {
+    if ch == '\t' {
+        return 4;
+    }
     let u = ch as u32;
     // ASCII printable
     if (0x20..=0x7E).contains(&u) {
@@ -518,7 +521,7 @@ mod tests {
         assert_eq!(char_unit_width('Z'), 1);
         assert_eq!(char_unit_width('1'), 1);
         assert_eq!(char_unit_width(' '), 1);
-        assert_eq!(char_unit_width('\t'), 0);
+        assert_eq!(char_unit_width('\t'), 4);
         assert_eq!(char_unit_width('\0'), 0);
         assert_eq!(char_unit_width('\u{200B}'), 0);
         assert_eq!(char_unit_width('中'), 2);

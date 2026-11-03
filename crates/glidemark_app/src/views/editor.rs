@@ -9,6 +9,7 @@ pub fn calculate_line_row_height(font_size: f32, line_height: f32) -> f32 {
     font_size * lh
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarkdownTokenKind {
     HeadingPrefix,
@@ -425,12 +426,14 @@ pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
     tokens
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActiveLineSegment {
     Token(MarkdownToken),
     Cursor,
 }
 
+#[allow(dead_code)]
 pub fn build_active_line_segments(tokens: &[MarkdownToken], cursor_col: usize) -> Vec<ActiveLineSegment> {
     let mut segments = Vec::new();
     let mut curr_char_idx = 0;
@@ -543,6 +546,105 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
     el
 }
 
+pub const DRAWER_WIDTH: f32 = 250.0;
+pub const EDITOR_CONTAINER_PADDING_X: f32 = 16.0; // uniform_list p_4
+pub const EDITOR_ROW_PADDING_X: f32 = 4.0;        // row px_1
+pub const EDITOR_GUTTER_WIDTH: f32 = 36.0;        // gutter w(px(36.))
+pub const EDITOR_GUTTER_MARGIN_RIGHT: f32 = 12.0; // gutter mr_3
+pub const EDITOR_TEXT_START_OFFSET: f32 =
+    EDITOR_CONTAINER_PADDING_X + EDITOR_ROW_PADDING_X + EDITOR_GUTTER_WIDTH + EDITOR_GUTTER_MARGIN_RIGHT; // 68.0px
+
+pub fn char_index_to_byte_offset(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(b, _)| b)
+        .unwrap_or(s.len())
+}
+
+pub fn byte_offset_to_char_index(s: &str, byte_offset: usize) -> usize {
+    let clamped = byte_offset.min(s.len());
+    s[..clamped].chars().count()
+}
+
+/// Computes the character column index closest to `x_offset` within `subline_str`
+/// using GPUI's text system and actual font metrics.
+pub fn calculate_click_char_col_layout(
+    text_system: &gpui::WindowTextSystem,
+    subline_str: &str,
+    x_offset: f32,
+    font_size: f32,
+) -> usize {
+    if subline_str.is_empty() || x_offset <= 0.0 {
+        return 0;
+    }
+    let font = gpui::font("ui-monospace");
+    let font_size_px = gpui::px(font_size);
+    let run = gpui::TextRun {
+        len: subline_str.len(),
+        font,
+        color: gpui::black(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let shaped = text_system.shape_line(gpui::SharedString::from(subline_str.to_string()), font_size_px, &[run], None);
+    let target_x = gpui::px(x_offset);
+    if target_x >= shaped.width {
+        return subline_str.chars().count();
+    }
+
+    let mut prev_idx = 0;
+    let mut prev_x = gpui::px(0.);
+    for run in &shaped.runs {
+        for glyph in &run.glyphs {
+            if glyph.position.x >= target_x {
+                let byte_idx = if glyph.position.x - target_x < target_x - prev_x {
+                    glyph.index
+                } else {
+                    prev_idx
+                };
+                return byte_offset_to_char_index(subline_str, byte_idx);
+            }
+            prev_idx = glyph.index;
+            prev_x = glyph.position.x;
+        }
+    }
+
+    let byte_idx = if shaped.width - target_x < target_x - prev_x {
+        shaped.len
+    } else {
+        prev_idx
+    };
+    byte_offset_to_char_index(subline_str, byte_idx)
+}
+
+/// Computes the horizontal pixel offset where the cursor should be rendered for `char_col`
+/// within `subline_str` using GPUI's text system and actual font metrics.
+pub fn calculate_cursor_x_offset_layout(
+    text_system: &gpui::WindowTextSystem,
+    subline_str: &str,
+    char_col: usize,
+    font_size: f32,
+) -> f32 {
+    if subline_str.is_empty() || char_col == 0 {
+        return 0.0;
+    }
+    let byte_idx = char_index_to_byte_offset(subline_str, char_col);
+    let font = gpui::font("ui-monospace");
+    let font_size_px = gpui::px(font_size);
+    let run = gpui::TextRun {
+        len: subline_str.len(),
+        font,
+        color: gpui::black(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let shaped = text_system.shape_line(gpui::SharedString::from(subline_str.to_string()), font_size_px, &[run], None);
+    f32::from(shaped.x_for_index(byte_idx))
+}
+
+#[allow(dead_code)]
 pub fn calculate_click_char_col(subline_str: &str, x_offset: f32, font_size: f32) -> usize {
     let base_unit_w = (font_size * 0.6).max(1.0);
     let mut current_x = 0.0;
@@ -556,8 +658,8 @@ pub fn calculate_click_char_col(subline_str: &str, x_offset: f32, font_size: f32
     subline_str.chars().count()
 }
 
-pub fn calculate_editor_left_offset(drawer_open: bool, split_preview_left_offset: f32) -> f32 {
-    (if drawer_open { 250.0 } else { 0.0 }) + 68.0 + split_preview_left_offset
+pub fn calculate_editor_left_offset(drawer_open: bool, _split_preview_left_offset: f32) -> f32 {
+    (if drawer_open { DRAWER_WIDTH } else { 0.0 }) + EDITOR_TEXT_START_OFFSET
 }
 
 pub fn slice_tokens_for_visual_subline(
@@ -620,7 +722,7 @@ pub fn render_editor_pane(
         .flex_col()
         .bg(theme.surface)
         .child(
-            uniform_list("editor_lines", line_count, move |range, _window, _cx| {
+            uniform_list("editor_lines", line_count, move |range, window, _cx| {
                 range
                     .map(|vis_idx| {
                         let vl = visual_lines.get(vis_idx);
@@ -656,7 +758,7 @@ pub fn render_editor_pane(
                             .cursor_text()
                             .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
                                 let x_offset = (f32::from(event.position.x) - editor_left_offset).max(0.0);
-                                let rel_col = calculate_click_char_col(&subline_click, x_offset, font_size);
+                                let rel_col = calculate_click_char_col_layout(window.text_system(), &subline_click, x_offset, font_size);
                                 on_click_line(vis_idx, rel_col, window, cx);
                             });
 
@@ -686,6 +788,38 @@ pub fn render_editor_pane(
                         };
                         let tokens = slice_tokens_for_visual_subline(&phys_tokens, sub_start, sub_len);
 
+                        let cursor_x = if is_active_subline {
+                            let char_count = subline_str.chars().count();
+                            let col = rel_cursor_col.min(char_count);
+                            calculate_cursor_x_offset_layout(window.text_system(), &subline_str, col, font_size)
+                        } else {
+                            0.0
+                        };
+
+                        let mut text_container = div()
+                            .flex_1()
+                            .relative()
+                            .text_size(px(font_size))
+                            .line_height(relative(sanitized_lh))
+                            .font_family("ui-monospace")
+                            .flex()
+                            .items_center()
+                            .children(tokens.into_iter().map(|tok| {
+                                render_markdown_token_element(&tok, &list_theme).into_any_element()
+                            }));
+
+                        if is_active_subline {
+                            text_container = text_container.child(
+                                div()
+                                    .absolute()
+                                    .top(px(((row_h - font_size * 1.2) * 0.5).max(0.0)))
+                                    .left(px(cursor_x))
+                                    .w(px(2.))
+                                    .h(px(font_size * 1.2))
+                                    .bg(list_theme.accent),
+                            );
+                        }
+
                         styled_row
                             .child(
                                 div()
@@ -699,75 +833,7 @@ pub fn render_editor_pane(
                                     .text_color(if is_active_subline { list_theme.accent } else { list_theme.text_muted })
                                     .child(gutter_text),
                             )
-                            .child(if is_active_subline {
-                                let char_count = subline_str.chars().count();
-                                let col = rel_cursor_col.min(char_count);
-                                let segments = build_active_line_segments(&tokens, col);
-
-                                div()
-                                    .flex_1()
-                                    .text_size(px(font_size))
-                                    .line_height(relative(sanitized_lh))
-                                    .font_family("ui-monospace")
-                                    .flex()
-                                    .items_center()
-                                    .children(segments.iter().enumerate().map(|(idx, seg)| {
-                                        match seg {
-                                            ActiveLineSegment::Token(tok) => {
-                                                render_markdown_token_element(tok, &list_theme).into_any_element()
-                                            }
-                                            ActiveLineSegment::Cursor => {
-                                                let in_inline_code = (idx > 0
-                                                    && matches!(
-                                                        &segments[idx - 1],
-                                                        ActiveLineSegment::Token(t)
-                                                            if t.kind == MarkdownTokenKind::InlineCodeSplitLeft
-                                                    ))
-                                                    || (idx + 1 < segments.len()
-                                                        && matches!(
-                                                            &segments[idx + 1],
-                                                            ActiveLineSegment::Token(t)
-                                                                if t.kind == MarkdownTokenKind::InlineCodeSplitRight
-                                                        ));
-
-                                                if in_inline_code {
-                                                    div()
-                                                        .bg(list_theme.code_bg)
-                                                        .mx_0()
-                                                        .flex()
-                                                        .items_center()
-                                                        .child(
-                                                            div()
-                                                                .w(px(2.))
-                                                                .h(px(font_size * 1.2))
-                                                                .bg(list_theme.accent),
-                                                        )
-                                                        .into_any_element()
-                                                } else {
-                                                    div()
-                                                        .w(px(2.))
-                                                        .h(px(font_size * 1.2))
-                                                        .bg(list_theme.accent)
-                                                        .mx(px(0.5))
-                                                        .into_any_element()
-                                                }
-                                            }
-                                        }
-                                    }))
-                                    .into_any_element()
-                            } else {
-                                div()
-                                    .flex_1()
-                                    .text_size(px(font_size))
-                                    .line_height(relative(sanitized_lh))
-                                    .font_family("ui-monospace")
-                                    .flex()
-                                    .items_center()
-                                    .children(tokens.into_iter().map(|tok| {
-                                        render_markdown_token_element(&tok, &list_theme).into_any_element()
-                                    }))
-                                    .into_any_element()
-                            })
+                            .child(text_container.into_any_element())
                     })
                     .collect()
             })

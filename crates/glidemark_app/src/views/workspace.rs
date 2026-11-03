@@ -141,13 +141,21 @@ impl WorkspaceView {
     }
 
     pub fn compute_max_cols(&self, window: &Window) -> usize {
-        let unit_width = (self.state.preferences.font_size * 0.6).max(1.0);
-        let drawer_w = if self.state.drawer_open { px(250.) } else { px(0.) };
+        let font = gpui::font("ui-monospace");
+        let font_id = window.text_system().resolve_font(&font);
+        let font_size = px(self.state.preferences.font_size);
+        let ch_width = window
+            .text_system()
+            .ch_advance(font_id, font_size)
+            .map(|w| f32::from(w))
+            .unwrap_or_else(|_| (self.state.preferences.font_size * 0.6).max(1.0));
+        let unit_width = ch_width.max(1.0);
+        let drawer_w = if self.state.drawer_open { px(crate::views::editor::DRAWER_WIDTH) } else { px(0.) };
         let available_w = match self.state.view_mode {
             ViewMode::Split => (window.viewport_size().width - drawer_w) * self.split_ratio,
             _ => window.viewport_size().width - drawer_w,
         };
-        ((f32::from(available_w) - 68.0).max(100.0) / unit_width).floor() as usize
+        ((f32::from(available_w) - crate::views::editor::EDITOR_TEXT_START_OFFSET).max(100.0) / unit_width).floor() as usize
     }
 
     /// Synchronizes editor wheel scrolling to the preview pane with 100ms echo suppression.
@@ -1835,13 +1843,7 @@ impl Render for WorkspaceView {
                                             )
                                             .into_any_element()
                                     } else {
-                                        let drawer_w = if self.state.drawer_open { 250.0 } else { 0.0 };
-                                        let available_w = (f32::from(window.viewport_size().width) - drawer_w).max(0.0);
-                                        let split_preview_left_offset = match view_mode {
-                                            ViewMode::Split => available_w * self.split_ratio,
-                                            _ => 0.0,
-                                        };
-                                        let editor_left_offset = crate::views::editor::calculate_editor_left_offset(self.state.drawer_open, split_preview_left_offset);
+                                        let editor_left_offset = crate::views::editor::calculate_editor_left_offset(self.state.drawer_open, 0.0);
                                         match view_mode {
                                             ViewMode::Source => div()
                                                 .size_full()
