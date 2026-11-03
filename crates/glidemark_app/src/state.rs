@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -127,6 +127,20 @@ impl Default for WorkspaceRoot {
             files_used: 0,
             deferred: false,
         }
+    }
+}
+
+impl WorkspaceRoot {
+    #[allow(dead_code)]
+    pub fn expanded_folders(&self) -> HashSet<PathBuf> {
+        let mut set = HashSet::new();
+        collect_expanded_paths(&self.tree, &mut set);
+        set
+    }
+
+    #[allow(dead_code)]
+    pub fn set_expanded_folders(&mut self, set: &HashSet<PathBuf>) {
+        apply_expanded_paths(&mut self.tree, set);
     }
 }
 
@@ -413,6 +427,14 @@ pub struct AppState {
     pub is_system_dark: bool,
     pub is_quitting: bool,
     pub error_message: Option<String>,
+    #[allow(dead_code)]
+    pub search_query: String,
+    #[allow(dead_code)]
+    pub search_original_expanded: Option<std::collections::HashMap<usize, std::collections::HashSet<std::path::PathBuf>>>,
+    #[allow(dead_code)]
+    pub search_in_progress: bool,
+    #[allow(dead_code)]
+    pub search_truncated: bool,
 }
 
 impl AppState {
@@ -496,6 +518,10 @@ impl AppState {
             is_system_dark: false,
             is_quitting: false,
             error_message: None,
+            search_query: String::new(),
+            search_original_expanded: None,
+            search_in_progress: false,
+            search_truncated: false,
         };
         state.refresh_all_roots();
         state
@@ -1478,6 +1504,215 @@ impl AppState {
         }
         self.doc.status == DocumentStatus::ConflictOnDisk
     }
+
+    #[allow(dead_code)]
+    pub fn set_search_query(&mut self, query: &str) {
+        self.search_query = query.to_string();
+        if !query.is_empty() {
+            // Save current expanded state on first keystroke
+            if self.search_original_expanded.is_none() {
+                let mut saved = HashMap::new();
+                for (idx, r) in self.workspace_roots.iter().enumerate() {
+                    let mut set = r.expanded_folders();
+                    if r.is_expanded {
+                        set.insert(r.path.clone());
+                    }
+                    saved.insert(idx, set);
+                }
+                self.search_original_expanded = Some(saved);
+            } else if let Some(ref saved) = self.search_original_expanded {
+                // If query changes while searching, restore each root to original state before re-expanding
+                for (idx, r) in self.workspace_roots.iter_mut().enumerate() {
+                    if let Some(orig) = saved.get(&idx) {
+                        r.is_expanded = orig.contains(&r.path);
+                        r.set_expanded_folders(orig);
+                    }
+                }
+            }
+
+            let query_lower = query.to_lowercase();
+            let mut any_truncated = false;
+
+            for root_idx in 0..self.workspace_roots.len() {
+                if self.workspace_roots[root_idx].is_missing {
+                    continue;
+                }
+                if self.workspace_roots[root_idx].truncated {
+                    any_truncated = true;
+                }
+                if self.workspace_roots[root_idx].deferred && self.workspace_roots[root_idx].tree.is_empty() {
+                    self.refresh_root(root_idx);
+                }
+
+                let root_rem_entries = ScanBudget::PER_ROOT_ENTRY_CAP
+                    .saturating_sub(self.workspace_roots[root_idx].entries_used);
+                let root_rem_files = ScanBudget::PER_ROOT_FILE_CAP
+                    .saturating_sub(self.workspace_roots[root_idx].files_used);
+                let avail_entries = root_rem_entries.min(self.scan_budget.entries_left);
+                let avail_files = root_rem_files.min(self.scan_budget.files_left);
+
+                let mut budget = ScanBudget::new(avail_entries, avail_files);
+                let mut is_truncated = self.workspace_roots[root_idx].truncated;
+                let mut entries_used = 0;
+                let mut files_used = 0;
+
+                let matched = expand_ancestors_for_matching_files(
+                    &mut self.workspace_roots[root_idx].tree,
+                    &query_lower,
+                    0,
+                    &mut budget,
+                    &mut entries_used,
+                    &mut files_used,
+                    &mut is_truncated,
+                );
+
+                self.workspace_roots[root_idx].entries_used += entries_used;
+                self.workspace_roots[root_idx].files_used += files_used;
+                self.scan_budget.entries_left = self.scan_budget.entries_left.saturating_sub(entries_used);
+                self.scan_budget.files_left = self.scan_budget.files_left.saturating_sub(files_used);
+
+                if is_truncated {
+                    self.workspace_roots[root_idx].truncated = true;
+                    any_truncated = true;
+                }
+                if matched {
+                    self.workspace_roots[root_idx].is_expanded = true;
+                }
+            }
+
+            self.search_truncated = any_truncated;
+        } else {
+            // Restore original expanded folders
+            if let Some(saved) = self.search_original_expanded.take() {
+                for (idx, r) in self.workspace_roots.iter_mut().enumerate() {
+                    if let Some(orig) = saved.get(&idx) {
+                        r.is_expanded = orig.contains(&r.path);
+                        r.set_expanded_folders(orig);
+                    }
+                }
+            }
+            self.search_truncated = false;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn clear_search(&mut self) {
+        self.set_search_query("");
+    }
+
+    #[allow(dead_code)]
+    pub fn file_matches_search(&self, filename: &str) -> bool {
+        if self.search_query.is_empty() {
+            return true;
+        }
+        filename.to_lowercase().contains(&self.search_query.to_lowercase())
+    }
+
+    #[allow(dead_code)]
+    pub fn has_search_matches(&self) -> bool {
+        if self.search_query.is_empty() {
+            return true;
+        }
+        let q = self.search_query.to_lowercase();
+        for root in &self.workspace_roots {
+            if node_tree_has_match(&root.tree, &q) {
+                return true;
+            }
+        }
+        for key in &self.loose_docs() {
+            if let DocKey::Path(p) = key {
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    if name.to_lowercase().contains(&q) {
+                        return true;
+                    }
+                }
+            }
+        }
+        for open_doc in &self.open_docs {
+            if open_doc.key.is_scratch() {
+                let title = open_doc.doc.display_name_with_fallback(self.strings.untitled_file);
+                if title.to_lowercase().contains(&q) {
+                    return true;
+                }
+                if let Some(h) = open_doc.doc.parsed.headings().first() {
+                    if h.text.to_lowercase().contains(&q) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+#[allow(dead_code)]
+pub fn apply_expanded_paths(nodes: &mut [FileTreeNode], set: &HashSet<PathBuf>) {
+    for n in nodes.iter_mut() {
+        if n.is_dir {
+            n.is_expanded = set.contains(&n.path);
+            apply_expanded_paths(&mut n.children, set);
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn node_tree_has_match(nodes: &[FileTreeNode], q: &str) -> bool {
+    for node in nodes {
+        if node.is_dir {
+            if node.name.to_lowercase().contains(q) || node_tree_has_match(&node.children, q) {
+                return true;
+            }
+        } else if node.name.to_lowercase().contains(q) {
+            return true;
+        }
+    }
+    false
+}
+
+#[allow(dead_code)]
+fn expand_ancestors_for_matching_files(
+    nodes: &mut [FileTreeNode],
+    query_lower: &str,
+    depth: usize,
+    budget: &mut ScanBudget,
+    entries_used: &mut usize,
+    files_used: &mut usize,
+    is_truncated: &mut bool,
+) -> bool {
+    let mut has_match = false;
+    for node in nodes.iter_mut() {
+        if node.is_dir {
+            if node.children.is_empty() && node.path.is_dir() {
+                let empty_set = HashSet::new();
+                let prev_e = budget.entries_left;
+                let prev_f = budget.files_left;
+                let (children, child_trunc) = scan_root_layer(&node.path, depth + 1, budget, &empty_set, 4);
+                *entries_used += prev_e.saturating_sub(budget.entries_left);
+                *files_used += prev_f.saturating_sub(budget.files_left);
+                node.children = children;
+                if child_trunc || (budget.entries_left == 0 && budget.files_left == 0) {
+                    *is_truncated = true;
+                }
+            }
+            let child_match = expand_ancestors_for_matching_files(
+                &mut node.children,
+                query_lower,
+                depth + 1,
+                budget,
+                entries_used,
+                files_used,
+                is_truncated,
+            );
+            let name_matches = node.name.to_lowercase().contains(query_lower);
+            if child_match || name_matches {
+                node.is_expanded = true;
+                has_match = true;
+            }
+        } else if node.name.to_lowercase().contains(query_lower) {
+            has_match = true;
+        }
+    }
+    has_match
 }
 
 fn collect_expanded_paths(nodes: &[FileTreeNode], set: &mut std::collections::HashSet<PathBuf>) {

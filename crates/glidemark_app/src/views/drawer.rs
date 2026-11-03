@@ -8,6 +8,31 @@ use glidemark_core::i18n::I18nStrings;
 use crate::state::{root_label, DocKey, DrawerTab, FileTreeNode, OpenDoc, WorkspaceRoot};
 use crate::theme::ThemeColors;
 
+#[derive(Clone, Default)]
+pub struct DrawerSearchParams {
+    pub search_query: String,
+    pub has_search_matches: bool,
+    pub search_in_progress: bool,
+    pub search_truncated: bool,
+    pub on_clear_search: Option<Arc<dyn Fn(&mut Window, &mut App)>>,
+    pub on_focus_search: Option<Arc<dyn Fn(&mut Window, &mut App)>>,
+}
+
+impl DrawerSearchParams {
+    #[allow(dead_code)]
+    pub fn from_state(state: &crate::state::AppState, on_clear: Option<Arc<dyn Fn(&mut Window, &mut App)>>) -> Self {
+        Self {
+            search_query: state.search_query.clone(),
+            has_search_matches: state.has_search_matches(),
+            search_in_progress: state.search_in_progress,
+            search_truncated: state.search_truncated,
+            on_clear_search: on_clear,
+            on_focus_search: None,
+        }
+    }
+}
+
+#[allow(dead_code)]
 pub fn render_drawer(
     is_fullscreen: bool,
     active_tab: DrawerTab,
@@ -19,6 +44,60 @@ pub fn render_drawer(
     theme: &ThemeColors,
     strings: &'static I18nStrings,
     scroll_handle: &ScrollHandle,
+    on_select_tab: Arc<dyn Fn(DrawerTab, &mut Window, &mut App)>,
+    on_toggle_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
+    on_remove_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
+    on_refresh_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
+    on_toggle_folder: Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
+    on_select_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
+    on_select_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
+    on_close_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
+    on_new_draft: Arc<dyn Fn(&mut Window, &mut App)>,
+    on_select_heading: Arc<dyn Fn(usize, &mut Window, &mut App)>,
+    on_open_folder: Arc<dyn Fn(&mut Window, &mut App)>,
+    on_toggle_drawer: Arc<dyn Fn(&mut Window, &mut App)>,
+    on_new_file_in_dir: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
+) -> impl IntoElement {
+    render_drawer_with_search(
+        is_fullscreen,
+        active_tab,
+        workspace_roots,
+        loose_docs,
+        open_docs,
+        active_key,
+        headings,
+        theme,
+        strings,
+        scroll_handle,
+        &DrawerSearchParams::default(),
+        on_select_tab,
+        on_toggle_root,
+        on_remove_root,
+        on_refresh_root,
+        on_toggle_folder,
+        on_select_file,
+        on_select_doc,
+        on_close_doc,
+        on_new_draft,
+        on_select_heading,
+        on_open_folder,
+        on_toggle_drawer,
+        on_new_file_in_dir,
+    )
+}
+
+pub fn render_drawer_with_search(
+    is_fullscreen: bool,
+    active_tab: DrawerTab,
+    workspace_roots: &[WorkspaceRoot],
+    loose_docs: &[DocKey],
+    open_docs: &[OpenDoc],
+    active_key: Option<&DocKey>,
+    headings: &[HeadingItem],
+    theme: &ThemeColors,
+    strings: &'static I18nStrings,
+    scroll_handle: &ScrollHandle,
+    search: &DrawerSearchParams,
     on_select_tab: Arc<dyn Fn(DrawerTab, &mut Window, &mut App)>,
     on_toggle_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_remove_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
@@ -119,17 +198,151 @@ pub fn render_drawer(
                         let mut content = div().flex().flex_col().gap_1();
 
                         // ==========================================
+                        // 0. Search Row
+                        // ==========================================
+                        let is_searching = !search.search_query.is_empty();
+
+                        let mut search_row = div()
+                            .id("drawer_search_container")
+                            .w_full()
+                            .h(px(28.))
+                            .px_2()
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.surface)
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_1p5();
+
+                        if let Some(ref on_focus) = search.on_focus_search {
+                            let on_focus_cb = on_focus.clone();
+                            search_row = search_row
+                                .cursor_pointer()
+                                .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                                    on_focus_cb(window, cx);
+                                });
+                        }
+
+                        let search_left = div()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .min_w(px(0.))
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .text_color(theme.text_muted)
+                                    .child("🔍"),
+                            )
+                            .child(
+                                div()
+                                    .id("drawer_search_query_display")
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::NORMAL)
+                                    .text_color(if is_searching {
+                                        theme.text_primary
+                                    } else {
+                                        theme.text_muted
+                                    })
+                                    .child(if is_searching {
+                                        search.search_query.clone()
+                                    } else {
+                                        strings.search_placeholder.to_string()
+                                    }),
+                            );
+
+                        search_row = search_row.child(search_left);
+
+                        if is_searching {
+                            let on_clear = search.on_clear_search.clone();
+                            let clear_btn = div()
+                                .id("btn_clear_search")
+                                .w(px(16.))
+                                .h(px(16.))
+                                .rounded(px(3.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .text_size(px(12.))
+                                .text_color(theme.text_muted)
+                                .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
+                                .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                                    cx.stop_propagation();
+                                    if let Some(ref cb) = on_clear {
+                                        cb(window, cx);
+                                    }
+                                })
+                                .child("×");
+                            search_row = search_row.child(clear_btn);
+                        }
+
+                        content = content.child(search_row);
+
+                        // Status indicators below search input
+                        if is_searching && !search.has_search_matches {
+                            content = content.child(
+                                div()
+                                    .id("drawer_search_no_results")
+                                    .px_2()
+                                    .py_1()
+                                    .text_size(px(11.))
+                                    .text_color(theme.text_muted)
+                                    .child(strings.search_no_results),
+                            );
+                        }
+
+                        if search.search_in_progress {
+                            content = content.child(
+                                div()
+                                    .id("drawer_search_scanning")
+                                    .px_2()
+                                    .py_0p5()
+                                    .text_size(px(11.))
+                                    .text_color(theme.text_muted)
+                                    .child(strings.search_scanning),
+                            );
+                        }
+
+                        if search.search_truncated {
+                            content = content.child(
+                                div()
+                                    .id("drawer_search_incomplete")
+                                    .px_2()
+                                    .py_0p5()
+                                    .text_size(px(11.))
+                                    .text_color(theme.conflict_border)
+                                    .child(strings.search_incomplete),
+                            );
+                        }
+
+                        // ==========================================
                         // 1. Draft Item (decentralized: rendered only when an active/open scratch doc exists)
                         // ==========================================
                         if let Some(draft_doc) = open_docs.iter().find(|d| d.key.is_scratch()) {
-                            let is_draft_active = active_key == Some(&draft_doc.key);
                             let draft_title = draft_doc.doc.display_name_with_fallback(strings.untitled_file);
-                            let d_key = draft_doc.key.clone();
-                            let t_switch_draft = on_select_doc.clone();
-                            let t_close_draft = on_close_doc.clone();
+                            let heading_match = draft_doc
+                                .doc
+                                .parsed
+                                .headings()
+                                .first()
+                                .map(|h| h.text.to_lowercase().contains(&search.search_query.to_lowercase()))
+                                .unwrap_or(false);
+                            let show_draft = search.search_query.is_empty()
+                                || draft_title.to_lowercase().contains(&search.search_query.to_lowercase())
+                                || heading_match;
+                            if show_draft {
+                                let is_draft_active = active_key == Some(&draft_doc.key);
+                                let d_key = draft_doc.key.clone();
+                                let t_switch_draft = on_select_doc.clone();
+                                let t_close_draft = on_close_doc.clone();
 
-                            let close_key = d_key.clone();
-                            let on_close = t_close_draft.clone();
+                                let close_key = d_key.clone();
+                                let on_close = t_close_draft.clone();
                             let draft_right = div()
                                 .flex()
                                 .items_center()
@@ -216,6 +429,7 @@ pub fn render_drawer(
                                 .child(draft_right);
 
                             content = content.child(draft_item);
+                            }
                         }
 
                         // ==========================================
@@ -386,6 +600,7 @@ pub fn render_drawer(
                                             active_key,
                                             theme,
                                             strings,
+                                            &search.search_query,
                                             &on_toggle_folder,
                                             &on_new_file_in_dir,
                                             &on_select_file,
@@ -446,7 +661,15 @@ pub fn render_drawer(
                         let loose_file_paths: Vec<&PathBuf> = loose_docs
                             .iter()
                             .filter_map(|k| match k {
-                                DocKey::Path(p) => Some(p),
+                                DocKey::Path(p) => {
+                                    if !search.search_query.is_empty() {
+                                        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                                        if !name.to_lowercase().contains(&search.search_query.to_lowercase()) {
+                                            return None;
+                                        }
+                                    }
+                                    Some(p)
+                                }
                                 DocKey::Scratch(_) => None,
                             })
                             .collect();
@@ -633,6 +856,13 @@ pub fn render_drawer(
         )
 }
 
+fn dir_matches_search(node: &FileTreeNode, q_lower: &str) -> bool {
+    if node.name.to_lowercase().contains(q_lower) {
+        return true;
+    }
+    crate::state::node_tree_has_match(&node.children, q_lower)
+}
+
 fn render_file_tree_nodes(
     nodes: &[FileTreeNode],
     depth: usize,
@@ -641,15 +871,20 @@ fn render_file_tree_nodes(
     active_key: Option<&DocKey>,
     theme: &ThemeColors,
     strings: &'static I18nStrings,
+    search_query: &str,
     on_toggle_folder: &Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
     on_new_file_in_dir: &Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_select_file: &Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_close_doc: &Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
     out: &mut Vec<AnyElement>,
 ) {
+    let q_lower = search_query.to_lowercase();
     for (node_idx, node) in nodes.iter().enumerate() {
         let depth_indent = (depth as f32 + 1.0) * 12.0;
         if node.is_dir {
+            if !search_query.is_empty() && !dir_matches_search(node, &q_lower) {
+                continue;
+            }
             let p = node.path.clone();
             let on_toggle = on_toggle_folder.clone();
             let is_expanded = node.is_expanded;
@@ -744,6 +979,7 @@ fn render_file_tree_nodes(
                     active_key,
                     theme,
                     strings,
+                    search_query,
                     on_toggle_folder,
                     on_new_file_in_dir,
                     on_select_file,
@@ -752,6 +988,9 @@ fn render_file_tree_nodes(
                 );
             }
         } else {
+            if !search_query.is_empty() && !node.name.to_lowercase().contains(&q_lower) {
+                continue;
+            }
             let p = node.path.clone();
             let target_key = DocKey::Path(p.clone());
             let is_active = active_key == Some(&target_key);
