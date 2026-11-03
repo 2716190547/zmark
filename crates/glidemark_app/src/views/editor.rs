@@ -426,65 +426,7 @@ pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
     tokens
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ActiveLineSegment {
-    Token(MarkdownToken),
-    Cursor,
-}
 
-#[allow(dead_code)]
-pub fn build_active_line_segments(tokens: &[MarkdownToken], cursor_col: usize) -> Vec<ActiveLineSegment> {
-    let mut segments = Vec::new();
-    let mut curr_char_idx = 0;
-    let mut cursor_placed = false;
-
-    for tok in tokens {
-        let tok_len = tok.text.chars().count();
-        if !cursor_placed && cursor_col >= curr_char_idx && cursor_col <= curr_char_idx + tok_len {
-            let offset = cursor_col - curr_char_idx;
-            let before: String = tok.text.chars().take(offset).collect();
-            let after: String = tok.text.chars().skip(offset).collect();
-
-            let (before_kind, after_kind) = if tok.kind == MarkdownTokenKind::InlineCode {
-                if !before.is_empty() && !after.is_empty() {
-                    (
-                        MarkdownTokenKind::InlineCodeSplitLeft,
-                        MarkdownTokenKind::InlineCodeSplitRight,
-                    )
-                } else {
-                    (MarkdownTokenKind::InlineCode, MarkdownTokenKind::InlineCode)
-                }
-            } else {
-                (tok.kind.clone(), tok.kind.clone())
-            };
-
-            if !before.is_empty() {
-                segments.push(ActiveLineSegment::Token(MarkdownToken {
-                    text: before,
-                    kind: before_kind,
-                }));
-            }
-            segments.push(ActiveLineSegment::Cursor);
-            if !after.is_empty() {
-                segments.push(ActiveLineSegment::Token(MarkdownToken {
-                    text: after,
-                    kind: after_kind,
-                }));
-            }
-            cursor_placed = true;
-        } else {
-            segments.push(ActiveLineSegment::Token(tok.clone()));
-        }
-        curr_char_idx += tok_len;
-    }
-
-    if !cursor_placed {
-        segments.push(ActiveLineSegment::Cursor);
-    }
-
-    segments
-}
 
 fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> impl IntoElement {
     let mut el = div().child(tok.text.clone());
@@ -796,6 +738,31 @@ pub fn compute_char_pixel_widths(
 }
 
 /// Wraps a physical line into visual lines using actual layout metrics (font advance, Tab width,
+/// and token paddings) against `max_width_px`, also returning the natural unwrapped width in pixels.
+pub fn wrap_line_to_visual_layout_with_width(
+    text_system: &gpui::WindowTextSystem,
+    physical_line_idx: usize,
+    line_str: &str,
+    tokens: &[MarkdownToken],
+    max_width_px: f32,
+    font_size: f32,
+) -> (Vec<VisualLine>, f32) {
+    let char_widths = compute_char_pixel_widths(text_system, tokens, font_size);
+    let natural_width_px: f32 = char_widths.iter().copied().sum();
+    let visual_lines = crate::editor_engine::wrap_line_to_visual_measured(
+        physical_line_idx,
+        line_str,
+        max_width_px,
+        |idx, ch| {
+            char_widths.get(idx).copied().unwrap_or_else(|| {
+                (crate::editor_engine::char_unit_width(ch) as f32) * (font_size * 0.6).max(1.0)
+            })
+        },
+    );
+    (visual_lines, natural_width_px)
+}
+
+/// Wraps a physical line into visual lines using actual layout metrics (font advance, Tab width,
 /// and token paddings) against `max_width_px`.
 pub fn wrap_line_to_visual_layout(
     text_system: &gpui::WindowTextSystem,
@@ -805,17 +772,15 @@ pub fn wrap_line_to_visual_layout(
     max_width_px: f32,
     font_size: f32,
 ) -> Vec<VisualLine> {
-    let char_widths = compute_char_pixel_widths(text_system, tokens, font_size);
-    crate::editor_engine::wrap_line_to_visual_measured(
+    wrap_line_to_visual_layout_with_width(
+        text_system,
         physical_line_idx,
         line_str,
+        tokens,
         max_width_px,
-        |idx, ch| {
-            char_widths.get(idx).copied().unwrap_or_else(|| {
-                (crate::editor_engine::char_unit_width(ch) as f32) * (font_size * 0.6).max(1.0)
-            })
-        },
+        font_size,
     )
+    .0
 }
 
 /// Wraps all physical lines of a document into visual lines using actual layout metrics
@@ -865,11 +830,12 @@ pub struct LineVisualSpan {
     pub is_first: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CachedLineEntry {
     pub text: String,
     pub is_fenced: bool,
     pub spans: Vec<LineVisualSpan>,
+    pub natural_width_px: f32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -884,6 +850,77 @@ pub struct DocumentLayoutCache {
     pub cached_font_bits: u32,
     pub entries: Vec<CachedLineEntry>,
     pub metrics: VisualLayoutMetrics,
+}
+
+fn shape_single_line(
+    text_system: &gpui::WindowTextSystem,
+    i: usize,
+    line: &str,
+    is_fenced: bool,
+    max_width_px: f32,
+    font_size: f32,
+) -> CachedLineEntry {
+    let tokens = if is_fenced {
+        tokenize_code_line(line)
+    } else {
+        tokenize_markdown_line(line)
+    };
+    let (vl, natural_width_px) = wrap_line_to_visual_layout_with_width(
+        text_system,
+        i,
+        line,
+        &tokens,
+        max_width_px,
+        font_size,
+    );
+    let spans = vl
+        .into_iter()
+        .map(|v| LineVisualSpan {
+            char_start: v.char_start,
+            char_len: v.char_len,
+            is_first: v.is_first,
+        })
+        .collect();
+    CachedLineEntry {
+        text: line.to_string(),
+        is_fenced,
+        spans,
+        natural_width_px,
+    }
+}
+
+fn evaluate_matching_line(
+    old: &CachedLineEntry,
+    i: usize,
+    line: &str,
+    is_fenced: bool,
+    width_changed: bool,
+    max_width_px: f32,
+    font_size: f32,
+    text_system: &gpui::WindowTextSystem,
+) -> (CachedLineEntry, bool) {
+    if !width_changed {
+        (old.clone(), true)
+    } else if old.natural_width_px <= max_width_px {
+        (
+            CachedLineEntry {
+                text: line.to_string(),
+                is_fenced,
+                spans: vec![LineVisualSpan {
+                    char_start: 0,
+                    char_len: line.chars().count(),
+                    is_first: true,
+                }],
+                natural_width_px: old.natural_width_px,
+            },
+            true,
+        )
+    } else {
+        (
+            shape_single_line(text_system, i, line, is_fenced, max_width_px, font_size),
+            false,
+        )
+    }
 }
 
 impl DocumentLayoutCache {
@@ -901,10 +938,13 @@ impl DocumentLayoutCache {
         let width_bits = max_width_px.round().to_bits();
         let font_bits = font_size.to_bits();
 
-        let layout_changed = self.cached_width_bits != width_bits || self.cached_font_bits != font_bits;
-        if layout_changed {
-            self.cached_width_bits = width_bits;
-            self.cached_font_bits = font_bits;
+        let font_changed = self.cached_font_bits != font_bits;
+        let width_changed = self.cached_width_bits != width_bits;
+
+        self.cached_width_bits = width_bits;
+        self.cached_font_bits = font_bits;
+
+        if font_changed {
             self.entries.clear();
         }
 
@@ -915,33 +955,39 @@ impl DocumentLayoutCache {
         let old_entries = std::mem::take(&mut self.entries);
         let mut new_entries = Vec::with_capacity(lines.len());
 
-        if !layout_changed && old_entries.len() == lines.len() {
+        if !font_changed && old_entries.len() == lines.len() {
             for (i, (line, &is_fenced)) in lines.iter().zip(fenced_lines.iter()).enumerate() {
                 let old = &old_entries[i];
                 if old.is_fenced == is_fenced && old.text == *line {
-                    new_entries.push(old.clone());
-                    reused_count += 1;
-                } else {
-                    let tokens = if is_fenced {
-                        tokenize_code_line(line)
-                    } else {
-                        tokenize_markdown_line(line)
-                    };
-                    let vl = wrap_line_to_visual_layout(text_system, i, line, &tokens, max_width_px, font_size);
-                    let spans = vl.into_iter().map(|v| LineVisualSpan {
-                        char_start: v.char_start,
-                        char_len: v.char_len,
-                        is_first: v.is_first,
-                    }).collect();
-                    new_entries.push(CachedLineEntry {
-                        text: line.clone(),
+                    let (entry, is_reused) = evaluate_matching_line(
+                        old,
+                        i,
+                        line,
                         is_fenced,
-                        spans,
-                    });
+                        width_changed,
+                        max_width_px,
+                        font_size,
+                        text_system,
+                    );
+                    new_entries.push(entry);
+                    if is_reused {
+                        reused_count += 1;
+                    } else {
+                        shaped_count += 1;
+                    }
+                } else {
+                    new_entries.push(shape_single_line(
+                        text_system,
+                        i,
+                        line,
+                        is_fenced,
+                        max_width_px,
+                        font_size,
+                    ));
                     shaped_count += 1;
                 }
             }
-        } else if !layout_changed && !old_entries.is_empty() {
+        } else if !font_changed && !old_entries.is_empty() {
             let mut prefix = 0;
             while prefix < lines.len()
                 && prefix < old_entries.len()
@@ -954,63 +1000,76 @@ impl DocumentLayoutCache {
             let mut suffix = 0;
             while suffix < (lines.len() - prefix)
                 && suffix < (old_entries.len() - prefix)
-                && old_entries[old_entries.len() - 1 - suffix].is_fenced == fenced_lines[lines.len() - 1 - suffix]
-                && old_entries[old_entries.len() - 1 - suffix].text == lines[lines.len() - 1 - suffix]
+                && old_entries[old_entries.len() - 1 - suffix].is_fenced
+                    == fenced_lines[lines.len() - 1 - suffix]
+                && old_entries[old_entries.len() - 1 - suffix].text
+                    == lines[lines.len() - 1 - suffix]
             {
                 suffix += 1;
             }
 
-            for old in &old_entries[..prefix] {
-                new_entries.push(old.clone());
-                reused_count += 1;
+            for (i, old) in old_entries[..prefix].iter().enumerate() {
+                let (entry, is_reused) = evaluate_matching_line(
+                    old,
+                    i,
+                    &lines[i],
+                    fenced_lines[i],
+                    width_changed,
+                    max_width_px,
+                    font_size,
+                    text_system,
+                );
+                new_entries.push(entry);
+                if is_reused {
+                    reused_count += 1;
+                } else {
+                    shaped_count += 1;
+                }
             }
 
             let middle_end = lines.len() - suffix;
             for i in prefix..middle_end {
-                let line = &lines[i];
-                let is_fenced = fenced_lines[i];
-                let tokens = if is_fenced {
-                    tokenize_code_line(line)
-                } else {
-                    tokenize_markdown_line(line)
-                };
-                let vl = wrap_line_to_visual_layout(text_system, i, line, &tokens, max_width_px, font_size);
-                let spans = vl.into_iter().map(|v| LineVisualSpan {
-                    char_start: v.char_start,
-                    char_len: v.char_len,
-                    is_first: v.is_first,
-                }).collect();
-                new_entries.push(CachedLineEntry {
-                    text: line.clone(),
-                    is_fenced,
-                    spans,
-                });
+                new_entries.push(shape_single_line(
+                    text_system,
+                    i,
+                    &lines[i],
+                    fenced_lines[i],
+                    max_width_px,
+                    font_size,
+                ));
                 shaped_count += 1;
             }
 
             let old_suffix_start = old_entries.len() - suffix;
-            for old in &old_entries[old_suffix_start..] {
-                new_entries.push(old.clone());
-                reused_count += 1;
+            for (offset, old) in old_entries[old_suffix_start..].iter().enumerate() {
+                let i = middle_end + offset;
+                let (entry, is_reused) = evaluate_matching_line(
+                    old,
+                    i,
+                    &lines[i],
+                    fenced_lines[i],
+                    width_changed,
+                    max_width_px,
+                    font_size,
+                    text_system,
+                );
+                new_entries.push(entry);
+                if is_reused {
+                    reused_count += 1;
+                } else {
+                    shaped_count += 1;
+                }
             }
         } else {
             for (i, (line, &is_fenced)) in lines.iter().zip(fenced_lines.iter()).enumerate() {
-                let tokens = if is_fenced {
-                    tokenize_code_line(line)
-                } else {
-                    tokenize_markdown_line(line)
-                };
-                let vl = wrap_line_to_visual_layout(text_system, i, line, &tokens, max_width_px, font_size);
-                let spans = vl.into_iter().map(|v| LineVisualSpan {
-                    char_start: v.char_start,
-                    char_len: v.char_len,
-                    is_first: v.is_first,
-                }).collect();
-                new_entries.push(CachedLineEntry {
-                    text: line.clone(),
+                new_entries.push(shape_single_line(
+                    text_system,
+                    i,
+                    line,
                     is_fenced,
-                    spans,
-                });
+                    max_width_px,
+                    font_size,
+                ));
                 shaped_count += 1;
             }
         }
@@ -1318,5 +1377,10 @@ pub fn render_editor_pane(
                 .child(format!("{} {}, {} {}", strings.status_line, cursor_line + 1, strings.status_col, cursor_col + 1)),
         )
 }
+
+
+
+
+
 
 

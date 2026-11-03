@@ -43,6 +43,9 @@ pub struct WorkspaceView {
     pub search_input: Option<Entity<crate::views::drawer::SearchInput>>,
     pub preview_selection: Option<crate::views::preview::PreviewSelectionRange>,
     pub is_preview_selecting: bool,
+    pub preview_autoscroll_task: Option<gpui::Task<()>>,
+    pub preview_mouse_window_pos: Option<Point<Pixels>>,
+    pub preview_content_bounds: Option<Bounds<Pixels>>,
     pub document_layout_cache: crate::views::editor::DocumentLayoutCache,
     pub cached_visual_rev: usize,
     pub cached_visual_width_bits: u64,
@@ -99,6 +102,9 @@ impl WorkspaceView {
             search_input: Some(search_input),
             preview_selection: None,
             is_preview_selecting: false,
+            preview_autoscroll_task: None,
+            preview_mouse_window_pos: None,
+            preview_content_bounds: None,
             document_layout_cache: crate::views::editor::DocumentLayoutCache::new(),
             cached_visual_rev: usize::MAX,
             cached_visual_width_bits: 0,
@@ -111,6 +117,8 @@ impl WorkspaceView {
     pub fn reset_preview_list(&mut self) {
         self.preview_selection = None;
         self.is_preview_selecting = false;
+        self.preview_autoscroll_task = None;
+        self.preview_mouse_window_pos = None;
         self.preview_list.reset(self.state.doc.parsed.blocks.len());
     }
 
@@ -334,10 +342,14 @@ impl WorkspaceView {
         self.reset_preview_list();
     }
 
-    fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
+    pub fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
         if mode != ViewMode::Source && self.state.parse_is_stale() {
             self.parse_now_and_refresh();
         }
+        self.preview_selection = None;
+        self.is_preview_selecting = false;
+        self.preview_autoscroll_task = None;
+        self.preview_mouse_window_pos = None;
         self.state.set_view_mode(mode);
         cx.notify();
     }
@@ -350,6 +362,103 @@ impl WorkspaceView {
         self.state.editor.set_cursor(phys_line, phys_col);
         self.preview_selection = None;
         self.is_preview_selecting = false;
+        self.preview_autoscroll_task = None;
+        self.preview_mouse_window_pos = None;
+    }
+
+    pub fn step_preview_autoscroll(
+        &mut self,
+        velocity: f32,
+        _mouse_pos: Point<Pixels>,
+        _bounds: Bounds<Pixels>,
+        _cx: &mut Context<Self>,
+    ) {
+        let mut top = self.preview_list.logical_scroll_top();
+        let new_offset = f32::from(top.offset_in_item) + velocity;
+        if new_offset < 0.0 {
+            if top.item_ix > 0 {
+                top.item_ix = top.item_ix.saturating_sub(1);
+                top.offset_in_item = px(0.0);
+            } else {
+                top.offset_in_item = px(0.0);
+            }
+        } else {
+            top.offset_in_item = px(new_offset);
+        }
+        self.preview_list.scroll_to(top);
+
+        if let Some(sel) = self.preview_selection {
+            let num_blocks = self.state.doc.parsed.blocks.len();
+            if num_blocks > 0 {
+                let target_block_ix = if velocity > 0.0 {
+                    (top.item_ix + 1).min(num_blocks - 1)
+                } else {
+                    top.item_ix.min(num_blocks - 1)
+                };
+                let char_offset = if velocity > 0.0 {
+                    self.state.doc.parsed.blocks.get(target_block_ix)
+                        .map(|b| b.to_plain_text().chars().count())
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                let head = crate::views::preview::PreviewCharPosition::new(target_block_ix, char_offset);
+                self.preview_selection = Some(crate::views::preview::PreviewSelection::new(sel.anchor, head));
+            }
+        }
+    }
+
+    pub fn trigger_preview_autoscroll_if_needed(&mut self, cx: &mut Context<Self>) {
+        if !self.is_preview_selecting {
+            self.preview_autoscroll_task = None;
+            return;
+        }
+        let Some(mouse_pos) = self.preview_mouse_window_pos else {
+            return;
+        };
+        let Some(bounds) = self.preview_content_bounds else {
+            return;
+        };
+        let mouse_y = f32::from(mouse_pos.y);
+        let bounds_top = f32::from(bounds.top());
+        let bounds_height = f32::from(bounds.size.height);
+        if crate::views::preview::detect_edge_autoscroll(mouse_y, bounds_top, bounds_height).is_some() {
+            if self.preview_autoscroll_task.is_none() {
+                let view = cx.entity().clone();
+                self.preview_autoscroll_task = Some(cx.spawn(async move |_this, app| {
+                    loop {
+                        app.background_executor().timer(std::time::Duration::from_millis(16)).await;
+                        let keep_going = view.update(app, |this, cx| {
+                            if !this.is_preview_selecting {
+                                this.preview_autoscroll_task = None;
+                                return false;
+                            }
+                            let Some(mouse_pos) = this.preview_mouse_window_pos else {
+                                this.preview_autoscroll_task = None;
+                                return false;
+                            };
+                            let Some(bounds) = this.preview_content_bounds else {
+                                this.preview_autoscroll_task = None;
+                                return false;
+                            };
+                            let mouse_y = f32::from(mouse_pos.y);
+                            let bounds_top = f32::from(bounds.top());
+                            let bounds_height = f32::from(bounds.size.height);
+                            let Some(vel) = crate::views::preview::detect_edge_autoscroll(mouse_y, bounds_top, bounds_height) else {
+                                this.preview_autoscroll_task = None;
+                                return false;
+                            };
+                            this.step_preview_autoscroll(vel, mouse_pos, bounds, cx);
+                            cx.notify();
+                            true
+                        }).unwrap_or(false);
+                        if !keep_going {
+                            break;
+                        }
+                    }
+                }));
+            }
+        }
     }
 
     pub fn theme(&self, _cx: &App) -> &crate::theme::ThemeColors {
@@ -1408,10 +1517,20 @@ impl Render for WorkspaceView {
                     this.split_ratio = (offset_x / avail_w).clamp(0.20, 0.80);
                     cx.notify();
                 }
+                if this.is_preview_selecting {
+                    this.preview_mouse_window_pos = Some(event.position);
+                    this.trigger_preview_autoscroll_if_needed(cx);
+                }
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _window, _cx| {
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _window, cx| {
                 if this.is_resizing_split {
                     this.is_resizing_split = false;
+                }
+                if this.is_preview_selecting {
+                    this.is_preview_selecting = false;
+                    this.preview_autoscroll_task = None;
+                    this.preview_mouse_window_pos = None;
+                    cx.notify();
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleSourceMode, _window, cx| {
@@ -1505,10 +1624,9 @@ impl Render for WorkspaceView {
                     .as_ref()
                     .map(|si| si.read(cx).focus_handle.is_focused(window))
                     .unwrap_or(false);
-                let search_active = search_is_focused || (this.search_focused && !this.focus_handle.is_focused(window));
-                this.search_focused = search_active;
+                this.search_focused = search_is_focused;
 
-                if search_active {
+                if search_is_focused {
                     let key = event.keystroke.key.as_str();
                     let mods = event.keystroke.modifiers;
                     if mods.platform && (key == "c" || key == "C") {
@@ -1517,24 +1635,11 @@ impl Render for WorkspaceView {
                         }
                         return;
                     }
-                    match key {
-                        "escape" => {
-                            this.search_focused = false;
-                            this.state.clear_search();
-                            if let Some(ref input) = this.search_input {
-                                input.update(cx, |inp, cx| {
-                                    inp.clear(cx);
-                                });
-                            }
-                            window.focus(&this.focus_handle);
-                            cx.notify();
-                        }
-                        "enter" => {
-                            this.search_focused = false;
-                            window.focus(&this.focus_handle);
-                            cx.notify();
-                        }
-                        _ => {}
+                    if key == "enter" {
+                        this.search_focused = false;
+                        window.focus(&this.focus_handle);
+                        cx.notify();
+                        return;
                     }
                     return;
                 }
@@ -1651,10 +1756,12 @@ impl Render for WorkspaceView {
                             cx.notify();
                         }
                         "c" | "C" => {
-                            if let Some(sel) = this.preview_selection {
-                                let text = crate::views::preview::serialize_preview_selection(&this.state.doc.parsed, sel);
-                                if !text.is_empty() {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            if this.state.view_mode != ViewMode::Source {
+                                if let Some(sel) = this.preview_selection {
+                                    let text = crate::views::preview::serialize_preview_selection(&this.state.doc.parsed, sel);
+                                    if !text.is_empty() {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                                    }
                                 }
                             }
                         }
@@ -2003,32 +2110,31 @@ impl Render for WorkspaceView {
                                 };
 
                                 let view_for_sel = cx.entity().clone();
-                                let on_selection_change: crate::views::preview::OnPreviewSelectionCallback = Arc::new(move |sel, is_selecting, _window, app| {
+                                let on_selection_change: crate::views::preview::OnPreviewSelectionCallback = Arc::new(move |sel, is_selecting, window, app| {
                                     let view = view_for_sel.clone();
                                     view.update(app, |this, cx| {
                                         this.preview_selection = sel;
                                         this.is_preview_selecting = is_selecting;
+                                        if is_selecting {
+                                            this.preview_mouse_window_pos = Some(window.mouse_position());
+                                            this.trigger_preview_autoscroll_if_needed(cx);
+                                        } else {
+                                            this.preview_autoscroll_task = None;
+                                            this.preview_mouse_window_pos = None;
+                                        }
                                         cx.notify();
                                     });
                                 });
 
                                 let view_for_scroll = cx.entity().clone();
-                                let on_autoscroll: crate::views::preview::OnPreviewAutoscrollCallback = Arc::new(move |velocity, _window, app| {
+                                let on_autoscroll: crate::views::preview::OnPreviewAutoscrollCallback = Arc::new(move |velocity, window, app| {
                                     let view = view_for_scroll.clone();
-                                    view.update(app, |this, _cx| {
-                                        let mut top = this.preview_list.logical_scroll_top();
-                                        let new_offset = f32::from(top.offset_in_item) + velocity;
-                                        if new_offset < 0.0 {
-                                            if top.item_ix > 0 {
-                                                top.item_ix = top.item_ix.saturating_sub(1);
-                                                top.offset_in_item = px(0.0);
-                                            } else {
-                                                top.offset_in_item = px(0.0);
-                                            }
-                                        } else {
-                                            top.offset_in_item = px(new_offset);
+                                    view.update(app, |this, cx| {
+                                        this.preview_mouse_window_pos = Some(window.mouse_position());
+                                        if let (Some(mouse_pos), Some(bounds)) = (this.preview_mouse_window_pos, this.preview_content_bounds) {
+                                            this.step_preview_autoscroll(velocity, mouse_pos, bounds, cx);
                                         }
-                                        this.preview_list.scroll_to(top);
+                                        this.trigger_preview_autoscroll_if_needed(cx);
                                     });
                                 });
 
@@ -2096,22 +2202,37 @@ impl Render for WorkspaceView {
                                                     on_click_line.clone(),
                                                 ))
                                                 .into_any_element(),
-                                            ViewMode::Preview => div()
-                                                .size_full()
-                                                .min_w(px(0.))
-                                                .child(crate::views::preview::render_preview_pane_with_callbacks(
-                                                    self.state.doc.parsed.clone(),
-                                                    theme,
-                                                    strings,
-                                                    self.state.preferences.max_column_width,
-                                                    self.state.preferences.font_size,
-                                                    &self.preview_list,
-                                                    copied_code_hash,
-                                                    preview_callbacks.clone(),
-                                                    self.preview_selection,
-                                                    self.is_preview_selecting,
-                                                ))
-                                                .into_any_element(),
+                                            ViewMode::Preview => {
+                                                let view_bounds = cx.entity().clone();
+                                                div()
+                                                    .size_full()
+                                                    .min_w(px(0.))
+                                                    .child(
+                                                        canvas(
+                                                            move |bounds, _window, cx| {
+                                                                view_bounds.update(cx, |this, _cx| {
+                                                                    this.preview_content_bounds = Some(bounds);
+                                                                });
+                                                            },
+                                                            |_bounds, _, _window, _cx| {},
+                                                        )
+                                                        .absolute()
+                                                        .size_full(),
+                                                    )
+                                                    .child(crate::views::preview::render_preview_pane_with_callbacks(
+                                                        self.state.doc.parsed.clone(),
+                                                        theme,
+                                                        strings,
+                                                        self.state.preferences.max_column_width,
+                                                        self.state.preferences.font_size,
+                                                        &self.preview_list,
+                                                        copied_code_hash,
+                                                        preview_callbacks.clone(),
+                                                        self.preview_selection,
+                                                        self.is_preview_selecting,
+                                                    ))
+                                                    .into_any_element()
+                                            }
                                             ViewMode::Split => div()
                                                 .size_full()
                                                 .flex()
@@ -2190,18 +2311,36 @@ impl Render for WorkspaceView {
                                                         .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
                                                             this.handle_preview_scroll_wheel(event, window, cx);
                                                         }))
-                                                        .child(crate::views::preview::render_preview_pane_with_callbacks(
-                                                            self.state.doc.parsed.clone(),
-                                                            theme,
-                                                            strings,
-                                                            self.state.preferences.max_column_width,
-                                                            self.state.preferences.font_size,
-                                                            &self.preview_list,
-                                                            copied_code_hash,
-                                                            preview_callbacks,
-                                                            self.preview_selection,
-                                                            self.is_preview_selecting,
-                                                        )),
+                                                        .child({
+                                                            let view_bounds = cx.entity().clone();
+                                                            div()
+                                                                .size_full()
+                                                                .min_w(px(0.))
+                                                                .child(
+                                                                    canvas(
+                                                                        move |bounds, _window, cx| {
+                                                                            view_bounds.update(cx, |this, _cx| {
+                                                                                this.preview_content_bounds = Some(bounds);
+                                                                            });
+                                                                        },
+                                                                        |_bounds, _, _window, _cx| {},
+                                                                    )
+                                                                    .absolute()
+                                                                    .size_full(),
+                                                                )
+                                                                .child(crate::views::preview::render_preview_pane_with_callbacks(
+                                                                    self.state.doc.parsed.clone(),
+                                                                    theme,
+                                                                    strings,
+                                                                    self.state.preferences.max_column_width,
+                                                                    self.state.preferences.font_size,
+                                                                    &self.preview_list,
+                                                                    copied_code_hash,
+                                                                    preview_callbacks,
+                                                                    self.preview_selection,
+                                                                    self.is_preview_selecting,
+                                                                ))
+                                                        }),
                                                 )
                                                 .into_any_element(),
                                         }

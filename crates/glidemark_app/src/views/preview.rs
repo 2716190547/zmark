@@ -45,22 +45,6 @@ impl PreviewSelection {
         Self { anchor, head }
     }
 
-    /// Legacy constructor for block-level ranges.
-    #[allow(dead_code)]
-    pub fn from_blocks(start_block: usize, end_block: usize) -> Self {
-        if start_block <= end_block {
-            Self {
-                anchor: PreviewCharPosition::new(start_block, 0),
-                head: PreviewCharPosition::new(end_block, usize::MAX),
-            }
-        } else {
-            Self {
-                anchor: PreviewCharPosition::new(start_block, usize::MAX),
-                head: PreviewCharPosition::new(end_block, 0),
-            }
-        }
-    }
-
     pub fn normalized(&self) -> (PreviewCharPosition, PreviewCharPosition) {
         if self.head < self.anchor {
             (self.head, self.anchor)
@@ -88,17 +72,6 @@ impl PreviewSelection {
         } else {
             Some(s_char..e_char)
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn contains_block(&self, block_ix: usize) -> bool {
-        let (start, end) = self.normalized();
-        start.block_ix <= block_ix && block_ix <= end.block_ix
-    }
-
-    #[allow(dead_code)]
-    pub fn contains(&self, block_ix: usize) -> bool {
-        self.contains_block(block_ix)
     }
 }
 
@@ -281,28 +254,105 @@ pub fn calculate_block_click_char_offset(
     x_pos: f32,
     y_pos: f32,
     base_font_size: f32,
+    width_limit: Option<f32>,
 ) -> usize {
     if block_text.is_empty() {
         return 0;
     }
-    let total_chars = block_text.chars().count();
-    let lines: Vec<&str> = block_text.split('\n').collect();
-    if lines.len() > 1 {
-        let line_height = base_font_size * 1.6;
-        let line_idx = if y_pos <= 0.0 {
-            0
-        } else {
-            ((y_pos / line_height).floor() as usize).min(lines.len() - 1)
-        };
-        let mut char_count_before = 0;
-        for l in &lines[..line_idx] {
-            char_count_before += l.chars().count() + 1;
-        }
-        let line_offset = calculate_single_line_char_offset(text_system, lines[line_idx], x_pos, base_font_size);
-        (char_count_before + line_offset).min(total_chars)
-    } else {
-        calculate_single_line_char_offset(text_system, block_text, x_pos, base_font_size)
+    if y_pos <= 0.0 && x_pos <= 0.0 {
+        return 0;
     }
+
+    let total_chars = block_text.chars().count();
+    let font = gpui::font("ui-sans-serif, system-ui");
+    let font_size_px = gpui::px(base_font_size);
+
+    let mut visual_lines: Vec<(String, usize)> = Vec::new();
+    let mut current_char_offset = 0;
+    let phys_lines: Vec<&str> = block_text.split('\n').collect();
+
+    for (p_idx, phys_line) in phys_lines.iter().enumerate() {
+        let phys_char_count = phys_line.chars().count();
+        if phys_line.is_empty() {
+            visual_lines.push((String::new(), current_char_offset));
+        } else {
+            let mut wrapped = false;
+            if let Some(max_w) = width_limit {
+                if max_w > 0.0 {
+                    let run = gpui::TextRun {
+                        len: phys_line.len(),
+                        font: font.clone(),
+                        color: gpui::black(),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    };
+                    let shaped = text_system.shape_line(
+                        gpui::SharedString::from(phys_line.to_string()),
+                        font_size_px,
+                        &[run],
+                        None,
+                    );
+                    if f32::from(shaped.width) > max_w {
+                        let chars: Vec<char> = phys_line.chars().collect();
+                        let char_count = chars.len();
+                        let mut byte_offsets = Vec::with_capacity(char_count + 1);
+                        for (b_idx, _) in phys_line.char_indices() {
+                            byte_offsets.push(b_idx);
+                        }
+                        byte_offsets.push(phys_line.len());
+
+                        let mut char_widths = Vec::with_capacity(char_count);
+                        for k in 0..char_count {
+                            let start_x = f32::from(shaped.x_for_index(byte_offsets[k]));
+                            let end_x = if k + 1 == char_count {
+                                f32::from(shaped.width)
+                            } else {
+                                f32::from(shaped.x_for_index(byte_offsets[k + 1]))
+                            };
+                            char_widths.push((end_x - start_x).max(0.0));
+                        }
+
+                        let vls = crate::editor_engine::wrap_line_to_visual_measured(
+                            p_idx,
+                            phys_line,
+                            max_w,
+                            |idx, _| char_widths.get(idx).copied().unwrap_or(base_font_size * 0.6),
+                        );
+
+                        if !vls.is_empty() {
+                            for vl in vls {
+                                let vl_str: String = chars[vl.char_start..vl.char_start + vl.char_len].iter().collect();
+                                visual_lines.push((vl_str, current_char_offset + vl.char_start));
+                            }
+                            wrapped = true;
+                        }
+                    }
+                }
+            }
+
+            if !wrapped {
+                visual_lines.push((phys_line.to_string(), current_char_offset));
+            }
+        }
+
+        current_char_offset += phys_char_count + 1;
+    }
+
+    if visual_lines.is_empty() {
+        return 0;
+    }
+
+    let line_height = base_font_size * 1.75;
+    let line_idx = if y_pos <= 0.0 {
+        0
+    } else {
+        ((y_pos / line_height).floor() as usize).min(visual_lines.len() - 1)
+    };
+
+    let (ref vl_str, vl_offset) = visual_lines[line_idx];
+    let line_offset = calculate_single_line_char_offset(text_system, vl_str, x_pos, base_font_size);
+    (vl_offset + line_offset).min(total_chars)
 }
 
 pub fn render_preview_pane_with_callbacks(
@@ -351,10 +401,24 @@ pub fn render_preview_pane_with_callbacks(
             let block_char_len = block_text.chars().count();
             let selected_char_range = selection.and_then(|s| s.char_range_for_block(ix, block_char_len));
 
+            let block_bounds_cell = Arc::new(std::cell::Cell::new(Bounds::default()));
+            let bounds_for_canvas = block_bounds_cell.clone();
+
             let mut block_container = div()
+                .relative()
                 .w_full()
                 .max_w(px(max_column_width))
                 .mx_auto()
+                .child(
+                    canvas(
+                        move |bounds, _window, _cx| {
+                            bounds_for_canvas.set(bounds);
+                        },
+                        |_bounds, _, _window, _cx| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
                 .child(render_block_element(
                     block,
                     &item_theme,
@@ -372,27 +436,37 @@ pub fn render_preview_pane_with_callbacks(
                 let on_autoscroll = item_callbacks.on_autoscroll.clone();
                 let text_for_down = block_text.clone();
                 let text_for_move = block_text.clone();
+                let bounds_cell_down = block_bounds_cell.clone();
+                let bounds_cell_move = block_bounds_cell.clone();
 
                 block_container = block_container
                     .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
+                        let bounds = bounds_cell_down.get();
+                        let local_x = (event.position.x - bounds.left()).max(px(0.));
+                        let local_y = (event.position.y - bounds.top()).max(px(0.));
                         let offset = calculate_block_click_char_offset(
                             window.text_system(),
                             &text_for_down,
-                            f32::from(event.position.x),
-                            f32::from(event.position.y),
+                            f32::from(local_x),
+                            f32::from(local_y),
                             font_size,
+                            Some(f32::from(bounds.size.width)),
                         );
                         let pos = PreviewCharPosition::new(ix, offset);
                         on_sel_down(Some(PreviewSelection::new(pos, pos)), true, window, cx);
                     })
                     .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
                         if is_selecting {
+                            let bounds = bounds_cell_move.get();
+                            let local_x = (event.position.x - bounds.left()).max(px(0.));
+                            let local_y = (event.position.y - bounds.top()).max(px(0.));
                             let offset = calculate_block_click_char_offset(
                                 window.text_system(),
                                 &text_for_move,
-                                f32::from(event.position.x),
-                                f32::from(event.position.y),
+                                f32::from(local_x),
+                                f32::from(local_y),
                                 font_size,
+                                Some(f32::from(bounds.size.width)),
                             );
                             let head = PreviewCharPosition::new(ix, offset);
                             if let Some(sel) = selection {
@@ -483,23 +557,62 @@ fn render_block_element(
                 )
             }
         }
-        BlockElement::BlockQuote(blocks) => div()
-            .w_full()
-            .min_w(px(0.))
-            .border_l_4()
-            .border_color(theme.accent)
-            .bg(theme.surface)
-            .p_3()
-            .rounded_r_md()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .children(
-                blocks
-                    .iter()
-                    .map(|b| render_block_element(b, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox, selected_char_range.clone())),
-            )
-            .into_any_element(),
+        BlockElement::BlockQuote(blocks) => {
+            let mut cur_offset = 0;
+            let mut is_first_non_empty = true;
+            let mut child_elements = Vec::new();
+
+            for b in blocks {
+                let text = b.to_plain_text();
+                let len = text.chars().count();
+                let child_range = if len == 0 {
+                    None
+                } else {
+                    if !is_first_non_empty {
+                        cur_offset += 1;
+                    }
+                    is_first_non_empty = false;
+                    let block_start = cur_offset;
+                    let block_end = cur_offset + len;
+                    let r = selected_char_range.as_ref().and_then(|range| {
+                        if range.start < block_end && range.end > block_start {
+                            let s = range.start.saturating_sub(block_start).min(len);
+                            let e = range.end.saturating_sub(block_start).min(len);
+                            if s < e { Some(s..e) } else { None }
+                        } else {
+                            None
+                        }
+                    });
+                    cur_offset += len;
+                    r
+                };
+
+                child_elements.push(render_block_element(
+                    b,
+                    theme,
+                    strings,
+                    base_font_size,
+                    copied_code_hash,
+                    on_copy,
+                    on_open_lightbox,
+                    child_range,
+                ));
+            }
+
+            div()
+                .w_full()
+                .min_w(px(0.))
+                .border_l_4()
+                .border_color(theme.accent)
+                .bg(theme.surface)
+                .p_3()
+                .rounded_r_md()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .children(child_elements)
+                .into_any_element()
+        }
         BlockElement::List { ordered, items } => render_list_element(
             *ordered,
             items,
@@ -996,37 +1109,149 @@ fn render_list_element(
     selected_char_range: Option<std::ops::Range<usize>>,
 ) -> AnyElement {
     let mut cur_offset = 0;
-    div()
-        .w_full()
-        .min_w(px(0.))
-        .flex()
-        .flex_col()
-        .gap_1p5()
-        .children(items.iter().enumerate().map(|(idx, item)| {
-            let prefix_len = if item.checked.is_some() {
-                6
-            } else if ordered {
-                format!("{}. ", idx + 1).chars().count()
+    let mut item_elements = Vec::with_capacity(items.len());
+
+    for (idx, item) in items.iter().enumerate() {
+        let prefix_len = if item.checked.is_some() {
+            6
+        } else if ordered {
+            format!("{}. ", idx + 1).chars().count()
+        } else {
+            2
+        };
+        let content_text = item.content.plain_text();
+        let content_len = content_text.chars().count();
+        let item_start = cur_offset + prefix_len;
+        let item_end = item_start + content_len;
+
+        let item_range = selected_char_range.as_ref().and_then(|range| {
+            if range.start < item_end && range.end > item_start {
+                let s = range.start.saturating_sub(item_start).min(content_len);
+                let e = range.end.saturating_sub(item_start).min(content_len);
+                if s < e { Some(s..e) } else { None }
             } else {
-                2
-            };
-            let content_text = item.content.plain_text();
-            let content_len = content_text.chars().count();
-            let item_start = cur_offset + prefix_len;
-            let item_end = item_start + content_len;
+                None
+            }
+        });
 
-            let item_range = selected_char_range.as_ref().and_then(|range| {
-                if range.start < item_end && range.end > item_start {
-                    let s = range.start.saturating_sub(item_start).min(content_len);
-                    let e = range.end.saturating_sub(item_start).min(content_len);
-                    if s < e { Some(s..e) } else { None }
-                } else {
-                    None
+        let (sub_range, next_offset) = if let Some(sub) = &item.sub_list {
+            let sub_text = sub.to_plain_text();
+            if sub_text.is_empty() {
+                (None, item_end)
+            } else {
+                let mut first_sel = None;
+                let mut last_sel = None;
+                let mut p_offset = item_end;
+                let mut sub_char_idx = 0;
+                let sub_char_total = sub_text.chars().count();
+
+                for line in sub_text.lines() {
+                    p_offset += 3; // '\n' + "  "
+                    for _ in line.chars() {
+                        if let Some(ref range) = selected_char_range {
+                            if range.start <= p_offset && p_offset < range.end {
+                                if first_sel.is_none() {
+                                    first_sel = Some(sub_char_idx);
+                                }
+                                last_sel = Some(sub_char_idx + 1);
+                            }
+                        }
+                        p_offset += 1;
+                        sub_char_idx += 1;
+                    }
+                    if sub_char_idx < sub_char_total {
+                        if let Some(ref range) = selected_char_range {
+                            if range.start <= p_offset && p_offset < range.end {
+                                if first_sel.is_none() {
+                                    first_sel = Some(sub_char_idx);
+                                }
+                                last_sel = Some(sub_char_idx + 1);
+                            }
+                        }
+                        sub_char_idx += 1;
+                    }
                 }
-            });
 
-            cur_offset += prefix_len + content_len + 1;
+                let range = match (first_sel, last_sel) {
+                    (Some(s), Some(e)) if s < e => Some(s..e),
+                    _ => None,
+                };
+                (range, p_offset)
+            }
+        } else {
+            (None, item_end)
+        };
 
+        cur_offset = next_offset + 1;
+
+        let bullet_element = if let Some(checked) = item.checked {
+            div()
+                .mt_1()
+                .w(px(14.))
+                .h(px(14.))
+                .rounded_sm()
+                .border_1()
+                .border_color(theme.syntax_bullet)
+                .bg(if checked { theme.syntax_bullet } else { theme.bg })
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(if checked {
+                    svg()
+                        .path("icons/check.svg")
+                        .size(px(9.))
+                        .text_color(rgb(0xffffff))
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
+                })
+        } else if ordered {
+            div()
+                .flex_shrink_0()
+                .w(px(20.))
+                .text_right()
+                .text_size(px(base_font_size))
+                .font_family("ui-monospace")
+                .text_color(theme.syntax_bullet)
+                .child(format!("{}.", idx + 1))
+        } else {
+            let bullet = match depth % 3 {
+                0 => "–",
+                1 => "◦",
+                _ => "▪",
+            };
+            div()
+                .flex_shrink_0()
+                .w(px(12.))
+                .text_center()
+                .text_size(px(base_font_size))
+                .text_color(theme.syntax_bullet)
+                .child(bullet)
+        };
+
+        let sub_element = item.sub_list.as_ref().map(|sub| {
+            div()
+                .pl_5()
+                .pt_1()
+                .child(if let BlockElement::List { ordered: sub_ordered, items: sub_items } = sub.as_ref() {
+                    render_list_element(
+                        *sub_ordered,
+                        sub_items,
+                        theme,
+                        strings,
+                        base_font_size,
+                        depth + 1,
+                        copied_code_hash,
+                        on_copy,
+                        on_open_lightbox,
+                        sub_range,
+                    )
+                } else {
+                    render_block_element(sub, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox, sub_range)
+                })
+        });
+
+        item_elements.push(
             div()
                 .w_full()
                 .min_w(px(0.))
@@ -1039,50 +1264,7 @@ fn render_list_element(
                         .flex()
                         .items_start()
                         .gap_2()
-                        .child(if let Some(checked) = item.checked {
-                            div()
-                                .mt_1()
-                                .w(px(14.))
-                                .h(px(14.))
-                                .rounded_sm()
-                                .border_1()
-                                .border_color(theme.syntax_bullet)
-                                .bg(if checked { theme.syntax_bullet } else { theme.bg })
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(if checked {
-                                    svg()
-                                        .path("icons/check.svg")
-                                        .size(px(9.))
-                                        .text_color(rgb(0xffffff))
-                                        .into_any_element()
-                                } else {
-                                    div().into_any_element()
-                                })
-                        } else if ordered {
-                            div()
-                                .flex_shrink_0()
-                                .w(px(20.))
-                                .text_right()
-                                .text_size(px(base_font_size))
-                                .font_family("ui-monospace")
-                                .text_color(theme.syntax_bullet)
-                                .child(format!("{}.", idx + 1))
-                        } else {
-                            let bullet = match depth % 3 {
-                                0 => "–",
-                                1 => "◦",
-                                _ => "▪",
-                            };
-                            div()
-                                .flex_shrink_0()
-                                .w(px(12.))
-                                .text_center()
-                                .text_size(px(base_font_size))
-                                .text_color(theme.syntax_bullet)
-                                .child(bullet)
-                        })
+                        .child(bullet_element)
                         .child(
                             div()
                                 .flex_1()
@@ -1093,28 +1275,17 @@ fn render_list_element(
                                 .child(render_styled_inlines(&item.content, theme, base_font_size, item_range)),
                         ),
                 )
-                .children(item.sub_list.as_ref().map(|sub| {
-                    div()
-                        .pl_5()
-                        .pt_1()
-                        .child(if let BlockElement::List { ordered: sub_ordered, items: sub_items } = sub.as_ref() {
-                            render_list_element(
-                                *sub_ordered,
-                                sub_items,
-                                theme,
-                                strings,
-                                base_font_size,
-                                depth + 1,
-                                copied_code_hash,
-                                on_copy,
-                                on_open_lightbox,
-                                selected_char_range.clone(),
-                            )
-                        } else {
-                            render_block_element(sub, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox, selected_char_range.clone())
-                        })
-                }))
-        }))
+                .children(sub_element),
+        );
+    }
+
+    div()
+        .w_full()
+        .min_w(px(0.))
+        .flex()
+        .flex_col()
+        .gap_1p5()
+        .children(item_elements)
         .into_any_element()
 }
 

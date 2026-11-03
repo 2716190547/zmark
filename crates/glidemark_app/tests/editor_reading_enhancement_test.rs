@@ -1,6 +1,6 @@
 use glidemark_app::views::editor::{
-    build_active_line_segments, calculate_line_row_height, tokenize_markdown_line,
-    ActiveLineSegment, MarkdownToken, MarkdownTokenKind,
+    calculate_line_row_height, tokenize_markdown_line,
+    MarkdownToken, MarkdownTokenKind,
 };
 use glidemark_app::views::workspace::{adaptive_header_padding, CANVAS_TITLE_LEFT_MARGIN};
 
@@ -256,102 +256,11 @@ fn test_markdown_tokenizer_empty_and_plain() {
     );
 }
 
-/// Helper to reconstruct line text from active line segments by ignoring the cursor
-fn reconstruct_segments(segments: &[ActiveLineSegment]) -> String {
-    segments
-        .iter()
-        .filter_map(|seg| match seg {
-            ActiveLineSegment::Token(tok) => Some(tok.text.as_str()),
-            ActiveLineSegment::Cursor => None,
-        })
-        .collect()
-}
-
-/// Requirement 8: Active line token splitting and syntax highlight preservation
+/// Requirement 8: Markdown tokenization and syntax highlight preservation
 ///
-/// Ensures active line with cursor maintains syntax highlighting for tokens,
-/// cleanly splits the active token around the cursor, and preserves the full text.
+/// Ensures syntax highlighting tokens preserve full text across various constructs.
 #[test]
-fn test_active_line_token_splitting_and_highlight_preservation() {
-    // -----------------------------------------------------------------
-    // Test 1: Cursor inside heading prefix:
-    // "### Title" with cursor at col 2 -> "##", Cursor, "# ", "Title"
-    // -----------------------------------------------------------------
-    let line1 = "### Title";
-    let tokens1 = tokenize_markdown_line(line1);
-    let segments1 = build_active_line_segments(&tokens1, 2);
-    assert_eq!(
-        segments1,
-        vec![
-            ActiveLineSegment::Token(MarkdownToken {
-                text: "##".to_string(),
-                kind: MarkdownTokenKind::HeadingPrefix,
-            }),
-            ActiveLineSegment::Cursor,
-            ActiveLineSegment::Token(MarkdownToken {
-                text: "# ".to_string(),
-                kind: MarkdownTokenKind::HeadingPrefix,
-            }),
-            ActiveLineSegment::Token(MarkdownToken {
-                text: "Title".to_string(),
-                kind: MarkdownTokenKind::HeadingText,
-            }),
-        ]
-    );
-
-    // -----------------------------------------------------------------
-    // Test 2: Cursor inside bold text:
-    // "Here is **bold** text" with cursor at pos 11 (after "**b")
-    // Both before and after cursor tokens maintain MarkdownTokenKind::Bold
-    // -----------------------------------------------------------------
-    let line2 = "Here is **bold** text";
-    let tokens2 = tokenize_markdown_line(line2);
-    let segments2 = build_active_line_segments(&tokens2, 11);
-    let cursor_idx2 = segments2
-        .iter()
-        .position(|s| matches!(s, ActiveLineSegment::Cursor))
-        .expect("Cursor must be present in segments");
-    assert!(cursor_idx2 > 0 && cursor_idx2 < segments2.len() - 1);
-    match (&segments2[cursor_idx2 - 1], &segments2[cursor_idx2 + 1]) {
-        (ActiveLineSegment::Token(before), ActiveLineSegment::Token(after)) => {
-            assert_eq!(before.kind, MarkdownTokenKind::Bold);
-            assert_eq!(after.kind, MarkdownTokenKind::Bold);
-            assert_eq!(before.text, "**b");
-            assert_eq!(after.text, "old**");
-        }
-        _ => panic!("Expected Bold tokens immediately before and after cursor"),
-    }
-
-    // -----------------------------------------------------------------
-    // Test 3: Cursor inside inline code:
-    // "Run `cargo test` now" with cursor at pos 7 (inside "`cargo test`")
-    // Both before and after cursor tokens maintain MarkdownTokenKind::InlineCodeSplitLeft/Right
-    // -----------------------------------------------------------------
-    let line3 = "Run `cargo test` now";
-    let tokens3 = tokenize_markdown_line(line3);
-    let segments3 = build_active_line_segments(&tokens3, 7);
-    let cursor_idx3 = segments3
-        .iter()
-        .position(|s| matches!(s, ActiveLineSegment::Cursor))
-        .expect("Cursor must be present in segments");
-    assert!(cursor_idx3 > 0 && cursor_idx3 < segments3.len() - 1);
-    match (&segments3[cursor_idx3 - 1], &segments3[cursor_idx3 + 1]) {
-        (ActiveLineSegment::Token(before), ActiveLineSegment::Token(after)) => {
-            assert_eq!(before.kind, MarkdownTokenKind::InlineCodeSplitLeft);
-            assert_eq!(after.kind, MarkdownTokenKind::InlineCodeSplitRight);
-            assert_eq!(before.text, "`ca");
-            assert_eq!(after.text, "rgo test`");
-        }
-        _ => panic!("Expected InlineCodeSplit tokens immediately before and after cursor"),
-    }
-
-    // -----------------------------------------------------------------
-    // Test 4: Reconstructed text (ignoring Cursor) equals original line text across all cases
-    // -----------------------------------------------------------------
-    assert_eq!(reconstruct_segments(&segments1), line1);
-    assert_eq!(reconstruct_segments(&segments2), line2);
-    assert_eq!(reconstruct_segments(&segments3), line3);
-
+fn test_markdown_tokenization_preserves_full_text() {
     let test_lines = [
         "### Title",
         "Here is **bold** text",
@@ -363,48 +272,9 @@ fn test_active_line_token_splitting_and_highlight_preservation() {
 
     for line in test_lines {
         let tokens = tokenize_markdown_line(line);
-        let char_len = line.chars().count();
-        for col in 0..=char_len {
-            let segs = build_active_line_segments(&tokens, col);
-            let recon = reconstruct_segments(&segs);
-            assert_eq!(
-                recon, line,
-                "Reconstructed text mismatch for {:?} at col {}",
-                line, col
-            );
-            assert_eq!(
-                segs.iter().filter(|s| matches!(s, ActiveLineSegment::Cursor)).count(),
-                1,
-                "Exactly one cursor expected for {:?} at col {}",
-                line, col
-            );
-        }
+        let recon: String = tokens.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(recon, line, "Reconstructed text mismatch for {:?}", line);
     }
-
-    // -----------------------------------------------------------------
-    // Test 5: Cursor at start of line (col 0) and at end of line (col == line.len())
-    // -----------------------------------------------------------------
-    let line5 = "### Title";
-    let tokens5 = tokenize_markdown_line(line5);
-
-    // Cursor at start of line (col 0)
-    let segments_start = build_active_line_segments(&tokens5, 0);
-    assert_eq!(segments_start.first(), Some(&ActiveLineSegment::Cursor));
-    assert_eq!(reconstruct_segments(&segments_start), line5);
-
-    // Cursor at end of line (col == line.len())
-    let segments_end = build_active_line_segments(&tokens5, line5.len());
-    assert_eq!(segments_end.last(), Some(&ActiveLineSegment::Cursor));
-    assert_eq!(reconstruct_segments(&segments_end), line5);
-
-    // Cursor on empty line
-    let empty_tokens = tokenize_markdown_line("");
-    let segments_empty = build_active_line_segments(&empty_tokens, 0);
-    assert_eq!(segments_empty.first(), Some(&ActiveLineSegment::Cursor));
-    assert_eq!(
-        segments_empty.iter().filter(|s| matches!(s, ActiveLineSegment::Cursor)).count(),
-        1
-    );
 }
 
 /// Requirement 9: Scroll wheel row height linkage

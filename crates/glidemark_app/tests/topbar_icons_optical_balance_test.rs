@@ -60,6 +60,7 @@ fn test_topbar_icons_optical_weight_balance_matrix() {
         ("icons/book-open.svg", 2.0, 1.3333334),
         ("icons/save.svg", 2.0, 1.3333334),
         ("icons/settings.svg", 1.8, 1.20),
+        ("icons/search.svg", 2.25, 1.50),
     ];
 
     let assets = AppAssets;

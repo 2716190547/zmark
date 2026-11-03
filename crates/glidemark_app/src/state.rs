@@ -131,14 +131,12 @@ impl Default for WorkspaceRoot {
 }
 
 impl WorkspaceRoot {
-    #[allow(dead_code)]
     pub fn expanded_folders(&self) -> HashSet<PathBuf> {
         let mut set = HashSet::new();
         collect_expanded_paths(&self.tree, &mut set);
         set
     }
 
-    #[allow(dead_code)]
     pub fn set_expanded_folders(&mut self, set: &HashSet<PathBuf>) {
         apply_expanded_paths(&mut self.tree, set);
     }
@@ -1558,32 +1556,64 @@ impl AppState {
         if self.search_query.is_empty() {
             return None;
         }
+        let roots = self
+            .workspace_roots
+            .iter()
+            .map(SearchRootSpec::from)
+            .collect();
+
         Some(SearchJob {
             generation: self.search_generation,
             query: self.search_query.clone(),
-            roots: self.workspace_roots.clone(),
+            roots,
             scan_budget: self.scan_budget.clone(),
         })
     }
 
     pub fn apply_search_result(&mut self, result: SearchJobResult) -> bool {
-        if result.generation != self.search_generation || result.query != self.search_query {
+        if result.generation != self.search_generation {
+            if result.generation >= self.search_generation || self.search_query.is_empty() {
+                self.search_in_progress = false;
+            }
             return false;
         }
 
+        if result.query != self.search_query {
+            self.search_in_progress = false;
+            return false;
+        }
+
+        let query_lower = self.search_query.to_lowercase();
+
         for res_root in result.roots {
             if let Some(existing) = self.workspace_roots.iter_mut().find(|r| r.path == res_root.path) {
-                existing.tree = res_root.tree;
-                existing.is_expanded = res_root.is_expanded;
-                existing.truncated = res_root.truncated;
-                existing.entries_used = res_root.entries_used;
-                existing.files_used = res_root.files_used;
-                existing.deferred = res_root.deferred;
+                if existing.tree.is_empty() {
+                    existing.tree = res_root.tree;
+                    existing.deferred = res_root.deferred;
+                    existing.is_expanded = res_root.is_expanded;
+                    apply_expanded_paths(&mut existing.tree, &res_root.matching_expanded_paths);
+                } else {
+                    merge_node_trees(&mut existing.tree, res_root.tree, &res_root.matching_expanded_paths);
+                    if res_root.is_expanded {
+                        existing.is_expanded = true;
+                    }
+                    if !res_root.deferred {
+                        existing.deferred = false;
+                    }
+                }
+
+                if expand_ancestors_for_query(&mut existing.tree, &query_lower) {
+                    existing.is_expanded = true;
+                }
+
+                existing.truncated = existing.truncated || res_root.truncated;
+                existing.entries_used = existing.entries_used.max(res_root.entries_used);
+                existing.files_used = existing.files_used.max(res_root.files_used);
             }
         }
 
         self.scan_budget = result.scan_budget;
-        self.search_truncated = result.search_truncated;
+        self.search_truncated = result.search_truncated || self.workspace_roots.iter().any(|r| r.truncated);
         self.search_in_progress = false;
         true
     }
@@ -1596,31 +1626,17 @@ impl AppState {
         }
         if let Some(job) = self.prepare_search_job() {
             let result = job.execute();
-            self.apply_search_result(result)
+            let applied = self.apply_search_result(result);
+            if !applied {
+                self.search_in_progress = false;
+            }
+            applied
         } else {
             self.search_in_progress = false;
             false
         }
     }
 
-    #[allow(dead_code)]
-    pub fn perform_search(&mut self) -> bool {
-        self.execute_search()
-    }
-
-    #[allow(dead_code)]
-    pub fn spawn_background_search<F>(&self, on_complete: F) -> Option<std::thread::JoinHandle<()>>
-    where
-        F: FnOnce(SearchJobResult) + Send + 'static,
-    {
-        let job = self.prepare_search_job()?;
-        Some(std::thread::spawn(move || {
-            let res = job.execute();
-            on_complete(res);
-        }))
-    }
-
-    #[allow(dead_code)]
     pub fn clear_search(&mut self) {
         self.set_search_query("");
     }
@@ -1633,7 +1649,6 @@ impl AppState {
         filename.to_lowercase().contains(&self.search_query.to_lowercase())
     }
 
-    #[allow(dead_code)]
     pub fn has_search_matches(&self) -> bool {
         if self.search_query.is_empty() {
             return true;
@@ -1665,11 +1680,46 @@ impl AppState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRootSpec {
+    pub path: PathBuf,
+    pub is_missing: bool,
+    pub truncated: bool,
+    pub entries_used: usize,
+    pub files_used: usize,
+    pub deferred: bool,
+}
+
+impl From<&WorkspaceRoot> for SearchRootSpec {
+    fn from(r: &WorkspaceRoot) -> Self {
+        Self {
+            path: r.path.clone(),
+            is_missing: r.is_missing,
+            truncated: r.truncated,
+            entries_used: r.entries_used,
+            files_used: r.files_used,
+            deferred: r.deferred,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchRootResult {
+    pub path: PathBuf,
+    pub tree: Vec<FileTreeNode>,
+    pub is_expanded: bool,
+    pub truncated: bool,
+    pub entries_used: usize,
+    pub files_used: usize,
+    pub deferred: bool,
+    pub matching_expanded_paths: HashSet<PathBuf>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchJob {
     pub generation: u64,
     pub query: String,
-    pub roots: Vec<WorkspaceRoot>,
+    pub roots: Vec<SearchRootSpec>,
     pub scan_budget: ScanBudget,
 }
 
@@ -1677,7 +1727,7 @@ pub struct SearchJob {
 pub struct SearchJobResult {
     pub generation: u64,
     pub query: String,
-    pub roots: Vec<WorkspaceRoot>,
+    pub roots: Vec<SearchRootResult>,
     pub scan_budget: ScanBudget,
     pub search_truncated: bool,
 }
@@ -1686,32 +1736,29 @@ impl SearchJob {
     pub fn execute(mut self) -> SearchJobResult {
         let query_lower = self.query.to_lowercase();
         let mut any_truncated = false;
+        let mut result_roots = Vec::with_capacity(self.roots.len());
 
-        for root in self.roots.iter_mut() {
+        for root in self.roots {
             if root.is_missing {
+                result_roots.push(SearchRootResult {
+                    path: root.path,
+                    tree: Vec::new(),
+                    is_expanded: false,
+                    truncated: root.truncated,
+                    entries_used: root.entries_used,
+                    files_used: root.files_used,
+                    deferred: root.deferred,
+                    matching_expanded_paths: HashSet::new(),
+                });
                 continue;
             }
+
             if root.truncated {
                 any_truncated = true;
             }
-            if root.deferred && root.tree.is_empty() {
-                let empty_set = HashSet::new();
-                let prev_e = self.scan_budget.entries_left;
-                let prev_f = self.scan_budget.files_left;
-                let (tree, is_trunc) = scan_root_layer(&root.path, 0, &mut self.scan_budget, &empty_set, 4);
-                let consumed_e = prev_e.saturating_sub(self.scan_budget.entries_left);
-                let consumed_f = prev_f.saturating_sub(self.scan_budget.files_left);
-                root.entries_used = consumed_e;
-                root.files_used = consumed_f;
-                root.deferred = false;
-                root.truncated = is_trunc;
-                root.tree = tree;
-            }
 
-            let root_rem_entries = ScanBudget::PER_ROOT_ENTRY_CAP
-                .saturating_sub(root.entries_used);
-            let root_rem_files = ScanBudget::PER_ROOT_FILE_CAP
-                .saturating_sub(root.files_used);
+            let root_rem_entries = ScanBudget::PER_ROOT_ENTRY_CAP.saturating_sub(root.entries_used);
+            let root_rem_files = ScanBudget::PER_ROOT_FILE_CAP.saturating_sub(root.files_used);
             let avail_entries = root_rem_entries.min(self.scan_budget.entries_left);
             let avail_files = root_rem_files.min(self.scan_budget.files_left);
 
@@ -1719,42 +1766,247 @@ impl SearchJob {
             let mut is_truncated = root.truncated;
             let mut entries_used = 0;
             let mut files_used = 0;
+            let mut matching_expanded_paths = HashSet::new();
 
-            let matched = expand_ancestors_for_matching_files(
-                &mut root.tree,
-                &query_lower,
+            let (tree, root_matched) = scan_dir_for_search(
+                &root.path,
                 0,
+                4,
+                &query_lower,
                 &mut budget,
                 &mut entries_used,
                 &mut files_used,
                 &mut is_truncated,
+                &mut matching_expanded_paths,
             );
 
-            root.entries_used += entries_used;
-            root.files_used += files_used;
+            let total_entries = root.entries_used + entries_used;
+            let total_files = root.files_used + files_used;
             self.scan_budget.entries_left = self.scan_budget.entries_left.saturating_sub(entries_used);
             self.scan_budget.files_left = self.scan_budget.files_left.saturating_sub(files_used);
 
             if is_truncated {
-                root.truncated = true;
                 any_truncated = true;
             }
-            if matched {
-                root.is_expanded = true;
-            }
+
+            result_roots.push(SearchRootResult {
+                path: root.path,
+                tree,
+                is_expanded: root_matched,
+                truncated: is_truncated,
+                entries_used: total_entries,
+                files_used: total_files,
+                deferred: false,
+                matching_expanded_paths,
+            });
         }
 
         SearchJobResult {
             generation: self.generation,
             query: self.query,
-            roots: self.roots,
+            roots: result_roots,
             scan_budget: self.scan_budget,
             search_truncated: any_truncated,
         }
     }
 }
 
-#[allow(dead_code)]
+pub fn scan_dir_for_search(
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    query_lower: &str,
+    budget: &mut ScanBudget,
+    entries_used: &mut usize,
+    files_used: &mut usize,
+    is_truncated: &mut bool,
+    expanded_paths: &mut HashSet<PathBuf>,
+) -> (Vec<FileTreeNode>, bool) {
+    if depth > max_depth {
+        return (Vec::new(), false);
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return (Vec::new(), false),
+    };
+
+    let mut dir_entries = Vec::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let name = match p.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if name.starts_with('.')
+            || name == "target"
+            || name == "node_modules"
+            || name == "build"
+            || name == "dist"
+            || name == "dev"
+            || name == "proc"
+            || name == "sys"
+        {
+            continue;
+        }
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        dir_entries.push((p, name, file_type));
+    }
+
+    dir_entries.sort_by(|a, b| {
+        match (a.2.is_dir(), b.2.is_dir()) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.1.to_lowercase().cmp(&b.1.to_lowercase()),
+        }
+    });
+
+    let mut nodes = Vec::new();
+    let mut dir_has_match = false;
+
+    for (p, name, file_type) in dir_entries {
+        if file_type.is_dir() {
+            if !budget.consume_entry() {
+                *is_truncated = true;
+                break;
+            }
+            *entries_used += 1;
+
+            let name_matches = name.to_lowercase().contains(query_lower);
+            let (children, child_has_match) = if depth < max_depth {
+                scan_dir_for_search(
+                    &p,
+                    depth + 1,
+                    max_depth,
+                    query_lower,
+                    budget,
+                    entries_used,
+                    files_used,
+                    is_truncated,
+                    expanded_paths,
+                )
+            } else {
+                (Vec::new(), false)
+            };
+
+            let is_matched = name_matches || child_has_match;
+            if is_matched {
+                dir_has_match = true;
+                expanded_paths.insert(p.clone());
+            }
+
+            nodes.push(FileTreeNode {
+                path: p,
+                name,
+                is_dir: true,
+                is_expanded: is_matched,
+                children,
+                mtime: None,
+            });
+        } else if file_type.is_file() {
+            let is_markdown = p.extension()
+                .and_then(|e| e.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+                .unwrap_or(false);
+
+            if is_markdown {
+                if !budget.consume_file() {
+                    *is_truncated = true;
+                    break;
+                }
+                *files_used += 1;
+
+                let name_matches = name.to_lowercase().contains(query_lower);
+                if name_matches {
+                    dir_has_match = true;
+                }
+
+                let raw_mtime = fs::metadata(&p).ok().and_then(|m| m.modified().ok());
+                let mtime = format_mtime(raw_mtime, std::time::SystemTime::now());
+                nodes.push(FileTreeNode {
+                    path: p,
+                    name,
+                    is_dir: false,
+                    is_expanded: false,
+                    children: Vec::new(),
+                    mtime,
+                });
+            } else {
+                if !budget.consume_entry() {
+                    *is_truncated = true;
+                    break;
+                }
+                *entries_used += 1;
+            }
+        }
+    }
+
+    (nodes, dir_has_match)
+}
+
+fn merge_node_trees(
+    existing: &mut Vec<FileTreeNode>,
+    scanned: Vec<FileTreeNode>,
+    expanded_paths: &HashSet<PathBuf>,
+) {
+    for scanned_node in scanned {
+        if let Some(existing_node) = existing.iter_mut().find(|n| n.path == scanned_node.path) {
+            if scanned_node.is_dir {
+                if expanded_paths.contains(&existing_node.path) || scanned_node.is_expanded {
+                    existing_node.is_expanded = true;
+                }
+                if existing_node.children.is_empty() {
+                    let mut children = scanned_node.children;
+                    for child in children.iter_mut() {
+                        if child.is_dir && expanded_paths.contains(&child.path) {
+                            child.is_expanded = true;
+                        }
+                    }
+                    existing_node.children = children;
+                } else if !scanned_node.children.is_empty() {
+                    merge_node_trees(&mut existing_node.children, scanned_node.children, expanded_paths);
+                }
+            }
+        } else {
+            let parent_exists = scanned_node.path.parent().map(|p| p.exists()).unwrap_or(false);
+            if scanned_node.path.exists() || !parent_exists {
+                let mut new_node = scanned_node;
+                if new_node.is_dir && expanded_paths.contains(&new_node.path) {
+                    new_node.is_expanded = true;
+                }
+                existing.push(new_node);
+            }
+        }
+    }
+
+    existing.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
+}
+
+fn expand_ancestors_for_query(nodes: &mut [FileTreeNode], query_lower: &str) -> bool {
+    let mut any_match = false;
+    for node in nodes.iter_mut() {
+        if node.is_dir {
+            let child_match = expand_ancestors_for_query(&mut node.children, query_lower);
+            let name_match = node.name.to_lowercase().contains(query_lower);
+            if child_match || name_match {
+                node.is_expanded = true;
+                any_match = true;
+            }
+        } else if node.name.to_lowercase().contains(query_lower) {
+            any_match = true;
+        }
+    }
+    any_match
+}
+
 pub fn apply_expanded_paths(nodes: &mut [FileTreeNode], set: &HashSet<PathBuf>) {
     for n in nodes.iter_mut() {
         if n.is_dir {
@@ -1764,7 +2016,6 @@ pub fn apply_expanded_paths(nodes: &mut [FileTreeNode], set: &HashSet<PathBuf>) 
     }
 }
 
-#[allow(dead_code)]
 pub fn node_tree_has_match(nodes: &[FileTreeNode], q: &str) -> bool {
     for node in nodes {
         if node.is_dir {
@@ -1778,52 +2029,6 @@ pub fn node_tree_has_match(nodes: &[FileTreeNode], q: &str) -> bool {
     false
 }
 
-#[allow(dead_code)]
-fn expand_ancestors_for_matching_files(
-    nodes: &mut [FileTreeNode],
-    query_lower: &str,
-    depth: usize,
-    budget: &mut ScanBudget,
-    entries_used: &mut usize,
-    files_used: &mut usize,
-    is_truncated: &mut bool,
-) -> bool {
-    let mut has_match = false;
-    for node in nodes.iter_mut() {
-        if node.is_dir {
-            if node.children.is_empty() && node.path.is_dir() {
-                let empty_set = HashSet::new();
-                let prev_e = budget.entries_left;
-                let prev_f = budget.files_left;
-                let (children, child_trunc) = scan_root_layer(&node.path, depth + 1, budget, &empty_set, 4);
-                *entries_used += prev_e.saturating_sub(budget.entries_left);
-                *files_used += prev_f.saturating_sub(budget.files_left);
-                node.children = children;
-                if child_trunc || (budget.entries_left == 0 && budget.files_left == 0) {
-                    *is_truncated = true;
-                }
-            }
-            let child_match = expand_ancestors_for_matching_files(
-                &mut node.children,
-                query_lower,
-                depth + 1,
-                budget,
-                entries_used,
-                files_used,
-                is_truncated,
-            );
-            let name_matches = node.name.to_lowercase().contains(query_lower);
-            if child_match || name_matches {
-                node.is_expanded = true;
-                has_match = true;
-            }
-        } else if node.name.to_lowercase().contains(query_lower) {
-            has_match = true;
-        }
-    }
-    has_match
-}
-
 fn collect_expanded_paths(nodes: &[FileTreeNode], set: &mut std::collections::HashSet<PathBuf>) {
     for n in nodes {
         if n.is_dir {
@@ -1833,23 +2038,6 @@ fn collect_expanded_paths(nodes: &[FileTreeNode], set: &mut std::collections::Ha
             collect_expanded_paths(&n.children, set);
         }
     }
-}
-
-#[allow(dead_code)]
-pub fn count_tree_usage(nodes: &[FileTreeNode]) -> (usize, usize) {
-    let mut entries = 0;
-    let mut files = 0;
-    for node in nodes {
-        if node.is_dir {
-            entries += 1;
-            let (sub_e, sub_f) = count_tree_usage(&node.children);
-            entries += sub_e;
-            files += sub_f;
-        } else {
-            files += 1;
-        }
-    }
-    (entries, files)
 }
 
 /// Formats an optional file modification time as `YYYY/MM/DD HH:mm`.
@@ -1923,7 +2111,6 @@ pub fn format_mtime(mtime: Option<std::time::SystemTime>, now: std::time::System
     ))
 }
 
-#[allow(dead_code)]
 pub fn scan_root_layer(
     dir: &Path,
     depth: usize,
@@ -2033,4 +2220,140 @@ pub fn scan_root_layer(
     }
 
     (nodes, truncated)
+}
+
+#[cfg(test)]
+mod background_search_decoupling_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_prepare_search_job_lightweight_no_tree_clone() {
+        let doc = Document::new_scratch();
+        let mut state = AppState::new_isolated(doc);
+        state.workspace_roots.push(WorkspaceRoot {
+            path: PathBuf::from("/mock/root"),
+            tree: vec![FileTreeNode {
+                path: PathBuf::from("/mock/root/huge_file.md"),
+                name: "huge_file.md".to_string(),
+                is_dir: false,
+                is_expanded: false,
+                children: Vec::new(),
+                mtime: None,
+            }],
+            is_expanded: true,
+            is_missing: false,
+            truncated: false,
+            entries_used: 1,
+            files_used: 1,
+            deferred: false,
+        });
+
+        state.set_search_query("huge");
+        let job = state.prepare_search_job().expect("job should be prepared");
+        assert_eq!(job.roots.len(), 1);
+        assert_eq!(job.roots[0].path, PathBuf::from("/mock/root"));
+        assert_eq!(job.roots[0].entries_used, 1);
+        assert_eq!(job.roots[0].files_used, 1);
+    }
+
+    #[test]
+    fn test_apply_search_result_preserves_concurrent_user_mutations() {
+        let tmp = tempdir().unwrap();
+        let root_dir = tmp.path().join("workspace");
+        fs::create_dir_all(&root_dir).unwrap();
+        let initial_file = root_dir.join("initial.md");
+        fs::write(&initial_file, "# Initial").unwrap();
+
+        let doc = Document::new_scratch();
+        let mut state = AppState::new_isolated(doc);
+        state.add_workspace_root(root_dir.clone()).unwrap();
+
+        // 1. User starts search
+        state.set_search_query("initial");
+        let job = state.prepare_search_job().unwrap();
+
+        // 2. Background search executes
+        let handle = std::thread::spawn(move || job.execute());
+        let result = handle.join().unwrap();
+
+        // 3. Concurrently while search was executing, user added a new file to the workspace tree
+        let user_new_path = root_dir.join("user_concurrent.md");
+        state.workspace_roots[0].tree.push(FileTreeNode {
+            path: user_new_path.clone(),
+            name: "user_concurrent.md".to_string(),
+            is_dir: false,
+            is_expanded: false,
+            children: Vec::new(),
+            mtime: None,
+        });
+
+        // 4. Result arrives and is applied
+        let applied = state.apply_search_result(result);
+        assert!(applied);
+        assert!(!state.search_in_progress);
+
+        // 5. Verify user_concurrent.md was NOT overwritten or lost!
+        let has_user_file = state.workspace_roots[0]
+            .tree
+            .iter()
+            .any(|n| n.name == "user_concurrent.md");
+        assert!(has_user_file, "Concurrent user file must NOT be lost when search result is applied");
+    }
+
+    #[test]
+    fn test_apply_search_result_does_not_resurrect_renamed_file() {
+        let tmp = tempdir().unwrap();
+        let root_dir = tmp.path().join("workspace");
+        fs::create_dir_all(&root_dir).unwrap();
+        let file_a = root_dir.join("file_a.md");
+        fs::write(&file_a, "# File A").unwrap();
+
+        let doc = Document::new_scratch();
+        let mut state = AppState::new_isolated(doc);
+        state.add_workspace_root(root_dir.clone()).unwrap();
+
+        state.set_search_query("file");
+        let job = state.prepare_search_job().unwrap();
+        let result = job.execute();
+
+        // Simulate rename on disk and in state tree while search was running
+        let file_b = root_dir.join("file_b.md");
+        fs::rename(&file_a, &file_b).unwrap();
+        state.workspace_roots[0].tree.retain(|n| n.name != "file_a.md");
+        state.workspace_roots[0].tree.push(FileTreeNode {
+            path: file_b.clone(),
+            name: "file_b.md".to_string(),
+            is_dir: false,
+            is_expanded: false,
+            children: Vec::new(),
+            mtime: None,
+        });
+
+        let applied = state.apply_search_result(result);
+        assert!(applied);
+
+        // file_a should NOT be resurrected because it no longer exists on disk
+        let has_file_a = state.workspace_roots[0].tree.iter().any(|n| n.name == "file_a.md");
+        let has_file_b = state.workspace_roots[0].tree.iter().any(|n| n.name == "file_b.md");
+        assert!(!has_file_a, "file_a must not be resurrected after rename");
+        assert!(has_file_b, "file_b must remain in workspace tree");
+    }
+
+    #[test]
+    fn test_generation_mismatch_resets_in_progress_when_no_active_query() {
+        let doc = Document::new_scratch();
+        let mut state = AppState::new_isolated(doc);
+        let stale_result = SearchJobResult {
+            generation: 999,
+            query: "query".to_string(),
+            roots: Vec::new(),
+            scan_budget: ScanBudget::default(),
+            search_truncated: false,
+        };
+        state.search_in_progress = true;
+        let applied = state.apply_search_result(stale_result);
+        assert!(!applied);
+        assert!(!state.search_in_progress);
+    }
 }

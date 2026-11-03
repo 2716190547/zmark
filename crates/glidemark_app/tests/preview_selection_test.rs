@@ -507,11 +507,12 @@ fn test_preview_selection_range_methods() {
         range_fwd.normalized(),
         (PreviewCharPosition::new(2, 0), PreviewCharPosition::new(5, 10))
     );
-    assert!(!range_fwd.contains_block(1));
-    assert!(range_fwd.contains_block(2));
-    assert!(range_fwd.contains_block(4));
-    assert!(range_fwd.contains_block(5));
-    assert!(!range_fwd.contains_block(6));
+    let (sf, ef) = range_fwd.normalized();
+    assert!(!(sf.block_ix <= 1 && 1 <= ef.block_ix));
+    assert!(sf.block_ix <= 2 && 2 <= ef.block_ix);
+    assert!(sf.block_ix <= 4 && 4 <= ef.block_ix);
+    assert!(sf.block_ix <= 5 && 5 <= ef.block_ix);
+    assert!(!(sf.block_ix <= 6 && 6 <= ef.block_ix));
 
     let range_rev = PreviewSelection::new(
         PreviewCharPosition::new(5, 10),
@@ -521,18 +522,20 @@ fn test_preview_selection_range_methods() {
         range_rev.normalized(),
         (PreviewCharPosition::new(2, 0), PreviewCharPosition::new(5, 10))
     );
-    assert!(!range_rev.contains_block(1));
-    assert!(range_rev.contains_block(2));
-    assert!(range_rev.contains_block(5));
-    assert!(!range_rev.contains_block(6));
+    let (s, e) = range_rev.normalized();
+    assert!(!(s.block_ix <= 1 && 1 <= e.block_ix));
+    assert!(s.block_ix <= 2 && 2 <= e.block_ix);
+    assert!(s.block_ix <= 5 && 5 <= e.block_ix);
+    assert!(!(s.block_ix <= 6 && 6 <= e.block_ix));
 
     let default_range = PreviewSelectionRange::default();
     assert_eq!(
         default_range.normalized(),
         (PreviewCharPosition::default(), PreviewCharPosition::default())
     );
-    assert!(default_range.contains_block(0));
-    assert!(!default_range.contains_block(1));
+    let (ds, de) = default_range.normalized();
+    assert!(ds.block_ix == 0 && de.block_ix == 0);
+    assert!(!(ds.block_ix <= 1 && 1 <= de.block_ix));
 }
 
 #[test]
@@ -540,11 +543,17 @@ fn test_serialize_preview_selection_helper() {
     let md = "# Heading 1\n\nParagraph 1\n\nParagraph 2";
     let doc = parse_markdown(md);
 
-    let range = PreviewSelection::from_blocks(1, 2);
+    let range = PreviewSelection::new(
+        PreviewCharPosition::new(1, 0),
+        PreviewCharPosition::new(2, usize::MAX),
+    );
     let serialized = serialize_preview_selection(&doc, range);
     assert_eq!(serialized, "Paragraph 1\n\nParagraph 2");
 
-    let range_rev = PreviewSelection::from_blocks(2, 0);
+    let range_rev = PreviewSelection::new(
+        PreviewCharPosition::new(2, usize::MAX),
+        PreviewCharPosition::new(0, 0),
+    );
     let serialized_rev = serialize_preview_selection(&doc, range_rev);
     assert_eq!(serialized_rev, "Heading 1\n\nParagraph 1\n\nParagraph 2");
 }
