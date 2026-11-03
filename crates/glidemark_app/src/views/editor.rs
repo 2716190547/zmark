@@ -24,7 +24,9 @@ pub enum MarkdownTokenKind {
     LinkText,
     LinkUrl,
     Keyword,
+    Attribute,
     StringLiteral,
+    Number,
     Comment,
     CodeDelimiter,
     CodeText,
@@ -320,6 +322,52 @@ pub fn compute_fenced_code_lines(lines: &[String]) -> Vec<bool> {
     is_fenced
 }
 
+pub fn spans_to_code_tokens(
+    line: &str,
+    spans: &[glidemark_core::syntax::SyntaxSpan],
+) -> Vec<MarkdownToken> {
+    if line.is_empty() {
+        return vec![MarkdownToken {
+            text: " ".to_string(),
+            kind: MarkdownTokenKind::CodeText,
+        }];
+    }
+    if spans.is_empty() {
+        return vec![MarkdownToken {
+            text: line.to_string(),
+            kind: MarkdownTokenKind::CodeText,
+        }];
+    }
+
+    let mut tokens = Vec::with_capacity(spans.len());
+    for span in spans {
+        let start = span.range.start.min(line.len());
+        let end = span.range.end.min(line.len());
+        if start >= end {
+            continue;
+        }
+        let text = line[start..end].to_string();
+        let kind = match span.role {
+            glidemark_core::syntax::SyntaxRole::Plain => MarkdownTokenKind::CodeText,
+            glidemark_core::syntax::SyntaxRole::Keyword => MarkdownTokenKind::Keyword,
+            glidemark_core::syntax::SyntaxRole::Attribute => MarkdownTokenKind::Attribute,
+            glidemark_core::syntax::SyntaxRole::String => MarkdownTokenKind::StringLiteral,
+            glidemark_core::syntax::SyntaxRole::Number => MarkdownTokenKind::Number,
+            glidemark_core::syntax::SyntaxRole::Comment => MarkdownTokenKind::Comment,
+        };
+        tokens.push(MarkdownToken { text, kind });
+    }
+
+    if tokens.is_empty() {
+        tokens.push(MarkdownToken {
+            text: line.to_string(),
+            kind: MarkdownTokenKind::CodeText,
+        });
+    }
+    tokens
+}
+
+#[allow(dead_code)]
 pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
     if line.is_empty() {
         return vec![MarkdownToken {
@@ -336,109 +384,121 @@ pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
         }];
     }
 
-    const KEYWORDS: &[&str] = &[
-        "fn", "let", "pub", "struct", "impl", "mut", "if", "else", "return", "match",
-        "for", "in", "while", "loop", "const", "static", "enum", "type", "use", "mod",
-        "trait", "async", "await", "def", "class", "import", "from", "function", "var", "val",
-    ];
-
-    let mut tokens = Vec::new();
-    let chars: Vec<char> = line.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        // Comments: //... or #...
-        if (chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '/') || chars[i] == '#' {
-            let comment_text: String = chars[i..].iter().collect();
-            tokens.push(MarkdownToken {
-                text: comment_text,
-                kind: MarkdownTokenKind::Comment,
-            });
-            break;
-        }
-
-        // Strings: "..." or '...'
-        if chars[i] == '"' || chars[i] == '\'' {
-            let quote = chars[i];
-            let start = i;
-            i += 1;
-            let mut escaped = false;
-            while i < chars.len() {
-                if escaped {
-                    escaped = false;
-                    i += 1;
-                } else if chars[i] == '\\' {
-                    escaped = true;
-                    i += 1;
-                } else if chars[i] == quote {
-                    i += 1;
-                    break;
-                } else {
-                    i += 1;
-                }
-            }
-            let str_text: String = chars[start..i].iter().collect();
-            tokens.push(MarkdownToken {
-                text: str_text,
-                kind: MarkdownTokenKind::StringLiteral,
-            });
-            continue;
-        }
-
-        // Identifiers / keywords: starts with alphabetic or '_'
-        if chars[i].is_alphabetic() || chars[i] == '_' {
-            let start = i;
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                i += 1;
-            }
-            let word: String = chars[start..i].iter().collect();
-            let kind = if KEYWORDS.contains(&word.as_str()) {
-                MarkdownTokenKind::Keyword
-            } else {
-                MarkdownTokenKind::CodeText
-            };
-            tokens.push(MarkdownToken {
-                text: word,
-                kind,
-            });
-            continue;
-        }
-
-        // Other characters (whitespace, punctuation, numbers, operators)
-        let start = i;
-        while i < chars.len()
-            && !chars[i].is_alphabetic()
-            && chars[i] != '_'
-            && chars[i] != '"'
-            && chars[i] != '\''
-            && !(chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '/')
-            && chars[i] != '#'
-        {
-            i += 1;
-        }
-        let other: String = chars[start..i].iter().collect();
-        tokens.push(MarkdownToken {
-            text: other,
-            kind: MarkdownTokenKind::CodeText,
-        });
-    }
-
-    tokens
+    let spans = glidemark_core::syntax::get_or_parse_code_spans(line, Some("rust"));
+    spans_to_code_tokens(line, &spans)
 }
 
+pub fn tokenize_document_lines<S: AsRef<str>>(lines: &[S]) -> Vec<Vec<MarkdownToken>> {
+    let mut result = Vec::with_capacity(lines.len());
+    let mut in_fence = false;
+    let mut fence_lang: Option<String> = None;
+    let mut block_lines: Vec<(usize, String)> = Vec::new();
 
+    let flush_block = |block_lines: &mut Vec<(usize, String)>,
+                       fence_lang: &Option<String>,
+                       result: &mut Vec<Vec<MarkdownToken>>| {
+        if block_lines.is_empty() {
+            return;
+        }
+        let full_code = block_lines
+            .iter()
+            .map(|(_, l)| l.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let spans =
+            glidemark_core::syntax::get_or_parse_code_spans(&full_code, fence_lang.as_deref());
+
+        let mut byte_offset = 0;
+        for (idx, line_str) in block_lines.drain(..) {
+            let line_len = line_str.len();
+            let line_range = byte_offset..byte_offset + line_len;
+
+            let mut line_spans = Vec::new();
+            for span in spans.iter() {
+                let overlap_start = span.range.start.max(line_range.start);
+                let overlap_end = span.range.end.min(line_range.end);
+                if overlap_start < overlap_end {
+                    line_spans.push(glidemark_core::syntax::SyntaxSpan {
+                        range: (overlap_start - byte_offset)..(overlap_end - byte_offset),
+                        role: span.role,
+                    });
+                }
+            }
+
+            let tokens = spans_to_code_tokens(&line_str, &line_spans);
+            result[idx] = tokens;
+            byte_offset += line_len + 1; // +1 for the '\n' separator
+        }
+    };
+
+    for line_ref in lines {
+        let line = line_ref.as_ref();
+        let trimmed = line.trim();
+        let is_fence_delim = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+
+        if !in_fence {
+            if is_fence_delim {
+                in_fence = true;
+                let raw_tag = if let Some(stripped) = trimmed.strip_prefix("```") {
+                    stripped.trim()
+                } else if let Some(stripped) = trimmed.strip_prefix("~~~") {
+                    stripped.trim()
+                } else {
+                    ""
+                };
+                let lang_token = raw_tag.split_whitespace().next().unwrap_or("");
+                fence_lang = if lang_token.is_empty() {
+                    None
+                } else {
+                    Some(lang_token.to_string())
+                };
+
+                result.push(vec![MarkdownToken {
+                    text: line.to_string(),
+                    kind: MarkdownTokenKind::CodeDelimiter,
+                }]);
+            } else {
+                result.push(tokenize_markdown_line(line));
+            }
+        } else if is_fence_delim {
+            flush_block(&mut block_lines, &fence_lang, &mut result);
+            in_fence = false;
+            fence_lang = None;
+            result.push(vec![MarkdownToken {
+                text: line.to_string(),
+                kind: MarkdownTokenKind::CodeDelimiter,
+            }]);
+        } else {
+            let idx = result.len();
+            result.push(Vec::new()); // placeholder
+            block_lines.push((idx, line.to_string()));
+        }
+    }
+
+    if in_fence {
+        flush_block(&mut block_lines, &fence_lang, &mut result);
+    }
+
+    result
+}
 
 fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> impl IntoElement {
     let mut el = div().child(tok.text.clone());
     match tok.kind {
         MarkdownTokenKind::Keyword => {
-            el = el.text_color(theme.syntax_keyword).font_weight(FontWeight::BOLD);
+            el = el.text_color(theme.syntax_keyword);
+        }
+        MarkdownTokenKind::Attribute => {
+            el = el.text_color(theme.syntax_attribute);
         }
         MarkdownTokenKind::StringLiteral => {
             el = el.text_color(theme.syntax_string);
         }
+        MarkdownTokenKind::Number => {
+            el = el.text_color(theme.syntax_number);
+        }
         MarkdownTokenKind::Comment => {
-            el = el.text_color(theme.syntax_comment).italic();
+            el = el.text_color(theme.syntax_comment);
         }
         MarkdownTokenKind::HeadingPrefix | MarkdownTokenKind::HeadingText => {
             el = el.text_color(theme.syntax_heading).font_weight(FontWeight::BOLD);
@@ -792,20 +852,14 @@ pub fn wrap_document_to_visual_layout(
     max_width_px: f32,
     font_size: f32,
 ) -> Vec<VisualLine> {
-    let fenced_lines = compute_fenced_code_lines(lines);
+    let doc_tokens = tokenize_document_lines(lines);
     let mut result = Vec::new();
-    for (phys_idx, line) in lines.iter().enumerate() {
-        let is_fenced = fenced_lines.get(phys_idx).copied().unwrap_or(false);
-        let tokens = if is_fenced {
-            tokenize_code_line(line)
-        } else {
-            tokenize_markdown_line(line)
-        };
+    for (phys_idx, (line, tokens)) in lines.iter().zip(doc_tokens.iter()).enumerate() {
         let wrapped = wrap_line_to_visual_layout(
             text_system,
             phys_idx,
             line,
-            &tokens,
+            tokens,
             max_width_px,
             font_size,
         );
@@ -836,6 +890,7 @@ pub struct CachedLineEntry {
     pub is_fenced: bool,
     pub spans: Vec<LineVisualSpan>,
     pub natural_width_px: f32,
+    pub tokens: Vec<MarkdownToken>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -857,19 +912,15 @@ fn shape_single_line(
     i: usize,
     line: &str,
     is_fenced: bool,
+    tokens: &[MarkdownToken],
     max_width_px: f32,
     font_size: f32,
 ) -> CachedLineEntry {
-    let tokens = if is_fenced {
-        tokenize_code_line(line)
-    } else {
-        tokenize_markdown_line(line)
-    };
     let (vl, natural_width_px) = wrap_line_to_visual_layout_with_width(
         text_system,
         i,
         line,
-        &tokens,
+        tokens,
         max_width_px,
         font_size,
     );
@@ -886,6 +937,7 @@ fn shape_single_line(
         is_fenced,
         spans,
         natural_width_px,
+        tokens: tokens.to_vec(),
     }
 }
 
@@ -894,6 +946,7 @@ fn evaluate_matching_line(
     i: usize,
     line: &str,
     is_fenced: bool,
+    tokens: &[MarkdownToken],
     width_changed: bool,
     max_width_px: f32,
     font_size: f32,
@@ -912,12 +965,13 @@ fn evaluate_matching_line(
                     is_first: true,
                 }],
                 natural_width_px: old.natural_width_px,
+                tokens: tokens.to_vec(),
             },
             true,
         )
     } else {
         (
-            shape_single_line(text_system, i, line, is_fenced, max_width_px, font_size),
+            shape_single_line(text_system, i, line, is_fenced, tokens, max_width_px, font_size),
             false,
         )
     }
@@ -948,6 +1002,7 @@ impl DocumentLayoutCache {
             self.entries.clear();
         }
 
+        let doc_tokens = tokenize_document_lines(lines);
         let fenced_lines = compute_fenced_code_lines(lines);
         let mut shaped_count = 0;
         let mut reused_count = 0;
@@ -956,14 +1011,20 @@ impl DocumentLayoutCache {
         let mut new_entries = Vec::with_capacity(lines.len());
 
         if !font_changed && old_entries.len() == lines.len() {
-            for (i, (line, &is_fenced)) in lines.iter().zip(fenced_lines.iter()).enumerate() {
+            for (i, ((line, &is_fenced), tokens)) in lines
+                .iter()
+                .zip(fenced_lines.iter())
+                .zip(doc_tokens.iter())
+                .enumerate()
+            {
                 let old = &old_entries[i];
-                if old.is_fenced == is_fenced && old.text == *line {
+                if old.is_fenced == is_fenced && old.text == *line && &old.tokens == tokens {
                     let (entry, is_reused) = evaluate_matching_line(
                         old,
                         i,
                         line,
                         is_fenced,
+                        tokens,
                         width_changed,
                         max_width_px,
                         font_size,
@@ -981,6 +1042,7 @@ impl DocumentLayoutCache {
                         i,
                         line,
                         is_fenced,
+                        tokens,
                         max_width_px,
                         font_size,
                     ));
@@ -993,6 +1055,7 @@ impl DocumentLayoutCache {
                 && prefix < old_entries.len()
                 && old_entries[prefix].is_fenced == fenced_lines[prefix]
                 && old_entries[prefix].text == lines[prefix]
+                && old_entries[prefix].tokens == doc_tokens[prefix]
             {
                 prefix += 1;
             }
@@ -1004,6 +1067,8 @@ impl DocumentLayoutCache {
                     == fenced_lines[lines.len() - 1 - suffix]
                 && old_entries[old_entries.len() - 1 - suffix].text
                     == lines[lines.len() - 1 - suffix]
+                && old_entries[old_entries.len() - 1 - suffix].tokens
+                    == doc_tokens[lines.len() - 1 - suffix]
             {
                 suffix += 1;
             }
@@ -1014,6 +1079,7 @@ impl DocumentLayoutCache {
                     i,
                     &lines[i],
                     fenced_lines[i],
+                    &doc_tokens[i],
                     width_changed,
                     max_width_px,
                     font_size,
@@ -1034,6 +1100,7 @@ impl DocumentLayoutCache {
                     i,
                     &lines[i],
                     fenced_lines[i],
+                    &doc_tokens[i],
                     max_width_px,
                     font_size,
                 ));
@@ -1048,6 +1115,7 @@ impl DocumentLayoutCache {
                     i,
                     &lines[i],
                     fenced_lines[i],
+                    &doc_tokens[i],
                     width_changed,
                     max_width_px,
                     font_size,
@@ -1061,12 +1129,17 @@ impl DocumentLayoutCache {
                 }
             }
         } else {
-            for (i, (line, &is_fenced)) in lines.iter().zip(fenced_lines.iter()).enumerate() {
+            for (i, (line, (&is_fenced, tokens))) in lines
+                .iter()
+                .zip(fenced_lines.iter().zip(doc_tokens.iter()))
+                .enumerate()
+            {
                 new_entries.push(shape_single_line(
                     text_system,
                     i,
                     line,
                     is_fenced,
+                    tokens,
                     max_width_px,
                     font_size,
                 ));
@@ -1221,7 +1294,7 @@ pub fn render_editor_pane(
     let theme = theme.clone();
     let list_theme = theme.clone();
     let sanitized_lh = glidemark_core::config::Preferences::sanitize_line_height(line_height);
-    let fenced_lines = Arc::new(compute_fenced_code_lines(&lines));
+    let doc_tokens = Arc::new(tokenize_document_lines(&lines));
 
     div()
         .flex_1()
@@ -1262,12 +1335,10 @@ pub fn render_editor_pane(
                             String::new()
                         };
 
-                        let is_fenced = fenced_lines.get(phys_idx).copied().unwrap_or(false);
-                        let phys_tokens = if is_fenced {
-                            tokenize_code_line(phys_line_str)
-                        } else {
-                            tokenize_markdown_line(phys_line_str)
-                        };
+                        let phys_tokens = doc_tokens
+                            .get(phys_idx)
+                            .cloned()
+                            .unwrap_or_else(|| tokenize_markdown_line(phys_line_str));
                         let (sub_start, sub_len) = if let Some(v) = vl {
                             (v.char_start, v.char_len)
                         } else {

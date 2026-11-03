@@ -1797,19 +1797,31 @@ fn render_code_block(
 
     let group_name: SharedString = format!("code_block_{}", hash).into();
 
-    let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
-    if let Some(char_range) = selected_char_range {
-        let byte_range = char_range_to_byte_range(&code_text, char_range);
-        if byte_range.start < byte_range.end {
-            highlights.push((
-                byte_range,
+    let spans = glidemark_core::syntax::get_or_parse_code_spans(code, lang);
+    let syntax_highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = spans
+        .iter()
+        .filter(|s| s.range.start < s.range.end && s.range.end <= code_text.len())
+        .map(|s| {
+            (
+                s.range.clone(),
                 HighlightStyle {
-                    background_color: Some(theme.selection_bg()),
+                    color: Some(theme.syntax_color_for_role(s.role)),
                     ..Default::default()
                 },
-            ));
+            )
+        })
+        .collect();
+
+    let highlights = if let Some(char_range) = selected_char_range {
+        let byte_range = char_range_to_byte_range(&code_text, char_range);
+        if byte_range.start < byte_range.end {
+            apply_selection_to_highlights(&code_text, &syntax_highlights, byte_range, theme.selection_bg())
+        } else {
+            syntax_highlights
         }
-    }
+    } else {
+        syntax_highlights
+    };
 
     let styled_text = if highlights.is_empty() {
         StyledText::new(code_text)

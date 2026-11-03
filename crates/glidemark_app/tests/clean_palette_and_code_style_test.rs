@@ -19,8 +19,8 @@ fn test_default_palette_neutral_colors() {
     );
     assert_eq!(
         light.code_bg,
-        rgb(0xf6f8fa).into(),
-        "Default light code_bg must be #f6f8fa (Clean cool light gray)"
+        rgb(0xf6f5ef).into(),
+        "Default light code_bg must be #f6f5ef (Warm paper code block per Phase I)"
     );
     let sel_light = light.selection_bg();
     assert!(
@@ -57,7 +57,9 @@ fn test_eight_palettes_six_syntax_tokens_matrix() {
             let theme = ThemeColors::resolve(palette.id, is_dark);
             let tokens = [
                 ("syntax_keyword", theme.syntax_keyword),
+                ("syntax_attribute", theme.syntax_attribute),
                 ("syntax_string", theme.syntax_string),
+                ("syntax_number", theme.syntax_number),
                 ("syntax_comment", theme.syntax_comment),
                 ("syntax_heading", theme.syntax_heading),
                 ("syntax_inline_code", theme.syntax_inline_code),
@@ -74,13 +76,15 @@ fn test_eight_palettes_six_syntax_tokens_matrix() {
         }
     }
 
-    // Specifically verify representative palette values from ADR 0034 matrix:
+    // Specifically verify representative palette values from Phase I (I2) warm palette:
 
     // 1. default light
     let def_light = ThemeColors::resolve("default", false);
-    assert_eq!(def_light.syntax_keyword, rgb(0x8250df).into(), "default light syntax_keyword");
-    assert_eq!(def_light.syntax_string, rgb(0x1a7f37).into(), "default light syntax_string");
-    assert_eq!(def_light.syntax_comment, rgb(0x6e7781).into(), "default light syntax_comment");
+    assert_eq!(def_light.syntax_keyword, rgb(0x7d56b3).into(), "default light syntax_keyword");
+    assert_eq!(def_light.syntax_attribute, rgb(0x596a88).into(), "default light syntax_attribute");
+    assert_eq!(def_light.syntax_string, rgb(0x8a6b12).into(), "default light syntax_string");
+    assert_eq!(def_light.syntax_number, rgb(0x995b2b).into(), "default light syntax_number");
+    assert_eq!(def_light.syntax_comment, rgb(0x676d65).into(), "default light syntax_comment");
     assert_eq!(def_light.syntax_heading, rgb(0x0969da).into(), "default light syntax_heading");
     assert_eq!(def_light.syntax_inline_code, rgb(0x1f2328).into(), "default light syntax_inline_code");
     assert_eq!(def_light.syntax_link, rgb(0x0969da).into(), "default light syntax_link");
@@ -88,8 +92,10 @@ fn test_eight_palettes_six_syntax_tokens_matrix() {
     // 2. default dark
     let def_dark = ThemeColors::resolve("default", true);
     assert_eq!(def_dark.syntax_keyword, rgb(0xd2a8ff).into(), "default dark syntax_keyword");
-    assert_eq!(def_dark.syntax_string, rgb(0x7ee787).into(), "default dark syntax_string");
-    assert_eq!(def_dark.syntax_comment, rgb(0x8b949e).into(), "default dark syntax_comment");
+    assert_eq!(def_dark.syntax_attribute, rgb(0x9bb7d4).into(), "default dark syntax_attribute");
+    assert_eq!(def_dark.syntax_string, rgb(0xe5c07b).into(), "default dark syntax_string");
+    assert_eq!(def_dark.syntax_number, rgb(0xf39c6b).into(), "default dark syntax_number");
+    assert_eq!(def_dark.syntax_comment, rgb(0xa8a29e).into(), "default dark syntax_comment");
     assert_eq!(def_dark.syntax_heading, rgb(0x58a6ff).into(), "default dark syntax_heading");
     assert_eq!(def_dark.syntax_inline_code, rgb(0xf3f1ed).into(), "default dark syntax_inline_code");
     assert_eq!(def_dark.syntax_link, rgb(0x58a6ff).into(), "default dark syntax_link");
@@ -97,53 +103,68 @@ fn test_eight_palettes_six_syntax_tokens_matrix() {
     // 3. github light
     let gh_light = ThemeColors::resolve("github", false);
     assert_eq!(gh_light.syntax_keyword, rgb(0xcf222e).into(), "github light syntax_keyword");
+    assert_eq!(gh_light.syntax_attribute, rgb(0x0550ae).into(), "github light syntax_attribute");
     assert_eq!(gh_light.syntax_string, rgb(0x0a3069).into(), "github light syntax_string");
-    assert_eq!(gh_light.syntax_comment, rgb(0x6e7781).into(), "github light syntax_comment");
+    assert_eq!(gh_light.syntax_number, rgb(0x953800).into(), "github light syntax_number");
+    assert_eq!(gh_light.syntax_comment, rgb(0x57606a).into(), "github light syntax_comment");
     assert_eq!(gh_light.syntax_heading, rgb(0x0550ae).into(), "github light syntax_heading");
     assert_eq!(gh_light.syntax_inline_code, rgb(0x24292f).into(), "github light syntax_inline_code");
     assert_eq!(gh_light.syntax_link, rgb(0x0969da).into(), "github light syntax_link");
 
     // 4. nord dark
     let nord_dark = ThemeColors::resolve("nord", true);
-    assert_eq!(nord_dark.syntax_keyword, rgb(0xb48ead).into(), "nord dark syntax_keyword");
-    assert_eq!(nord_dark.syntax_string, rgb(0xa3be8c).into(), "nord dark syntax_string");
-    assert_eq!(nord_dark.syntax_comment, rgb(0x616e88).into(), "nord dark syntax_comment");
+    assert_eq!(nord_dark.syntax_keyword, rgb(0xcdabe1).into(), "nord dark syntax_keyword");
+    assert_eq!(nord_dark.syntax_attribute, rgb(0x88c0d0).into(), "nord dark syntax_attribute");
+    assert_eq!(nord_dark.syntax_string, rgb(0xbbe2a3).into(), "nord dark syntax_string");
+    assert_eq!(nord_dark.syntax_number, rgb(0xebcb8b).into(), "nord dark syntax_number");
+    assert_eq!(nord_dark.syntax_comment, rgb(0xb8c5db).into(), "nord dark syntax_comment");
     assert_eq!(nord_dark.syntax_heading, rgb(0x81a1c1).into(), "nord dark syntax_heading");
     assert_eq!(nord_dark.syntax_inline_code, rgb(0xeceff4).into(), "nord dark syntax_inline_code");
     assert_eq!(nord_dark.syntax_link, rgb(0x88c0d0).into(), "nord dark syntax_link");
 
     // 5. macos light
     let macos_light = ThemeColors::resolve("macos", false);
-    assert_eq!(macos_light.syntax_keyword, rgb(0xaf52de).into(), "macos light syntax_keyword");
-    assert_eq!(macos_light.syntax_string, rgb(0x34c759).into(), "macos light syntax_string");
+    assert_eq!(macos_light.syntax_keyword, rgb(0x7b1fa2).into(), "macos light syntax_keyword");
+    assert_eq!(macos_light.syntax_attribute, rgb(0x00695c).into(), "macos light syntax_attribute");
+    assert_eq!(macos_light.syntax_string, rgb(0x1b5e20).into(), "macos light syntax_string");
+    assert_eq!(macos_light.syntax_number, rgb(0xbf360c).into(), "macos light syntax_number");
     assert_eq!(macos_light.syntax_heading, rgb(0x007aff).into(), "macos light syntax_heading");
     assert_eq!(macos_light.syntax_inline_code, rgb(0x1c1c1e).into(), "macos light syntax_inline_code");
 
     // 6. claude light
     let claude_light = ThemeColors::resolve("claude", false);
-    assert_eq!(claude_light.syntax_keyword, rgb(0xd97706).into(), "claude light syntax_keyword");
-    assert_eq!(claude_light.syntax_string, rgb(0x059669).into(), "claude light syntax_string");
+    assert_eq!(claude_light.syntax_keyword, rgb(0x7d56b3).into(), "claude light syntax_keyword");
+    assert_eq!(claude_light.syntax_attribute, rgb(0x596a88).into(), "claude light syntax_attribute");
+    assert_eq!(claude_light.syntax_string, rgb(0x8a6b12).into(), "claude light syntax_string");
+    assert_eq!(claude_light.syntax_number, rgb(0x995b2b).into(), "claude light syntax_number");
+    assert_eq!(claude_light.syntax_comment, rgb(0x676d65).into(), "claude light syntax_comment");
     assert_eq!(claude_light.syntax_heading, rgb(0xb45309).into(), "claude light syntax_heading");
     assert_eq!(claude_light.syntax_inline_code, rgb(0x292524).into(), "claude light syntax_inline_code");
 
     // 7. tokyo-night dark
     let tokyo_dark = ThemeColors::resolve("tokyo-night", true);
     assert_eq!(tokyo_dark.syntax_keyword, rgb(0xbb9af7).into(), "tokyo-night dark syntax_keyword");
+    assert_eq!(tokyo_dark.syntax_attribute, rgb(0x7dcfff).into(), "tokyo-night dark syntax_attribute");
     assert_eq!(tokyo_dark.syntax_string, rgb(0x9ece6a).into(), "tokyo-night dark syntax_string");
+    assert_eq!(tokyo_dark.syntax_number, rgb(0xff9e64).into(), "tokyo-night dark syntax_number");
     assert_eq!(tokyo_dark.syntax_heading, rgb(0x7aa2f7).into(), "tokyo-night dark syntax_heading");
     assert_eq!(tokyo_dark.syntax_inline_code, rgb(0xc0caf5).into(), "tokyo-night dark syntax_inline_code");
 
     // 8. solarized light
     let solarized_light = ThemeColors::resolve("solarized", false);
-    assert_eq!(solarized_light.syntax_keyword, rgb(0x859900).into(), "solarized light syntax_keyword");
-    assert_eq!(solarized_light.syntax_string, rgb(0x2aa198).into(), "solarized light syntax_string");
+    assert_eq!(solarized_light.syntax_keyword, rgb(0x586e00).into(), "solarized light syntax_keyword");
+    assert_eq!(solarized_light.syntax_attribute, rgb(0x1a6b63).into(), "solarized light syntax_attribute");
+    assert_eq!(solarized_light.syntax_string, rgb(0x19665f).into(), "solarized light syntax_string");
+    assert_eq!(solarized_light.syntax_number, rgb(0xb53900).into(), "solarized light syntax_number");
     assert_eq!(solarized_light.syntax_heading, rgb(0x268bd2).into(), "solarized light syntax_heading");
     assert_eq!(solarized_light.syntax_inline_code, rgb(0x073642).into(), "solarized light syntax_inline_code");
 
     // 9. one-dark dark
     let one_dark = ThemeColors::resolve("one-dark", true);
     assert_eq!(one_dark.syntax_keyword, rgb(0xc678dd).into(), "one-dark dark syntax_keyword");
+    assert_eq!(one_dark.syntax_attribute, rgb(0x61afef).into(), "one-dark dark syntax_attribute");
     assert_eq!(one_dark.syntax_string, rgb(0x98c379).into(), "one-dark dark syntax_string");
+    assert_eq!(one_dark.syntax_number, rgb(0xd19a66).into(), "one-dark dark syntax_number");
     assert_eq!(one_dark.syntax_heading, rgb(0x61afef).into(), "one-dark dark syntax_heading");
     assert_eq!(one_dark.syntax_inline_code, rgb(0xabb2bf).into(), "one-dark dark syntax_inline_code");
 }
@@ -373,4 +394,41 @@ fn test_eight_palettes_text_primary_bg_contrast_ratio() {
             );
         }
     }
+}
+
+#[test]
+fn test_all_palettes_all_syntax_tokens_contrast_ratio() {
+    use glidemark_core::syntax::SyntaxRole;
+
+    let roles = [
+        SyntaxRole::Plain,
+        SyntaxRole::Keyword,
+        SyntaxRole::Attribute,
+        SyntaxRole::String,
+        SyntaxRole::Number,
+        SyntaxRole::Comment,
+    ];
+
+    let mut failures = Vec::new();
+
+    for palette in ALL_PALETTES {
+        for &is_dark in &[false, true] {
+            let theme = ThemeColors::resolve(palette.id, is_dark);
+            let bg_lum = hsla_luminance(theme.code_bg);
+
+            for role in roles {
+                let fg_color = theme.syntax_color_for_role(role);
+                let fg_lum = hsla_luminance(fg_color);
+                let cr = wcag_contrast(fg_lum, bg_lum);
+                if cr < 4.5 {
+                    failures.push(format!(
+                        "Palette '{}' (is_dark={}) role '{:?}' vs code_bg contrast ratio was {:.2} < 4.5",
+                        palette.id, is_dark, role, cr
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(failures.is_empty(), "Contrast ratio failures:\n{}", failures.join("\n"));
 }
