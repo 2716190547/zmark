@@ -18,17 +18,32 @@
 
 本次只派 A，目标关闭 P1-1/2/3；P1-4/5/6/7 及其测试缺口在 B 继续处理，不得声称整体验收通过。
 
-1. 在生产 parser 的事件/offset 路径产出同 revision 的代码描述和逐行映射：canonical payload/语言、payload 行范围、source content/前缀范围、EOL 宽度、synthetic LF。适用于顶层及 ListItem.body/BlockQuote 内代码；不在 App 再逐行扫 fence 拼文本。源码只消费描述，映射先校验非 EOL 字节相等及 UTF-8 边界；不等块两侧 Plain 且有可辨错误，不改源文本。
+1. 在生产 parser 的事件/offset 路径产出同 revision 的代码描述和逐行映射：canonical payload/语言、payload 行范围、source content/前缀范围、EOL 宽度、synthetic LF。适用于顶层及 ListItem.body/BlockQuote 内代码；不在 App 再逐行扫 fence 拼文本。源码只消费描述，映射先校验非 EOL 字节相等及 UTF-8 边界；不等块两侧 Plain 且有可辨错误，不改源文本。**缓冲领先 AST 的 debounce 期间**，描述 revision 不等 editor revision 时，源码暂用无角色的 Plain 呈现，不拿旧 AST 角色套新缓冲、不另起当前 buffer 的 fence 扫描器或 UI 同步 parse；同 revision 描述就绪再恢复。映射行范围同时供 fenced 几何判定消费。
 2. 删除 `extract_source_code_blocks` 及其生产调用。源码可见着色、代码几何范围、预览需求取同一描述的内容 key；同一块不再因 CRLF/容器前缀产生两个条目。原文件/保存/源码复制保持，预览代码复制保持 canonical 语义。
 3. 删除进程 static CACHE 的生产读写，包括批次双写、preview.or_else(global)、旧 helper 的生产旁路。测试改为实例缓存或纯 parse，不为旧用例保留可被生产调用的隐式全局副本。仅 SyntaxSet/受限预热可进程共享。切文档清空本 Workspace 不应再从其他缓存回填旧角色。
-4. 内容 key 用共享 payload/固定 canonical lang，避免 map/deque/retained/region 每次复制整段 String。缓存、索引、容纳集合中实际保留的 key/角色数据和容器 capacity 均须在 4MiB 额度内记账；同一 Arc allocation 只计一次。不能继续 `len + 64` 冒充实际容量。优先把重复容器压成已有小型具体结构，避免新框架；若 HashMap 不便给可靠容量界，允许采用更简单可核算的单一容器。不把帧临时分配和持久保留混成一项，也不将文档/纯几何数据算作已受 4MiB 限制。
+4. A 固定一个运行期内容 key：`CodeKey { language: Option<&'static str>, payload: Arc<str> }`，由 Core 解析描述生成并供两侧/cache/容纳/尝试表共用；language 只取既有 canonical resolver 的固定受支持名称，None 表示无语言/text/未知均为 Plain（原始 info string 另存展示，不进入身份）。相同 language+payload 按内容相等/哈希相等，不能以 Arc 地址或 hash 单独判等；同内容不同围栏只共享一条语义结果。空 payload 保持空并立即 Ready/无区间，不因视觉空格发任务；None 语言同样直接 Plain，不占解析队列。缓存和解析入口消费**已 canonical 的 language**，不得再把 Bash 的显示名称当 raw alias 二次解析。B 直接复用该类型，不另造 `(String,String)` 键。key 仅用于运行期，无需把静态字符串生命周期写入持久化格式。
+   缓存、索引、容纳集合中实际保留的 key/角色数据和容器 capacity 均须在 4MiB 额度内记账；同一 Arc allocation 只计一次。不能继续 `len + 64` 冒充实际容量。优先把重复容器压成已有小型具体结构，避免新框架；若 HashMap 不便给可靠容量界，允许采用更简单可核算的单一容器。不把帧临时分配和持久保留混成一项，也不将文档/纯几何数据算作已受 4MiB 限制。
 5. 入库返回明确准入/拒绝结果供 B 消费，不能在超额时对调用者静默成功；本阶段维持预算上限，不增加条数上限。预算/取消语义和重试的完整行为仍在 B 验收。
+
+### A 必须逐项消除/迁移的现有依赖（9ef5304 行号）
+
+| 位置 | A 的处理 |
+| --- | --- |
+| preview.rs:1881 `.or_else(get_cached_code_spans)` | 删除全局回填，仅读本 Workspace 实例 |
+| workspace.rs:444 `insert_cached_code_spans` | 删除批次双写，仅本实例入库 |
+| editor.rs:471 `tokenize_document_lines` 读全局 | 去掉隐式全局读；必要的纯 Markdown 分词与描述驱动代码着色分开，不借旧 helper 留旁路 |
+| editor.rs:378 `tokenize_code_line -> get_or_parse_code_spans` | 删除同步解析/全局写兼容 helper，调用它的旧测试迁移实例或纯 parse |
+| editor.rs:390 `extract_source_code_blocks` | 删除第二套 payload 扫描，App 消费 parser 描述及映射 |
+| editor.rs:310 `compute_fenced_code_lines`，:1076 几何调用 | 删除第三套 fence 扫描，几何 fenced mask 消费同一描述行范围，引用内代码也走单 run |
+| phase_i_syntax_and_warm_palette_test.rs:3/235/239/265/277/478，visual_line_wrap_and_syntax_test.rs:7-8/192/204 | 迁移全局/旧 helper 调用至实例缓存或纯 parse，保留有效断言，不用 `allow(dead_code)` 保兼容 |
+
+A 暂保留现有 interim 可见窗口（workspace.rs:335 的 `start_vis+60`）供小窗口接线证据使用；**不宣称关闭 P1-6**，真实 bounds 明确在 B。`source_code_blocks` 将迁移为同 revision parser 描述；Test11 的 `Arc::ptr_eq` 不变 revision 复用契约同步保留或等价迁移，不能通过删除复用断言过关。描述落后时的临时 Plain 不授予回扫权限。
 
 ### A 的最小独立证据
 
-- 一个经真实 `parse_markdown` 的 12 组映射表，沿已核准 probe 的输入：LF、CRLF、列表空格/Tab/CRLF、引用及引用内列表、无尾 LF、缩进、空/空白/CRLF 空行。验证源切片/前缀/EOL/synthetic LF 与 canonical 投影；普通 Rust 小块的 CRLF/列表/引用另经真实 Workspace draw 验证源码和预览最终颜色，同 key 一次解析，不只检查手造 descriptor。
-- 实例隔离/切文档检查证明不存在 global fallback；去掉 Workspace 中条目不能从旧缓存恢复。测试不得自己预热被观测的 Workspace 目标来假装元素接通。
-- 小型 cache-only 分配/容量检查验证保留内存与 ledger，含 key 共享、容器扩容、淘汰和拒绝；独立测量区分持久/临时，不把两份 Arc 引用误算成两份 payload。核对额度边界附近仍不超限，不用错误统计自证。
+- 一个经真实 `parse_markdown` 的 12 组映射表，沿已核准 probe 的输入：LF、CRLF、列表空格/Tab/CRLF、引用及引用内列表、无尾 LF、缩进、空/空白/CRLF 空行。验证源切片/前缀/EOL/synthetic LF 与 canonical 投影；普通 Rust 小块的 CRLF/列表/引用另经真实 Workspace draw 验证源码和预览最终颜色。再验证编辑后立即 draw（buffer 领先 AST）没有旧角色错位、回扫或同步 parse，同 revision 描述到达后恢复。
+- 用本实例**恰好一个内容条目**和最小生产解析调用计数证明同块两侧至多一次解析；两侧都有颜色不是这个性质的证明。恢复旧 payload 扫描器及恢复 global 双写/回填路径这两类**可编译**定向回退，分别必须使对应检查变红。实例隔离/切文档检查证明去掉 Workspace 中条目不能从其他缓存恢复；正常代码不留生产 global API。测试不得自己预热被观测 Workspace 目标来假装元素接通，也不为变异新增正式全局缓存框架。
+- 小型 cache-only 分配/容量检查验证保留内存与 ledger，含 key 共享、容器扩容、淘汰和拒绝。基准用计数分配器（或等价方法）测稳定时刻的**持久条目/容器分配增量**，独立于 ledger 计算；禁止用 len+常量估算再与自身比较。区分持久/帧临时、同 Arc 引用与真实独立副本，核对额度边界附近仍不超限。
 - `flatten_copy_test` 改为生产 parse→flatten，保留已批准的四条新期望、三个边界、八条旧兼容。移除产品测试中直接复制的 REVIEW-ONLY `replan4_flatten_ref.rs` / `replan4_compat_probe.rs`，有效期望并入最小生产路径表，不另做一次全仓历史测试清理。
 - 反例先在旧生产入口为红，修复后为绿；新 API 不存在导致的编译失败不算行为判别证明。映射/实例/记账的必要接线回退要能红，不扩成全历史变异平台。
 
@@ -48,3 +63,5 @@
 - 中间相关测试，阶段最终精确候选全量与 Phase H 21 串行；I0 颜色/预算保持。允许有效测试数下降，精确报告 passed/failed/ignored 和结果行数，禁止“330+”。
 - 独立阶段提交与打包/验签，确认包晚于代码提交、工作区干净、子代理全结束。A 交付注明 `阶段 A 完成 / 整体 I1/I2 BLOCKED` 并列出 B 未完成项，协调者只验 A，不提前派 I3 或创建最终 PR。
 - 任务完成并通过最终独立验收后由协调端推送创建保持打开的 PR。该授权不意味着每个未验收中间阶段提前发布。
+
+对 0e0f3d7 清单审查回应：补齐全部 global 依赖、第三套几何 fence 扫描及旧测试迁移；加入 AST 落后时 Plain 和立即 draw 证据；固定 A/B 共用运行期 CodeKey 与空/未知语言归一；明确 A 暂留60行窗口且保留描述 Arc 复用，真实高度只在 B 验收；把“一次解析”落实为唯一条目+生产调用计数和两个可编译路由回退红灯，记账采用独立持久分配测量。原1c9bbd1契约、阶段拆分和产品选择不变。此修订仍需独立确认后才派 A。
