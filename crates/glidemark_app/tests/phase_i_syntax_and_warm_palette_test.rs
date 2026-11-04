@@ -1336,15 +1336,16 @@ async fn test_phase_i_real_ui_failure_reason_presentation(cx: &mut TestAppContex
         assert!(f.source_line > 0, "Source line must be 1-based (got {})", f.source_line);
     }
 
-    // Verify UI badge text contains "原文可读"
-    let first = &failures[0];
-    let badge_text = if failures.len() == 1 {
-        format!("L{} {} · {}", first.source_line, first.reason, strings.syntax_plain_readable)
-    } else {
-        format!("L{} {} · {} (+{})", first.source_line, first.reason, strings.syntax_plain_readable, failures.len() - 1)
-    };
-    assert!(badge_text.contains(strings.syntax_plain_readable), "Badge text must contain '原文可读'");
-    assert_eq!(strings.syntax_plain_readable, "原文可读");
+    assert_eq!(failures.len(), 5);
+    assert!(!failures.iter().any(|f| f.source_line == 21), "Legal shared occurrence must not fail");
+    assert!(cx.debug_bounds("editor_syntax_failure_badge").is_some(), "Production badge must be laid out");
+    // A click on the badge goes to its named source line, even when the badge is at the bottom.
+    let bounds = cx.debug_bounds("editor_syntax_failure_badge").unwrap();
+    let point = bounds.center();
+    cx.simulate_mouse_down(point, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(point, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| view.read(cx).state.editor.cursor().0), failures[0].source_line - 1);
 
     // Verify valid code block with the SAME CodeKey elsewhere is still highlighted
     let (shared_cached, shared_state) = cx.update(|_window, cx| {
@@ -1511,134 +1512,142 @@ async fn test_phase_i_warm_gating_and_failure_recovery(cx: &mut TestAppContext) 
     assert!(in_cache_recovered, "Cache must contain parsed block after recovery");
 }
 
-/// Test 17: Reading order admission in Split mode (reading pane priority, distance to center, constraint)
+/// The scheduler, not the test, chooses candidates and admits results.
 #[gpui::test]
 async fn test_phase_i_reading_order_admission_split_mode(cx: &mut TestAppContext) {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-
-    let doc_str = r#"```rust
-fn block_source_near() {
-    let near = 1;
-}
-```
-
-```rust
-fn block_preview() {
-    let prev = 2;
-}
-```
-"#;
-
-    let key_near = CodeKey::from_raw(
-        Some("rust"),
-        Arc::from("fn block_source_near() {\n    let near = 1;\n}\n"),
-    );
-    let key_prev = CodeKey::from_raw(
-        Some("rust"),
-        Arc::from("fn block_preview() {\n    let prev = 2;\n}\n"),
-    );
-
-    let (view, cx) = cx.add_window_view(|window, cx| {
+    let (view, cx) = cx.add_window_view(|_, cx| {
         let mut doc = Document::new_scratch();
-        doc.update_buffer(doc_str.to_string());
+        doc.update_buffer("```rust\nfn first() {}\n```\n\n```rust\nfn second() {}\n```\n".into());
         let mut state = AppState::new(doc);
         state.set_view_mode(ViewMode::Split);
-        let view = WorkspaceView::new(state, cx);
-        window.focus(&view.focus_handle);
-        view
+        WorkspaceView::new(state, cx)
     });
-
     cx.run_until_parked();
-
-    cx.update(|window, cx| {
-        let _ = window.draw(cx);
-    });
-
-    let spans_near: Arc<[glidemark_core::syntax::SyntaxSpan]> = glidemark_core::syntax::parse_code_spans(key_near.payload.as_ref(), Some("rust")).into();
-    let spans_prev: Arc<[glidemark_core::syntax::SyntaxSpan]> = glidemark_core::syntax::parse_code_spans(key_prev.payload.as_ref(), Some("rust")).into();
-
-    let entry_heap = glidemark_core::syntax::SyntaxCache::entry_heap_bytes(&key_near, &spans_near);
-    let overhead = glidemark_core::syntax::heap_usable_size(2 * std::mem::size_of::<glidemark_core::syntax::CacheEntry>());
-
-    // 1. Reading pane is Source:
-    // Source pane candidate has higher priority than Preview pane candidate.
-    // Constrain cache to tightly hold only 1 entry:
-    cx.update(|_window, cx| {
-        view.update(cx, |this, _cx| {
-            let mut cache = this.syntax_cache.lock().unwrap();
-            cache.clear();
-            cache.max_bytes = overhead + entry_heap + 32;
-
-            let mut retained = std::collections::HashSet::new();
-            // Candidate 1 (Source near): higher priority candidate is admitted into cache
-            let admitted_near = cache.insert(key_near.clone(), spans_near.clone(), &retained);
-            assert!(admitted_near, "Higher priority candidate must be admitted");
-            retained.insert(key_near.clone());
-            this.syntax_block_states.insert(key_near.clone(), SyntaxBlockState::Ready);
-
-            // Candidate 2 (Preview): lower priority candidate cannot fit and cannot evict retained higher priority candidate
-            let admitted_prev = cache.insert(key_prev.clone(), spans_prev.clone(), &retained);
-            assert!(!admitted_prev, "Lower priority candidate cannot evict retained higher priority candidate");
-            this.syntax_block_states.insert(key_prev.clone(), SyntaxBlockState::ResourceConstrained);
-        });
-    });
-
-    let (state_near, state_prev, cache_has_near, cache_has_prev) = cx.update(|_window, cx| {
+    cx.update(|w, cx| { let _ = w.draw(cx); });
+    cx.run_until_parked();
+    let keys = cx.update(|_, cx| view.read(cx).source_code_blocks.iter().map(|b| b.key.clone()).collect::<Vec<_>>());
+    assert_eq!(keys.len(), 2);
+    // The preview has only the second occurrence visible. Source has both,
+    // with the first closer to its measured viewport center.
+    cx.update(|_, cx| view.update(cx, |ws, cx| {
+        ws.syntax_cache.lock().unwrap().clear();
+        ws.syntax_attempts.clear();
+        ws.last_visible_syntax_keys.clear();
+        ws.current_ordered_candidates.clear();
+        ws.syntax_active_task = None;
+        ws.syntax_pending_request = None;
+        ws.editor_content_bounds = Some(gpui::Bounds::new(gpui::point(px(0.), px(0.)), gpui::size(px(300.), px(70.))));
+        let mut regions = ws.rendered_regions.lock().unwrap();
+        regions.retain(|r| r.fence_open_line == Some(4));
+        let r = regions.first_mut().expect("Second preview occurrence rendered");
+        r.bounds = gpui::Bounds::new(gpui::point(px(400.), px(0.)), gpui::size(px(300.), px(70.)));
+        drop(regions);
+        ws.preview_content_bounds = Some(gpui::Bounds::new(gpui::point(px(400.), px(0.)), gpui::size(px(300.), px(70.))));
+        ws.current_reading_pane = Some(PaneKind::Source);
+        ws.process_visible_syntax_defer(cx);
+        assert_eq!(ws.current_ordered_candidates, keys);
+        // Switch focus while the first request is in flight, without starting
+        // another request: completion must use this current order.
+        let request_id = ws.syntax_request_counter;
+        for key in &keys { ws.syntax_attempts.insert(key.clone(), (1, 2)); }
+        ws.current_reading_pane = Some(PaneKind::Preview);
+        ws.process_visible_syntax_defer(cx);
+        assert_eq!(ws.syntax_request_counter, request_id, "Order-only change must exercise original in-flight callback");
+        assert_eq!(ws.current_ordered_candidates, vec![keys[1].clone(), keys[0].clone()]);
+        let spans: Arc<[_]> = parse_code_spans(&keys[0].payload, Some("rust")).into();
+        let bytes = SyntaxCache::entry_heap_bytes(&keys[0], &spans);
+        let overhead = glidemark_core::syntax::heap_usable_size(2 * std::mem::size_of::<glidemark_core::syntax::CacheEntry>());
+        ws.syntax_cache.lock().unwrap().max_bytes = overhead + bytes + 32;
+    }));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
         let ws = view.read(cx);
-        let sn = ws.syntax_block_states.get(&key_near).copied();
-        let sp = ws.syntax_block_states.get(&key_prev).copied();
-        let mut c = ws.syntax_cache.lock().unwrap();
-        let has_near = c.get(&key_near).is_some();
-        let has_prev = c.get(&key_prev).is_some();
-        (sn, sp, has_near, has_prev)
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        assert!(cache.get(&keys[1]).is_some(), "Current reading pane wins late completion");
+        assert!(cache.get(&keys[0]).is_none(), "Old first candidate cannot evict current first candidate");
+        assert_eq!(ws.syntax_block_states.get(&keys[0]), Some(&SyntaxBlockState::ResourceConstrained));
     });
+    cx.update(|_, cx| view.update(cx, |ws, cx| {
+        let row = glidemark_app::views::editor::calculate_line_row_height(ws.state.preferences.font_size, ws.state.preferences.line_height);
+        ws.editor_content_bounds.as_mut().unwrap().size.height = px(row * 10.);
+        ws.current_reading_pane = Some(PaneKind::Source);
+        ws.process_visible_syntax_defer(cx);
+        assert_eq!(ws.current_ordered_candidates, vec![keys[1].clone(), keys[0].clone()], "Source center distance precedes document order");
+    }));
+}
 
-    // Higher priority candidate (Source near) is admitted
-    assert_eq!(state_near, Some(SyntaxBlockState::Ready), "Source near candidate must be admitted");
-    assert!(cache_has_near, "Source near candidate must be in cache");
-
-    // Lower priority candidate (Preview) is marked ResourceConstrained
-    assert_eq!(state_prev, Some(SyntaxBlockState::ResourceConstrained), "Lower priority preview candidate must be ResourceConstrained");
-    assert!(!cache_has_prev, "Preview candidate must not be in cache");
-
-    // 2. Focus switch to Preview:
-    // Focus switch re-evaluates admission with current candidates without re-parsing
-    // Now Candidate order: Preview (higher priority) > Source near (lower priority)
-    cx.update(|_window, cx| {
-        view.update(cx, |this, _cx| {
-            this.current_reading_pane = Some(PaneKind::Preview);
-
-            let mut cache = this.syntax_cache.lock().unwrap();
-            let mut retained = std::collections::HashSet::new();
-
-            // Candidate 1 (Preview): now has reading pane priority, evicts un-retained Source candidate
-            let admitted_prev = cache.insert(key_prev.clone(), spans_prev.clone(), &retained);
-            assert!(admitted_prev, "Preview candidate must be admitted after focus switch");
-            retained.insert(key_prev.clone());
-            this.syntax_block_states.insert(key_prev.clone(), SyntaxBlockState::Ready);
-
-            // Candidate 2 (Source near): cannot evict retained Preview candidate
-            let admitted_near = cache.insert(key_near.clone(), spans_near.clone(), &retained);
-            assert!(!admitted_near, "Source candidate cannot evict retained Preview candidate");
-            this.syntax_block_states.insert(key_near.clone(), SyntaxBlockState::ResourceConstrained);
-        });
+#[gpui::test]
+async fn test_phase_i_preview_mapping_invalid_occurrence(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer("```rust\n  fn a() {}\n```\n\n- y\n\n  ```rust\n\tfn a() {}\n  ```\n".into());
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Split);
+        WorkspaceView::new(state, cx)
     });
-
-    let (state_prev_after, state_near_after, cache_has_prev_after, cache_has_near_after) = cx.update(|_window, cx| {
+    for _ in 0..4 {
+        cx.run_until_parked();
+        cx.update(|w, cx| { let _ = w.draw(cx); });
+    }
+    cx.update(|_, cx| {
         let ws = view.read(cx);
-        let sp = ws.syntax_block_states.get(&key_prev).copied();
-        let sn = ws.syntax_block_states.get(&key_near).copied();
-        let mut c = ws.syntax_cache.lock().unwrap();
-        let has_prev = c.get(&key_prev).is_some();
-        let has_near = c.get(&key_near).is_some();
-        (sp, sn, has_prev, has_near)
+        let blocks = &ws.state.doc.parsed.code_blocks;
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].key, blocks[1].key);
+        assert!(blocks[0].is_valid);
+        assert!(!blocks[1].is_valid);
+        assert!(ws.syntax_cache.lock().unwrap().get(&blocks[0].key).is_some());
+        let failures = ws.collect_visible_preview_failures();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].source_line, 7);
+        assert_eq!(failures[0].reason, ws.state.strings.syntax_mapping_invalid);
+        assert_eq!(ws.collect_visible_editor_failures().len(), 1);
+        let highlights = obs::last_code_highlights().expect("Invalid occurrence rendered");
+        assert!(highlights.iter().all(|(_, style)| style.color == Some(ws.state.theme.syntax_code)), "Invalid occurrence must render Plain despite shared cached spans");
     });
+    assert!(cx.debug_bounds("preview_syntax_failure_badge").is_some(), "Preview badge must actually render");
+    let badge = cx.debug_bounds("preview_syntax_failure_badge").unwrap();
+    cx.simulate_mouse_down(badge.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let anchor = cx.update(|_, cx| view.read(cx).preview_selection.expect("Badge starts selection").anchor);
+    assert_eq!(anchor.block_ix, 1, "Badge must hit nearest block instead of first document block");
+    let text_start = cx.update(|_, cx| {
+        let ws = view.read(cx);
+        let regions = ws.rendered_regions.lock().unwrap();
+        let region = regions.iter().find(|r| r.fence_open_line == Some(6)).unwrap();
+        gpui::point(region.bounds.origin.x + px(region.padding_left + 1.), region.bounds.origin.y + px(region.padding_top + 1.))
+    });
+    cx.simulate_mouse_move(text_start, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let dragged = cx.update(|_, cx| view.read(cx).preview_selection.unwrap());
+    assert_ne!(dragged.anchor, dragged.head, "Dragging across badge must extend selection");
+    cx.simulate_mouse_up(badge.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(!cx.update(|_, cx| view.read(cx).is_preview_selecting));
+}
 
-    // Preview candidate is now admitted into cache
-    assert_eq!(state_prev_after, Some(SyntaxBlockState::Ready), "Preview candidate must be admitted after focus switch");
-    assert!(cache_has_prev_after, "Preview candidate must be in cache after focus switch");
-
-    // Source candidate is now ResourceConstrained and evicted
-    assert_eq!(state_near_after, Some(SyntaxBlockState::ResourceConstrained), "Source candidate must become ResourceConstrained");
-    assert!(!cache_has_near_after, "Source candidate must be evicted to make room for reading pane candidate");
+#[gpui::test]
+async fn test_phase_i_late_completion_after_viewport_empties(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        WorkspaceView::new(AppState::new(Document::new_scratch()), cx)
+    });
+    cx.run_until_parked();
+    let key = CodeKey::from_raw(Some("rust"), Arc::from("fn no_longer_visible() {}\n"));
+    cx.update(|_, cx| view.update(cx, |ws, cx| {
+        ws.current_ordered_candidates = vec![key.clone()];
+        ws.run_syntax_batch(SyntaxBatchRequest {
+            request_id: ws.syntax_request_counter,
+            doc_key: ws.state.active.clone(),
+            revision: ws.state.editor.revision,
+            blocks: vec![key.clone()],
+            ordered_candidates: vec![key.clone()],
+            reading_pane: ws.current_reading_pane,
+        }, cx);
+        ws.current_ordered_candidates.clear();
+    }));
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| view.read(cx).syntax_cache.lock().unwrap().get(&key).is_none()), "Exited viewport cannot be readmitted by a late callback");
 }

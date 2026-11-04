@@ -9,9 +9,12 @@ test-observation = ["glidemark_core/test-observation"]
 [dependencies]
 glidemark_core = { path = "../glidemark_core" }
 gpui = "0.2.2"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+usvg = "0.45.1"
+percent-encoding = "2.3"
+tempfile = "3.17"
 
 [dev-dependencies]
-tempfile = "3.17"
 gpui = { version = "0.2.2", features = ["test-support", "runtime_shaders"] }
 
 [[test]]

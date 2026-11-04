@@ -86,19 +86,9 @@ touch "$APP_DEST"
 echo "==> Applying local Ad-Hoc code signature (zero-fee self-signed)..."
 codesign --force --deep --sign - "$APP_DEST"
 
-echo "==> Registering with macOS LaunchServices and resetting Dock cache..."
+echo "==> Registering with macOS LaunchServices..."
 if [ -x "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" ]; then
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DEST" || true
 fi
-
-# Clear user dock icon caches
-CACHE_DIR="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null || true)"
-if [ -n "$CACHE_DIR" ]; then
-    rm -f "$CACHE_DIR/com.apple.dock.iconcache" 2>/dev/null || true
-    rm -rf "$CACHE_DIR/com.apple.iconservices"* 2>/dev/null || true
-fi
-find /private/var/folders/ -name "com.apple.dock.iconcache" -exec rm {} + 2>/dev/null || true
-find /private/var/folders/ -name "com.apple.iconservices" -exec rm -rf {} + 2>/dev/null || true
-killall Dock 2>/dev/null || true
 
 echo "==> GlideMark successfully installed to $APP_DEST!"

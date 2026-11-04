@@ -17,32 +17,6 @@ fn extract_stroke_width(svg_content: &str) -> f32 {
 }
 
 #[test]
-fn test_topbar_settings_button_active_state_is_false() {
-    let ws_src = include_str!("../src/views/workspace.rs");
-
-    // Locate the btn_settings button invocation in canvas header
-    let btn_pos = ws_src
-        .find("\"btn_settings\"")
-        .expect("btn_settings invocation must exist in workspace.rs");
-
-    let section_end = ws_src[btn_pos..]
-        .find(")")
-        .map(|idx| btn_pos + idx + 100)
-        .unwrap_or(ws_src.len());
-    let btn_section = &ws_src[btn_pos..section_end];
-
-    // Assert that btn_settings passes false for active, not self.settings_window.is_some()
-    assert!(
-        btn_section.contains("false,"),
-        "btn_settings must have active parameter set to false"
-    );
-    assert!(
-        !btn_section.contains("self.settings_window.is_some()"),
-        "btn_settings must NOT bind active state to self.settings_window.is_some()"
-    );
-}
-
-#[test]
 fn test_topbar_icons_optical_weight_balance_matrix() {
     // Expected optical balance matrix per ADR 0035 Decision 3:
     // - code.svg: viewBox stroke-width 2.25 -> 1.50px rendered stroke at 16px

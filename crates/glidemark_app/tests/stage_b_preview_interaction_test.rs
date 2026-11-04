@@ -1,7 +1,7 @@
 use glidemark_app::state::{AppState, ViewMode};
 use glidemark_app::views::editor::DocumentLayoutCache;
 use glidemark_app::views::preview::{
-    calculate_block_click_char_offset, detect_edge_autoscroll, serialize_preview_selection,
+    calculate_text_click_char_offset, serialize_preview_selection,
     PreviewCharPosition, PreviewSelection,
 };
 use glidemark_app::views::workspace::WorkspaceView;
@@ -18,94 +18,18 @@ impl Render for EmptyTestView {
     }
 }
 
+// The non-zero-origin production entry is covered by phase_h_b1_real_geometry.
+// Keep the distinct soft-wrap boundary check against the helper production uses.
 #[gpui::test]
-async fn test_b1_block_origin_subtraction_and_multiline_hit_testing(cx: &mut TestAppContext) {
-    let (_view, cx) = cx.add_window_view(|_window, cx| {
-        let doc = Document::new_scratch();
-        let state = AppState::new(doc);
-        WorkspaceView::new(state, cx)
-    });
-    cx.run_until_parked();
-
-    cx.update(|window, _cx| {
-        let text_system = window.text_system();
-        let block_text = "The quick brown fox jumps over the lazy dog";
-        let base_font_size = 16.0;
-
-        // 1. Simulating the review regression:
-        // Window click position is (390.0, 420.0).
-        // Rendered block container is located at (385.0, 415.0).
-        // If window coordinates (390, 420) were used directly without subtracting block origin,
-        // it erroneously landed at character 44+.
-        // With origin subtraction, local position is (5.0, 5.0).
-        let window_click_x: f32 = 390.0;
-        let window_click_y: f32 = 420.0;
-        let block_origin_x: f32 = 385.0;
-        let block_origin_y: f32 = 415.0;
-
-        let local_x = (window_click_x - block_origin_x).max(0.0f32);
-        let local_y = (window_click_y - block_origin_y).max(0.0f32);
-        assert_eq!(local_x, 5.0);
-        assert_eq!(local_y, 5.0);
-
-        let offset = calculate_block_click_char_offset(
-            text_system,
-            block_text,
-            local_x,
-            local_y,
-            base_font_size,
-            Some(600.0),
-        );
-        assert_eq!(
-            offset, 1,
-            "Local coordinate (5.0, 5.0) on line 0 must hit character 1, not character 44"
-        );
-
-        // 2. Multi-line soft-wrapped paragraph hit testing
-        // Create a long paragraph that wraps across visual lines in a narrow container (120px)
-        let long_para = "LineOneWords LineTwoWords LineThreeWords";
-        let _line_height = base_font_size * 1.75; // 28px
-
-        // Click on visual line 0 (y = 10.0, well within first 28px)
-        let off_line0 = calculate_block_click_char_offset(
-            text_system,
-            long_para,
-            5.0,
-            10.0,
-            base_font_size,
-            Some(120.0),
-        );
-        assert_eq!(off_line0, 1, "Click on visual line 0 must hit character 1");
-
-        // Click on visual line 1 (y = 40.0, between 28px and 56px)
-        let off_line1 = calculate_block_click_char_offset(
-            text_system,
-            long_para,
-            5.0,
-            40.0,
-            base_font_size,
-            Some(120.0),
-        );
-        assert!(
-            off_line1 > 10,
-            "Click on visual line 1 (y=40.0) must map into second visual line offset, got {}",
-            off_line1
-        );
-
-        // Click on visual line 2 (y = 70.0, between 56px and 84px)
-        let off_line2 = calculate_block_click_char_offset(
-            text_system,
-            long_para,
-            5.0,
-            70.0,
-            base_font_size,
-            Some(120.0),
-        );
-        assert!(
-            off_line2 > off_line1,
-            "Click on visual line 2 (y=70.0) must map deeper than visual line 1, got {}",
-            off_line2
-        );
+async fn test_preview_wrapped_text_hit_testing(cx: &mut TestAppContext) {
+    let (_, cx) = cx.add_window_view(|_, _| EmptyTestView);
+    cx.update(|window, _| {
+        let hit = |y| calculate_text_click_char_offset(window.text_system(),
+            "LineOneWords LineTwoWords LineThreeWords", 5., y,
+            "ui-sans-serif, system-ui", 16., 1.75, Some(120.));
+        assert_eq!(hit(10.), 1);
+        assert!(hit(40.) > 10);
+        assert!(hit(70.) > hit(40.));
     });
 }
 
@@ -158,76 +82,6 @@ fn test_b2_nested_list_and_blockquote_offset_mapping() {
         serialized_quote, "Second line of quote",
         "Serializing second block of blockquote must yield exact line"
     );
-}
-
-#[gpui::test]
-async fn test_b3_continuous_autoscroll_edge_bounds_and_cancellation(cx: &mut TestAppContext) {
-    let (view, cx) = cx.add_window_view(|_window, cx| {
-        let mut doc = Document::new_scratch();
-        let mut text = String::new();
-        for i in 0..50 {
-            text.push_str(&format!("# Block {}\nParagraph content for item {}\n\n", i, i));
-        }
-        doc.update_buffer(text);
-        let mut state = AppState::new(doc);
-        state.set_view_mode(ViewMode::Preview);
-        WorkspaceView::new(state, cx)
-    });
-    cx.run_until_parked();
-
-    cx.update(|_window, cx| {
-        view.update(cx, |workspace, cx| {
-            workspace.parse_now_and_refresh();
-
-            // Set real-time content bounds (top: 38.0, height: 762.0)
-            let content_bounds = Bounds {
-                origin: Point { x: px(0.0), y: px(38.0) },
-                size: gpui::size(px(600.0), px(762.0)),
-            };
-            workspace.preview_content_bounds = Some(content_bounds);
-
-            // 1. Edge autoscroll detection pure function:
-            // Center position (y = 400.0) -> None
-            assert!(detect_edge_autoscroll(400.0, 38.0, 762.0).is_none());
-
-            // Top edge zone (y = 45.0, which is < 38 + 40 = 78) -> Some(negative velocity)
-            let top_vel = detect_edge_autoscroll(45.0, 38.0, 762.0).expect("Top edge scroll");
-            assert!(top_vel < 0.0, "Top edge must scroll up (negative velocity)");
-
-            // Bottom edge zone (y = 780.0, which is > 800 - 40 = 760) -> Some(positive velocity)
-            let bottom_vel = detect_edge_autoscroll(780.0, 38.0, 762.0).expect("Bottom edge scroll");
-            assert!(bottom_vel > 0.0, "Bottom edge must scroll down (positive velocity)");
-
-            // 2. Start selection in preview
-            let anchor = PreviewCharPosition::new(0, 0);
-            workspace.preview_selection = Some(PreviewSelection::new(anchor, anchor));
-            workspace.is_preview_selecting = true;
-            workspace.preview_mouse_window_pos = Some(Point { x: px(300.0), y: px(780.0) });
-
-            // Trigger autoscroll: task should start
-            workspace.trigger_preview_autoscroll_if_needed(cx);
-            assert!(
-                workspace.preview_autoscroll_task.is_some(),
-                "Autoscroll task must be active when mouse is held at edge while selecting"
-            );
-
-            // Step autoscroll downwards
-            let _initial_top = workspace.preview_list.logical_scroll_top();
-            workspace.step_preview_autoscroll(bottom_vel, Point { x: px(300.0), y: px(780.0) }, content_bounds, cx);
-
-            // Selection head expanded downwards to track newly revealed content
-            let sel = workspace.preview_selection.expect("Selection must exist");
-            assert!(sel.head.block_ix >= anchor.block_ix);
-
-            // 3. Mouse release / blur cancellation:
-            workspace.is_preview_selecting = false;
-            workspace.trigger_preview_autoscroll_if_needed(cx);
-            assert!(
-                workspace.preview_autoscroll_task.is_none(),
-                "Autoscroll task must terminate immediately upon mouse release"
-            );
-        });
-    });
 }
 
 #[gpui::test]

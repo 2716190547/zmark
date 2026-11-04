@@ -488,6 +488,10 @@ fn test_detect_edge_autoscroll() {
 
     // Middle zone -> None
     assert_eq!(detect_edge_autoscroll(400.0, top, height), None);
+    // Preserve the old stage B non-zero-origin cases without creating a window.
+    assert!(detect_edge_autoscroll(400.0, 38.0, 762.0).is_none());
+    assert!(detect_edge_autoscroll(45.0, 38.0, 762.0).unwrap() < 0.0);
+    assert!(detect_edge_autoscroll(780.0, 38.0, 762.0).unwrap() > 0.0);
 }
 
 // =========================================================================

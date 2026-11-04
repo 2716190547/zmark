@@ -1387,12 +1387,11 @@ pub fn render_editor_pane(
                         .collect::<Vec<_>>()
                         .join("\n");
                     let on_click = on_click_line.clone();
-                    let vl_list = visual_lines.clone();
-                    let s_handle = scroll_handle.clone();
-                    let lines_for_click = lines.clone();
+                    let target_vis = visual_lines.iter().position(|vl| vl.physical_line_idx == first.source_line - 1).unwrap_or(0);
                     el.child(
                         div()
                             .id("editor_syntax_failure_badge")
+                            .debug_selector(|| "editor_syntax_failure_badge".into())
                             .flex()
                             .items_center()
                             .gap_1p5()
@@ -1409,23 +1408,8 @@ pub fn render_editor_pane(
                                 let t = tooltip_text.clone();
                                 cx.new(|_| crate::views::workspace::TooltipView { text: t }).into()
                             })
-                            .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _window, cx| {
-                                let scroll_y = (-f32::from(s_handle.0.borrow().base_handle.offset().y)).max(0.0);
-                                let row_h = calculate_line_row_height(font_size, line_height).max(1.0);
-                                let click_y = f32::from(event.position.y) + scroll_y;
-                                let vis_idx = (click_y / row_h).floor().max(0.0) as usize;
-                                let x_offset = (f32::from(event.position.x) - editor_left_offset).max(0.0);
-                                let rel_col = if let Some(vl) = vl_list.get(vis_idx) {
-                                    if let Some(phys_line_str) = lines_for_click.get(vl.physical_line_idx) {
-                                        let subline_str: String = phys_line_str.chars().skip(vl.char_start).take(vl.char_len).collect();
-                                        calculate_click_char_col(&subline_str, x_offset, font_size)
-                                    } else {
-                                        0
-                                    }
-                                } else {
-                                    0
-                                };
-                                on_click(vis_idx, rel_col, _window, cx);
+                            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                                on_click(target_vis, 0, window, cx);
                             })
                             .child(badge_text),
                     )

@@ -212,6 +212,7 @@ pub struct TextLayoutRegion {
     pub padding_right: f32,
     pub flat_char_offset: usize,
     pub content_key: Option<glidemark_core::syntax::CodeKey>,
+    pub fence_open_line: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -226,6 +227,7 @@ pub struct TextRegionInfo {
     pub padding_right: f32,
     pub flat_char_offset: usize,
     pub content_key: Option<glidemark_core::syntax::CodeKey>,
+    pub fence_open_line: Option<usize>,
 }
 
 pub type RegionsRegistry = std::sync::Mutex<Vec<TextLayoutRegion>>;
@@ -253,6 +255,7 @@ pub(crate) fn with_text_probe(el: gpui::Div, info: TextRegionInfo, regions: Arc<
                 padding_right: info.padding_right,
                 flat_char_offset: info.flat_char_offset,
                 content_key: info.content_key.clone(),
+                fence_open_line: info.fence_open_line,
             });
         },
         |_bounds, _paint, _window, _cx| {},
@@ -288,6 +291,7 @@ pub(crate) fn with_text_probe_stateful(el: gpui::Stateful<gpui::Div>, info: Text
                 padding_right: info.padding_right,
                 flat_char_offset: info.flat_char_offset,
                 content_key: info.content_key.clone(),
+                fence_open_line: info.fence_open_line,
             });
         },
         |_bounds, _paint, _window, _cx| {},
@@ -346,16 +350,6 @@ pub fn calculate_single_line_char_offset_with_font(
         }
     }
     char_count
-}
-
-#[allow(dead_code)]
-pub fn calculate_single_line_char_offset(
-    text_system: &gpui::WindowTextSystem,
-    line: &str,
-    x_pos: f32,
-    font_size: f32,
-) -> usize {
-    calculate_single_line_char_offset_with_font(text_system, line, x_pos, "ui-sans-serif, system-ui", font_size)
 }
 
 pub fn calculate_text_click_char_offset(
@@ -465,27 +459,6 @@ pub fn calculate_text_click_char_offset(
     let (ref vl_str, vl_offset) = visual_lines[line_idx];
     let line_offset = calculate_single_line_char_offset_with_font(text_system, vl_str, x_pos, font_name, font_size);
     (vl_offset + line_offset).min(total_chars)
-}
-
-#[allow(dead_code)]
-pub fn calculate_block_click_char_offset(
-    text_system: &gpui::WindowTextSystem,
-    block_text: &str,
-    x_pos: f32,
-    y_pos: f32,
-    base_font_size: f32,
-    width_limit: Option<f32>,
-) -> usize {
-    calculate_text_click_char_offset(
-        text_system,
-        block_text,
-        x_pos,
-        y_pos,
-        "ui-sans-serif, system-ui",
-        base_font_size,
-        1.75,
-        width_limit,
-    )
 }
 
 fn compute_offset_in_region(
@@ -681,6 +654,7 @@ pub fn render_preview_pane_with_callbacks(
     regions: Arc<RegionsRegistry>,
     syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
     failures: &[crate::views::workspace::VisibleSyntaxFailure],
+    images: crate::local_images::SharedImages,
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
@@ -750,6 +724,8 @@ pub fn render_preview_pane_with_callbacks(
                     ix,
                     item_regions.clone(),
                     item_syntax_cache.clone(),
+                    &images,
+                    &item_parsed.code_blocks,
                     &flat,
                     "0",
                 ));
@@ -865,6 +841,7 @@ pub fn render_preview_pane_with_callbacks(
                 .font_family("ui-sans-serif, system-ui")
                 .text_color(theme.text_muted)
                 .id("preview_syntax_failure_badge")
+                .debug_selector(|| "preview_syntax_failure_badge".into())
                 .tooltip(move |_window, cx| {
                     let t = tooltip_text.clone();
                     cx.new(|_| CodeTooltipView { text: t }).into()
@@ -873,20 +850,8 @@ pub fn render_preview_pane_with_callbacks(
                     if let Some(ref sel_cb) = on_sel_down {
                         let text_system = window.text_system();
                         let reg = regions_down.lock().unwrap();
-                        for (ix, block) in parsed_down.blocks.iter().enumerate() {
-                            let flat = glidemark_core::ast::flatten_block(block, "0");
-                            let offset = hit_test_char_offset_in_block(
-                                text_system,
-                                &reg,
-                                ix,
-                                &flat.text,
-                                event.position,
-                                font_size,
-                                Bounds::default(),
-                            );
-                            let pos = PreviewCharPosition::new(ix, offset);
+                        if let Some(pos) = hit_test_point_across_all_regions(&reg, Some(text_system), event.position, &parsed_down.blocks) {
                             sel_cb(Some(PreviewSelection::new(pos, pos)), true, window, cx);
-                            break;
                         }
                     }
                 })
@@ -896,20 +861,8 @@ pub fn render_preview_pane_with_callbacks(
                             if let Some(sel) = selection {
                                 let text_system = window.text_system();
                                 let reg = regions_move.lock().unwrap();
-                                for (ix, block) in parsed_move.blocks.iter().enumerate() {
-                                    let flat = glidemark_core::ast::flatten_block(block, "0");
-                                    let offset = hit_test_char_offset_in_block(
-                                        text_system,
-                                        &reg,
-                                        ix,
-                                        &flat.text,
-                                        event.position,
-                                        font_size,
-                                        Bounds::default(),
-                                    );
-                                    let head = PreviewCharPosition::new(ix, offset);
+                                if let Some(head) = hit_test_point_across_all_regions(&reg, Some(text_system), event.position, &parsed_move.blocks) {
                                     sel_cb(Some(PreviewSelection::new(sel.anchor, head)), true, window, cx);
-                                    break;
                                 }
                             }
                         }
@@ -934,6 +887,8 @@ fn render_block_element(
     block_ix: usize,
     regions: Arc<RegionsRegistry>,
     syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
+    images: &crate::local_images::SharedImages,
+    code_blocks: &[glidemark_core::ast::ParsedCodeBlock],
     flat: &glidemark_core::ast::FlattenResult,
     path: &str,
 ) -> AnyElement {
@@ -975,7 +930,7 @@ fn render_block_element(
                 })
             });
 
-            el = el.child(render_styled_inlines(content, theme, font_size, el_range));
+            el = el.child(render_styled_inlines(content, theme, font_size, el_range, images));
 
             with_text_probe(
                 el,
@@ -990,6 +945,7 @@ fn render_block_element(
                     padding_right: 0.0,
                     flat_char_offset,
                     content_key: None,
+                    fence_open_line: None,
                 },
                 regions,
             )
@@ -1017,7 +973,7 @@ fn render_block_element(
                 .text_size(px(base_font_size))
                 .line_height(relative(1.75))
                 .text_color(theme.text_primary)
-                .child(render_styled_inlines(content, theme, base_font_size, el_range));
+                .child(render_styled_inlines(content, theme, base_font_size, el_range, images));
 
             with_text_probe(
                 el,
@@ -1032,6 +988,7 @@ fn render_block_element(
                     padding_right: 0.0,
                     flat_char_offset,
                     content_key: None,
+                    fence_open_line: None,
                 },
                 regions,
             )
@@ -1056,6 +1013,7 @@ fn render_block_element(
                     })
                 });
 
+                let occurrence_path = format!("{}{}", block_ix, &path[1..]);
                 render_code_block(
                     lang.as_deref(),
                     code,
@@ -1069,6 +1027,7 @@ fn render_block_element(
                     flat_char_offset,
                     regions,
                     &syntax_cache,
+                    code_blocks.iter().find(|b| b.child_path == occurrence_path),
                 )
             }
         }
@@ -1089,6 +1048,8 @@ fn render_block_element(
                     block_ix,
                     regions.clone(),
                     syntax_cache.clone(),
+                    images,
+                    code_blocks,
                     flat,
                     &child_path,
                 ));
@@ -1122,6 +1083,8 @@ fn render_block_element(
             block_ix,
             regions,
             syntax_cache.clone(),
+            images,
+            code_blocks,
             flat,
             path,
         ),
@@ -1152,7 +1115,7 @@ fn render_block_element(
                             .font_weight(FontWeight::BOLD)
                             .text_size(px(base_font_size * 0.95))
                             .text_color(theme.text_primary)
-                            .child(render_styled_inlines(h, theme, base_font_size * 0.95, cell_range)),
+                            .child(render_styled_inlines(h, theme, base_font_size * 0.95, cell_range, images)),
                         TextRegionInfo {
                             block_ix,
                             text: text.clone(),
@@ -1164,6 +1127,7 @@ fn render_block_element(
                             padding_right: 12.0,
                             flat_char_offset: cell_start,
                             content_key: None,
+                            fence_open_line: None,
                         },
                         regions.clone(),
                     )
@@ -1196,7 +1160,7 @@ fn render_block_element(
                                 .p_3()
                                 .text_size(px(base_font_size * 0.95))
                                 .text_color(theme.text_primary)
-                                .child(render_styled_inlines(cell, theme, base_font_size * 0.95, cell_range)),
+                                .child(render_styled_inlines(cell, theme, base_font_size * 0.95, cell_range, images)),
                             TextRegionInfo {
                                 block_ix,
                                 text: text.clone(),
@@ -1208,6 +1172,7 @@ fn render_block_element(
                                 padding_right: 12.0,
                                 flat_char_offset: cell_start,
                                 content_key: None,
+                                fence_open_line: None,
                             },
                             regions.clone(),
                         )
@@ -1264,51 +1229,55 @@ fn render_styled_inlines(
     theme: &ThemeColors,
     font_size: f32,
     selected_char_range: Option<std::ops::Range<usize>>,
+    images: &crate::local_images::SharedImages,
 ) -> AnyElement {
-    let has_image = group.0.iter().any(|item| matches!(item, InlineItem::Image { .. }));
-    if has_image {
-        return div()
-            .w_full()
-            .min_w(px(0.))
-            .flex()
-            .flex_col()
-            .gap_2()
-            .children(group.0.iter().map(|item| match item {
-                InlineItem::Image { alt, url, .. } => div()
-                    .w_full()
-                    .min_w(px(0.))
-                    .p_3()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.bg)
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .child(
-                        svg()
-                            .path("icons/image.svg")
-                            .size(px(18.))
-                            .text_color(theme.text_muted),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .text_sm()
-                            .text_color(theme.text_muted)
-                            .child(if alt.is_empty() { url.clone() } else { format!("{} ({})", alt, url) }),
-                    )
-                    .into_any_element(),
-                other => {
-                    let single = InlineGroup(vec![other.clone()]);
-                    render_styled_text_only(&single, theme, font_size, selected_char_range.clone()).into_any_element()
-                }
-            }))
-            .into_any_element();
+    if !group.0.iter().any(|item| matches!(item, InlineItem::Image { .. })) {
+        return render_styled_text_only(group, theme, font_size, selected_char_range).into_any_element();
     }
-
-    render_styled_text_only(group, theme, font_size, selected_char_range).into_any_element()
+    let mut offset = 0;
+    div().w_full().min_w(px(0.)).flex().flex_col().gap_2()
+        .children(group.0.iter().map(|item| {
+            let single = InlineGroup(vec![item.clone()]);
+            let len = single.plain_text().chars().count();
+            let local_selection = selected_char_range.as_ref().and_then(|range| {
+                let start = range.start.saturating_sub(offset).min(len);
+                let end = range.end.saturating_sub(offset).min(len);
+                (start < end).then_some(start..end)
+            });
+            offset += len;
+            match item {
+                InlineItem::Image { alt, url, .. } => {
+                    let state = images.lock().unwrap().request(url);
+                    match state {
+                        crate::local_images::ImageState::Ready(image) => {
+                            let reference = url.clone();
+                            let mut element = img(image.snapshot.path().to_path_buf())
+                                .w_full().max_w(px(image.width as f32))
+                                .object_fit(ObjectFit::Contain)
+                                .debug_selector(|| format!("local_image:{url}"))
+                                .with_fallback(move || div().child(format!("图片显示失败 · {reference}")).into_any_element());
+                            element.style().aspect_ratio = Some(image.width as f32 / image.height as f32);
+                            let description = if alt.is_empty() { url.clone() } else { format!("{alt} · {url}") };
+                            div().id(SharedString::from(format!("local_image_container:{url}")))
+                                .w_full().min_w(px(0.))
+                                .tooltip(move |_, cx| cx.new(|_| CodeTooltipView { text: description.clone() }).into())
+                                .child(element).into_any_element()
+                        }
+                        state => {
+                            let reason = match state {
+                                crate::local_images::ImageState::Failed(reason) => reason,
+                                _ => "正在加载图片…".to_owned(),
+                            };
+                            div().w_full().min_w(px(0.)).p_3().rounded_md().border_1()
+                                .border_color(theme.border).text_color(theme.text_muted)
+                                .debug_selector(|| format!("local_image_status:{url}"))
+                                .child(format!("{alt} · {reason} · {url}")).into_any_element()
+                        }
+                    }
+                }
+                _ => render_styled_text_only(&single, theme, font_size, local_selection).into_any_element(),
+            }
+        })).into_any_element()
 }
 
 pub fn render_styled_text_only(
@@ -1799,6 +1768,8 @@ fn render_list_element(
     block_ix: usize,
     regions: Arc<RegionsRegistry>,
     syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
+    images: &crate::local_images::SharedImages,
+    code_blocks: &[glidemark_core::ast::ParsedCodeBlock],
     flat: &glidemark_core::ast::FlattenResult,
     path: &str,
 ) -> AnyElement {
@@ -1881,7 +1852,7 @@ fn render_list_element(
                                 .text_size(px(base_font_size))
                                 .line_height(relative(1.6))
                                 .text_color(theme.text_primary)
-                                .child(render_styled_inlines(content, theme, base_font_size, child_range)),
+                                .child(render_styled_inlines(content, theme, base_font_size, child_range, images)),
                             TextRegionInfo {
                                 block_ix,
                                 text: content_text,
@@ -1893,6 +1864,7 @@ fn render_list_element(
                                 padding_right: 0.0,
                                 flat_char_offset,
                                 content_key: None,
+                                fence_open_line: None,
                             },
                             regions.clone(),
                         )
@@ -1911,6 +1883,8 @@ fn render_list_element(
                         block_ix,
                         regions.clone(),
                         syntax_cache.clone(),
+                        images,
+                        code_blocks,
                         flat,
                         &child_path,
                     );
@@ -1938,6 +1912,8 @@ fn render_list_element(
                         block_ix,
                         regions.clone(),
                         syntax_cache.clone(),
+                        images,
+                        code_blocks,
                         flat,
                         &child_path,
                     )
@@ -1954,6 +1930,8 @@ fn render_list_element(
                         block_ix,
                         regions.clone(),
                         syntax_cache.clone(),
+                        images,
+                        code_blocks,
                         flat,
                         &child_path,
                     )
@@ -2028,6 +2006,7 @@ fn render_code_block(
     base_char_offset: usize,
     regions: Arc<RegionsRegistry>,
     syntax_cache: &Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
+    occurrence: Option<&glidemark_core::ast::ParsedCodeBlock>,
 ) -> AnyElement {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     code.as_ref().hash(&mut hasher);
@@ -2048,10 +2027,7 @@ fn render_code_block(
 
     let group_name: SharedString = format!("code_block_{}", hash).into();
 
-    let spans = syntax_cache
-        .lock()
-        .unwrap()
-        .get(&key)
+    let spans = occurrence.filter(|b| b.is_valid).and_then(|_| syntax_cache.lock().unwrap().get(&key))
         .unwrap_or_else(|| {
             Arc::from([glidemark_core::syntax::SyntaxSpan {
                 range: 0..code.len(),
@@ -2123,6 +2099,7 @@ fn render_code_block(
             padding_right: 12.0,
             flat_char_offset: base_char_offset,
             content_key,
+            fence_open_line: occurrence.map(|b| b.fence_open_line),
         },
         regions,
     );

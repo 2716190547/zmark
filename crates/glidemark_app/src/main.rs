@@ -5,6 +5,7 @@ use std::path::PathBuf;
 mod actions;
 mod assets;
 mod editor_engine;
+mod local_images;
 mod state;
 mod theme;
 mod views;

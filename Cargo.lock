@@ -2094,7 +2094,10 @@ version = "0.1.0"
 dependencies = [
  "glidemark_core",
  "gpui",
+ "image",
+ "percent-encoding",
  "tempfile",
+ "usvg",
 ]
 
 [[package]]

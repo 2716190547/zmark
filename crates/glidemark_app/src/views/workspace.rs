@@ -74,6 +74,8 @@ pub struct WorkspaceView {
     pub cached_visual_font_bits: u32,
     pub cached_visual_lines: Arc<Vec<crate::editor_engine::VisualLine>>,
     pub rendered_regions: Arc<crate::views::preview::RegionsRegistry>,
+    pub local_images: crate::local_images::SharedImages,
+    pub local_image_task: Option<gpui::Task<()>>,
     pub syntax_active_task: Option<gpui::Task<()>>,
     pub syntax_pending_request: Option<SyntaxBatchRequest>,
     pub syntax_cancel_flag: Arc<AtomicBool>,
@@ -95,7 +97,6 @@ pub struct WorkspaceView {
     pub last_evaluated_reading_pane: Option<PaneKind>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyntaxBlockState {
     Ready,
@@ -106,13 +107,12 @@ pub enum SyntaxBlockState {
     MappingInvalid,
     InitFailed,
     WaitingWarm,
-    Cancelled,
 }
 
 impl SyntaxBlockState {
     pub fn localized_reason<'a>(&self, strings: &'a glidemark_core::i18n::I18nStrings) -> Option<&'a str> {
         match self {
-            SyntaxBlockState::Ready | SyntaxBlockState::UnsupportedLanguage | SyntaxBlockState::WaitingWarm | SyntaxBlockState::Cancelled => None,
+            SyntaxBlockState::Ready | SyntaxBlockState::UnsupportedLanguage | SyntaxBlockState::WaitingWarm => None,
             SyntaxBlockState::BudgetExceeded => Some(strings.syntax_budget_exceeded),
             SyntaxBlockState::ResourceConstrained => Some(strings.syntax_resource_constrained),
             SyntaxBlockState::HardLimit => Some(strings.syntax_hard_limit),
@@ -192,6 +192,8 @@ impl WorkspaceView {
             cached_visual_font_bits: 0,
             cached_visual_lines: Arc::new(Vec::new()),
             rendered_regions: Arc::new(std::sync::Mutex::new(Vec::new())),
+            local_images: Arc::new(std::sync::Mutex::new(crate::local_images::LocalImages::default())),
+            local_image_task: None,
             syntax_active_task: None,
             syntax_pending_request: None,
             syntax_cancel_flag: Arc::new(AtomicBool::new(false)),
@@ -219,6 +221,22 @@ impl WorkspaceView {
             last_evaluated_reading_pane: None,
         };
 
+        cx.on_release(|view, cx| {
+            let mut images = view.local_images.lock().unwrap();
+            for (_, state) in std::mem::take(&mut images.entries) {
+                if let crate::local_images::ImageState::Ready(image) = state { images.retired.push(image); }
+            }
+            if let Some(image) = images.loading.take() { images.retired.push(image); }
+            for image in images.retired.drain(..) {
+                let path = image.snapshot.path().to_path_buf();
+                if let Some(handle) = view.window_handle {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        crate::views::lightbox::release_lightbox_image(&path, window, cx);
+                    });
+                }
+                cx.remove_asset::<gpui::ImgResourceLoader>(&gpui::Resource::Path(Arc::from(path.as_path())));
+            }
+        }).detach();
         view.start_warm_coordination_task(cx);
 
         view
@@ -258,6 +276,72 @@ impl WorkspaceView {
             }).detach();
         }
         cx.notify();
+    }
+
+    pub fn process_local_images(&mut self, cx: &mut Context<Self>) {
+        let next = {
+            let mut images = self.local_images.lock().unwrap();
+            images.evict_hidden();
+            if !images.retired.is_empty() { cx.notify(); return; }
+            if self.local_image_task.is_some() { return; }
+            images.wanted.iter().find(|url| matches!(images.entries.get(*url), Some(crate::local_images::ImageState::Waiting)))
+                .map(|url| (images.generation, url.clone(), images.document.clone()))
+        };
+        let Some((generation, url, document)) = next else { return; };
+        self.local_image_task = Some(cx.spawn(async move |this, app| {
+            let load_url = url.clone();
+            let mut result = app.background_executor().spawn(async move {
+                crate::local_images::load_image(&load_url, document.as_deref())
+            }).await;
+            // Await GPUI's own resource decode before starting another image. This
+            // preserves its color channel path and validates the actual bitmap.
+            if let Ok(image) = &result {
+                let image = image.clone();
+                let allowed = this.update(app, |view, _| {
+                    let mut images = view.local_images.lock().unwrap();
+                    if images.generation != generation || !images.wanted.contains(&url) { return false; }
+                    if images.decoded_bytes() + image.decoded_bytes > crate::local_images::MAX_CACHE_BYTES { return false; }
+                    images.loading = Some(image.clone());
+                    true
+                }).unwrap_or(false);
+                if allowed {
+                    let resource = gpui::Resource::Path(Arc::from(image.snapshot.path()));
+                    if let Ok(task) = app.update(|cx| cx.fetch_asset::<gpui::ImgResourceLoader>(&resource).0) {
+                        match task.await {
+                            Ok(render) => {
+                                let size = render.size(0);
+                                if size.width.0 < 1 || size.height.0 < 1 || render.frame_count() != 1
+                                    || crate::local_images::check_dimensions(size.width.0 as u32, size.height.0 as u32).is_err()
+                                    || size.width.0 as u32 != image.width || size.height.0 as u32 != image.height
+                                    || render.as_bytes(0).is_none_or(|bytes| bytes.len() as u64 > crate::local_images::MAX_DECODED_BYTES)
+                                {
+                                    result = Err("图片实际解码尺寸或帧数超限".into());
+                                }
+                            }
+                            Err(error) => result = Err(format!("图片解码失败：{error}")),
+                        }
+                    } else {
+                        result = Err("图片加载已关闭".into());
+                    }
+                } else {
+                    result = Err("图片已退出当前文档或可见图片缓存超过 64MiB".into());
+                }
+            }
+            let _ = this.update(app, |view, cx| {
+                view.local_image_task = None;
+                let changed = {
+                    let mut images = view.local_images.lock().unwrap();
+                    let changed = images.complete(generation, url.clone(), result);
+                    if let Some(image) = images.loading.take() {
+                        let retained = matches!(images.entries.get(&url), Some(crate::local_images::ImageState::Ready(i)) if Arc::ptr_eq(i, &image));
+                        if !retained { images.retired.push(image); }
+                    }
+                    changed || !images.retired.is_empty()
+                };
+                if changed { cx.notify(); }
+                view.process_local_images(cx);
+            });
+        }));
     }
 
     /// Re-measures the preview after an edit, keeping the current scroll position.
@@ -313,6 +397,7 @@ impl WorkspaceView {
 
     /// Explicit user action via Refresh Preview button: resets attempt counters and triggers refresh.
     pub fn reset_syntax_attempts_and_refresh(&mut self, cx: &mut Context<Self>) {
+        self.local_images.lock().unwrap().refresh();
         self.syntax_attempts.clear();
         self.syntax_block_states.retain(|_, s| matches!(s, SyntaxBlockState::Ready));
         self.last_visible_syntax_keys.clear();
@@ -404,6 +489,17 @@ impl WorkspaceView {
         }
     }
 
+    fn failure_for_occurrence(&self, key: &glidemark_core::syntax::CodeKey, open_line: usize, is_valid: bool) -> Option<VisibleSyntaxFailure> {
+        let state = if !is_valid || self.syntax_invalid_positions.contains(&(key.clone(), open_line)) {
+            SyntaxBlockState::MappingInvalid
+        } else if key.language.is_some_and(|lang| self.syntax_warm_states.get(lang) == Some(&WarmState::InitFailed)) {
+            SyntaxBlockState::InitFailed
+        } else {
+            *self.syntax_block_states.get(key)?
+        };
+        state.localized_reason(self.state.strings).map(|reason| VisibleSyntaxFailure { source_line: open_line + 1, reason })
+    }
+
     pub fn collect_visible_editor_failures(&self) -> Vec<VisibleSyntaxFailure> {
         let mut failures = Vec::new();
         if !matches!(self.state.view_mode, ViewMode::Source | ViewMode::Split) {
@@ -428,37 +524,14 @@ impl WorkspaceView {
         let start_phys = self.cached_visual_lines.get(start_vis).map(|vl| vl.physical_line_idx).unwrap_or(0);
         let end_phys = self.cached_visual_lines.get(end_vis.min(self.cached_visual_lines.len().saturating_sub(1))).map(|vl| vl.physical_line_idx).unwrap_or(usize::MAX);
 
-        let strings = self.state.strings;
         for b in self.source_code_blocks.iter() {
             let b_start = b.fence_open_line;
             let b_end = b.fence_close_line.unwrap_or_else(|| {
                 b.lines.last().map(|l| l.source_line_idx).unwrap_or(b_start)
             });
             if b_start <= end_phys && b_end >= start_phys && !b.key.payload.is_empty() {
-                let source_line = b.fence_open_line + 1;
-                if self.syntax_invalid_positions.contains(&(b.key.clone(), b.fence_open_line)) {
-                    failures.push(VisibleSyntaxFailure {
-                        source_line,
-                        reason: strings.syntax_mapping_invalid,
-                    });
-                    continue;
-                }
-                if let Some(lang) = b.key.language {
-                    if let Some(WarmState::InitFailed) = self.syntax_warm_states.get(lang) {
-                        failures.push(VisibleSyntaxFailure {
-                            source_line,
-                            reason: strings.syntax_init_failed,
-                        });
-                        continue;
-                    }
-                }
-                if let Some(state) = self.syntax_block_states.get(&b.key) {
-                    if let Some(reason) = state.localized_reason(strings) {
-                        failures.push(VisibleSyntaxFailure {
-                            source_line,
-                            reason,
-                        });
-                    }
+                if let Some(failure) = self.failure_for_occurrence(&b.key, b.fence_open_line, b.is_valid) {
+                    failures.push(failure);
                 }
             }
         }
@@ -473,52 +546,18 @@ impl WorkspaceView {
         let Some(preview_bounds) = self.preview_content_bounds else {
             return failures;
         };
-        let strings = self.state.strings;
         let regions = self.rendered_regions.lock().unwrap();
         let mut seen = std::collections::HashSet::new();
-
         for r in regions.iter() {
-            if let Some(ref key) = r.content_key {
-                if !key.payload.is_empty() && preview_bounds.intersects(&r.bounds) {
-                    let (open_line, is_invalid) = self.source_code_blocks
-                        .iter()
-                        .find(|b| b.key == *key)
-                        .map(|b| (b.fence_open_line, !b.is_valid))
-                        .unwrap_or_else(|| {
-                            self.state.doc.parsed.code_blocks
-                                .iter()
-                                .find(|b| b.key == *key)
-                                .map(|b| (b.fence_open_line, !b.is_valid))
-                                .unwrap_or((0, false))
-                        });
-
-                    let source_line = open_line + 1;
-                    if !seen.insert((key.clone(), source_line)) {
-                        continue;
-                    }
-
-                    if is_invalid || self.syntax_invalid_positions.contains(&(key.clone(), open_line)) {
-                        failures.push(VisibleSyntaxFailure {
-                            source_line,
-                            reason: strings.syntax_mapping_invalid,
-                        });
-                        continue;
-                    }
-                    if let Some(lang) = key.language {
-                        if let Some(WarmState::InitFailed) = self.syntax_warm_states.get(lang) {
-                            failures.push(VisibleSyntaxFailure {
-                                source_line,
-                                reason: strings.syntax_init_failed,
-                            });
-                            continue;
-                        }
-                    }
-                    if let Some(state) = self.syntax_block_states.get(key) {
-                        if let Some(reason) = state.localized_reason(strings) {
-                            failures.push(VisibleSyntaxFailure {
-                                source_line,
-                                reason,
-                            });
+            if let (Some(key), Some(open_line)) = (&r.content_key, r.fence_open_line) {
+                if !key.payload.is_empty() && preview_bounds.intersects(&r.bounds)
+                    && seen.insert((key.clone(), open_line))
+                {
+                    if let Some(block) = self.state.doc.parsed.code_blocks.iter()
+                        .find(|b| b.key == *key && b.fence_open_line == open_line)
+                    {
+                        if let Some(failure) = self.failure_for_occurrence(key, open_line, block.is_valid) {
+                            failures.push(failure);
                         }
                     }
                 }
@@ -632,19 +671,10 @@ impl WorkspaceView {
                 for r in regions.iter() {
                     if let Some(ref key) = r.content_key {
                         if !key.payload.is_empty() && preview_bounds.intersects(&r.bounds) {
-                            let doc_line = self.source_code_blocks
-                                .iter()
-                                .find(|b| b.key == *key)
-                                .map(|b| b.fence_open_line)
-                                .unwrap_or_else(|| {
-                                    self.state.doc.parsed.code_blocks
-                                        .iter()
-                                        .find(|b| b.key == *key)
-                                        .map(|b| b.fence_open_line)
-                                        .unwrap_or(0)
-                                });
-
-                            if self.syntax_invalid_positions.contains(&(key.clone(), doc_line)) {
+                            let Some(block) = self.state.doc.parsed.code_blocks.iter().find(|b|
+                                Some(b.fence_open_line) == r.fence_open_line && b.key == *key) else { continue; };
+                            let doc_line = block.fence_open_line;
+                            if !block.is_valid || self.syntax_invalid_positions.contains(&(key.clone(), doc_line)) {
                                 continue;
                             }
 
@@ -859,16 +889,9 @@ impl WorkspaceView {
                     for (key, res) in parsed_results {
                         match res {
                             glidemark_core::syntax::ParseResult::Ready(spans) => {
-                                let is_candidate = if !this.current_ordered_candidates.is_empty() {
-                                    this.current_ordered_candidates.contains(&key)
-                                } else if !request.ordered_candidates.is_empty() {
-                                    request.ordered_candidates.contains(&key)
-                                } else {
-                                    request.blocks.contains(&key)
-                                };
-                                if is_candidate {
-                                    new_ready.insert(key, spans);
-                                }
+                                // Admission below uses only the current ordered candidates;
+                                // results outside that snapshot are dropped with this map.
+                                new_ready.insert(key, spans);
                             }
                             glidemark_core::syntax::ParseResult::BudgetExceeded => {
                                 let (_gen, count) = this.syntax_attempts.entry(key.clone()).or_insert((0, 1));
@@ -895,12 +918,8 @@ impl WorkspaceView {
                     let snapshot_matches = request.ordered_candidates == this.current_ordered_candidates
                         && request.reading_pane == this.current_reading_pane;
 
-                    let eval_order = if snapshot_matches || this.current_ordered_candidates.is_empty() {
-                        if !request.ordered_candidates.is_empty() {
-                            request.ordered_candidates.clone()
-                        } else {
-                            request.blocks.clone()
-                        }
+                    let eval_order = if snapshot_matches {
+                        request.ordered_candidates.clone()
                     } else {
                         this.current_ordered_candidates.clone()
                     };
@@ -2055,6 +2074,15 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        {
+            let mut images = self.local_images.lock().unwrap();
+            images.begin_frame(self.state.active.clone(), self.state.doc.path.clone());
+            for image in images.retired.drain(..) {
+                crate::views::lightbox::release_lightbox_image(image.snapshot.path(), window, cx);
+            }
+        }
+        let image_view = cx.entity().clone();
+        cx.defer(move |cx| image_view.update(cx, |this, cx| this.process_local_images(cx)));
         let is_sys_dark = matches!(
             window.appearance(),
             WindowAppearance::Dark | WindowAppearance::VibrantDark
@@ -3087,6 +3115,7 @@ impl Render for WorkspaceView {
                                                         self.rendered_regions.clone(),
                                                         self.syntax_cache.clone(),
                                                         &preview_failures,
+                                                    self.local_images.clone(),
                                                     ))
                                                     .into_any_element()
                                             }
@@ -3216,6 +3245,7 @@ impl Render for WorkspaceView {
                                                                     self.rendered_regions.clone(),
                                                                     self.syntax_cache.clone(),
                                                                     &preview_failures,
+                                                                    self.local_images.clone(),
                                                                 ))
                                                         }),
                                                 )
