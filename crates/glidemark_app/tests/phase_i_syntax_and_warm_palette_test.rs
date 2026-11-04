@@ -1,12 +1,12 @@
 use glidemark_app::state::{AppState, DocKey, ViewMode};
 use glidemark_app::theme::ThemeColors;
-use glidemark_app::views::editor::{tokenize_document_lines, MarkdownTokenKind};
+use glidemark_app::views::editor::MarkdownTokenKind;
 use glidemark_app::views::preview::{apply_selection_to_highlights, obs};
-use glidemark_app::views::workspace::{SyntaxBatchRequest, SyntaxBlockItem, WorkspaceView};
+use glidemark_app::views::workspace::{SyntaxBatchRequest, WorkspaceView};
 use glidemark_core::document::Document;
 use glidemark_core::syntax::{
-    clear_syntax_cache, get_or_parse_code_spans, parse_code_spans,
-    resolve_canonical_language, SyntaxRole, MAX_CODE_BLOCK_BYTES,
+    parse_code_spans, resolve_canonical_language, CodeKey, SyntaxCache, SyntaxRole,
+    MAX_CODE_BLOCK_BYTES,
 };
 use gpui::{HighlightStyle, TestAppContext};
 use std::sync::Arc;
@@ -232,14 +232,18 @@ static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[test]
 fn test_phase_i_bounded_lru_cache_and_theme_independence() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    clear_syntax_cache();
+    let mut cache = SyntaxCache::new();
     let code = "def greet(name: str) -> str:\n    return f'Hello, {name}'";
 
     // 1. First call parses and inserts into cache
-    let spans1 = get_or_parse_code_spans(code, Some("python"));
+    let key = SyntaxCache::key(code, Some("python"));
+    let spans1: Arc<[glidemark_core::syntax::SyntaxSpan]> = parse_code_spans(code, Some("python")).into();
+    let retained = std::collections::HashSet::new();
+    let inserted = cache.insert(key.clone(), spans1.clone(), &retained);
+    assert!(inserted, "Cache must admit entry within budget");
 
     // 2. Second call returns the cached Arc without reparsing
-    let spans2 = get_or_parse_code_spans(code, Some("python"));
+    let spans2 = cache.get(&key).expect("Key must be present in cache");
     assert!(
         Arc::ptr_eq(&spans1, &spans2),
         "Identical code and language must return the exact same cached Arc"
@@ -262,7 +266,6 @@ fn test_phase_i_bounded_lru_cache_and_theme_independence() {
 #[test]
 fn test_phase_i_preview_and_editor_syntax_consistency() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    clear_syntax_cache();
     let markdown_doc = [
         "# Sample Document",
         "```xml",
@@ -274,17 +277,36 @@ fn test_phase_i_preview_and_editor_syntax_consistency() {
     ];
 
     let xml_payload = "<project xmlns=\"http://maven.apache.org\">\n    <groupId>org.apache.maven</groupId>\n</project>";
-    let preview_spans = get_or_parse_code_spans(xml_payload, Some("xml"));
+    let preview_spans = parse_code_spans(xml_payload, Some("xml"));
 
-    // 1. Editor tokenization
-    let editor_tokens = tokenize_document_lines(&markdown_doc);
-    assert_eq!(editor_tokens.len(), 7);
+    // 1. Editor tokenization via AST parser and code line mappings
+    let full_doc = markdown_doc.join("\n");
+    let doc = glidemark_core::ast::parse_markdown(&full_doc);
+    assert_eq!(doc.code_blocks.len(), 1);
+    let code_block = &doc.code_blocks[0];
+    let spans = parse_code_spans(&code_block.key.payload, code_block.key.language);
 
     // Line 1: ```xml delimiter
-    assert_eq!(editor_tokens[1][0].kind, MarkdownTokenKind::CodeDelimiter);
+    assert_eq!(code_block.fence_open_line, 1);
 
     // Line 2: <project xmlns="http://maven.apache.org">
-    let line2_tokens = &editor_tokens[2];
+    let line2_mapping = &code_block.lines[0];
+    let line2_spans: Vec<glidemark_core::syntax::SyntaxSpan> = spans
+        .iter()
+        .filter_map(|s| {
+            let overlap_start = s.range.start.max(line2_mapping.payload_range.start);
+            let overlap_end = s.range.end.min(line2_mapping.payload_range.end);
+            if overlap_start < overlap_end {
+                Some(glidemark_core::syntax::SyntaxSpan {
+                    range: (overlap_start - line2_mapping.payload_range.start)..(overlap_end - line2_mapping.payload_range.start),
+                    role: s.role,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    let line2_tokens = glidemark_app::views::editor::spans_to_code_tokens(markdown_doc[2], &line2_spans);
     assert!(
         line2_tokens.iter().any(|t| t.kind == MarkdownTokenKind::Keyword && t.text == "project"),
         "Editor must recognize 'project' tag as Keyword"
@@ -299,7 +321,23 @@ fn test_phase_i_preview_and_editor_syntax_consistency() {
     );
 
     // Line 3: <groupId>org.apache.maven</groupId>
-    let line3_tokens = &editor_tokens[3];
+    let line3_mapping = &code_block.lines[1];
+    let line3_spans: Vec<glidemark_core::syntax::SyntaxSpan> = spans
+        .iter()
+        .filter_map(|s| {
+            let overlap_start = s.range.start.max(line3_mapping.payload_range.start);
+            let overlap_end = s.range.end.min(line3_mapping.payload_range.end);
+            if overlap_start < overlap_end {
+                Some(glidemark_core::syntax::SyntaxSpan {
+                    range: (overlap_start - line3_mapping.payload_range.start)..(overlap_end - line3_mapping.payload_range.start),
+                    role: s.role,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    let line3_tokens = glidemark_app::views::editor::spans_to_code_tokens(markdown_doc[3], &line3_spans);
     assert!(
         line3_tokens.iter().any(|t| t.kind == MarkdownTokenKind::Keyword && t.text == "groupId"),
         "Editor must recognize 'groupId' tag as Keyword"
@@ -475,7 +513,6 @@ async fn test_phase_i_real_editor_render_tokens(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn test_phase_i_cold_start_nonblocking_and_async_refresh(cx: &mut TestAppContext) {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    clear_syntax_cache();
     let doc_str = "```rust\nfn cold() -> i32 { 100 }\n```\n";
     let (_view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
@@ -579,22 +616,14 @@ async fn test_phase_i_cancellation_and_stale_revision_rejection(cx: &mut TestApp
     let stale_rev_request = SyntaxBatchRequest {
         doc_key: current_doc_key.clone(),
         revision: current_rev.saturating_sub(1),
-        blocks: vec![SyntaxBlockItem {
-            block_id: 101,
-            lang: Some("rust".to_string()),
-            code: sentinel_rev.to_string(),
-        }],
+        blocks: vec![CodeKey::from_raw(Some("rust"), Arc::from(sentinel_rev))],
     };
 
     let sentinel_doc = "fn should_be_rejected_doc() {}";
     let stale_doc_request = SyntaxBatchRequest {
         doc_key: Some(DocKey::Scratch(999999)),
         revision: current_rev,
-        blocks: vec![SyntaxBlockItem {
-            block_id: 102,
-            lang: Some("rust".to_string()),
-            code: sentinel_doc.to_string(),
-        }],
+        blocks: vec![CodeKey::from_raw(Some("rust"), Arc::from(sentinel_doc))],
     };
 
     // Genuinely invoke run_syntax_batch with stale requests
@@ -610,13 +639,15 @@ async fn test_phase_i_cancellation_and_stale_revision_rejection(cx: &mut TestApp
     // Assert that neither sentinel was inserted into the workspace syntax cache
     let cache_contains_rev = cx.update(|_window, cx| {
         let ws = view.read(cx);
-        let cache = ws.syntax_cache.lock().unwrap();
-        cache.entries.contains_key(&(sentinel_rev.to_string(), "rust".to_string()))
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        let key = CodeKey::from_raw(Some("rust"), Arc::from(sentinel_rev));
+        cache.get(&key).is_some()
     });
     let cache_contains_doc = cx.update(|_window, cx| {
         let ws = view.read(cx);
-        let cache = ws.syntax_cache.lock().unwrap();
-        cache.entries.contains_key(&(sentinel_doc.to_string(), "rust".to_string()))
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        let key = CodeKey::from_raw(Some("rust"), Arc::from(sentinel_doc));
+        cache.get(&key).is_some()
     });
     assert!(
         !cache_contains_rev,

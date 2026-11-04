@@ -6,9 +6,53 @@
 
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
+
+/// Canonical key identifying a code block's syntax highlighting work.
+///
+/// Equality and hashing are strictly content-based (language identifier and payload string),
+/// NOT `Arc` pointer address.
+#[derive(Clone, Debug)]
+pub struct CodeKey {
+    pub language: Option<&'static str>,
+    pub payload: Arc<str>,
+}
+
+impl PartialEq for CodeKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.language == other.language && *self.payload == *other.payload
+    }
+}
+
+impl Eq for CodeKey {}
+
+impl std::hash::Hash for CodeKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.language.hash(state);
+        (*self.payload).hash(state);
+    }
+}
+
+impl CodeKey {
+    pub fn new(language: Option<&'static str>, payload: Arc<str>) -> Self {
+        Self { language, payload }
+    }
+
+    pub fn from_raw(raw_info: Option<&str>, payload: Arc<str>) -> Self {
+        let language = resolve_canonical_language(raw_info);
+        Self { language, payload }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.payload.is_empty()
+    }
+
+    pub fn is_plain(&self) -> bool {
+        self.language.is_none()
+    }
+}
 
 /// Minimal 6-role semantic contract shared across source editor and markdown preview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -60,43 +104,59 @@ pub fn init_syntax_set() -> &'static SyntaxSet {
         let ss = SyntaxSet::load_defaults_newlines();
         // Pre-compile regexes for canonical syntaxes during initialization so parsing
         // code blocks never incurs one-time onig compilation against their parse budget.
-        for name in &[
-            "XML",
-            "HTML",
-            "Java",
-            "Python",
-            "JavaScript",
-            "JSON",
-            "YAML",
-            "SQL",
-            "Bourne Again Shell (bash)",
-            "Rust",
-        ] {
+        let warm_samples: &[(&str, &str)] = &[
+            ("XML", "<tag attr=\"val\">text</tag>\n"),
+            ("HTML", "<div class=\"foo\">hello</div>\n"),
+            ("Java", "public static void main(String[] args) {}\n"),
+            ("Python", "def hello(name: str):\n    return f'{name}'\n"),
+            ("JavaScript", "function test() { const x = 42; return x; }\n"),
+            ("JSON", "{\"key\": [123, true, null]}\n"),
+            ("YAML", "key: value\nlist:\n  - item\n"),
+            ("SQL", "SELECT id, name FROM users WHERE id = 1;\n"),
+            ("Bourne Again Shell (bash)", "#!/bin/bash\necho 'hello' && exit 0\n"),
+            ("Rust", "pub fn add(a: i32) -> i32 { a + 1 }\n"),
+        ];
+        for (name, sample) in warm_samples {
             if let Some(syntax) = ss.find_syntax_by_name(name) {
                 let mut state = ParseState::new(syntax);
-                let _ = state.parse_line("\n", &ss);
+                let _ = state.parse_line(sample, &ss);
             }
         }
         ss
     })
 }
 
-/// Maps a raw fence info string to a canonical language identifier recognized by GlideMark.
+/// Maps a raw fence info string or already-canonical name to a canonical language identifier recognized by GlideMark.
 ///
 /// Rules:
-/// - Takes the first whitespace-separated token.
-/// - Trims and converts to ASCII lowercase.
-/// - Matches against the approved canonical list.
+/// - Accepts raw aliases ("bash", "sh", "rust", "js", etc.).
+/// - Accepts already-canonical names ("Bourne Again Shell (bash)", "Rust", "JavaScript", etc.) so canonical names never get lost.
+/// - Matches against the approved canonical list case-insensitively.
 /// - Returns `None` for empty/text/plain or unknown/unsupported languages.
 pub fn resolve_canonical_language(raw_info: Option<&str>) -> Option<&'static str> {
     let raw = raw_info?;
-    let token = raw
-        .trim()
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+
+    // Check multi-word canonical name "Bourne Again Shell (bash)" first
+    if lower == "bourne again shell (bash)"
+        || lower.starts_with("bourne again shell (bash) ")
+        || lower.starts_with("bourne again shell (bash),")
+        || lower.starts_with("bourne again shell (bash)\t")
+    {
+        return Some("Bourne Again Shell (bash)");
+    }
+
+    let token = lower
         .split(|c: char| c.is_whitespace() || c == ',')
         .next()?
-        .trim()
-        .to_ascii_lowercase();
-    match token.as_str() {
+        .trim();
+
+    match token {
         "xml" => Some("XML"),
         "html" | "htm" => Some("HTML"),
         "java" => Some("Java"),
@@ -105,7 +165,7 @@ pub fn resolve_canonical_language(raw_info: Option<&str>) -> Option<&'static str
         "json" => Some("JSON"),
         "yaml" | "yml" => Some("YAML"),
         "sql" => Some("SQL"),
-        "shell" | "sh" | "bash" => Some("Bourne Again Shell (bash)"),
+        "shell" | "sh" | "bash" | "bourne again shell (bash)" => Some("Bourne Again Shell (bash)"),
         "rust" | "rs" => Some("Rust"),
         // Unhighlighted aliases
         "" | "text" | "txt" | "plain" | "plaintext" => None,
@@ -410,105 +470,121 @@ pub fn parse_code_spans(code: &str, raw_lang: Option<&str>) -> Vec<SyntaxSpan> {
 // -----------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
-pub struct SyntaxCache {
-    pub entries: std::collections::HashMap<(String, String), Arc<[SyntaxSpan]>>,
-    pub lru: std::collections::VecDeque<(String, String)>,
-    pub current_bytes: usize,
-    pub max_bytes: usize, // 4 * 1024 * 1024 (4 MiB)
+pub struct CacheEntry {
+    pub key: CodeKey,
+    pub spans: Arc<[SyntaxSpan]>,
 }
 
-fn compute_entry_bytes(code: &str, lang: &str, spans_len: usize) -> usize {
-    code.len() + lang.len() + spans_len * std::mem::size_of::<SyntaxSpan>() + 64
+#[derive(Clone, Debug)]
+pub struct SyntaxCache {
+    pub entries: Vec<CacheEntry>,
+    pub max_bytes: usize, // 4 * 1024 * 1024 (4 MiB)
 }
 
 impl SyntaxCache {
     pub fn new() -> Self {
         Self {
-            entries: std::collections::HashMap::new(),
-            lru: std::collections::VecDeque::new(),
-            current_bytes: 0,
+            entries: Vec::new(),
             max_bytes: MAX_CACHE_BYTES,
         }
     }
 
-    pub fn key(code: &str, raw_lang: Option<&str>) -> (String, String) {
-        let lang = resolve_canonical_language(raw_lang)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| raw_lang.unwrap_or("").trim().to_string());
-        (code.to_string(), lang)
+    pub fn key(code: &str, raw_lang: Option<&str>) -> CodeKey {
+        CodeKey::from_raw(raw_lang, Arc::from(code))
     }
 
-    pub fn get(&mut self, code: &str, raw_lang: Option<&str>) -> Option<Arc<[SyntaxSpan]>> {
-        let key = Self::key(code, raw_lang);
-        if let Some(spans) = self.entries.get(&key).cloned() {
-            if let Some(pos) = self.lru.iter().position(|k| k == &key) {
-                self.lru.remove(pos);
-            }
-            self.lru.push_back(key);
+    pub fn entry_heap_bytes(key: &CodeKey, spans: &Arc<[SyntaxSpan]>) -> usize {
+        key.payload.len() + 16 + spans.len() * std::mem::size_of::<SyntaxSpan>() + 16
+    }
+
+    pub fn current_bytes(&self) -> usize {
+        let container_bytes = self.entries.capacity() * std::mem::size_of::<CacheEntry>();
+        let heap_bytes: usize = self
+            .entries
+            .iter()
+            .map(|e| Self::entry_heap_bytes(&e.key, &e.spans))
+            .sum();
+        container_bytes + heap_bytes
+    }
+
+    pub fn max_bytes(&self) -> usize {
+        self.max_bytes
+    }
+
+    pub fn get(&mut self, key: &CodeKey) -> Option<Arc<[SyntaxSpan]>> {
+        if let Some(pos) = self.entries.iter().position(|e| &e.key == key) {
+            let entry = self.entries.remove(pos);
+            let spans = entry.spans.clone();
+            self.entries.push(entry);
             Some(spans)
         } else {
             None
         }
     }
 
+    pub fn get_by_str(&mut self, code: &str, raw_lang: Option<&str>) -> Option<Arc<[SyntaxSpan]>> {
+        let key = Self::key(code, raw_lang);
+        self.get(&key)
+    }
+
     pub fn insert(
         &mut self,
-        code: &str,
-        raw_lang: Option<&str>,
+        key: CodeKey,
         spans: Arc<[SyntaxSpan]>,
-        retained_keys: &std::collections::HashSet<(String, String)>,
-    ) {
-        let key = Self::key(code, raw_lang);
-        let entry_size = compute_entry_bytes(&key.0, &key.1, spans.len());
+        retained_keys: &std::collections::HashSet<CodeKey>,
+    ) -> bool {
+        let needed_entry_heap = Self::entry_heap_bytes(&key, &spans);
+        let min_entry_size = needed_entry_heap + std::mem::size_of::<CacheEntry>();
 
-        if entry_size > self.max_bytes {
-            return;
+        if min_entry_size > self.max_bytes {
+            return false;
         }
 
-        if let Some(old_spans) = self.entries.get(&key) {
-            let old_size = compute_entry_bytes(&key.0, &key.1, old_spans.len());
-            self.current_bytes = self.current_bytes.saturating_sub(old_size);
-            if let Some(pos) = self.lru.iter().position(|k| k == &key) {
-                self.lru.remove(pos);
-            }
+        // If key already exists, remove it first
+        if let Some(pos) = self.entries.iter().position(|e| e.key == key) {
+            self.entries.remove(pos);
+            self.entries.shrink_to_fit();
         }
 
-        while self.current_bytes + entry_size > self.max_bytes {
-            let evict_idx = self
-                .lru
-                .iter()
-                .position(|k| !retained_keys.contains(k));
-            if let Some(idx) = evict_idx {
-                let evicted_key = self.lru.remove(idx).unwrap();
-                if let Some(evicted_spans) = self.entries.remove(&evicted_key) {
-                    let evicted_size =
-                        compute_entry_bytes(&evicted_key.0, &evicted_key.1, evicted_spans.len());
-                    self.current_bytes = self.current_bytes.saturating_sub(evicted_size);
-                }
+        loop {
+            let prospective_cap = if self.entries.len() == self.entries.capacity() {
+                self.entries.len() + 1
             } else {
-                break;
-            }
-        }
+                self.entries.capacity()
+            };
 
-        if self.current_bytes + entry_size <= self.max_bytes {
-            self.entries.insert(key.clone(), spans);
-            self.lru.push_back(key);
-            self.current_bytes += entry_size;
+            let container_bytes = prospective_cap * std::mem::size_of::<CacheEntry>();
+            let current_heap: usize = self
+                .entries
+                .iter()
+                .map(|e| Self::entry_heap_bytes(&e.key, &e.spans))
+                .sum();
+
+            if container_bytes + current_heap + needed_entry_heap <= self.max_bytes {
+                if self.entries.len() == self.entries.capacity() {
+                    self.entries.reserve_exact(1);
+                }
+                self.entries.push(CacheEntry { key, spans });
+                return true;
+            }
+
+            // Evict oldest (front) non-retained entry
+            if let Some(evict_idx) = self
+                .entries
+                .iter()
+                .position(|e| !retained_keys.contains(&e.key))
+            {
+                self.entries.remove(evict_idx);
+                self.entries.shrink_to_fit();
+            } else {
+                // Cannot evict any more non-retained entries to fit
+                return false;
+            }
         }
     }
 
     pub fn clear(&mut self) {
-        self.entries.clear();
-        self.lru.clear();
-        self.current_bytes = 0;
-    }
-
-    pub fn current_bytes(&self) -> usize {
-        self.current_bytes
-    }
-
-    pub fn max_bytes(&self) -> usize {
-        self.max_bytes
+        self.entries = Vec::new();
     }
 }
 
@@ -516,62 +592,6 @@ impl Default for SyntaxCache {
     fn default() -> Self {
         Self::new()
     }
-}
-
-static CACHE: LazyLock<Mutex<SyntaxCache>> = LazyLock::new(|| Mutex::new(SyntaxCache::new()));
-
-/// Clears the global syntax cache (useful for testing and memory reclaim).
-pub fn clear_syntax_cache() {
-    if let Ok(mut cache) = CACHE.lock() {
-        cache.clear();
-    }
-}
-
-/// Fast non-blocking lookup in syntax cache.
-///
-/// Returns:
-/// - `Some(fallback_plain)` if language resolves to plain / unsupported.
-/// - `Some(spans)` if cached.
-/// - `None` if supported language but cache miss (does NOT parse or block).
-pub fn get_cached_code_spans(code: &str, raw_lang: Option<&str>) -> Option<Arc<[SyntaxSpan]>> {
-    if code.is_empty() {
-        return Some(fallback_plain(code).into());
-    }
-    if resolve_canonical_language(raw_lang).is_none() {
-        return Some(fallback_plain(code).into());
-    }
-
-    if let Ok(mut cache) = CACHE.lock() {
-        if let Some(spans) = cache.get(code, raw_lang) {
-            return Some(spans);
-        }
-    }
-    None
-}
-
-/// Inserts pre-parsed spans into the syntax cache.
-pub fn insert_cached_code_spans(code: &str, raw_lang: Option<&str>, spans: Arc<[SyntaxSpan]>) {
-    if resolve_canonical_language(raw_lang).is_none() {
-        return;
-    }
-    let empty_retained = std::collections::HashSet::new();
-    if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(code, raw_lang, spans, &empty_retained);
-    }
-}
-
-/// Retrieves or computes semantic syntax spans for a code block.
-///
-/// Thread-safe and caching enabled. Keyed by canonical language and code content.
-/// Roles are theme-independent, enabling 100% cache reuse across theme switches.
-pub fn get_or_parse_code_spans(code: &str, raw_lang: Option<&str>) -> Arc<[SyntaxSpan]> {
-    if let Some(spans) = get_cached_code_spans(code, raw_lang) {
-        return spans;
-    }
-
-    let parsed: Arc<[SyntaxSpan]> = parse_code_spans_bounded(code, raw_lang, None).into();
-    insert_cached_code_spans(code, raw_lang, parsed.clone());
-    parsed
 }
 
 #[cfg(test)]
@@ -584,20 +604,31 @@ mod tests {
         assert_eq!(resolve_canonical_language(Some("XML")), Some("XML"));
         assert_eq!(resolve_canonical_language(Some("html")), Some("HTML"));
         assert_eq!(resolve_canonical_language(Some("htm")), Some("HTML"));
+        assert_eq!(resolve_canonical_language(Some("HTML")), Some("HTML"));
         assert_eq!(resolve_canonical_language(Some("java")), Some("Java"));
+        assert_eq!(resolve_canonical_language(Some("Java")), Some("Java"));
         assert_eq!(resolve_canonical_language(Some("python")), Some("Python"));
         assert_eq!(resolve_canonical_language(Some("py")), Some("Python"));
+        assert_eq!(resolve_canonical_language(Some("Python")), Some("Python"));
         assert_eq!(resolve_canonical_language(Some("javascript")), Some("JavaScript"));
         assert_eq!(resolve_canonical_language(Some("js")), Some("JavaScript"));
+        assert_eq!(resolve_canonical_language(Some("JavaScript")), Some("JavaScript"));
         assert_eq!(resolve_canonical_language(Some("json")), Some("JSON"));
+        assert_eq!(resolve_canonical_language(Some("JSON")), Some("JSON"));
         assert_eq!(resolve_canonical_language(Some("yaml")), Some("YAML"));
         assert_eq!(resolve_canonical_language(Some("yml")), Some("YAML"));
+        assert_eq!(resolve_canonical_language(Some("YAML")), Some("YAML"));
         assert_eq!(resolve_canonical_language(Some("sql")), Some("SQL"));
+        assert_eq!(resolve_canonical_language(Some("SQL")), Some("SQL"));
         assert_eq!(resolve_canonical_language(Some("shell")), Some("Bourne Again Shell (bash)"));
         assert_eq!(resolve_canonical_language(Some("sh")), Some("Bourne Again Shell (bash)"));
         assert_eq!(resolve_canonical_language(Some("bash")), Some("Bourne Again Shell (bash)"));
+        assert_eq!(resolve_canonical_language(Some("Bourne Again Shell (bash)")), Some("Bourne Again Shell (bash)"));
+        assert_eq!(resolve_canonical_language(Some("Bourne Again Shell (bash),editable")), Some("Bourne Again Shell (bash)"));
+        assert_eq!(resolve_canonical_language(Some("Bourne Again Shell (bash) {1-3}")), Some("Bourne Again Shell (bash)"));
         assert_eq!(resolve_canonical_language(Some("rust")), Some("Rust"));
         assert_eq!(resolve_canonical_language(Some("rs")), Some("Rust"));
+        assert_eq!(resolve_canonical_language(Some("Rust")), Some("Rust"));
 
         // With extra info tags: e.g. "rust,editable" or "python {1-3}"
         assert_eq!(resolve_canonical_language(Some("python {1-3}")), Some("Python"));
@@ -647,6 +678,19 @@ mod tests {
             let reconstructed: String = spans.iter().map(|s| &code[s.range.clone()]).collect();
             assert_eq!(reconstructed, code, "reconstructed mismatch for {}", lang);
         }
+    }
+
+    #[test]
+    fn test_bash_canonical_never_downgraded_to_plain() {
+        let bash_code = "echo 'hello' && exit 0";
+        // Passing canonical name directly
+        let spans_canonical = parse_code_spans(bash_code, Some("Bourne Again Shell (bash)"));
+        // Passing raw alias
+        let spans_alias = parse_code_spans(bash_code, Some("bash"));
+        assert_eq!(spans_canonical, spans_alias);
+        // Ensure not downgraded to single Plain span
+        let has_non_plain = spans_canonical.iter().any(|s| s.role != SyntaxRole::Plain);
+        assert!(has_non_plain, "Bourne Again Shell (bash) must have syntax highlighted tokens");
     }
 
     #[test]
@@ -708,35 +752,22 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_hit_and_theme_independence() {
-        clear_syntax_cache();
-        let code = "fn test() -> i32 { 42 }";
-        let parsed1 = get_or_parse_code_spans(code, Some("rust"));
-        let parsed2 = get_or_parse_code_spans(code, Some("rust"));
-        assert!(Arc::ptr_eq(&parsed1, &parsed2), "subsequent call must hit Arc cache pointer");
-    }
+    fn test_syntax_cache_instance_methods() {
+        let mut cache = SyntaxCache::new();
+        let key = SyntaxCache::key("let x = 1;", Some("rust"));
+        assert!(cache.get(&key).is_none());
+        assert!(cache.get_by_str("let x = 1;", Some("rust")).is_none());
 
-    #[test]
-    fn test_syntax_set_readiness_and_cached_spans_api() {
-        assert!(is_syntax_set_ready() || !is_syntax_set_ready());
-        let _ = init_syntax_set();
-        assert!(is_syntax_set_ready());
+        let spans: Arc<[SyntaxSpan]> = parse_code_spans("let x = 1;", Some("rust")).into();
+        let retained = std::collections::HashSet::new();
+        let admitted = cache.insert(key.clone(), spans.clone(), &retained);
+        assert!(admitted);
 
-        clear_syntax_cache();
-        let code = "let val = 999;";
-
-        // Cache miss for rust before parsing
-        assert!(get_cached_code_spans(code, Some("rust")).is_none());
-
-        // Plain / unsupported lang resolves immediately without blocking
-        let plain = get_cached_code_spans(code, None).expect("none raw_lang should return plain");
-        assert_eq!(plain[0].role, SyntaxRole::Plain);
-
-        // Explicit cache insert & get
-        let spans: Arc<[SyntaxSpan]> = parse_code_spans(code, Some("rust")).into();
-        insert_cached_code_spans(code, Some("rust"), spans.clone());
-        let cached = get_cached_code_spans(code, Some("rust")).expect("must hit cache after insert");
+        let cached = cache.get(&key).expect("must be in cache");
         assert!(Arc::ptr_eq(&cached, &spans));
+
+        let cached_str = cache.get_by_str("let x = 1;", Some("rust")).expect("get_by_str must work");
+        assert!(Arc::ptr_eq(&cached_str, &spans));
     }
 
     #[test]
@@ -752,37 +783,61 @@ mod tests {
     #[test]
     fn test_syntax_cache_lru_and_retained_keys_eviction() {
         let mut cache = SyntaxCache::new();
-        // Artificially lower max_bytes to test eviction
         let sample_spans: Arc<[SyntaxSpan]> = Arc::new([SyntaxSpan {
             range: 0..10,
             role: SyntaxRole::Plain,
         }]);
-        let size_per_entry = compute_entry_bytes("code_a", "Rust", 1);
-        cache.max_bytes = size_per_entry * 2 + 10; // Can hold at most 2 entries
+
+        let key_a = SyntaxCache::key("code_a", Some("rust"));
+        let key_b = SyntaxCache::key("code_b", Some("rust"));
+        let key_c = SyntaxCache::key("code_c", Some("rust"));
+
+        let heap_a = SyntaxCache::entry_heap_bytes(&key_a, &sample_spans);
+        let heap_b = SyntaxCache::entry_heap_bytes(&key_b, &sample_spans);
+        let entry_cap_bytes = 2 * std::mem::size_of::<CacheEntry>();
+
+        // Set max_bytes to hold exactly 2 entries
+        cache.max_bytes = entry_cap_bytes + heap_a + heap_b;
 
         let mut retained = std::collections::HashSet::new();
 
         // Insert A and B
-        cache.insert("code_a", Some("rust"), sample_spans.clone(), &retained);
-        cache.insert("code_b", Some("rust"), sample_spans.clone(), &retained);
+        assert!(cache.insert(key_a.clone(), sample_spans.clone(), &retained));
+        assert!(cache.insert(key_b.clone(), sample_spans.clone(), &retained));
         assert_eq!(cache.entries.len(), 2);
 
         // Retain A, insert C -> B must be evicted (A is protected even though A was inserted first!)
-        let key_a = SyntaxCache::key("code_a", Some("rust"));
         retained.insert(key_a.clone());
 
-        cache.insert("code_c", Some("rust"), sample_spans.clone(), &retained);
+        assert!(cache.insert(key_c.clone(), sample_spans.clone(), &retained));
         assert_eq!(cache.entries.len(), 2);
-        assert!(cache.entries.contains_key(&key_a), "A must be retained in cache");
-        let key_b = SyntaxCache::key("code_b", Some("rust"));
-        assert!(!cache.entries.contains_key(&key_b), "B must have been evicted");
-        let key_c = SyntaxCache::key("code_c", Some("rust"));
-        assert!(cache.entries.contains_key(&key_c), "C must be present");
+        assert!(cache.entries.iter().any(|e| e.key == key_a), "A must be retained in cache");
+        assert!(!cache.entries.iter().any(|e| e.key == key_b), "B must have been evicted");
+        assert!(cache.entries.iter().any(|e| e.key == key_c), "C must be present");
 
-        // Clear resets everything
+        // Clear resets everything and zeroes bytes
         cache.clear();
         assert_eq!(cache.current_bytes(), 0);
         assert_eq!(cache.entries.len(), 0);
-        assert_eq!(cache.lru.len(), 0);
+    }
+
+    #[test]
+    fn test_code_key_equality_and_hash_content_based() {
+        let p1 = Arc::from("payload");
+        let p2 = Arc::from(String::from("payload")); // distinct Arc pointer
+        assert!(!Arc::ptr_eq(&p1, &p2));
+
+        let k1 = CodeKey::new(Some("Rust"), p1);
+        let k2 = CodeKey::new(Some("Rust"), p2);
+        assert_eq!(k1, k2, "CodeKey equality must be content-based");
+
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut h1 = DefaultHasher::new();
+        k1.hash(&mut h1);
+        let mut h2 = DefaultHasher::new();
+        k2.hash(&mut h2);
+        assert_eq!(h1.finish(), h2.finish(), "CodeKey hash must be content-based");
     }
 }

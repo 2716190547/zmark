@@ -51,7 +51,7 @@ fn test_parse_fenced_code_block() {
     match &doc.blocks[0] {
         BlockElement::FencedCode { lang, code } => {
             assert_eq!(lang.as_deref(), Some("rust"));
-            assert_eq!(code, "fn main() {\n    println!(\"hello\");\n}\n");
+            assert_eq!(code.as_ref(), "fn main() {\n    println!(\"hello\");\n}\n");
         }
         _ => panic!("Expected FencedCode"),
     }

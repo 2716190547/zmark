@@ -307,7 +307,8 @@ async fn test_checklist3_split_drag_continuous_width_optimization(cx: &mut TestA
 
         // 1. Initial full layout at 800px: all 2000 lines are shaped
         let start_init = Instant::now();
-        let vl_init = cache.update(text_system, &lines, 800.0, 14.0);
+        let fenced_mask = vec![false; lines.len()];
+        let vl_init = cache.update(text_system, &lines, &fenced_mask, 800.0, 14.0);
         let dur_init = start_init.elapsed();
         assert_eq!(cache.metrics.shaped_lines_count, 2000);
         assert_eq!(cache.metrics.reused_lines_count, 0);
@@ -316,7 +317,7 @@ async fn test_checklist3_split_drag_continuous_width_optimization(cx: &mut TestA
         // 2. Split dragging step: width changes continuously (e.g. from 800px to 750px)
         // Short lines whose natural_width_px <= 750px are reused without font shaping!
         let start_drag = Instant::now();
-        let vl_drag = cache.update(text_system, &lines, 750.0, 14.0);
+        let vl_drag = cache.update(text_system, &lines, &fenced_mask, 750.0, 14.0);
         let dur_drag = start_drag.elapsed();
 
         assert!(

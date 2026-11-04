@@ -299,3 +299,19 @@ hr {
     }
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_render_html_with_fenced_code_arc_str() {
+        let doc = parse_markdown("```rust\nfn main() {}\n```");
+        let html = render_html(&doc);
+        assert!(html.contains("<pre><code class=\"language-rust\">fn main() {}\n</code></pre>"));
+
+        let standalone = export_html(&doc, "Test Document");
+        assert!(standalone.contains("<title>Test Document</title>"));
+        assert!(standalone.contains("<pre><code class=\"language-rust\">fn main() {}\n</code></pre>"));
+    }
+}

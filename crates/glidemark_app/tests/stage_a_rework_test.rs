@@ -286,6 +286,7 @@ async fn test_layout_cache_incremental_performance_and_fence_propagation(cx: &mu
             new_lines[110] = "```".to_string();
             workspace.state.editor.lines = std::sync::Arc::new(new_lines);
             workspace.state.editor.revision += 1;
+            workspace.state.doc.update_buffer(workspace.state.editor.lines.join("\n"));
 
             let _ = workspace.compute_visual_lines(window);
             // Lines 100..=110 had their fence state changed and must be re-shaped

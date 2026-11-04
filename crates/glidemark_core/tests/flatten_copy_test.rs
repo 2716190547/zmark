@@ -128,7 +128,7 @@ fn test_boundary_expectations_ast_construction() {
                 BlockElement::Paragraph(InlineGroup(vec![InlineItem::Text("before".into())])),
                 BlockElement::FencedCode {
                     lang: None,
-                    code: String::new(),
+                    code: "".into(),
                 },
                 BlockElement::Paragraph(InlineGroup(vec![InlineItem::Text("after".into())])),
             ],
@@ -138,12 +138,13 @@ fn test_boundary_expectations_ast_construction() {
     assert_eq!(flatten_block(&ld, "0").text, "- before\n  after");
 }
 
-/// 3. Test 4 pinned copy expectations via parse_markdown
+/// 3. Test 4 pinned copy expectations via parse_markdown + flatten_block
 #[test]
 fn test_pinned_copy_expectations_markdown_parse() {
     // 1. quote: two paragraphs
     let doc1 = parse_markdown("> first\n>\n> second");
     assert_eq!(doc1.blocks[0].to_plain_text(), "first\nsecond");
+    assert_eq!(flatten_block(&doc1.blocks[0], "0").text, "first\nsecond");
 
     // 2. list: two paragraphs in one item
     let doc2 = parse_markdown("- first para\n\n  second para");
@@ -151,10 +152,15 @@ fn test_pinned_copy_expectations_markdown_parse() {
         doc2.blocks[0].to_plain_text(),
         "- first para\n  second para"
     );
+    assert_eq!(
+        flatten_block(&doc2.blocks[0], "0").text,
+        "- first para\n  second para"
+    );
 
     // 3. quote: code then paragraph
     let doc3 = parse_markdown("> ```rust\n> fn a() {}\n> ```\n> next");
     assert_eq!(doc3.blocks[0].to_plain_text(), "fn a() {}\nnext");
+    assert_eq!(flatten_block(&doc3.blocks[0], "0").text, "fn a() {}\nnext");
 
     // 4. list: para -> code -> para
     let doc4 = parse_markdown("- before\n\n  ```rust\n  fn a() {}\n  ```\n\n  after");
@@ -162,14 +168,19 @@ fn test_pinned_copy_expectations_markdown_parse() {
         doc4.blocks[0].to_plain_text(),
         "- before\n  fn a() {}\n  after"
     );
+    assert_eq!(
+        flatten_block(&doc4.blocks[0], "0").text,
+        "- before\n  fn a() {}\n  after"
+    );
 }
 
-/// 4. Test 3 boundary expectations via parse_markdown
+/// 4. Test 3 boundary expectations via parse_markdown + flatten_block
 #[test]
 fn test_boundary_expectations_markdown_parse() {
     // Edge A: code with blank line in list => "- x\n  a\n  \n  b\n"
     let doc_a = parse_markdown("- x\n\n  ```\n  a\n\n  b\n  ```\n");
     assert_eq!(doc_a.blocks[0].to_plain_text(), "- x\n  a\n  \n  b\n");
+    assert_eq!(flatten_block(&doc_a.blocks[0], "0").text, "- x\n  a\n  \n  b\n");
 
     // Edge B: code as first child in list => "- fn a() {}\n  let b = 1;\n"
     let doc_b = parse_markdown("- ```\n  fn a() {}\n  let b = 1;\n  ```\n");
@@ -177,10 +188,20 @@ fn test_boundary_expectations_markdown_parse() {
         doc_b.blocks[0].to_plain_text(),
         "- fn a() {}\n  let b = 1;\n"
     );
+    assert_eq!(
+        flatten_block(&doc_b.blocks[0], "0").text,
+        "- fn a() {}\n  let b = 1;\n"
+    );
 
     // Edge C: adjacent code blocks in quote => "a\nb\nafter"
     let doc_c = parse_markdown("> ```\n> a\n> ```\n> ```\n> b\n> ```\n> after");
     assert_eq!(doc_c.blocks[0].to_plain_text(), "a\nb\nafter");
+    assert_eq!(flatten_block(&doc_c.blocks[0], "0").text, "a\nb\nafter");
+
+    // Edge D: empty code block in list item
+    let doc_d = parse_markdown("- before\n\n  ```\n  ```\n\n  after");
+    assert_eq!(doc_d.blocks[0].to_plain_text(), "- before\n  after");
+    assert_eq!(flatten_block(&doc_d.blocks[0], "0").text, "- before\n  after");
 }
 
 /// 5. Test 8 backward-compatible single-paragraph shapes matching replan4_compat_probe.rs
@@ -219,7 +240,9 @@ fn test_compat_old_shapes_all() {
 
     for (label, src, expected) in samples {
         let doc = parse_markdown(src);
-        let actual: Vec<String> = doc.blocks.iter().map(|b| b.to_plain_text()).collect();
-        assert_eq!(actual, expected, "COMPAT failure on sample '{}'", label);
+        let actual_plain: Vec<String> = doc.blocks.iter().map(|b| b.to_plain_text()).collect();
+        assert_eq!(actual_plain, expected, "COMPAT failure on sample '{}' (to_plain_text)", label);
+        let actual_flat: Vec<String> = doc.blocks.iter().enumerate().map(|(i, b)| flatten_block(b, &i.to_string()).text).collect();
+        assert_eq!(actual_flat, expected, "COMPAT failure on sample '{}' (flatten_block)", label);
     }
 }

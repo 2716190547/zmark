@@ -4,10 +4,11 @@ use glidemark_app::editor_engine::{
 };
 use glidemark_app::theme::{ThemeColors, ALL_PALETTES};
 use glidemark_app::views::editor::{
-    calculate_click_char_col, calculate_editor_left_offset, compute_fenced_code_lines,
-    slice_tokens_for_visual_subline, tokenize_code_line, tokenize_markdown_line,
+    calculate_click_char_col, calculate_editor_left_offset,
+    slice_tokens_for_visual_subline, spans_to_code_tokens, tokenize_markdown_line,
     MarkdownTokenKind,
 };
+use glidemark_core::syntax::parse_code_spans;
 use glidemark_app::views::workspace::calculate_subline_scroll_offset;
 
 #[test]
@@ -179,17 +180,16 @@ fn test_visual_line_cache_invalidation_boundaries() {
 
 #[test]
 fn test_fenced_code_context_and_syntax_highlighting() {
-    // 1. Test glidemark_app::views::editor::compute_fenced_code_lines
-    let markdown_lines = vec![
-        "# Title".to_string(),
-        "```rust".to_string(),
-        "fn main() {".to_string(),
-        "    println!(\"hello\");".to_string(),
-        "}".to_string(),
-        "```".to_string(),
-        "Outside text".to_string(),
-    ];
-    let fenced = compute_fenced_code_lines(&markdown_lines);
+    // 1. Test AST fenced code blocks line mask
+    let md = "# Title\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```\nOutside text\n";
+    let doc = glidemark_core::ast::parse_markdown(md);
+    assert_eq!(doc.code_blocks.len(), 1);
+    let block = &doc.code_blocks[0];
+    let mut fenced = vec![false; 7];
+    let end = block.fence_close_line.unwrap();
+    for i in block.fence_open_line..=end {
+        fenced[i] = true;
+    }
     assert_eq!(fenced.len(), 7);
     assert_eq!(fenced[0], false, "Line 0 (# Title) => false");
     assert_eq!(fenced[1], true, "Line 1 (```rust) => true");
@@ -199,9 +199,10 @@ fn test_fenced_code_context_and_syntax_highlighting() {
     assert_eq!(fenced[5], true, "Line 5 (```) => true");
     assert_eq!(fenced[6], false, "Line 6 (Outside text) => false");
 
-    // 2. Test glidemark_app::views::editor::tokenize_code_line
+    // 2. Test code line tokenization via parse_code_spans + spans_to_code_tokens
     let code_line = "fn main() { let x = \"hello\"; // comment }";
-    let tokens = tokenize_code_line(code_line);
+    let spans = parse_code_spans(code_line, Some("rust"));
+    let tokens = spans_to_code_tokens(code_line, &spans);
 
     // Verify Keyword ("fn", "let"), StringLiteral ("\"hello\""), Comment ("// comment }")
     let has_fn_kw = tokens

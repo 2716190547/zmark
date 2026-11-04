@@ -1,7 +1,32 @@
+use std::sync::Arc;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 
 use crate::anchor::SourceAnchor;
+use crate::syntax::{resolve_canonical_language, CodeKey};
+
+/// Line mapping for code block line synchronization and validation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodeLineMapping {
+    pub payload_range: std::ops::Range<usize>, // byte range in canonical payload
+    pub source_line_idx: usize,                // 0-based line index in source
+    pub prefix_len: usize,                     // byte length of stripped prefix (e.g. `> ` or `  `)
+    pub content_len: usize,                    // byte length of code content on source line
+    pub eol_len: usize,                        // 1 for \n, 2 for \r\n, 0 for EOF
+    pub is_synthetic_lf: bool,                 // true if trailing LF was synthesized
+}
+
+/// A parsed code block description and line mapping in a document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParsedCodeBlock {
+    pub key: CodeKey,
+    pub raw_info: Option<String>,
+    pub fence_open_line: usize,
+    pub fence_close_line: Option<usize>,
+    pub lines: Vec<CodeLineMapping>,
+    pub child_path: String,
+    pub is_valid: bool,
+}
 
 /// An inline formatted piece of text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,7 +167,7 @@ pub fn flatten_block(block: &BlockElement, path: &str) -> FlattenResult {
                 } else {
                     Vec::new()
                 },
-                text: code.clone(),
+                text: code.to_string(),
             }
         }
         BlockElement::BlockQuote(children) => {
@@ -281,6 +306,26 @@ pub fn flatten_block(block: &BlockElement, path: &str) -> FlattenResult {
     }
 }
 
+mod arc_str_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::sync::Arc;
+
+    pub fn serialize<S>(val: &Arc<str>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(val)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<str>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(Arc::from(s))
+    }
+}
+
 /// A top-level Markdown block element.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockElement {
@@ -291,7 +336,8 @@ pub enum BlockElement {
     Paragraph(InlineGroup),
     FencedCode {
         lang: Option<String>,
-        code: String,
+        #[serde(with = "arc_str_serde")]
+        code: Arc<str>,
     },
     BlockQuote(Vec<BlockElement>),
     List {
@@ -316,6 +362,8 @@ impl BlockElement {
 pub struct ParsedDocument {
     pub blocks: Vec<BlockElement>,
     pub anchors: Vec<SourceAnchor>,
+    #[serde(skip, default)]
+    pub code_blocks: Vec<ParsedCodeBlock>,
 }
 
 impl ParsedDocument {
@@ -447,9 +495,32 @@ impl LineIndex {
             Err(idx) => idx.max(1),
         }
     }
+
+    pub fn line_idx(&self, byte_offset: usize) -> usize {
+        match self.line_starts.binary_search(&byte_offset) {
+            Ok(idx) => idx,
+            Err(idx) => idx.saturating_sub(1),
+        }
+    }
+
+    pub fn line_str<'a>(&self, line_idx: usize, text: &'a str) -> Option<&'a str> {
+        if line_idx >= self.line_starts.len() {
+            return None;
+        }
+        let start = self.line_starts[line_idx];
+        if start > text.len() {
+            return None;
+        }
+        let end = if line_idx + 1 < self.line_starts.len() {
+            self.line_starts[line_idx + 1]
+        } else {
+            text.len()
+        };
+        Some(&text[start..end])
+    }
 }
 
-/// Parse Markdown text into AST `BlockElement`s and `SourceAnchor`s.
+/// Parse Markdown text into AST `BlockElement`s, `SourceAnchor`s, and `ParsedCodeBlock`s.
 pub fn parse_markdown(source: &str) -> ParsedDocument {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -461,23 +532,38 @@ pub fn parse_markdown(source: &str) -> ParsedDocument {
     let line_index = LineIndex::new(source);
     let mut blocks = Vec::new();
     let mut anchors = Vec::new();
+    let mut code_blocks = Vec::new();
 
     let parser = Parser::new_ext(source, options).into_offset_iter();
     let mut iter = parser.peekable();
+    let mut block_idx = 0;
 
     while let Some((ev, range)) = iter.next() {
         let start_line = line_index.line_number(range.start);
-        if let Some((block, end_offset)) = parse_single_block(ev, range, &mut iter) {
+        let path = block_idx.to_string();
+        if let Some((block, end_offset)) = parse_single_block(
+            ev,
+            range,
+            &mut iter,
+            &line_index,
+            source,
+            &path,
+            &mut code_blocks,
+        ) {
             let end_line = line_index
                 .line_number(end_offset.saturating_sub(1))
                 .max(start_line);
-            let block_index = blocks.len();
             blocks.push(block);
-            anchors.push(SourceAnchor::new(block_index, start_line, end_line));
+            anchors.push(SourceAnchor::new(block_idx, start_line, end_line));
+            block_idx += 1;
         }
     }
 
-    ParsedDocument { blocks, anchors }
+    ParsedDocument {
+        blocks,
+        anchors,
+        code_blocks,
+    }
 }
 
 fn is_inline_start(ev: &Event) -> bool {
@@ -506,6 +592,10 @@ fn parse_single_block<'a, I>(
     ev: Event<'a>,
     range: std::ops::Range<usize>,
     iter: &mut std::iter::Peekable<I>,
+    line_index: &LineIndex,
+    source: &str,
+    path: &str,
+    code_blocks: &mut Vec<ParsedCodeBlock>,
 ) -> Option<(BlockElement, usize)>
 where
     I: Iterator<Item = (Event<'a>, std::ops::Range<usize>)>,
@@ -531,7 +621,7 @@ where
             Some((BlockElement::Paragraph(inlines), end_offset))
         }
         Event::Start(Tag::CodeBlock(kind)) => {
-            let lang = match kind {
+            let raw_info = match kind {
                 CodeBlockKind::Fenced(l) => {
                     let s = l.trim().to_string();
                     if s.is_empty() {
@@ -562,11 +652,111 @@ where
                     }
                 }
             }
-            Some((BlockElement::FencedCode { lang, code }, end_offset))
+
+            let payload: Arc<str> = Arc::from(code);
+            let canonical_lang = resolve_canonical_language(raw_info.as_deref());
+            let key = CodeKey::new(canonical_lang, payload.clone());
+
+            let fence_open_line = line_index.line_idx(range.start);
+
+            let mut payload_lines = Vec::new();
+            let mut p_start = 0;
+            for (idx, b) in payload.bytes().enumerate() {
+                if b == b'\n' {
+                    payload_lines.push((p_start..idx + 1, &payload[p_start..idx + 1]));
+                    p_start = idx + 1;
+                }
+            }
+            if p_start < payload.len() {
+                payload_lines.push((p_start..payload.len(), &payload[p_start..payload.len()]));
+            }
+
+            let num_lines = payload_lines.len();
+            let mut lines = Vec::with_capacity(num_lines);
+            let mut is_valid = true;
+
+            for (k, (payload_range, payload_line)) in payload_lines.into_iter().enumerate() {
+                let source_line_idx = fence_open_line + 1 + k;
+                let Some(source_line) = line_index.line_str(source_line_idx, source) else {
+                    is_valid = false;
+                    break;
+                };
+
+                let eol_len = if source_line.ends_with("\r\n") {
+                    2
+                } else if source_line.ends_with('\n') {
+                    1
+                } else {
+                    0
+                };
+
+                let source_content = &source_line[..source_line.len() - eol_len];
+                let payload_content = payload_line
+                    .strip_suffix("\r\n")
+                    .or_else(|| payload_line.strip_suffix('\n'))
+                    .unwrap_or(payload_line);
+
+                let (prefix_len, content_len, line_valid) = if payload_content.is_empty() {
+                    (source_content.len(), 0, true)
+                } else if source_content.ends_with(payload_content) {
+                    let c_len = payload_content.len();
+                    let p_len = source_content.len() - c_len;
+                    (p_len, c_len, true)
+                } else {
+                    (0, source_content.len().min(payload_content.len()), false)
+                };
+
+                if !line_valid {
+                    is_valid = false;
+                }
+
+                let is_synthetic_lf = payload_line.ends_with('\n') && eol_len == 0;
+
+                lines.push(CodeLineMapping {
+                    payload_range,
+                    source_line_idx,
+                    prefix_len,
+                    content_len,
+                    eol_len,
+                    is_synthetic_lf,
+                });
+            }
+
+            let candidate_close_line = fence_open_line + 1 + num_lines;
+            let fence_close_line = if let Some(cand_str) = line_index.line_str(candidate_close_line, source) {
+                let cand_trimmed = cand_str.trim();
+                let cand_no_quote = cand_trimmed.trim_start_matches(|c: char| c == '>' || c.is_whitespace());
+                if cand_no_quote.starts_with("```") || cand_no_quote.starts_with("~~~") {
+                    Some(candidate_close_line)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            code_blocks.push(ParsedCodeBlock {
+                key,
+                raw_info: raw_info.clone(),
+                fence_open_line,
+                fence_close_line,
+                lines,
+                child_path: path.to_string(),
+                is_valid,
+            });
+
+            Some((BlockElement::FencedCode { lang: raw_info, code: payload }, end_offset))
         }
         Event::Start(Tag::List(first_num)) => {
             let ordered = first_num.is_some();
-            let (items, end_offset) = collect_list_items(iter, range.end);
+            let (items, end_offset) = collect_list_items(
+                iter,
+                range.end,
+                line_index,
+                source,
+                path,
+                code_blocks,
+            );
             Some((BlockElement::List { ordered, items }, end_offset))
         }
         Event::Start(Tag::Table(_)) => {
@@ -576,6 +766,7 @@ where
         Event::Start(Tag::BlockQuote(_)) => {
             let mut child_blocks = Vec::new();
             let mut quote_end = range.end;
+            let mut child_idx = 0;
             while let Some((sub_ev, sub_range)) = iter.peek() {
                 if matches!(sub_ev, Event::End(TagEnd::BlockQuote(_))) {
                     quote_end = sub_range.end;
@@ -584,9 +775,19 @@ where
                 }
                 let (next_ev, next_r) = iter.next().unwrap();
                 quote_end = next_r.end;
-                if let Some((b, end_off)) = parse_single_block(next_ev, next_r, iter) {
+                let child_path = format!("{}.{}", path, child_idx);
+                if let Some((b, end_off)) = parse_single_block(
+                    next_ev,
+                    next_r,
+                    iter,
+                    line_index,
+                    source,
+                    &child_path,
+                    code_blocks,
+                ) {
                     quote_end = end_off;
                     child_blocks.push(b);
+                    child_idx += 1;
                 }
             }
             Some((BlockElement::BlockQuote(child_blocks), quote_end))
@@ -727,12 +928,17 @@ fn inline_to_string(item: InlineItem) -> String {
 fn collect_list_items<'a, I>(
     iter: &mut std::iter::Peekable<I>,
     default_end: usize,
+    line_index: &LineIndex,
+    source: &str,
+    parent_path: &str,
+    code_blocks: &mut Vec<ParsedCodeBlock>,
 ) -> (Vec<ListItem>, usize)
 where
     I: Iterator<Item = (Event<'a>, std::ops::Range<usize>)>,
 {
     let mut items = Vec::new();
     let mut end_offset = default_end;
+    let mut item_idx = 0;
 
     while let Some((ev, range)) = iter.next() {
         match ev {
@@ -744,6 +950,7 @@ where
                 let mut checked = None;
                 let mut body = Vec::new();
                 let mut item_end = range.end;
+                let mut child_idx = 0;
 
                 while let Some((sub_ev, sub_range)) = iter.peek() {
                     if matches!(sub_ev, Event::End(TagEnd::Item)) {
@@ -759,12 +966,23 @@ where
                     }
                     let (next_ev, next_r) = iter.next().unwrap();
                     item_end = next_r.end;
-                    if let Some((b, end_off)) = parse_single_block(next_ev, next_r, iter) {
+                    let child_path = format!("{}.{}.{}", parent_path, item_idx, child_idx);
+                    if let Some((b, end_off)) = parse_single_block(
+                        next_ev,
+                        next_r,
+                        iter,
+                        line_index,
+                        source,
+                        &child_path,
+                        code_blocks,
+                    ) {
                         item_end = end_off;
                         body.push(b);
+                        child_idx += 1;
                     }
                 }
                 items.push(ListItem { checked, body });
+                item_idx += 1;
                 end_offset = item_end;
             }
             _ => {}
@@ -897,5 +1115,116 @@ mod tests {
             }
             _ => panic!("expected list"),
         }
+    }
+
+    #[test]
+    fn test_code_block_mappings_top_level_and_nested() {
+        // 1. Top-level Rust block
+        let src1 = "```rust\nfn main() {\n    println!(\"hi\");\n}\n```";
+        let doc1 = parse_markdown(src1);
+        assert_eq!(doc1.code_blocks.len(), 1);
+        let cb1 = &doc1.code_blocks[0];
+        assert_eq!(cb1.child_path, "0");
+        assert_eq!(cb1.raw_info.as_deref(), Some("rust"));
+        assert_eq!(cb1.key.language, Some("Rust"));
+        assert_eq!(&*cb1.key.payload, "fn main() {\n    println!(\"hi\");\n}\n");
+        assert_eq!(cb1.fence_open_line, 0);
+        assert_eq!(cb1.fence_close_line, Some(4));
+        assert!(cb1.is_valid);
+        assert_eq!(cb1.lines.len(), 3);
+
+        // Check Arc sharing with AST BlockElement
+        match &doc1.blocks[0] {
+            BlockElement::FencedCode { code, .. } => {
+                assert!(Arc::ptr_eq(code, &cb1.key.payload), "AST code and CodeKey must share the exact same Arc");
+            }
+            _ => panic!("Expected FencedCode"),
+        }
+
+        // Verify line mappings
+        assert_eq!(cb1.lines[0].source_line_idx, 1);
+        assert_eq!(cb1.lines[0].prefix_len, 0);
+        assert_eq!(cb1.lines[0].content_len, 11); // "fn main() {"
+        assert_eq!(cb1.lines[0].eol_len, 1);
+        assert!(!cb1.lines[0].is_synthetic_lf);
+
+        assert_eq!(cb1.lines[1].source_line_idx, 2);
+        assert_eq!(cb1.lines[1].prefix_len, 0);
+        assert_eq!(cb1.lines[1].content_len, 19); // "    println!(\"hi\");"
+        assert_eq!(cb1.lines[1].eol_len, 1);
+
+        assert_eq!(cb1.lines[2].source_line_idx, 3);
+        assert_eq!(cb1.lines[2].content_len, 1); // "}"
+        assert_eq!(cb1.lines[2].eol_len, 1);
+
+        // 2. BlockQuote nested code block
+        let src2 = "> ```rust\n> fn a() {}\n> ```";
+        let doc2 = parse_markdown(src2);
+        assert_eq!(doc2.code_blocks.len(), 1);
+        let cb2 = &doc2.code_blocks[0];
+        assert_eq!(cb2.child_path, "0.0");
+        assert_eq!(cb2.fence_open_line, 0);
+        assert_eq!(cb2.fence_close_line, Some(2));
+        assert!(cb2.is_valid);
+        assert_eq!(cb2.lines.len(), 1);
+        assert_eq!(cb2.lines[0].source_line_idx, 1);
+        assert_eq!(cb2.lines[0].prefix_len, 2); // "> "
+        assert_eq!(cb2.lines[0].content_len, 9); // "fn a() {}"
+        assert_eq!(cb2.lines[0].eol_len, 1);
+
+        // 3. List nested code block
+        let src3 = "- item\n  ```rust\n  fn b() {}\n  ```";
+        let doc3 = parse_markdown(src3);
+        assert_eq!(doc3.code_blocks.len(), 1);
+        let cb3 = &doc3.code_blocks[0];
+        assert_eq!(cb3.child_path, "0.0.1");
+        assert_eq!(cb3.fence_open_line, 1);
+        assert_eq!(cb3.fence_close_line, Some(3));
+        assert!(cb3.is_valid);
+        assert_eq!(cb3.lines.len(), 1);
+        assert_eq!(cb3.lines[0].source_line_idx, 2);
+        assert_eq!(cb3.lines[0].prefix_len, 2); // "  "
+        assert_eq!(cb3.lines[0].content_len, 9); // "fn b() {}"
+
+        // 4. CRLF line endings
+        let src4 = "```python\r\nx = 1\r\ny = 2\r\n```\r\n";
+        let doc4 = parse_markdown(src4);
+        assert_eq!(doc4.code_blocks.len(), 1);
+        let cb4 = &doc4.code_blocks[0];
+        assert_eq!(cb4.key.language, Some("Python"));
+        assert!(cb4.is_valid);
+        assert_eq!(cb4.lines[0].eol_len, 2);
+        assert_eq!(cb4.lines[1].eol_len, 2);
+
+        // 5. Unclosed code block at EOF without trailing newline
+        let src5 = "```rust\nfn unclosed() {}";
+        let doc5 = parse_markdown(src5);
+        assert_eq!(doc5.code_blocks.len(), 1);
+        let cb5 = &doc5.code_blocks[0];
+        assert_eq!(cb5.fence_open_line, 0);
+        assert_eq!(cb5.fence_close_line, None);
+        assert_eq!(cb5.lines.len(), 1);
+        assert_eq!(cb5.lines[0].eol_len, 0);
+        assert!(cb5.is_valid);
+
+        // 6. Blank lines in code block
+        let src6 = "```\na\n\nb\n```";
+        let doc6 = parse_markdown(src6);
+        assert_eq!(doc6.code_blocks.len(), 1);
+        let cb6 = &doc6.code_blocks[0];
+        assert!(cb6.key.is_plain());
+        assert_eq!(cb6.lines.len(), 3);
+        assert_eq!(cb6.lines[1].content_len, 0); // blank line
+        assert!(cb6.is_valid);
+
+        // 7. Empty code block
+        let src7 = "```rust\n```";
+        let doc7 = parse_markdown(src7);
+        assert_eq!(doc7.code_blocks.len(), 1);
+        let cb7 = &doc7.code_blocks[0];
+        assert_eq!(cb7.fence_open_line, 0);
+        assert_eq!(cb7.fence_close_line, Some(1));
+        assert!(cb7.lines.is_empty());
+        assert!(cb7.is_valid);
     }
 }

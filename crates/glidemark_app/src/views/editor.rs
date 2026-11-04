@@ -307,21 +307,6 @@ pub fn tokenize_inline(line: &str) -> Vec<MarkdownToken> {
     tokens
 }
 
-pub fn compute_fenced_code_lines(lines: &[String]) -> Vec<bool> {
-    let mut in_code = false;
-    let mut is_fenced = Vec::with_capacity(lines.len());
-    for line in lines {
-        let trimmed = line.trim();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_code = !in_code;
-            is_fenced.push(true);
-        } else {
-            is_fenced.push(in_code);
-        }
-    }
-    is_fenced
-}
-
 pub fn spans_to_code_tokens(
     line: &str,
     spans: &[glidemark_core::syntax::SyntaxSpan],
@@ -365,189 +350,6 @@ pub fn spans_to_code_tokens(
         });
     }
     tokens
-}
-
-#[allow(dead_code)]
-pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
-    if line.is_empty() {
-        return vec![MarkdownToken {
-            text: " ".to_string(),
-            kind: MarkdownTokenKind::CodeText,
-        }];
-    }
-    let spans = glidemark_core::syntax::get_or_parse_code_spans(line, Some("rust"));
-    spans_to_code_tokens(line, &spans)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceCodeBlock {
-    pub lang: Option<String>,
-    pub code: String,
-    pub start_line: usize,
-    pub line_count: usize,
-}
-
-pub fn extract_source_code_blocks(lines: &[String]) -> Vec<SourceCodeBlock> {
-    let mut blocks = Vec::new();
-    let mut in_fence = false;
-    let mut fence_lang: Option<String> = None;
-    let mut block_lines: Vec<String> = Vec::new();
-    let mut block_start_line = 0;
-
-    for (line_idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        let is_fence_delim = trimmed.starts_with("```") || trimmed.starts_with("~~~");
-
-        if !in_fence {
-            if is_fence_delim {
-                in_fence = true;
-                let raw_tag = if let Some(stripped) = trimmed.strip_prefix("```") {
-                    stripped.trim()
-                } else if let Some(stripped) = trimmed.strip_prefix("~~~") {
-                    stripped.trim()
-                } else {
-                    ""
-                };
-                let lang_token = raw_tag.split_whitespace().next().unwrap_or("");
-                fence_lang = if lang_token.is_empty() {
-                    None
-                } else {
-                    Some(lang_token.to_string())
-                };
-                block_lines.clear();
-                block_start_line = line_idx + 1;
-            }
-        } else if is_fence_delim {
-            let mut code = block_lines.join("\n");
-            if !code.is_empty() {
-                code.push('\n');
-            }
-            blocks.push(SourceCodeBlock {
-                lang: fence_lang.take(),
-                code,
-                start_line: block_start_line,
-                line_count: block_lines.len(),
-            });
-            in_fence = false;
-            block_lines.clear();
-        } else {
-            block_lines.push(line.clone());
-        }
-    }
-
-    if in_fence && !block_lines.is_empty() {
-        let mut code = block_lines.join("\n");
-        if !code.is_empty() {
-            code.push('\n');
-        }
-        blocks.push(SourceCodeBlock {
-            lang: fence_lang,
-            code,
-            start_line: block_start_line,
-            line_count: block_lines.len(),
-        });
-    }
-
-    blocks
-}
-
-pub fn tokenize_document_lines<S: AsRef<str>>(lines: &[S]) -> Vec<Vec<MarkdownToken>> {
-    let mut result = Vec::with_capacity(lines.len());
-    let mut in_fence = false;
-    let mut fence_lang: Option<String> = None;
-    let mut block_lines: Vec<(usize, String)> = Vec::new();
-
-    let flush_block = |block_lines: &mut Vec<(usize, String)>,
-                       fence_lang: &Option<String>,
-                       result: &mut Vec<Vec<MarkdownToken>>| {
-        if block_lines.is_empty() {
-            return;
-        }
-        let full_code = block_lines
-            .iter()
-            .map(|(_, l)| l.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let spans = glidemark_core::syntax::get_cached_code_spans(&full_code, fence_lang.as_deref())
-            .unwrap_or_else(|| {
-                Arc::from([glidemark_core::syntax::SyntaxSpan {
-                    range: 0..full_code.len(),
-                    role: glidemark_core::syntax::SyntaxRole::Plain,
-                }])
-            });
-
-        let mut byte_offset = 0;
-        for (idx, line_str) in block_lines.drain(..) {
-            let line_len = line_str.len();
-            let line_range = byte_offset..byte_offset + line_len;
-
-            let mut line_spans = Vec::new();
-            for span in spans.iter() {
-                let overlap_start = span.range.start.max(line_range.start);
-                let overlap_end = span.range.end.min(line_range.end);
-                if overlap_start < overlap_end {
-                    line_spans.push(glidemark_core::syntax::SyntaxSpan {
-                        range: (overlap_start - byte_offset)..(overlap_end - byte_offset),
-                        role: span.role,
-                    });
-                }
-            }
-
-            let tokens = spans_to_code_tokens(&line_str, &line_spans);
-            result[idx] = tokens;
-            byte_offset += line_len + 1; // +1 for the '\n' separator
-        }
-    };
-
-    for line_ref in lines {
-        let line = line_ref.as_ref();
-        let trimmed = line.trim();
-        let is_fence_delim = trimmed.starts_with("```") || trimmed.starts_with("~~~");
-
-        if !in_fence {
-            if is_fence_delim {
-                in_fence = true;
-                let raw_tag = if let Some(stripped) = trimmed.strip_prefix("```") {
-                    stripped.trim()
-                } else if let Some(stripped) = trimmed.strip_prefix("~~~") {
-                    stripped.trim()
-                } else {
-                    ""
-                };
-                let lang_token = raw_tag.split_whitespace().next().unwrap_or("");
-                fence_lang = if lang_token.is_empty() {
-                    None
-                } else {
-                    Some(lang_token.to_string())
-                };
-
-                result.push(vec![MarkdownToken {
-                    text: line.to_string(),
-                    kind: MarkdownTokenKind::CodeDelimiter,
-                }]);
-            } else {
-                result.push(tokenize_markdown_line(line));
-            }
-        } else if is_fence_delim {
-            flush_block(&mut block_lines, &fence_lang, &mut result);
-            in_fence = false;
-            fence_lang = None;
-            result.push(vec![MarkdownToken {
-                text: line.to_string(),
-                kind: MarkdownTokenKind::CodeDelimiter,
-            }]);
-        } else {
-            let idx = result.len();
-            result.push(Vec::new()); // placeholder
-            block_lines.push((idx, line.to_string()));
-        }
-    }
-
-    if in_fence {
-        flush_block(&mut block_lines, &fence_lang, &mut result);
-    }
-
-    result
 }
 
 fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> impl IntoElement {
@@ -892,6 +694,7 @@ pub fn wrap_line_to_visual_layout_with_width(
 
 /// Wraps a physical line into visual lines using actual layout metrics (font advance, Tab width,
 /// and token paddings) against `max_width_px`.
+#[allow(dead_code)]
 pub fn wrap_line_to_visual_layout(
     text_system: &gpui::WindowTextSystem,
     physical_line_idx: usize,
@@ -911,39 +714,7 @@ pub fn wrap_line_to_visual_layout(
     .0
 }
 
-/// Wraps all physical lines of a document into visual lines using actual layout metrics
-/// (font advance, Tab width, and token paddings) against `max_width_px`.
-#[allow(dead_code)]
-pub fn wrap_document_to_visual_layout(
-    text_system: &gpui::WindowTextSystem,
-    lines: &[String],
-    max_width_px: f32,
-    font_size: f32,
-) -> Vec<VisualLine> {
-    let doc_tokens = tokenize_document_lines(lines);
-    let mut result = Vec::new();
-    for (phys_idx, (line, tokens)) in lines.iter().zip(doc_tokens.iter()).enumerate() {
-        let wrapped = wrap_line_to_visual_layout(
-            text_system,
-            phys_idx,
-            line,
-            tokens,
-            max_width_px,
-            font_size,
-        );
-        result.extend(wrapped);
-    }
-    if result.is_empty() {
-        result.push(VisualLine {
-            physical_line_idx: 0,
-            subline_idx: 0,
-            char_start: 0,
-            char_len: 0,
-            is_first: true,
-        });
-    }
-    result
-}
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineVisualSpan {
@@ -1057,6 +828,7 @@ impl DocumentLayoutCache {
         &mut self,
         text_system: &gpui::WindowTextSystem,
         lines: &[String],
+        fenced_lines: &[bool],
         max_width_px: f32,
         font_size: f32,
     ) -> Vec<VisualLine> {
@@ -1073,7 +845,6 @@ impl DocumentLayoutCache {
             self.entries.clear();
         }
 
-        let fenced_lines = compute_fenced_code_lines(lines);
         let mut shaped_count = 0;
         let mut reused_count = 0;
 
@@ -1340,7 +1111,8 @@ pub fn render_editor_pane(
     lines: Arc<Vec<String>>,
     visual_lines: Arc<Vec<VisualLine>>,
     syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
-    code_blocks: Arc<Vec<SourceCodeBlock>>,
+    code_blocks: Arc<Vec<glidemark_core::ast::ParsedCodeBlock>>,
+    is_ast_in_sync: bool,
     cursor: (usize, usize),
     theme: &ThemeColors,
     strings: &'static glidemark_core::i18n::I18nStrings,
@@ -1396,34 +1168,80 @@ pub fn render_editor_pane(
                             String::new()
                         };
 
-                        let phys_tokens = {
-                            let block = code_blocks.iter().find(|b| {
-                                phys_idx >= b.start_line && phys_idx < b.start_line + b.line_count
+                        let phys_tokens = if !is_ast_in_sync {
+                            // During debounce, buffer leads AST: render code lines as uncolored plain text,
+                            // without synchronizing parsing or reusing stale AST tokens
+                            let is_code = code_blocks.iter().any(|b| {
+                                b.fence_open_line <= phys_idx
+                                    && phys_idx <= b.fence_close_line.unwrap_or_else(|| {
+                                        b.lines.last().map(|l| l.source_line_idx).unwrap_or(b.fence_open_line)
+                                    })
+                            });
+                            if is_code {
+                                vec![MarkdownToken {
+                                    text: phys_line_str.to_string(),
+                                    kind: MarkdownTokenKind::CodeText,
+                                }]
+                            } else {
+                                tokenize_markdown_line(phys_line_str)
+                            }
+                        } else {
+                            let matching_block = code_blocks.iter().find(|b| {
+                                b.fence_open_line <= phys_idx
+                                    && phys_idx <= b.fence_close_line.unwrap_or_else(|| {
+                                        b.lines.last().map(|l| l.source_line_idx).unwrap_or(b.fence_open_line)
+                                    })
                             });
 
-                            if let Some(b) = block {
-                                let mut cache = syntax_cache.lock().unwrap();
-                                if let Some(spans) = cache.get(&b.code, b.lang.as_deref()) {
-                                    let mut byte_offset = 0;
-                                    for i in b.start_line..phys_idx {
-                                        if let Some(l) = lines.get(i) {
-                                            byte_offset += l.len() + 1;
+                            if let Some(b) = matching_block {
+                                if phys_idx == b.fence_open_line
+                                    || b.fence_close_line.map_or(false, |close| phys_idx == close)
+                                {
+                                    vec![MarkdownToken {
+                                        text: phys_line_str.to_string(),
+                                        kind: MarkdownTokenKind::CodeDelimiter,
+                                    }]
+                                } else if let Some(mapping) = b.lines.iter().find(|m| m.source_line_idx == phys_idx) {
+                                    if !b.is_valid {
+                                        // "不等块两侧 Plain 且有可辨错误，不改源文本"
+                                        vec![MarkdownToken {
+                                            text: phys_line_str.to_string(),
+                                            kind: MarkdownTokenKind::CodeText,
+                                        }]
+                                    } else {
+                                        let mut cache = syntax_cache.lock().unwrap();
+                                        if let Some(spans) = cache.get(&b.key) {
+                                            let mut line_spans = Vec::new();
+                                            for span in spans.iter() {
+                                                let overlap_start = span.range.start.max(mapping.payload_range.start);
+                                                let overlap_end = span.range.end.min(mapping.payload_range.end);
+                                                if overlap_start < overlap_end {
+                                                    let rel_start = overlap_start - mapping.payload_range.start;
+                                                    let rel_end = overlap_end - mapping.payload_range.start;
+                                                    line_spans.push(glidemark_core::syntax::SyntaxSpan {
+                                                        range: rel_start..rel_end,
+                                                        role: span.role,
+                                                    });
+                                                }
+                                            }
+
+                                            let mut tokens = Vec::new();
+                                            if mapping.prefix_len > 0 && mapping.prefix_len <= phys_line_str.len() {
+                                                tokens.push(MarkdownToken {
+                                                    text: phys_line_str[..mapping.prefix_len].to_string(),
+                                                    kind: MarkdownTokenKind::Plain,
+                                                });
+                                            }
+                                            let code_portion = &phys_line_str[mapping.prefix_len.min(phys_line_str.len())..];
+                                            tokens.extend(spans_to_code_tokens(code_portion, &line_spans));
+                                            tokens
+                                        } else {
+                                            vec![MarkdownToken {
+                                                text: phys_line_str.to_string(),
+                                                kind: MarkdownTokenKind::CodeText,
+                                            }]
                                         }
                                     }
-                                    let line_len = phys_line_str.len();
-                                    let line_end = byte_offset + line_len;
-                                    let mut line_spans = Vec::new();
-                                    for span in spans.iter() {
-                                        let overlap_start = span.range.start.max(byte_offset);
-                                        let overlap_end = span.range.end.min(line_end);
-                                        if overlap_start < overlap_end {
-                                            line_spans.push(glidemark_core::syntax::SyntaxSpan {
-                                                range: (overlap_start - byte_offset)..(overlap_end - byte_offset),
-                                                role: span.role,
-                                            });
-                                        }
-                                    }
-                                    spans_to_code_tokens(phys_line_str, &line_spans)
                                 } else {
                                     vec![MarkdownToken {
                                         text: phys_line_str.to_string(),
@@ -1431,15 +1249,7 @@ pub fn render_editor_pane(
                                     }]
                                 }
                             } else {
-                                let trimmed = phys_line_str.trim();
-                                if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-                                    vec![MarkdownToken {
-                                        text: phys_line_str.to_string(),
-                                        kind: MarkdownTokenKind::CodeDelimiter,
-                                    }]
-                                } else {
-                                    tokenize_markdown_line(phys_line_str)
-                                }
+                                tokenize_markdown_line(phys_line_str)
                             }
                         };
                         let (sub_start, sub_len) = if let Some(v) = vl {

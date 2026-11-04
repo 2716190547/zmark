@@ -58,26 +58,18 @@ pub struct WorkspaceView {
     pub syntax_pending_request: Option<SyntaxBatchRequest>,
     pub syntax_cancel_flag: Arc<AtomicBool>,
     pub syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
-    pub syntax_attempts: std::collections::HashMap<(String, String), (u8, u8)>,
+    pub syntax_attempts: std::collections::HashMap<glidemark_core::syntax::CodeKey, (u8, u8)>,
     pub syntax_defer_armed: bool,
-    pub last_visible_syntax_keys: std::collections::HashSet<(String, String)>,
-    pub source_code_blocks: Arc<Vec<crate::views::editor::SourceCodeBlock>>,
+    pub last_visible_syntax_keys: std::collections::HashSet<glidemark_core::syntax::CodeKey>,
+    pub source_code_blocks: Arc<Vec<glidemark_core::ast::ParsedCodeBlock>>,
     pub source_code_blocks_rev: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct SyntaxBlockItem {
-    #[allow(dead_code)]
-    pub block_id: usize,
-    pub lang: Option<String>,
-    pub code: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct SyntaxBatchRequest {
     pub doc_key: Option<crate::state::DocKey>,
     pub revision: usize,
-    pub blocks: Vec<SyntaxBlockItem>,
+    pub blocks: Vec<glidemark_core::syntax::CodeKey>,
 }
 
 impl WorkspaceView {
@@ -279,6 +271,20 @@ impl WorkspaceView {
         (f32::from(available_w) - crate::views::editor::EDITOR_TEXT_START_OFFSET).max(100.0)
     }
 
+    pub fn compute_fenced_lines(&self, line_count: usize) -> Vec<bool> {
+        let mut mask = vec![false; line_count];
+        for block in self.source_code_blocks.iter() {
+            let start = block.fence_open_line;
+            let end = block.fence_close_line.unwrap_or_else(|| {
+                block.lines.last().map(|l| l.source_line_idx).unwrap_or(start)
+            });
+            for i in start..=end.min(line_count.saturating_sub(1)) {
+                mask[i] = true;
+            }
+        }
+        mask
+    }
+
     pub fn compute_visual_lines(&mut self, window: &Window) -> Arc<Vec<crate::editor_engine::VisualLine>> {
         let max_width_px = self.compute_editor_max_width_px(window);
         let font_size = self.state.preferences.font_size;
@@ -294,9 +300,18 @@ impl WorkspaceView {
             return self.cached_visual_lines.clone();
         }
 
+        if !self.state.doc.is_parse_stale() {
+            if self.source_code_blocks_rev != self.state.editor.revision || self.source_code_blocks.is_empty() {
+                self.source_code_blocks = Arc::new(self.state.doc.parsed.code_blocks.clone());
+                self.source_code_blocks_rev = self.state.editor.revision;
+            }
+        }
+
+        let fenced_lines = self.compute_fenced_lines(self.state.editor.lines.len());
         let lines = self.document_layout_cache.update(
             window.text_system(),
             &self.state.editor.lines,
+            &fenced_lines,
             max_width_px,
             font_size,
         );
@@ -317,7 +332,7 @@ impl WorkspaceView {
             let regions = self.rendered_regions.lock().unwrap();
             for r in regions.iter() {
                 if let Some(ref key) = r.content_key {
-                    if !key.1.is_empty() && preview_bounds.intersects(&r.bounds) {
+                    if !key.payload.is_empty() && preview_bounds.intersects(&r.bounds) {
                         visible_keys.insert(key.clone());
                     }
                 }
@@ -338,13 +353,12 @@ impl WorkspaceView {
             let end_phys = self.cached_visual_lines.get(end_vis.min(self.cached_visual_lines.len().saturating_sub(1))).map(|vl| vl.physical_line_idx).unwrap_or(usize::MAX);
 
             for b in self.source_code_blocks.iter() {
-                let b_start = b.start_line;
-                let b_end = b.start_line + b.line_count;
-                if b_start <= end_phys && b_end >= start_phys && !b.code.is_empty() {
-                    let lang = glidemark_core::syntax::resolve_canonical_language(b.lang.as_deref())
-                        .unwrap_or("Plain")
-                        .to_string();
-                    visible_keys.insert((lang, b.code.clone()));
+                let b_start = b.fence_open_line;
+                let b_end = b.fence_close_line.unwrap_or_else(|| {
+                    b.lines.last().map(|l| l.source_line_idx).unwrap_or(b_start)
+                });
+                if b_start <= end_phys && b_end >= start_phys && !b.key.payload.is_empty() {
+                    visible_keys.insert(b.key.clone());
                 }
             }
         }
@@ -357,27 +371,28 @@ impl WorkspaceView {
 
         // 4. Find missing keys that need parsing
         let mut missing_blocks = Vec::new();
-        let cache = self.syntax_cache.lock().unwrap();
+        let mut cache = self.syntax_cache.lock().unwrap();
 
         for key in &visible_keys {
-            let (canonical_lang, code) = key;
-            if cache.entries.get(&(code.clone(), canonical_lang.clone())).is_none() {
+            if cache.get(key).is_none() {
+                if key.language.is_none() || key.payload.is_empty() {
+                    let spans = Arc::from([glidemark_core::syntax::SyntaxSpan {
+                        range: 0..key.payload.len(),
+                        role: glidemark_core::syntax::SyntaxRole::Plain,
+                    }]);
+                    let empty_retained = std::collections::HashSet::new();
+                    cache.insert(key.clone(), spans, &empty_retained);
+                    continue;
+                }
+
                 let (gen, count) = self.syntax_attempts.entry(key.clone()).or_insert((0, 0));
                 if *count < 2 {
                     *count += 1;
-                    missing_blocks.push(SyntaxBlockItem {
-                        block_id: missing_blocks.len(),
-                        lang: Some(canonical_lang.clone()),
-                        code: code.clone(),
-                    });
+                    missing_blocks.push(key.clone());
                 } else if *gen == 0 && glidemark_core::syntax::is_syntax_set_ready() {
                     *gen = 1;
                     *count = 1;
-                    missing_blocks.push(SyntaxBlockItem {
-                        block_id: missing_blocks.len(),
-                        lang: Some(canonical_lang.clone()),
-                        code: code.clone(),
-                    });
+                    missing_blocks.push(key.clone());
                 }
             }
         }
@@ -411,17 +426,17 @@ impl WorkspaceView {
 
         self.syntax_active_task = Some(cx.spawn(async move |this, app| {
             let parsed_results = app.background_executor().spawn(async move {
-                let mut results: Vec<(String, Option<String>, Arc<[glidemark_core::syntax::SyntaxSpan]>)> = Vec::with_capacity(blocks.len());
-                for block in blocks {
+                let mut results: Vec<(glidemark_core::syntax::CodeKey, Arc<[glidemark_core::syntax::SyntaxSpan]>)> = Vec::with_capacity(blocks.len());
+                for key in blocks {
                     if cancel.load(Ordering::Relaxed) {
                         break;
                     }
                     let spans = glidemark_core::syntax::parse_code_spans_bounded(
-                        &block.code,
-                        block.lang.as_deref(),
+                        &key.payload,
+                        key.language,
                         Some(&cancel),
                     );
-                    results.push((block.code, block.lang, Arc::from(spans)));
+                    results.push((key, Arc::from(spans)));
                 }
                 results
             }).await;
@@ -433,15 +448,11 @@ impl WorkspaceView {
                 // Stale result guard: if document or revision has changed, discard!
                 if request.doc_key == current_doc_key && request.revision == current_rev {
                     let mut cache = this.syntax_cache.lock().unwrap();
-                    // Retain keys formatted as (code, lang) for SyntaxCache
-                    let retained_cache_keys: std::collections::HashSet<(String, String)> = this
+                    let retained_cache_keys: std::collections::HashSet<glidemark_core::syntax::CodeKey> = this
                         .last_visible_syntax_keys
-                        .iter()
-                        .map(|(lang, code)| (code.clone(), lang.clone()))
-                        .collect();
-                    for (code, lang, spans) in parsed_results {
-                        cache.insert(&code, lang.as_deref(), spans.clone(), &retained_cache_keys);
-                        glidemark_core::syntax::insert_cached_code_spans(&code, lang.as_deref(), spans);
+                        .clone();
+                    for (key, spans) in parsed_results {
+                        cache.insert(key, spans, &retained_cache_keys);
                     }
                     drop(cache);
                     this.invalidate_preview_list();
@@ -1592,9 +1603,11 @@ impl Render for WorkspaceView {
         }
 
         let visual_lines = self.compute_visual_lines(window);
-        if self.source_code_blocks_rev != self.state.editor.revision || self.source_code_blocks.is_empty() {
-            self.source_code_blocks = Arc::new(crate::views::editor::extract_source_code_blocks(&self.state.editor.lines));
-            self.source_code_blocks_rev = self.state.editor.revision;
+        if !self.state.doc.is_parse_stale() {
+            if self.source_code_blocks_rev != self.state.editor.revision || self.source_code_blocks.is_empty() {
+                self.source_code_blocks = Arc::new(self.state.doc.parsed.code_blocks.clone());
+                self.source_code_blocks_rev = self.state.editor.revision;
+            }
         }
 
         if !self.syntax_defer_armed {
@@ -2516,6 +2529,7 @@ impl Render for WorkspaceView {
                                                     visual_lines.clone(),
                                                     self.syntax_cache.clone(),
                                                     self.source_code_blocks.clone(),
+                                                    !self.state.doc.is_parse_stale(),
                                                     self.state.editor.cursor(),
                                                     theme,
                                                     strings,
@@ -2587,6 +2601,7 @@ impl Render for WorkspaceView {
                                                             visual_lines.clone(),
                                                             self.syntax_cache.clone(),
                                                             self.source_code_blocks.clone(),
+                                                            !self.state.doc.is_parse_stale(),
                                                             self.state.editor.cursor(),
                                                             theme,
                                                             strings,

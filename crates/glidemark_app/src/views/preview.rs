@@ -211,7 +211,7 @@ pub struct TextLayoutRegion {
     pub padding_top: f32,
     pub padding_right: f32,
     pub flat_char_offset: usize,
-    pub content_key: Option<(String, String)>,
+    pub content_key: Option<glidemark_core::syntax::CodeKey>,
 }
 
 #[derive(Clone, Debug)]
@@ -225,7 +225,7 @@ pub struct TextRegionInfo {
     pub padding_top: f32,
     pub padding_right: f32,
     pub flat_char_offset: usize,
-    pub content_key: Option<(String, String)>,
+    pub content_key: Option<glidemark_core::syntax::CodeKey>,
 }
 
 pub type RegionsRegistry = std::sync::Mutex<Vec<TextLayoutRegion>>;
@@ -1842,7 +1842,7 @@ pub fn should_wrap_code_block(lang: Option<&str>) -> bool {
 
 fn render_code_block(
     lang: Option<&str>,
-    code: &str,
+    code: &std::sync::Arc<str>,
     theme: &ThemeColors,
     strings: &'static I18nStrings,
     base_font_size: f32,
@@ -1855,7 +1855,7 @@ fn render_code_block(
     syntax_cache: &Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
 ) -> AnyElement {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    code.hash(&mut hasher);
+    code.as_ref().hash(&mut hasher);
     let hash = hasher.finish();
     let is_copied = copied_code_hash
         .map(|(h, t)| h == hash && t.elapsed() < std::time::Duration::from_millis(1200))
@@ -1865,10 +1865,9 @@ fn render_code_block(
     let code_to_copy = code.to_string();
     let code_text = if code.is_empty() { " ".to_string() } else { code.to_string() };
 
-    let canonical_lang = glidemark_core::syntax::resolve_canonical_language(lang)
-        .unwrap_or("Plain")
-        .to_string();
-    let content_key = Some((canonical_lang, code.to_string()));
+    let canonical_lang = glidemark_core::syntax::resolve_canonical_language(lang);
+    let key = glidemark_core::syntax::CodeKey::new(canonical_lang, code.clone());
+    let content_key = Some(key.clone());
 
     let should_wrap = should_wrap_code_block(lang);
 
@@ -1877,8 +1876,7 @@ fn render_code_block(
     let spans = syntax_cache
         .lock()
         .unwrap()
-        .get(code, lang)
-        .or_else(|| glidemark_core::syntax::get_cached_code_spans(code, lang))
+        .get(&key)
         .unwrap_or_else(|| {
             Arc::from([glidemark_core::syntax::SyntaxSpan {
                 range: 0..code.len(),

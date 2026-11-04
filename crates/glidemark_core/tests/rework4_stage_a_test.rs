@@ -1,0 +1,384 @@
+use glidemark_core::ast::parse_markdown;
+use glidemark_core::syntax::{
+    parse_code_spans, parse_code_spans_bounded, resolve_canonical_language, CacheEntry, CodeKey,
+    SyntaxCache, SyntaxRole, SyntaxSpan,
+};
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+// -----------------------------------------------------------------------------
+// Counting Allocator for Test A2
+// -----------------------------------------------------------------------------
+
+struct CountingAlloc;
+
+static ALLOCATED: AtomicUsize = AtomicUsize::new(0);
+
+unsafe impl GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let ptr = System.alloc(layout);
+        if !ptr.is_null() {
+            ALLOCATED.fetch_add(layout.size(), Ordering::SeqCst);
+        }
+        ptr
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        System.dealloc(ptr, layout);
+        ALLOCATED.fetch_sub(layout.size(), Ordering::SeqCst);
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let new_ptr = System.realloc(ptr, layout, new_size);
+        if !new_ptr.is_null() {
+            if new_size > layout.size() {
+                ALLOCATED.fetch_add(new_size - layout.size(), Ordering::SeqCst);
+            } else {
+                ALLOCATED.fetch_sub(layout.size() - new_size, Ordering::SeqCst);
+            }
+        }
+        new_ptr
+    }
+}
+
+#[global_allocator]
+static A: CountingAlloc = CountingAlloc;
+
+static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn current_allocated() -> usize {
+    ALLOCATED.load(Ordering::SeqCst)
+}
+
+fn get_source_line(source: &str, line_idx: usize) -> &str {
+    let mut current_idx = 0;
+    let mut current_start = 0;
+    let bytes = source.as_bytes();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'\n' {
+            if current_idx == line_idx {
+                return &source[current_start..=i];
+            }
+            current_idx += 1;
+            current_start = i + 1;
+        }
+    }
+    if current_idx == line_idx && current_start <= source.len() {
+        return &source[current_start..];
+    }
+    panic!("Line index {} out of range for source len {}", line_idx, source.len());
+}
+
+// -----------------------------------------------------------------------------
+// Test A1: 12-Case Mapping Table
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_stage_a_12_case_mapping_table() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let cases = [
+        ("1. Top-level LF", "```rust\nfn a() {}\n```\n"),
+        ("2. Top-level CRLF", "```rust\r\nfn a() {}\r\n```\r\n"),
+        ("3. List space nested", "- item\n\n  ```rust\n  fn a() {}\n  ```\n"),
+        ("4. List space nested CRLF", "- item\r\n\r\n  ```rust\r\n  fn a() {}\r\n  ```\r\n"),
+        ("5. List Tab nested", "- item\n\n\t```rust\n\tfn a() {}\n\t```\n"),
+        ("6. BlockQuote nested", "> ```rust\n> fn a() {}\n> ```\n"),
+        ("7. BlockQuote nested list", "> - item\n>   ```rust\n>   fn a() {}\n>   ```\n"),
+        ("8. No trailing LF", "```rust\nfn a() {}\n```"),
+        ("9. Indented code inside block", "```rust\n    let x = 1;\n```\n"),
+        ("10. Empty code block", "```rust\n```\n"),
+        ("11. Blank line in code", "```rust\nfn a() {}\n\nfn b() {}\n```\n"),
+        ("12. CRLF blank line in code", "```rust\r\nfn a() {}\r\n\r\nfn b() {}\r\n```\r\n"),
+    ];
+
+    for (name, src) in cases {
+        let doc = parse_markdown(src);
+        assert_eq!(
+            doc.code_blocks.len(),
+            1,
+            "Case '{}' must produce exactly 1 ParsedCodeBlock in doc.code_blocks",
+            name
+        );
+        let block = &doc.code_blocks[0];
+        assert!(block.is_valid, "Case '{}' block.is_valid must be true", name);
+
+        let payload_lines: Vec<&str> = if block.key.payload.is_empty() {
+            Vec::new()
+        } else {
+            let p = block.key.payload.strip_suffix('\n').unwrap_or(&block.key.payload);
+            p.split('\n').collect()
+        };
+
+        assert_eq!(
+            block.lines.len(),
+            payload_lines.len(),
+            "Case '{}' mapping lines count ({}) must match payload lines count ({})",
+            name,
+            block.lines.len(),
+            payload_lines.len()
+        );
+
+        for (idx, m) in block.lines.iter().enumerate() {
+            let src_line = get_source_line(src, m.source_line_idx);
+            assert!(
+                m.prefix_len + m.content_len <= src_line.len(),
+                "Case '{}' line {} overrun: prefix_len={}, content_len={}, src_line.len()={}",
+                name,
+                idx,
+                m.prefix_len,
+                m.content_len,
+                src_line.len()
+            );
+
+            let source_content = &src_line[m.prefix_len..m.prefix_len + m.content_len];
+            assert_eq!(
+                source_content, payload_lines[idx],
+                "Case '{}' line {} source_code_content must match payload_code_content",
+                name, idx
+            );
+
+            let line_eol = &src_line[m.prefix_len + m.content_len..];
+            if !m.is_synthetic_lf {
+                assert_eq!(
+                    line_eol.len(),
+                    m.eol_len,
+                    "Case '{}' line {} EOL len mismatch: expected {}, got {}",
+                    name,
+                    idx,
+                    m.eol_len,
+                    line_eol.len()
+                );
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Test A2: Cache Accounting & Ledger
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_stage_a_cache_accounting_and_ledger() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    // 1. Key sharing: cloning CodeKey does not allocate duplicate string buffers
+    {
+        let payload: Arc<str> = Arc::from("shared_payload_string_buffer_check");
+        let k1 = CodeKey::new(Some("Rust"), payload.clone());
+        let before_alloc = current_allocated();
+        let k2 = k1.clone();
+        let after_alloc = current_allocated();
+        assert_eq!(
+            after_alloc.saturating_sub(before_alloc),
+            0,
+            "Cloning CodeKey sharing Arc must not allocate duplicate string buffers"
+        );
+        assert!(Arc::ptr_eq(&k1.payload, &k2.payload));
+        assert_eq!(k1, k2);
+    }
+
+    // 2. Single entry: verify reported cache.current_bytes() accurately reflects
+    // entry_heap_bytes + container overhead within [1.0, 1.15] ratio
+    {
+        let mut cache = SyntaxCache::new();
+        let code = "fn compute_sum(a: i32, b: i32) -> i32 { a + b }";
+        let spans_vec = parse_code_spans(code, Some("rust"));
+        let spans_slice = spans_vec.as_slice();
+
+        let before_insert = current_allocated();
+        let payload: Arc<str> = Arc::from(code);
+        let key = CodeKey::new(Some("Rust"), payload);
+        let spans: Arc<[SyntaxSpan]> = Arc::from(spans_slice);
+        let admitted = cache.insert(key, spans, &HashSet::new());
+        let after_insert = current_allocated();
+        assert!(admitted, "Single entry within budget must be admitted");
+
+        let measured_delta = after_insert.saturating_sub(before_insert);
+        let reported_bytes = cache.current_bytes();
+        println!("Single entry: measured_delta={}, reported_bytes={}", measured_delta, reported_bytes);
+        let ratio = measured_delta as f64 / reported_bytes as f64;
+        assert!(
+            ratio >= 0.95 && ratio <= 1.15,
+            "Single entry heap-to-reported ratio must be within [0.95, 1.15], got: ratio={}, measured={}, reported={}",
+            ratio,
+            measured_delta,
+            reported_bytes
+        );
+    }
+
+    // 3. 6 distinct entries: verify accounting scales accurately
+    {
+        let mut cache = SyntaxCache::new();
+        let mut raw_data = Vec::with_capacity(6);
+
+        for i in 0..6 {
+            let code = format!("fn distinct_fn_{}() -> usize {{ let x = {}; x * 2 }}", i, i * 100);
+            let spans_vec = parse_code_spans(&code, Some("rust"));
+            raw_data.push((code, spans_vec));
+        }
+
+        let before_insert = current_allocated();
+        for (code, spans_vec) in &raw_data {
+            let payload: Arc<str> = Arc::from(code.as_str());
+            let key = CodeKey::new(Some("Rust"), payload);
+            let spans: Arc<[SyntaxSpan]> = Arc::from(spans_vec.as_slice());
+            let admitted = cache.insert(key, spans, &HashSet::new());
+            assert!(admitted);
+        }
+        let after_insert = current_allocated();
+
+        let measured_delta = after_insert.saturating_sub(before_insert);
+        let reported_bytes = cache.current_bytes();
+        let ratio = measured_delta as f64 / reported_bytes as f64;
+        println!("6 entries: measured_delta={}, reported_bytes={}, ratio={}", measured_delta, reported_bytes, ratio);
+        assert!(
+            ratio >= 0.95 && ratio <= 1.15,
+            "6 entries heap-to-reported ratio must be within [0.95, 1.15], got: ratio={}, measured={}, reported={}",
+            ratio,
+            measured_delta,
+            reported_bytes
+        );
+    }
+
+    // 4. LRU eviction: oldest non-retained item is evicted when memory approaches max_bytes
+    {
+        let mut cache = SyntaxCache::new();
+        let sample_spans: Arc<[SyntaxSpan]> = Arc::new([SyntaxSpan {
+            range: 0..5,
+            role: SyntaxRole::Plain,
+        }]);
+
+        let key1 = SyntaxCache::key("code_block_1", Some("rust"));
+        let key2 = SyntaxCache::key("code_block_2", Some("rust"));
+        let key3 = SyntaxCache::key("code_block_3", Some("rust"));
+
+        let heap1 = SyntaxCache::entry_heap_bytes(&key1, &sample_spans);
+        let heap2 = SyntaxCache::entry_heap_bytes(&key2, &sample_spans);
+        let container_overhead = 2 * std::mem::size_of::<CacheEntry>();
+        cache.max_bytes = container_overhead + heap1 + heap2; // exactly fits 2 entries
+
+        let retained = HashSet::new();
+        assert!(cache.insert(key1.clone(), sample_spans.clone(), &retained));
+        assert!(cache.insert(key2.clone(), sample_spans.clone(), &retained));
+        assert_eq!(cache.entries.len(), 2);
+
+        // Insert key3 -> key1 (oldest non-retained) must be evicted
+        assert!(cache.insert(key3.clone(), sample_spans.clone(), &retained));
+        assert_eq!(cache.entries.len(), 2);
+        assert!(cache.get(&key1).is_none(), "Oldest key1 must be evicted");
+        assert!(cache.get(&key2).is_some(), "Key2 must be present");
+        assert!(cache.get(&key3).is_some(), "Key3 must be present");
+    }
+
+    // 5. Retained protection: retained keys are protected from eviction
+    {
+        let mut cache = SyntaxCache::new();
+        let sample_spans: Arc<[SyntaxSpan]> = Arc::new([SyntaxSpan {
+            range: 0..5,
+            role: SyntaxRole::Plain,
+        }]);
+
+        let key1 = SyntaxCache::key("code_block_1", Some("rust"));
+        let key2 = SyntaxCache::key("code_block_2", Some("rust"));
+        let key3 = SyntaxCache::key("code_block_3", Some("rust"));
+
+        let heap1 = SyntaxCache::entry_heap_bytes(&key1, &sample_spans);
+        let heap2 = SyntaxCache::entry_heap_bytes(&key2, &sample_spans);
+        let container_overhead = 2 * std::mem::size_of::<CacheEntry>();
+        cache.max_bytes = container_overhead + heap1 + heap2;
+
+        let mut retained = HashSet::new();
+        assert!(cache.insert(key1.clone(), sample_spans.clone(), &retained));
+        assert!(cache.insert(key2.clone(), sample_spans.clone(), &retained));
+
+        // Retain key1
+        retained.insert(key1.clone());
+
+        // Insert key3 -> key2 (younger than key1, but key1 is retained!) must be evicted
+        assert!(cache.insert(key3.clone(), sample_spans.clone(), &retained));
+        assert_eq!(cache.entries.len(), 2);
+        assert!(cache.get(&key1).is_some(), "Retained key1 must remain protected in cache");
+        assert!(cache.get(&key2).is_none(), "Non-retained key2 must be evicted");
+        assert!(cache.get(&key3).is_some(), "Newly admitted key3 must be present");
+    }
+
+    // 6. Admission rejection: when cache cannot fit an entry even after evicting non-retained items
+    {
+        let mut cache = SyntaxCache::new();
+        let sample_spans: Arc<[SyntaxSpan]> = Arc::new([SyntaxSpan {
+            range: 0..5,
+            role: SyntaxRole::Plain,
+        }]);
+
+        let key1 = SyntaxCache::key("large_code_block", Some("rust"));
+        let entry_heap = SyntaxCache::entry_heap_bytes(&key1, &sample_spans);
+        cache.max_bytes = entry_heap; // Not enough for entry_heap + size_of::<CacheEntry>() container overhead
+
+        let retained = HashSet::new();
+        let admitted = cache.insert(key1, sample_spans.clone(), &retained);
+        assert!(!admitted, "insert must return false when entry size exceeds max_bytes");
+
+        // When all current entries are retained and space is insufficient
+        let mut cache2 = SyntaxCache::new();
+        let k_a = SyntaxCache::key("code_a", Some("rust"));
+        let k_b = SyntaxCache::key("code_b", Some("rust"));
+        let heap_a = SyntaxCache::entry_heap_bytes(&k_a, &sample_spans);
+        let overhead = std::mem::size_of::<CacheEntry>();
+        cache2.max_bytes = overhead + heap_a; // can only hold 1 entry
+
+        let mut all_retained = HashSet::new();
+        assert!(cache2.insert(k_a.clone(), sample_spans.clone(), &all_retained));
+        all_retained.insert(k_a.clone());
+
+        let admitted2 = cache2.insert(k_b, sample_spans, &all_retained);
+        assert!(!admitted2, "insert must return false when non-retained eviction cannot free enough space");
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Test A3: Canonical Bash/Shell Resolution
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_stage_a_canonical_bash_resolution() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    // 1. Raw alias "bash" resolves to canonical "Bourne Again Shell (bash)"
+    assert_eq!(
+        resolve_canonical_language(Some("bash")),
+        Some("Bourne Again Shell (bash)")
+    );
+    assert_eq!(
+        resolve_canonical_language(Some("sh")),
+        Some("Bourne Again Shell (bash)")
+    );
+    assert_eq!(
+        resolve_canonical_language(Some("shell")),
+        Some("Bourne Again Shell (bash)")
+    );
+
+    // 2. Canonical name "Bourne Again Shell (bash)" resolves to itself (never returns None!)
+    assert_eq!(
+        resolve_canonical_language(Some("Bourne Again Shell (bash)")),
+        Some("Bourne Again Shell (bash)")
+    );
+    assert_eq!(
+        resolve_canonical_language(Some("bourne again shell (bash)")),
+        Some("Bourne Again Shell (bash)")
+    );
+
+    // 3. parse_code_spans_bounded with canonical name produces shell syntax spans (NOT plain fallback)
+    let spans_canonical = parse_code_spans_bounded("echo 'hello' && exit 0", Some("Bourne Again Shell (bash)"), None);
+    let spans_alias = parse_code_spans_bounded("echo 'hello' && exit 0", Some("bash"), None);
+    assert_eq!(spans_canonical, spans_alias);
+    assert!(
+        spans_canonical.iter().any(|s| s.role != SyntaxRole::Plain),
+        "Bourne Again Shell (bash) must produce syntax-highlighted roles, not plain fallback: {:?}",
+        spans_canonical
+    );
+
+    // 4. Verify "echo 1" canonical resolution matches alias without panicking or mismatch
+    let spans_1 = parse_code_spans_bounded("echo 1", Some("Bourne Again Shell (bash)"), None);
+    let spans_1_alias = parse_code_spans_bounded("echo 1", Some("bash"), None);
+    assert_eq!(spans_1, spans_1_alias);
+}
