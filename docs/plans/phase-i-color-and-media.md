@@ -114,7 +114,7 @@ syntect 的 find_syntax_by_token 已按扩展名和大小写不敏感名称查�
 
 源码与预览共用语言及带范围的语义结果；支持跨行注释/字符串/嵌套语法状态，XML 的 tag、attribute、string 不混为一色。复用 ThemeColors 的关键字、字符串、注释色，按需要补充属性/数字等最少语义。未知范围回退代码普通前景。
 
-共用数据契约放在 `glidemark_core::syntax`：`SyntaxRole { Plain, Keyword, Attribute, String, Number, Comment }` 与 `SyntaxSpan { range: Range<usize>, role: SyntaxRole }`。range 是相对于原始完整代码 payload 的 UTF-8 字节半开区间；合法边界、按起点排序、不重叠、合并相邻同角色，Plain 补齐空隙，拼回原字节必须完全相同。保留 CRLF、换行、Tab、中文与组合字符；不改源文本、不做缩进或空白规范化。输出不含 GPUI、主题色或字形样式。
+共用数据契约放在 `glidemark_core::syntax`：`SyntaxRole { Plain, Keyword, Attribute, String, Number, Comment }` 与 `SyntaxSpan { range: Range<usize>, role: SyntaxRole }`。range 是相对于完整 canonical 代码 payload 的 UTF-8 字节半开区间；合法边界、按起点排序、不重叠、合并相邻同角色，Plain 补齐空隙，拼回 canonical 字节必须完全相同。canonical 选择 parser 的代码事件文本（LF 及其补充尾换行），源码 CRLF/前缀等另用逐行源映射投影，原文件、编辑和源码复制不改字节；不能把 canonical offset 当源 offset。此选择属于末节待复审修订，替代先前“payload 本身保留真实 CRLF”的矛盾要求。输出不含 GPUI、主题色或字形样式。
 
 编辑端的围栏信息必须保留语言、物理行范围及每行 payload 到原缓冲区字节范围的映射；复用现有 pulldown-cmark 及源范围能力，不另写一套完整 Markdown 解析器。扫描 fence 语言/闭合位置变化后重建受影响代码块信息，不能只保留 bool。共用内核按整块从起始 ParseState/ScopeStack 连续处理各行，跨行字符串/注释不得每行重置；源码再将整块 spans 映射到物理行与视觉子行，预览直接使用同一 payload spans。未闭合围栏按当前文档结束处理，修改闭合位置不得把旧块状态泄漏到相邻块。
 
@@ -231,35 +231,52 @@ Reviewer 对 3a542fc 独立验收打回，P1:2。证据为 `/private/tmp/glidema
 
 #### 1. 一个代码载荷与一条结果链路
 
-- 统一文档代码块描述及源位置映射，按现有 Markdown parser 的 fence/代码事件和源范围确定 payload，不再让 Workspace、Editor、Preview 各自用布尔围栏扫描器拼一份文本。闭合/未闭合围栏、缩进/引用/列表中的代码都走同一模型。
-- canonical language + 完整 payload 是唯一解析身份；同一普通围栏在源码与预览共享同一个结果。保留真实尾换行与 CRLF/Tab/空白，不以 trim_end、统一替换换行或改复制文本消除重复。源码物理行到 payload 的映射必须明确；若预览已有 parser 文本与原始载荷存在合法差异，投影 spans 到实际展示文本，不能盲目复用 byte offset。原文及复制语义保持。
+- 统一文档代码块描述及源位置映射，按 pulldown-cmark 的 fence/代码事件和源范围确定 payload，不再让 Workspace、Editor、Preview 各自用布尔围栏扫描器拼一份文本。嵌套代码须先按下文用户确认的 AST 扩展成为真正代码块，不能声称当前 parser 已支持。
+- canonical language + **parser 代码事件拼接文本**是唯一解析身份，同块两侧共享一个结果。接受现有 parser 将 CRLF 转 LF、补尾 LF 的事实；仅分析文本采用此形态，不改源文件或编辑/保存/源码复制。预览及其代码复制沿用 parser 代码文本。每个 canonical 行记录 payload byte 范围、对应源行 content byte 范围、被剥离前缀范围、真实行尾宽度（CRLF=2/LF=1/缺失=0）、是否有 synthetic LF；来源依赖事件 offsets，不用全局 replace/trim_end 猜测。
+- 源码投影先逐行断言 canonical 的非行尾字节等于源 content 切片，所有范围在 UTF-8 边界；前缀/真实行尾不在语法 spans 中渲染，synthetic LF 不对应源字符。Tab、中文/组合字符仍按字节映射；不等则该块两侧 Plain 并给明确映射错误，不硬套错误 offset。这样既允许 LF canonical，也保留 CRLF 原文。空块/无末尾换行/未闭合围栏的映射与新增嵌套前缀均需固定用例。
 - 文档身份/revision/block 身份决定结果是否能应用；payload/语言相同可复用语义缓存，但不能用全局命中替代窗口请求完成守卫。单个内容只解析一次，8/17/33 个独特且预算内的围栏不能因源码/预览产生两倍条目。
 
 #### 2. 一套后台队列，覆盖所有入口
 
 - 删除 schedule_syntax_parse_on_refresh 的同步实现及重复扫描/重建。切文档、打开、保存、刷新、内容改变、AST 就绪、模式切换都只提交最新文档/可见需求，不在 UI 线程调用 parse_code_spans_bounded 或等待语法初始化。
 - 一个 Workspace 最多一个 active 与一个合并后的 latest pending；pending 包含当前文档两侧仍可见块的去重并集，不能被后到的一侧视口报告覆盖掉另一侧。退出视口的需求可取消，内容/文档变化取消旧任务；完成结果必须独立验证 doc 与 revision，再更新仍对应的块，随后处理最新 pending。
-- 完成通知、LRU 淘汰或 cache miss 本身不得触发新批次。相同请求有 Missing/Pending/Ready 或明确终止降级的状态；未知语言、硬阈值超限、解析错误/预算耗尽不是反复补任务的理由。内容/语言改变才清除对应终止状态，不因重新绘制重试相同失败。
+- 完成通知、LRU 淘汰或 cache miss 本身不得触发新批次。相同请求有 Missing/Pending/Ready 或带原因的降级状态；未知语言、硬阈值超限、映射错误等不因重新绘制重试。预算降级先按下文预热/有限重试规则处理，不能第一回耗尽就无声永久钉 Plain；达到有限重试上限后记录真实原因，内容/语言改变或用户明确刷新才建立新尝试。
 
 #### 3. 可见需求必须来自真实布局
 
-- 源码通过已有 uniform_list 实际行范围和 VisualLine→physical line→block 映射确定需求；预览通过 list 实际展示块/布局范围确定需求。Split 使用两侧并集。仅上报块身份范围，不在每帧 join/hash/扫描整篇。
-- 本地 GPUI 0.2.2 已核实：uniform_list 的 render_items 回调提供 Range，但测量首项也会调用该回调；ListState::set_scroll_handler 提供 ListScrollEvent.visible_range，但源码只在 scroll_by 分支发该事件。两者均不能单独冒充所有视口变化的通知。
-- 候选路径：用既有虚拟列表的最终布局/可见项记录视口签名（doc、revision、mode、两侧可见 block IDs），仅在签名改变时合并一个布局后 deferred 通知，交给同一调度器；测量项、遮罩外及非当前文档记录不能入需求。不得在 render/render_items 中立即 spawn 解析、持缓存锁等待或无条件 notify。初始显示、拖滚动条、wheel、键盘/程序滚动、同步滚动、窗口/分屏/字号变化、模式切换都须覆盖。
-- Reviewer 须核实具体公开 API 能否区分测量与最终可见范围、defer 时序是否避免递归借用/无限 draw。若不可行，先给最小替代并修规划，不让执行端按猜测接 UI API。
+- **预览复用已有 rendered_regions**：其 TextRegionInfo/prepaint 已记录 root block_ix、flat_char_offset 和真实 bounds；按代码块模型对应必要的代码身份并与 preview_content_bounds/实际内容遮罩求交。不得另建一套并行可见性注册表。现有区域记录须按当前布局帧更新，旧帧/切模式/遮罩外记录不能残留成可见需求；嵌套代码用 root block + 子块身份区分，不能只靠 root index。
+- **源码新增一处列表 bounds 记录**：沿用 preview_content_bounds 的现有 canvas/prepaint 模式。用 editor_scroll_handle 的 base_handle.offset、真实行高与该列表实际可见高度得到视觉行范围，再经已有 VisualLine→physical line→block 映射成代码需求。不得用整个 window.viewport_size 近似列表高度，也不得依赖仅 cfg(test/test-support) 存在的 logical_scroll_top_index()。测量首项不能冒充可见行。
+- 每次布局只记录区域/范围，在 window.draw 结束后的 **一个合并 cx.defer/window.defer** 中比对当前 doc/revision 的两侧可见代码集合与上次已提交集合；发生变化才向同一后台调度器提交需求，不在 defer 解析或无条件 notify。删除独立视口签名结构体和逐事件挂钩层。这样初显、模式、resize、分屏、字号、滚动条/wheel/键盘/程序 scroll_to/同步滚动统一依赖最终布局；生产 handle.update 包住 draw 的时序及递归借用安全仍须一条真实窗口检查。
+- GPUI 事实纠正：ListScrollEvent 仅 wheel 的 StateInner::scroll 路径发出，scroll_by/scroll_to/reveal 均不发；ListState 的 logical_scroll_top、bounds_for_item、viewport_bounds 可生产使用，但非当前已测量项 bounds 不能被猜成可见。uniform_list render_items 仍被 measure_item 调用。方案不依赖这些接口覆盖全部事件，复用真实 prepaint 记录；若实现发现时序不成立，先回规划。
 
 #### 4. 按字节限制缓存，不以围栏数永久丢色
 
 - 候选取消独立的 32 项硬上限，保留总计 4MiB 的 payload/语义结果缓存上限，按实际分配容量和条目开销核算。相同数据 Arc 共享，不复制两份结果；全量文档不另存一份不计预算的 spans 来规避限制。语法集合与既有文档正文不属于这个缓存额度，不声称限制整个进程 RSS。
-- 当前可见且仍需要的结果优先驻留；只淘汰不再需要的条目。被淘汰块以后重新可见会产生新的视口需求，在后台重新生成；可以有短暂 Plain，不能长期无恢复入口。无视口变化时不得靠淘汰循环驱动重解析。
-- 4MiB 是待复审的资源设计值，不是用户指定的常量。Reviewer 需检查“最小同时可见工作集”能否在该预算内表达；若存在单条结果或两侧可见集合装不下的反例，须先提出最小粒度/容量调整或明确资源不足行为，回规划收敛后实施。不能先编码再静默无限加内存、轮流逐出可见结果或宣称可见高亮已保证。这个技术边界尚未自审关闭。
+- 用已有 LRU 加一个简单的本批可见保留集合即可，不新建优先级队列/缓存层。可见结果在能容纳时优先保留，淘汰不再需要的条目。被逐出块重新可见，由一次新需求后台恢复；普通缓存未命中不得无声长期 Plain，同视口不得靠淘汰形成重解析循环。
+- Reviewer 本机“50ms 内非 Plain 条目最大约 56KB、4MiB 约 70 条”仅为性能证据，**不是与机型无关的数学上界**。输入硬上限、有效 spans 非重叠覆盖约束提供可计算的单条上界；准入仍检查实际分配容量，不用 50ms 推导永不溢出。若日后放宽块/预算阈值，要复核缓存与运行成本的耦合。
+- **用户已确认极端溢出规则**：同时可见集合仍超 4MiB 时，按当前阅读/焦点窗格、距视口中心远近、文档顺序的稳定次序容纳条目；装不下的块显示 Plain 和“高亮资源不足，原文可读”等本地化原因。固定本次需求的容纳集合，不能轮流逐出可见结果驱动循环；视口/内容变化或用户明确刷新后重新评估。此为明确资源压力降级，不是按第 33 块固定降级；正常 8/17/33/35 小块应全部可恢复。超大单条不能入缓存时也执行相同明确降级，不无限加内存或复制到未计费的 Workspace 结果表。
 
 #### 5. 预算与最小判别检查
 
-- 每块累计 50ms 软预算从块解析开始到结束，首行/末行/单行均适用；去掉 !next_remaining.is_empty() 的末行豁免。不重置慢行计时，不承诺中断原子的单次 regex。后台初始化可以用十种语言的代表性多行样本做有限预热，不能声称已编译所有可能路径或把耗时仍可能发生称为 C/onig（本配置为 regex-fancy）。
+- 每块累计 50ms 软预算从块解析开始到结束，首行/末行/单行均适用；去掉 !next_remaining.is_empty() 的末行豁免。不重置慢行计时，不承诺中断原子的单次 regex。后台初始化用十种语言的代表性多行样本做有限预热，并逐语言用常规预算路径验证样本确有预期非 Plain 角色。未通过先标该语言预热未就绪，最多额外一轮预热/复验；仍失败显示明确初始化失败原因，不把它算作用户块内容的终止预算失败。不能声称已编译所有可能路径或把耗时仍可能发生称为 C/onig（本配置为 regex-fancy）。
+- 正常块等待对应语言预热完成才进入 50ms 计时解析；即便如此，新语法路径仍可能首次编译。第一次 BudgetExceeded 后允许同内容 **一次** 后台重试（首轮已经触发相应编译），期间完整 Plain；第二次仍超限才记录带原因的预算降级。尝试计数绑定该 doc/revision/content 与预热代次，不被 draw/滚动/淘汰重置，不在自动重试中再重置时间或放宽 50ms。初始化失败、真实预算不足、资源不足分别报告，不能宣称所有合法代码永不降级。
 - 替换依赖 750 行真实 CPU 耗时的预算用例，采用复用生产预算判定的最小受控时序/行后探针；有限确定性验证中间/末行/单行超预算整块 Plain。恢复慢行重置或末行豁免时对应检查必须红，不引入通用计时框架。
 - stale revision 与 stale document 分开各跑一批并推进真实完成，分别去掉生产对应守卫要红；再检查旧 active 完成不覆盖 latest pending，不能用连续覆盖任务句柄让一个场景从未到达守卫。
 - 真实切文档/保存/刷新事件检查 UI 返回时没有在该线程解析、后台完成后实际变色；同步解析变异须被抓住。不以单个机器的耗时阈值作为唯一线程归因证明。
 - 小型表驱动覆盖 8/17/33/35 围栏的唯一身份、当前可见源码和预览实际前景；另用确实触发字节淘汰的有限场景验证滚出→滚回自动恢复、draw/主题/光标不追加任务。检查高亮结果，不只检查 park；任务计数/线程归因只加最小观测。保持 I0、Phase H 与本轮已通过高亮接入/错色变异、主题对比度及字形几何。
+
+#### 6. 用户新增确认：正式支持嵌套围栏
+
+2026-11-04 原生交互选择“同时支持嵌套”。本轮明确扩展 parser/AST 与预览：列表项、引用、引用内列表、列表内引用中的 fenced code 成为真实 FencedCode，沿用语言高亮/换行/代码复制和现有 Mermaid 分支，不再拍平成行内文本。这是已确认的产品范围增加，不能只移除源码高亮来满足两侧一致。
+
+- AST 使用已有 BlockElement 递归组合：BlockQuote 已有 Vec<BlockElement>，让其 parser 真正保留子块；ListItem 改为 checked + 有序 body: Vec<BlockElement>，替代 content + 单个 sub_list 双形态，使段落→代码→子列表→后续段落保留实际顺序。不同时维护等价的两份内容。复用 pulldown 事件，不另造 Markdown 语法器。
+- 递归解析与递归预览复用统一块函数，保留既有列表深度防护；超深输入安全回退保留文本，不静默吞掉子内容。普通无代码列表/引用已有渲染、任务状态和纯文本格式保持。HTML 导出同步消费新 body，避免新增 AST 在导出丢失。
+- 代码身份包含 root block 和子块路径（或等价源范围），顶层虚拟列表仍以 root 为单位。嵌套渲染传递真实 bounds、padding、flat 字符偏移；列表/引用的 plain_text 序列及分隔符由同一输出/偏移规则派生，复制和高亮不能各自再猜前缀长度。源码借同一事件源映射去掉语法容器前缀后着色，原文件不改。
+- 旧列表/引用样例的序列化文本与 Phase H B1/B2 真实选区/复制期望保持；新增样例明确段落与代码之间换行，不粘成 itemfn。至少验证列表/引用各一例以及二者组合嵌套的语言色、代码按钮复制、局部/跨父项拖选、实际命中、代码换行和虚拟高度/同步滚动。嵌套内容的范围/语义变化不能通过批量重写旧期望掩盖。
+- ParsedDocument 的代码描述和源映射随相同 revision 产生，不独立重扫当前 buffer 并套旧 AST。若解析节流暂用旧 AST，当前源码代码着色先 Plain，待该 revision 模型就绪后恢复；不在 UI 为补映射另起同步 parse。
+
+#### 对 9b2f059 规划审查的逐项回应
+
+①接受 parser 的 LF/synthetic LF 现实，明确 canonical=parser 文本、源码逐行 byte 映射与失败回退；嵌套能力是新增范围，已由用户选择支持，补单一有序 AST body 和消费链路。②采纳已有 rendered_regions + 一处 editor bounds + draw 后 defer，删除额外签名层，纠正 scroll_by 事件表述和 cfg(test) API 限制。③采纳 4MiB 按实际字节准入和一句稳定溢出行为；不接受把本机 56KB/50ms 实测外推为不可溢出的证明，极端压力行为已获用户确认。④补每语言预热验证和最多一次块预算重试，首次冷编译不直接成为无声永久终止。候选尚待独立复审，未自行关闭技术异议。
 
 本修订先送既有 Reviewer 挑战，重点是载荷/源范围可行性、视口事件闭环、4MiB 工作集边界及线程/计时证据。技术事实由协调者查证，新增产品取舍再交用户；明确无未解决实质异议前不派返工 #3。两个子代理实现/独立测试及阶段全量、打包和最终 PR 交付流程继续有效。
