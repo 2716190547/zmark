@@ -21,6 +21,7 @@
 - 按可独立验证的阶段提交；中间提交前运行本次改动及调用链上受影响功能的相关测试，记录所跑命令与未跑范围，不将有限验证提交报告为阶段完成。
 - 阶段提审、打包前，在最终候选上运行 `cargo test --workspace` 及项目要求的 feature 专项回归，全绿后再提交交付。共享 editor/preview/workspace/theme/AST/布局链路的修改须包含相关历史回归；影响范围不明确时扩大到全量。
 - Phase H 当前 21 项专项按既有命令串行运行（`--test-threads=1`）；其中 B3/B4 共 8 项与默认全量重叠，结果分报、去重，不把默认全量当作覆盖所有专项。
+- Phase I 的 `phase_i_syntax_and_warm_palette_test` 与 `rework4_stage_a_workspace_test` 已用 `required-features` 隔离观测，阶段交付必须另跑 `cargo test -p glidemark_app --features test-observation --test phase_i_syntax_and_warm_palette_test --test rework4_stage_a_workspace_test -- --test-threads=1`，并单列结果；默认全量不包含这两组，不能漏跑后声称完整回归。
 - 已派发任务若明确要求更严格的验证门槛，按该任务要求完成，不用新规则回溯减免。测试精简只删除有证据的重复、失效或已被更强检查替代的用例，不通过 ignore、放宽断言或缩小输入降低保护；详见 `docs/plans/test-suite-maintenance.md`。
 - 不把 `target/`、构建产物、临时文件加入 git。
 - 不使用 `git reset --hard`、`git checkout .`、`git clean -fd` 等会丢弃他人改动的命令。
