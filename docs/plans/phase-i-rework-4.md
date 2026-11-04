@@ -166,3 +166,16 @@ Reviewer `w3:p7` 对 **40cb90d** 回调“本批通过，P1:0”，证据 `/priv
 - 十语言代表样本正常校验及有限失败/重试用例，观测真实后台入口；去掉warm验证或把失败当ready应红，界定测试钩子只强制底层结果，不在测试里重写状态机。保留正常bash/xml/rust实际颜色，断开生产预热接线能被检查抓住。
 - 一条小预算真实Split窗口反例，两侧不同可见块、同key重复、焦点切换及视口中心变化：实际入库/两侧颜色/资源提示与既定顺序一致，重绘不增加请求、滚回可恢复，去焦点/中心排序各自应红。检查insert拒绝和缓存有界；必须能区分只按文档顺序的旧实现。
 - 无参时钟共同起点重置、native-only旧起点移除与H边界红灯保留；不复制全历史变异。默认全量/AGENTS原样观测/H/I0/打包严格验签、子代理结束与精确计数后提审。整体仍不能宣称Phase I完成：I1/I2本批还待独立终验，I3与单独测试清理未执行；最终PR授权照旧。
+
+### d5e5186 规划复审回应：六处接线定案（待回审）
+
+Reviewer指出O1—O6，证据 `/private/tmp/glidemark-phase-i-i12-rework4-stage-b-fix3-plan-review/REVIEW_REPORT.md`。认可原设计，以下消除执行端二选一，不新增产品范围：
+
+- **O1，选需求门控，不在解析批次await。** Workspace持固定十语言的 `HashMap<&'static str, WarmState>`，有Waiting/Ready/InitFailed及最多0/1代次；复用一个独立warm任务句柄，一次后台任务完成有限样本预热/验证，不占syntax active/latest槽位。未Ready的可见块为非终止WaitingWarm，不进入用户解析队列、不递增syntax_attempts。语法集合仍进程OnceLock共享，warm就绪表按Workspace持有，不再为共享warm任务造等待者框架。warm完成/最终失败的回调更新该有限表，**显式清空上次已提交的有序需求记录并重新运行当前可见需求合并**，即使可见key完全未变也会推进Ready块或显示InitFailed；不能只notify后被集合相等提前return。任务不捕获旧文档待解析key，不把旧revision结果写回；切文档不取消与内容无关的warm，完成后只重新评估当前文档，用户解析结果仍逐项过doc/revision/request守卫。Workspace销毁则取消回调，后台在样本/语言边界检查取消，单个正则不可抢占的限制不变。warm不阻塞最新用户需求的合并；已Ready语言可先解析，不用等待其他语言warm，不以全局表锁包住样本正则。首次/最多一轮复验仍归warm代次，用户预算次数只在Ready后真实提交解析时记账；每代最多两次/总<=4是上界，不强求失败请求必须用满四次。
+- **O2，render期落字段，defer只读快照。** 保留现有 `cx.defer` 的每draw单armed模式。当前源码/预览共用Workspace focus_handle，不能伪称已有两个独立原生焦点；在 `WorkspaceView::render(&mut Window, ...)` 内读取 `focus_handle.is_focused(window)`，只有其真实持焦点时才用现有preview_focused逻辑窗格标记区分Preview/Source并写 `current_reading_pane`。该标记继续由两侧现有实际点击/键盘归焦入口维护，不能在defer里拿陈旧布尔直接冒充焦点；搜索/设置/其他焦点时当前值为None。另存 `last_reading_pane`，仅当前有效时更新，无焦点按它回退；初始无历史才按模式/文档稳定回退。无需新增pane FocusHandle或改变H的Cmd+C/输入路由。render快照随当前需求一起比较，所以只有焦点/优先级变化而key集合不变也会重评估。
+- **O3，映射错误只有AST描述一个来源。** Workspace收集可见描述时先看 `ParsedCodeBlock.is_valid`：false的出现位置立即标MappingInvalid，两侧该块Plain+源行原因，不入解析队列、不占attempt。删除无生产者的 `ParseResult::MappingInvalid` 及对应结果匹配臂，保留UI块状态类别。映射错误归属于该revision中的描述源范围/围栏起始行，不把同CodeKey另一处合法出现误报为映射错；源码和预览用同一描述定位该出现位置并在应用spans前门控。缓存身份仍只canonical语言+payload，同内容合法块可以复用结果，不能为此复制payload或另建扫描器。
+- **O4，完整准入次序随请求快照传递。** `SyntaxBatchRequest` 除missing解析工作项外，携带该需求的完整有序 `Vec<CodeKey>` 和阅读窗格快照（包含已缓存候选，去重保留最高优先位置），retry沿用同一需求顺序。焦点/滚动/优先级变化会建新request_id并替换latest pending，旧完成仍被现有三维守卫拒绝，不能事后拿新的last_visible顺序解释旧结果。被接受的完成回调仅按**请求自带顺序**评估已有Ready与新结果的容纳：非当前需求条目先按现有LRU释放，本轮已接受较高优先key才进入retained，较低优先条目不能反向阻挡/逐出它；拒绝即资源原因且继续尝试后续小条目。容纳结论用于两侧着色，不以缓存里碰巧还有旧span就越过降级状态。没有missing但排序变化也要立即用该快照重评估现有结果，不等一个不存在的新解析完成。复用Vec顺序/简单retained，不做通用签名、优先队列或第二份spans缓存。
+- **O5，接现有完整i18n。** 在 `I18nStrings` 增失败原因/原文可读/数量提示所需的最少字段，覆盖现有全部显式locale表（含繁体），Auto沿用既有resolve；删除 `localized_reason(is_zh)` 中英硬编码分支，状态到strings字段一处映射。HardLimit文案必须含单行1000标量，不只64KiB/2000行。不为此增加翻译依赖或新的语言框架。
+- **O6，tooltip不是鼠标事件黑洞。** 提示复用现有状态行样式及 `.tooltip`，窄条且不遮挡行列标签。若其hitbox与正文文本区相交，mousedown/move/up须交回该pane现有生产命中/选区处理，使用原始window坐标，不stop_propagation、不改坐标猜测、不合成另一套事件；仅“不注册点击handler”或“让事件冒泡”不能证明兄弟源码行收到事件。必须用真实事件验证从提示区域起手及拖过提示区域的选取/释放/复制与移除提示时一致，不能只检查某个函数被调用。若GPUI无法复用已有命中入口保证此边界，先报告具体API限制回规划，不静默让tooltip抢拖选。
+
+新增判别边界随上述最小证据并入现有用例：固定可见集WaitingWarm→Ready会实际着色、WaitingWarm→InitFailed会显示且不耗用户attempt；搜索夺焦不误用preview旧标记、归焦变化但key相同会变准入；同key合法/无效两处仅无效处Plain；请求在飞时切焦点使旧结果被拒、最新请求按自己顺序容纳；无missing排序变化仍更新；提示区域真实拖选不被截断。这些是O1—O6的闭环，不能只测状态map或手工构造不合法request状态。原守卫/预算/H变异与计数口径保持。仍待Reviewer对本修订明确无未解决实质异议，未派实现。
