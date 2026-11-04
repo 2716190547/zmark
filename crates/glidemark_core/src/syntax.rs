@@ -474,6 +474,18 @@ fn fallback_plain(code: &str) -> Vec<SyntaxSpan> {
     }
 }
 
+#[inline]
+fn now_ms(start_instant: Instant) -> u64 {
+    #[cfg(feature = "test-observation")]
+    {
+        let mock = TEST_MOCK_CLOCK_MS.load(Ordering::Relaxed);
+        if mock > 0 {
+            return mock;
+        }
+    }
+    start_instant.elapsed().as_millis() as u64
+}
+
 /// Parses the code payload into semantic `SyntaxSpan`s using syntect with an optional cancellation flag.
 ///
 /// Implements:
@@ -526,20 +538,17 @@ pub fn parse_code_spans_bounded(
         None => return ParseResult::InitFailed,
     };
 
+    let start_instant = Instant::now();
+    let start_ms: u64 = now_ms(start_instant);
+
     #[cfg(feature = "test-observation")]
-    let (use_mock_clock, mock_start_ms) = {
-        let mock = TEST_MOCK_CLOCK_MS.load(Ordering::Relaxed);
-        if mock > 0 {
-            let init_adv = TEST_INITIAL_ADVANCE_MS.load(Ordering::Relaxed);
-            if init_adv > 0 {
-                TEST_MOCK_CLOCK_MS.fetch_add(init_adv, Ordering::Relaxed);
-            }
-            (true, mock)
-        } else {
-            (false, 0)
+    {
+        let init_adv = TEST_INITIAL_ADVANCE_MS.load(Ordering::Relaxed);
+        if init_adv > 0 && TEST_MOCK_CLOCK_MS.load(Ordering::Relaxed) > 0 {
+            TEST_MOCK_CLOCK_MS.fetch_add(init_adv, Ordering::Relaxed);
         }
-    };
-    let start_time = Instant::now();
+    }
+
     let mut state = ParseState::new(syntax);
     let mut stack = ScopeStack::new();
     let mut raw_spans: Vec<SyntaxSpan> = Vec::new();
@@ -555,14 +564,7 @@ pub fn parse_code_spans_bounded(
         }
 
         // Check cumulative elapsed time before each line
-        #[cfg(feature = "test-observation")]
-        let elapsed_ms = if use_mock_clock {
-            TEST_MOCK_CLOCK_MS.load(Ordering::Relaxed).saturating_sub(mock_start_ms)
-        } else {
-            start_time.elapsed().as_millis() as u64
-        };
-        #[cfg(not(feature = "test-observation"))]
-        let elapsed_ms = start_time.elapsed().as_millis() as u64;
+        let elapsed_ms = now_ms(start_instant).saturating_sub(start_ms);
         if elapsed_ms >= PARSE_SOFT_BUDGET_MS {
             return ParseResult::BudgetExceeded;
         }
@@ -590,14 +592,7 @@ pub fn parse_code_spans_bounded(
         }
 
         // Check cumulative elapsed time immediately after regex return
-        #[cfg(feature = "test-observation")]
-        let elapsed_ms = if use_mock_clock {
-            TEST_MOCK_CLOCK_MS.load(Ordering::Relaxed).saturating_sub(mock_start_ms)
-        } else {
-            start_time.elapsed().as_millis() as u64
-        };
-        #[cfg(not(feature = "test-observation"))]
-        let elapsed_ms = start_time.elapsed().as_millis() as u64;
+        let elapsed_ms = now_ms(start_instant).saturating_sub(start_ms);
         if elapsed_ms >= PARSE_SOFT_BUDGET_MS {
             return ParseResult::BudgetExceeded;
         }

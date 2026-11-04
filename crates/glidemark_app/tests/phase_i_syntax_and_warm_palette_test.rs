@@ -1132,10 +1132,18 @@ async fn test_phase_i_small_blocks_eviction_and_scroll_recovery(cx: &mut TestApp
     assert!(recovered_key0, "Block 0 must recover when scrolled back / re-requested");
 }
 
+struct TestClockGuard;
+impl Drop for TestClockGuard {
+    fn drop(&mut self) {
+        reset_test_clock();
+    }
+}
+
 /// Test 14: Cumulative 50ms soft budget without slow-line resets (deterministic mock clock)
 #[test]
 fn test_phase_i_cumulative_soft_budget_without_resets() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = TestClockGuard;
 
     // 1. Initial / line 0 timeout returns BudgetExceeded
     reset_test_clock();

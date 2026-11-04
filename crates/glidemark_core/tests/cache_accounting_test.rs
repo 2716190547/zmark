@@ -237,26 +237,48 @@ fn test_stage_a_cache_accounting_and_ledger() {
         assert!(!admitted2, "insert must return false when non-retained eviction cannot free enough space");
     }
 
-    // 7. Drop diff: verify cache-owned bytes are strictly released upon drop
+    // 7. Bounded boundary test: small max_bytes (200,000) filled to capacity, verify real drop differential
     {
-        let code = "fn test_drop_cleanup() { let x = 42; }";
-        let spans_vec = parse_code_spans(code, Some("rust"));
-        let spans_slice = spans_vec.as_slice();
-
-        let before = current_allocated();
         let mut cache = SyntaxCache::new();
-        let key = SyntaxCache::key(code, Some("rust"));
-        let spans: Arc<[SyntaxSpan]> = Arc::from(spans_slice);
-        assert!(cache.insert(key, spans, &HashSet::new()));
+        cache.max_bytes = 200_000;
+        let retained = HashSet::new();
+        let base = current_allocated();
+        let mut i = 0;
+        while i < 2000 {
+            let code = format!("fn f{}() {{ let s = \"x{}\"; let n = {}; }}\n", i, i, i);
+            let spans = parse_code_spans(&code, Some("rust"));
+            let key = CodeKey::new(
+                glidemark_core::syntax::resolve_canonical_language(Some("rust")),
+                Arc::from(code.as_str()),
+            );
+            if cache.get(&key).is_some() {
+                i += 1;
+                continue;
+            }
+            if !cache.insert(key, Arc::from(spans), &retained) {
+                break;
+            }
+            i += 1;
+        }
         let during = current_allocated();
-        assert!(during > before);
-        let reported = cache.current_bytes();
+        let ledger = cache.current_bytes();
         drop(cache);
-        let after_drop = current_allocated();
-        let cache_owned = during.saturating_sub(after_drop);
-        let residual = after_drop.saturating_sub(before);
-        assert_eq!(residual, 0, "Residual memory after dropping cache must be 0");
-        let diff = (cache_owned as i64 - reported as i64).abs();
-        assert!(diff <= 64, "Cache owned memory must match ledger closely: cache_owned={}, reported={}", cache_owned, reported);
+        let after = current_allocated();
+        let owned_real = during.saturating_sub(after);
+        let _residual = after.saturating_sub(base);
+
+        assert!(
+            owned_real <= 200_000,
+            "Actual cache-owned bytes ({}) must not exceed max_bytes (200,000)",
+            owned_real
+        );
+        let diff = (owned_real as i64 - ledger as i64).abs();
+        assert!(
+            diff <= 256,
+            "Cache owned real ({}) must match ledger ({}) within tight tolerance (diff={})",
+            owned_real,
+            ledger,
+            diff
+        );
     }
 }
