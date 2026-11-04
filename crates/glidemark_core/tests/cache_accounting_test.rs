@@ -242,7 +242,6 @@ fn test_stage_a_cache_accounting_and_ledger() {
         let mut cache = SyntaxCache::new();
         cache.max_bytes = 200_000;
         let retained = HashSet::new();
-        let base = current_allocated();
         let mut i = 0;
         while i < 2000 {
             let code = format!("fn f{}() {{ let s = \"x{}\"; let n = {}; }}\n", i, i, i);
@@ -265,8 +264,12 @@ fn test_stage_a_cache_accounting_and_ledger() {
         drop(cache);
         let after = current_allocated();
         let owned_real = during.saturating_sub(after);
-        let _residual = after.saturating_sub(base);
 
+        assert!(
+            ledger > 150_000,
+            "Ledger must reach near capacity (got {})",
+            ledger
+        );
         assert!(
             owned_real <= 200_000,
             "Actual cache-owned bytes ({}) must not exceed max_bytes (200,000)",

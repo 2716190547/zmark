@@ -169,6 +169,13 @@ pub struct I18nStrings {
     pub search_no_results: &'static str,
     pub search_scanning: &'static str,
     pub search_incomplete: &'static str,
+    pub syntax_plain_readable: &'static str,
+    pub syntax_budget_exceeded: &'static str,
+    pub syntax_resource_constrained: &'static str,
+    pub syntax_hard_limit: &'static str,
+    pub syntax_mapping_invalid: &'static str,
+    pub syntax_init_failed: &'static str,
+    pub syntax_more_issues: &'static str,
 }
 
 pub fn localize_palette_name<'a>(id: &'a str, strings: &'a I18nStrings) -> &'a str {
@@ -298,6 +305,13 @@ static ZH_CN: I18nStrings = I18nStrings {
     search_no_results: "无匹配文件",
     search_scanning: "正在搜索...",
     search_incomplete: "结果可能不完整",
+    syntax_plain_readable: "原文可读",
+    syntax_budget_exceeded: "代码高亮解析超时（超过 50ms 预算）",
+    syntax_resource_constrained: "超出 4MiB 高亮缓存容量上限",
+    syntax_hard_limit: "超出代码块限制（>64KiB / >2000行 / 单行>1000字符）",
+    syntax_mapping_invalid: "围栏语法映射无效",
+    syntax_init_failed: "语法集预热或初始化失败",
+    syntax_more_issues: "等 {count} 处异常",
 };
 
 static ZH_TW: I18nStrings = I18nStrings {
@@ -398,6 +412,13 @@ static ZH_TW: I18nStrings = I18nStrings {
     search_no_results: "無符合檔案",
     search_scanning: "正在搜尋...",
     search_incomplete: "結果可能不完整",
+    syntax_plain_readable: "原文可讀",
+    syntax_budget_exceeded: "代碼高亮解析逾時（超過 50ms 預算）",
+    syntax_resource_constrained: "超出 4MiB 高亮快取容量上限",
+    syntax_hard_limit: "超出代碼塊限制（>64KiB / >2000行 / 單行>1000字元）",
+    syntax_mapping_invalid: "圍欄語法映射無效",
+    syntax_init_failed: "語法集預熱或初始化失敗",
+    syntax_more_issues: "等 {count} 處異常",
 };
 
 static EN: I18nStrings = I18nStrings {
@@ -498,6 +519,13 @@ static EN: I18nStrings = I18nStrings {
     search_no_results: "No matching files",
     search_scanning: "Searching...",
     search_incomplete: "Results may be incomplete",
+    syntax_plain_readable: "Plain text readable",
+    syntax_budget_exceeded: "Syntax highlight timed out (> 50ms budget)",
+    syntax_resource_constrained: "Exceeded 4MiB syntax cache memory limit",
+    syntax_hard_limit: "Exceeded block limit (>64KiB / >2000 lines / line >1000 scalars)",
+    syntax_mapping_invalid: "Code block mapping invalid",
+    syntax_init_failed: "Syntax set warm-up or initialization failed",
+    syntax_more_issues: "and {count} more issues",
 };
 
 static JA: I18nStrings = I18nStrings {
@@ -598,6 +626,13 @@ static JA: I18nStrings = I18nStrings {
     search_no_results: "一致するファイルがありません",
     search_scanning: "検索中...",
     search_incomplete: "結果が不完全な可能性があります",
+    syntax_plain_readable: "原文読み取り可能",
+    syntax_budget_exceeded: "構文ハイライトがタイムアウトしました（50ms上限）",
+    syntax_resource_constrained: "構文キャッシュ容量上限（4MiB）を超過しました",
+    syntax_hard_limit: "コードブロック制限超過（>64KiB / >2000行 / 1行>1000文字）",
+    syntax_mapping_invalid: "フェンス構文マッピングが無効です",
+    syntax_init_failed: "構文セットのウォームアップまたは初期化に失敗しました",
+    syntax_more_issues: "他 {count} 件の異常",
 };
 
 static KO: I18nStrings = I18nStrings {
@@ -698,6 +733,13 @@ static KO: I18nStrings = I18nStrings {
     search_no_results: "일치하는 파일 없음",
     search_scanning: "검색 중...",
     search_incomplete: "결과가 불완전할 수 있습니다",
+    syntax_plain_readable: "원문 읽기 가능",
+    syntax_budget_exceeded: "구문 강조 시간 초과 (50ms 예산 초과)",
+    syntax_resource_constrained: "구문 캐시 용량 한도(4MiB) 초과",
+    syntax_hard_limit: "코드 블록 제한 초과 (>64KiB / >2000줄 / 한 줄 >1000자)",
+    syntax_mapping_invalid: "펜스 구문 매핑이 유효하지 않음",
+    syntax_init_failed: "구문 세트 예열 또는 초기화 실패",
+    syntax_more_issues: "외 {count}건의 이상",
 };
 
 static FR: I18nStrings = I18nStrings {
@@ -798,6 +840,13 @@ static FR: I18nStrings = I18nStrings {
     search_no_results: "Aucun fichier correspondant",
     search_scanning: "Recherche en cours...",
     search_incomplete: "Résultats potentiellement incomplets",
+    syntax_plain_readable: "Texte brut lisible",
+    syntax_budget_exceeded: "Délai de coloration syntaxique dépassé (> 50ms)",
+    syntax_resource_constrained: "Limite de mémoire du cache syntaxique dépassée (4 Mio)",
+    syntax_hard_limit: "Limite du bloc dépassée (>64 Kio / >2000 lignes / ligne >1000 caractères)",
+    syntax_mapping_invalid: "Mappage du bloc de code invalide",
+    syntax_init_failed: "Échec du préchauffage ou de l'initialisation du jeu de syntaxe",
+    syntax_more_issues: "et {count} autres anomalies",
 };
 
 static DE: I18nStrings = I18nStrings {
@@ -898,6 +947,13 @@ static DE: I18nStrings = I18nStrings {
     search_no_results: "Keine übereinstimmenden Dateien",
     search_scanning: "Suche läuft...",
     search_incomplete: "Ergebnisse möglicherweise unvollständig",
+    syntax_plain_readable: "Klartext lesbar",
+    syntax_budget_exceeded: "Syntax-Highlighting-Zeitlimit überschritten (> 50ms)",
+    syntax_resource_constrained: "Speicherlimit des Syntax-Caches überschritten (4 MiB)",
+    syntax_hard_limit: "Blocklimit überschritten (>64 KiB / >2000 Zeilen / Zeile >1000 Zeichen)",
+    syntax_mapping_invalid: "Codeblock-Zuordnung ungültig",
+    syntax_init_failed: "Aufwärmen oder Initialisierung des Syntaxsets fehlgeschlagen",
+    syntax_more_issues: "und {count} weitere Probleme",
 };
 
 static ES: I18nStrings = I18nStrings {
@@ -998,6 +1054,13 @@ static ES: I18nStrings = I18nStrings {
     search_no_results: "No hay archivos coincidentes",
     search_scanning: "Buscando...",
     search_incomplete: "Los resultados pueden ser incompletos",
+    syntax_plain_readable: "Texto sin formato legible",
+    syntax_budget_exceeded: "Tiempo de resaltado de sintaxis agotado (> 50ms)",
+    syntax_resource_constrained: "Límite de memoria de caché de sintaxis superado (4 MiB)",
+    syntax_hard_limit: "Límite del bloque superado (>64 KiB / >2000 líneas / línea >1000 caracteres)",
+    syntax_mapping_invalid: "Asignación del bloque de código no válida",
+    syntax_init_failed: "Error al precalentar o inicializar el conjunto de sintaxis",
+    syntax_more_issues: "y {count} problemas más",
 };
 
 static RU: I18nStrings = I18nStrings {
@@ -1098,6 +1161,13 @@ static RU: I18nStrings = I18nStrings {
     search_no_results: "Нет совпадающих файлов",
     search_scanning: "Поиск...",
     search_incomplete: "Результаты могут быть неполными",
+    syntax_plain_readable: "Исходный текст читаем",
+    syntax_budget_exceeded: "Превышено время подсветки синтаксиса (> 50 мс)",
+    syntax_resource_constrained: "Превышен лимит памяти кэша синтаксиса (4 МиБ)",
+    syntax_hard_limit: "Превышен лимит блока (>64 КиБ / >2000 строк / строка >1000 символов)",
+    syntax_mapping_invalid: "Недопустимое сопоставление блока кода",
+    syntax_init_failed: "Сбой прогрева или инициализации набора синтаксисов",
+    syntax_more_issues: "и еще {count} проблем",
 };
 
 static PT: I18nStrings = I18nStrings {
@@ -1198,4 +1268,11 @@ static PT: I18nStrings = I18nStrings {
     search_no_results: "Nenhum arquivo correspondente",
     search_scanning: "Pesquisando...",
     search_incomplete: "Resultados podem estar incompletos",
+    syntax_plain_readable: "Texto sem formatação legível",
+    syntax_budget_exceeded: "Tempo limite de realce de sintaxe excedido (> 50ms)",
+    syntax_resource_constrained: "Limite de memória do cache de sintaxe excedido (4 MiB)",
+    syntax_hard_limit: "Limite do bloco excedido (>64 KiB / >2000 linhas / linha >1000 caracteres)",
+    syntax_mapping_invalid: "Mapeamento do bloco de código inválido",
+    syntax_init_failed: "Falha ao pré-aquecer ou inicializar o conjunto de sintaxes",
+    syntax_more_issues: "e mais {count} problemas",
 };

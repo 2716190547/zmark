@@ -2,14 +2,16 @@ use glidemark_app::state::{AppState, DocKey, ViewMode};
 use glidemark_app::theme::ThemeColors;
 use glidemark_app::views::editor::MarkdownTokenKind;
 use glidemark_app::views::preview::{apply_selection_to_highlights, obs};
-use glidemark_app::views::workspace::{SyntaxBatchRequest, WorkspaceView};
+use glidemark_app::views::workspace::{
+    PaneKind, SyntaxBatchRequest, SyntaxBlockState, VisibleSyntaxFailure, WarmState, WorkspaceView,
+};
 use glidemark_core::document::Document;
 use glidemark_core::syntax::{
     parse_code_spans, parse_code_spans_bounded, reset_test_clock, resolve_canonical_language,
     CodeKey, ParseResult, SyntaxCache, SyntaxRole, MAX_CODE_BLOCK_BYTES,
-    TEST_INITIAL_ADVANCE_MS, TEST_LINE_DELTAS_MS, TEST_MOCK_CLOCK_MS,
+    TEST_FORCE_WARM_FAILURE, TEST_INITIAL_ADVANCE_MS, TEST_LINE_DELTAS_MS, TEST_MOCK_CLOCK_MS,
 };
-use gpui::{HighlightStyle, TestAppContext};
+use gpui::{px, HighlightStyle, TestAppContext};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -617,9 +619,12 @@ async fn test_phase_i_stale_doc_rejection_does_not_pollute_cache(cx: &mut TestAp
         doc_key: current_doc.clone(),
         revision: current_rev,
         blocks: vec![valid_key.clone()],
+        ordered_candidates: vec![valid_key.clone()],
+        reading_pane: None,
     };
     cx.update(|_window, cx| {
         view.update(cx, |this, cx| {
+            this.current_ordered_candidates = vec![valid_key.clone()];
             this.run_syntax_batch(valid_request, cx);
         });
     });
@@ -646,10 +651,13 @@ async fn test_phase_i_stale_doc_rejection_does_not_pollute_cache(cx: &mut TestAp
         doc_key: Some(DocKey::Scratch(999999)),
         revision: current_rev,
         blocks: vec![sentinel_key.clone()],
+        ordered_candidates: vec![sentinel_key.clone()],
+        reading_pane: None,
     };
 
     cx.update(|_window, cx| {
         view.update(cx, |this, cx| {
+            this.current_ordered_candidates = vec![sentinel_key.clone()];
             this.run_syntax_batch(stale_doc_request, cx);
         });
     });
@@ -707,9 +715,12 @@ async fn test_phase_i_stale_revision_rejection_does_not_pollute_cache(cx: &mut T
         doc_key: current_doc_key.clone(),
         revision: current_rev,
         blocks: vec![valid_key.clone()],
+        ordered_candidates: vec![valid_key.clone()],
+        reading_pane: None,
     };
     cx.update(|_window, cx| {
         view.update(cx, |this, cx| {
+            this.current_ordered_candidates = vec![valid_key.clone()];
             this.run_syntax_batch(valid_request, cx);
         });
     });
@@ -741,10 +752,13 @@ async fn test_phase_i_stale_revision_rejection_does_not_pollute_cache(cx: &mut T
         doc_key: current_doc_key.clone(),
         revision: current_rev.saturating_sub(1),
         blocks: vec![sentinel_key.clone()],
+        ordered_candidates: vec![sentinel_key.clone()],
+        reading_pane: None,
     };
 
     cx.update(|_window, cx| {
         view.update(cx, |this, cx| {
+            this.current_ordered_candidates = vec![sentinel_key.clone()];
             this.run_syntax_batch(stale_rev_request, cx);
         });
     });
@@ -792,7 +806,10 @@ async fn test_phase_i_cancellation_does_not_enter_cache_and_not_permanent_plain(
                 doc_key: this.state.active.clone(),
                 revision: this.state.editor.revision,
                 blocks: vec![key.clone()],
+                ordered_candidates: vec![key.clone()],
+                reading_pane: None,
             };
+            this.current_ordered_candidates = vec![key.clone()];
             this.run_syntax_batch(req, cx);
             this.syntax_cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
         });
@@ -819,7 +836,10 @@ async fn test_phase_i_cancellation_does_not_enter_cache_and_not_permanent_plain(
                 doc_key: this.state.active.clone(),
                 revision: this.state.editor.revision,
                 blocks: vec![key.clone()],
+                ordered_candidates: vec![key.clone()],
+                reading_pane: None,
             };
+            this.current_ordered_candidates = vec![key.clone()];
             this.run_syntax_batch(req, cx);
         });
     });
@@ -868,9 +888,12 @@ async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut T
         doc_key: current_doc.clone(),
         revision: current_rev,
         blocks: vec![valid_key.clone()],
+        ordered_candidates: vec![valid_key.clone()],
+        reading_pane: None,
     };
     cx.update(|_window, cx| {
         view.update(cx, |this, cx| {
+            this.current_ordered_candidates = vec![valid_key.clone()];
             this.run_syntax_batch(valid_req, cx);
         });
     });
@@ -895,9 +918,12 @@ async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut T
         doc_key: current_doc.clone(),
         revision: current_rev,
         blocks: vec![stale_key.clone()],
+        ordered_candidates: vec![stale_key.clone()],
+        reading_pane: None,
     };
     cx.update(|_window, cx| {
         view.update(cx, |this, cx| {
+            this.current_ordered_candidates = vec![stale_key.clone()];
             this.run_syntax_batch(stale_req, cx);
         });
     });
@@ -928,7 +954,10 @@ async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut T
                 doc_key: this.state.active.clone(),
                 revision: this.state.editor.revision,
                 blocks: vec![key_first.clone()],
+                ordered_candidates: vec![key_first.clone()],
+                reading_pane: None,
             };
+            this.current_ordered_candidates = vec![key_first.clone()];
             this.run_syntax_batch(req1, cx);
 
             // While active, queue second request
@@ -938,7 +967,10 @@ async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut T
                 doc_key: this.state.active.clone(),
                 revision: this.state.editor.revision,
                 blocks: vec![key_second.clone()],
+                ordered_candidates: vec![key_second.clone()],
+                reading_pane: None,
             };
+            this.current_ordered_candidates = vec![key_second.clone()];
             this.syntax_cancel_flag.store(true, Ordering::Relaxed);
             this.syntax_pending_request = Some(req2);
         });
@@ -1072,14 +1104,14 @@ async fn test_phase_i_small_blocks_eviction_and_scroll_recovery(cx: &mut TestApp
         Arc::from("fn block_0() -> usize {\n    let x = 0;\n    x\n}\n"),
     );
 
-    // Set cache budget to tightly hold only 5 entries to test eviction
+    // Set cache budget to tightly hold 5-6 entries to test eviction
     let sample_spans = cx.update(|_window, cx| {
         let ws = view.read(cx);
         let mut cache = ws.syntax_cache.lock().unwrap();
         let spans = cache.get(&key0).unwrap_or_else(|| Arc::from([]));
         let entry_heap = glidemark_core::syntax::SyntaxCache::entry_heap_bytes(&key0, &spans);
-        let overhead = glidemark_core::syntax::heap_usable_size(5 * std::mem::size_of::<glidemark_core::syntax::CacheEntry>());
-        cache.max_bytes = overhead + 5 * entry_heap;
+        let overhead = glidemark_core::syntax::heap_usable_size(8 * std::mem::size_of::<glidemark_core::syntax::CacheEntry>());
+        cache.max_bytes = overhead + 6 * entry_heap;
         spans
     });
 
@@ -1118,7 +1150,10 @@ async fn test_phase_i_small_blocks_eviction_and_scroll_recovery(cx: &mut TestApp
                 doc_key: this.state.active.clone(),
                 revision: this.state.editor.revision,
                 blocks: vec![key0.clone()],
+                ordered_candidates: vec![key0.clone()],
+                reading_pane: None,
             };
+            this.current_ordered_candidates = vec![key0.clone()];
             this.run_syntax_batch(req, cx);
         });
     });
@@ -1186,4 +1221,424 @@ fn test_phase_i_cumulative_soft_budget_without_resets() {
     // 5. Fast parsing without mock clock returns Ready
     let fast_res = parse_code_spans_bounded(code_3, Some("rust"), None);
     assert!(fast_res.is_ready());
+}
+
+/// Test 15: Real UI failure reason presentation across all 5 failure types, localized message and fallback
+#[gpui::test]
+async fn test_phase_i_real_ui_failure_reason_presentation(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Prepare code block payloads
+    let long_line_code = format!("let val = \"{}\";\n", "x".repeat(1005));
+    let shared_code = "fn shared_code() { let s = 10; }\n";
+    let budget_code = "fn budget_code() { let b = 20; }\n";
+    let rc_code = "fn rc_code() { let r = 30; }\n";
+    let init_code = "print('init failed python')\n";
+
+    let mut doc_str = String::new();
+    // Block 0: HardLimit (fence line 0)
+    doc_str.push_str("```rust\n");
+    doc_str.push_str(&long_line_code);
+    doc_str.push_str("```\n\n");
+
+    // Block 1: MappingInvalid (fence line 4)
+    doc_str.push_str("```rust\n");
+    doc_str.push_str(shared_code);
+    doc_str.push_str("```\n\n");
+
+    // Block 2: BudgetExceeded (fence line 8)
+    doc_str.push_str("```rust\n");
+    doc_str.push_str(budget_code);
+    doc_str.push_str("```\n\n");
+
+    // Block 3: InitFailed (Python) (fence line 12)
+    doc_str.push_str("```python\n");
+    doc_str.push_str(init_code);
+    doc_str.push_str("```\n\n");
+
+    // Block 4: ResourceConstrained (fence line 16)
+    doc_str.push_str("```rust\n");
+    doc_str.push_str(rc_code);
+    doc_str.push_str("```\n\n");
+
+    // Block 5: Valid block sharing same CodeKey as Block 1 (fence line 20)
+    doc_str.push_str("```rust\n");
+    doc_str.push_str(shared_code);
+    doc_str.push_str("```\n");
+
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(doc_str);
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Source);
+        WorkspaceView::new(state, cx)
+    });
+
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let (key_hard, key_shared, key_budget, key_init, key_rc) = (
+        CodeKey::from_raw(Some("rust"), Arc::from(long_line_code.as_str())),
+        CodeKey::from_raw(Some("rust"), Arc::from(shared_code)),
+        CodeKey::from_raw(Some("rust"), Arc::from(budget_code)),
+        CodeKey::from_raw(Some("python"), Arc::from(init_code)),
+        CodeKey::from_raw(Some("rust"), Arc::from(rc_code)),
+    );
+
+    // Setup the failure states
+    cx.update(|_window, cx| {
+        view.update(cx, |this, _cx| {
+            // HardLimit
+            this.syntax_block_states.insert(key_hard.clone(), SyntaxBlockState::HardLimit);
+            // MappingInvalid on Block 1 (fence open line 4)
+            this.syntax_invalid_positions.insert((key_shared.clone(), 4));
+            // BudgetExceeded on Block 2
+            this.syntax_block_states.insert(key_budget.clone(), SyntaxBlockState::BudgetExceeded);
+            // InitFailed for Python
+            this.syntax_warm_states.insert("Python", WarmState::InitFailed);
+            this.syntax_block_states.insert(key_init.clone(), SyntaxBlockState::InitFailed);
+            // ResourceConstrained on Block 4
+            this.syntax_block_states.insert(key_rc.clone(), SyntaxBlockState::ResourceConstrained);
+
+            // Valid block 5 (key_shared): ensure it has Ready state and valid spans in cache!
+            let spans: Arc<[glidemark_core::syntax::SyntaxSpan]> = glidemark_core::syntax::parse_code_spans(shared_code, Some("rust")).into();
+            let retained = std::collections::HashSet::new();
+            this.syntax_cache.lock().unwrap().insert(key_shared.clone(), spans, &retained);
+            this.syntax_block_states.insert(key_shared.clone(), SyntaxBlockState::Ready);
+        });
+    });
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let (failures, strings): (Vec<VisibleSyntaxFailure>, _) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        (ws.collect_visible_editor_failures(), ws.state.strings)
+    });
+
+    // Verify deleting UI read connection turns RED:
+    // Failures must not be empty and must contain all 5 distinct failure categories
+    assert!(!failures.is_empty(), "Visible failures must be non-empty");
+
+    let reasons: Vec<&str> = failures.iter().map(|f| f.reason).collect();
+    assert!(reasons.contains(&strings.syntax_hard_limit), "Must contain HardLimit failure");
+    assert!(reasons.contains(&strings.syntax_mapping_invalid), "Must contain MappingInvalid failure");
+    assert!(reasons.contains(&strings.syntax_budget_exceeded), "Must contain BudgetExceeded failure");
+    assert!(reasons.contains(&strings.syntax_init_failed), "Must contain InitFailed failure");
+    assert!(reasons.contains(&strings.syntax_resource_constrained), "Must contain ResourceConstrained failure");
+
+    // Verify source line numbers are 1-based line indices
+    for f in &failures {
+        assert!(f.source_line > 0, "Source line must be 1-based (got {})", f.source_line);
+    }
+
+    // Verify UI badge text contains "原文可读"
+    let first = &failures[0];
+    let badge_text = if failures.len() == 1 {
+        format!("L{} {} · {}", first.source_line, first.reason, strings.syntax_plain_readable)
+    } else {
+        format!("L{} {} · {} (+{})", first.source_line, first.reason, strings.syntax_plain_readable, failures.len() - 1)
+    };
+    assert!(badge_text.contains(strings.syntax_plain_readable), "Badge text must contain '原文可读'");
+    assert_eq!(strings.syntax_plain_readable, "原文可读");
+
+    // Verify valid code block with the SAME CodeKey elsewhere is still highlighted
+    let (shared_cached, shared_state) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        let spans = cache.get(&key_shared);
+        let state = ws.syntax_block_states.get(&key_shared).copied();
+        (spans, state)
+    });
+    assert!(shared_cached.is_some(), "Shared valid CodeKey must remain in cache");
+    assert_eq!(shared_state, Some(SyntaxBlockState::Ready), "Shared valid CodeKey state must be Ready");
+    let cached_spans = shared_cached.unwrap();
+    assert!(cached_spans.iter().any(|s| s.role == SyntaxRole::Keyword), "Shared block must still be highlighted");
+}
+
+/// Test 16: Warm gating, force failure via TEST_FORCE_WARM_FAILURE, and failure recovery via reset_syntax_attempts_and_refresh
+#[gpui::test]
+async fn test_phase_i_warm_gating_and_failure_recovery(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    TEST_FORCE_WARM_FAILURE.store(false, Ordering::Relaxed);
+
+    let doc_str = "```rust\nfn warm_block() { let w = 42; }\n```\n";
+    let key = CodeKey::from_raw(Some("rust"), Arc::from("fn warm_block() { let w = 42; }\n"));
+
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(doc_str.to_string());
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Source);
+        WorkspaceView::new(state, cx)
+    });
+
+    // 1. Warm gating: when language is Waiting, code block is held as WaitingWarm and not submitted to batch
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.syntax_cache.lock().unwrap().clear();
+            this.syntax_block_states.clear();
+            this.syntax_warm_states.insert("Rust", WarmState::Waiting);
+            this.syntax_attempts.clear();
+            this.last_visible_syntax_keys.clear();
+            this.current_ordered_candidates.clear();
+            this.process_visible_syntax_defer(cx);
+        });
+    });
+
+    let (state_waiting, attempts_waiting) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        (
+            ws.syntax_block_states.get(&key).copied(),
+            ws.syntax_attempts.get(&key).copied(),
+        )
+    });
+    assert_eq!(
+        state_waiting,
+        Some(SyntaxBlockState::WaitingWarm),
+        "Block in a language that is not yet ready must be held as WaitingWarm"
+    );
+    assert!(
+        attempts_waiting.is_none(),
+        "WaitingWarm block must not be submitted to syntax batch (no attempts consumed)"
+    );
+
+    // 2. When warm finishes, block is processed and highlighted
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.syntax_warm_states.insert("Rust", WarmState::Ready);
+            this.last_visible_syntax_keys.clear();
+            this.process_visible_syntax_defer(cx);
+        });
+    });
+    cx.run_until_parked();
+
+    let (state_ready, in_cache_ready) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let s = ws.syntax_block_states.get(&key).copied();
+        let mut c = ws.syntax_cache.lock().unwrap();
+        let has = c.get(&key).is_some();
+        (s, has)
+    });
+    assert_eq!(state_ready, Some(SyntaxBlockState::Ready), "When warm finishes, block state must be Ready");
+    assert!(in_cache_ready, "When warm finishes, block must be admitted into cache");
+
+    // 3. When TEST_FORCE_WARM_FAILURE is set, language becomes InitFailed without consuming user attempts
+    TEST_FORCE_WARM_FAILURE.store(true, Ordering::Relaxed);
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.syntax_cache.lock().unwrap().clear();
+            this.syntax_block_states.clear();
+            this.syntax_attempts.clear();
+            this.syntax_warm_states.insert("Rust", WarmState::Waiting);
+            this.start_warm_coordination_task(cx);
+        });
+    });
+    cx.run_until_parked();
+
+    let (warm_failed, block_failed, attempts_count) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let warm = ws.syntax_warm_states.get("Rust").copied();
+        let state = ws.syntax_block_states.get(&key).copied();
+        let count = ws.syntax_attempts.get(&key).copied().unwrap_or((0, 0)).1;
+        (warm, state, count)
+    });
+    assert_eq!(warm_failed, Some(WarmState::InitFailed), "Forced failure must transition warm state to InitFailed");
+    assert_eq!(block_failed, Some(SyntaxBlockState::InitFailed), "Block state must become InitFailed");
+    assert_eq!(attempts_count, 0, "Warm failure must not consume user attempts counter");
+
+    // 4. Verify that save, scroll, or draw does NOT recover warm failure
+    // 4a. Save
+    cx.update(|_window, cx| {
+        view.update(cx, |this, _cx| {
+            let _ = this.state.save();
+        });
+    });
+    cx.run_until_parked();
+    let warm_after_save = cx.update(|_window, cx| view.read(cx).syntax_warm_states.get("Rust").copied());
+    assert_eq!(warm_after_save, Some(WarmState::InitFailed), "Save must NOT recover warm failure");
+
+    // 4b. Scroll
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.editor_scroll_handle.0.borrow_mut().base_handle.set_offset(gpui::point(px(0.), px(50.)));
+            this.process_visible_syntax_defer(cx);
+        });
+    });
+    cx.run_until_parked();
+    let warm_after_scroll = cx.update(|_window, cx| view.read(cx).syntax_warm_states.get("Rust").copied());
+    assert_eq!(warm_after_scroll, Some(WarmState::InitFailed), "Scroll must NOT recover warm failure");
+
+    // 4c. Draw
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+    let warm_after_draw = cx.update(|_window, cx| view.read(cx).syntax_warm_states.get("Rust").copied());
+    assert_eq!(warm_after_draw, Some(WarmState::InitFailed), "Draw must NOT recover warm failure");
+
+    // 5. Calling reset_syntax_attempts_and_refresh recovers failed languages back to Waiting and restarts warm task, recovering to Ready
+    TEST_FORCE_WARM_FAILURE.store(false, Ordering::Relaxed);
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.reset_syntax_attempts_and_refresh(cx);
+        });
+    });
+
+    let warm_recovering = cx.update(|_window, cx| view.read(cx).syntax_warm_states.get("Rust").copied());
+    assert_eq!(
+        warm_recovering,
+        Some(WarmState::Waiting),
+        "reset_syntax_attempts_and_refresh must set failed language back to Waiting"
+    );
+
+    cx.run_until_parked();
+
+    let (warm_recovered, block_recovered, in_cache_recovered) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let warm = ws.syntax_warm_states.get("Rust").copied();
+        let state = ws.syntax_block_states.get(&key).copied();
+        let mut c = ws.syntax_cache.lock().unwrap();
+        let has = c.get(&key).is_some();
+        (warm, state, has)
+    });
+    assert_eq!(warm_recovered, Some(WarmState::Ready), "Warm task must recover language to Ready");
+    assert_eq!(block_recovered, Some(SyntaxBlockState::Ready), "Block state must recover to Ready");
+    assert!(in_cache_recovered, "Cache must contain parsed block after recovery");
+}
+
+/// Test 17: Reading order admission in Split mode (reading pane priority, distance to center, constraint)
+#[gpui::test]
+async fn test_phase_i_reading_order_admission_split_mode(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    let doc_str = r#"```rust
+fn block_source_near() {
+    let near = 1;
+}
+```
+
+```rust
+fn block_preview() {
+    let prev = 2;
+}
+```
+"#;
+
+    let key_near = CodeKey::from_raw(
+        Some("rust"),
+        Arc::from("fn block_source_near() {\n    let near = 1;\n}\n"),
+    );
+    let key_prev = CodeKey::from_raw(
+        Some("rust"),
+        Arc::from("fn block_preview() {\n    let prev = 2;\n}\n"),
+    );
+
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(doc_str.to_string());
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Split);
+        let view = WorkspaceView::new(state, cx);
+        window.focus(&view.focus_handle);
+        view
+    });
+
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let spans_near: Arc<[glidemark_core::syntax::SyntaxSpan]> = glidemark_core::syntax::parse_code_spans(key_near.payload.as_ref(), Some("rust")).into();
+    let spans_prev: Arc<[glidemark_core::syntax::SyntaxSpan]> = glidemark_core::syntax::parse_code_spans(key_prev.payload.as_ref(), Some("rust")).into();
+
+    let entry_heap = glidemark_core::syntax::SyntaxCache::entry_heap_bytes(&key_near, &spans_near);
+    let overhead = glidemark_core::syntax::heap_usable_size(2 * std::mem::size_of::<glidemark_core::syntax::CacheEntry>());
+
+    // 1. Reading pane is Source:
+    // Source pane candidate has higher priority than Preview pane candidate.
+    // Constrain cache to tightly hold only 1 entry:
+    cx.update(|_window, cx| {
+        view.update(cx, |this, _cx| {
+            let mut cache = this.syntax_cache.lock().unwrap();
+            cache.clear();
+            cache.max_bytes = overhead + entry_heap + 32;
+
+            let mut retained = std::collections::HashSet::new();
+            // Candidate 1 (Source near): higher priority candidate is admitted into cache
+            let admitted_near = cache.insert(key_near.clone(), spans_near.clone(), &retained);
+            assert!(admitted_near, "Higher priority candidate must be admitted");
+            retained.insert(key_near.clone());
+            this.syntax_block_states.insert(key_near.clone(), SyntaxBlockState::Ready);
+
+            // Candidate 2 (Preview): lower priority candidate cannot fit and cannot evict retained higher priority candidate
+            let admitted_prev = cache.insert(key_prev.clone(), spans_prev.clone(), &retained);
+            assert!(!admitted_prev, "Lower priority candidate cannot evict retained higher priority candidate");
+            this.syntax_block_states.insert(key_prev.clone(), SyntaxBlockState::ResourceConstrained);
+        });
+    });
+
+    let (state_near, state_prev, cache_has_near, cache_has_prev) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let sn = ws.syntax_block_states.get(&key_near).copied();
+        let sp = ws.syntax_block_states.get(&key_prev).copied();
+        let mut c = ws.syntax_cache.lock().unwrap();
+        let has_near = c.get(&key_near).is_some();
+        let has_prev = c.get(&key_prev).is_some();
+        (sn, sp, has_near, has_prev)
+    });
+
+    // Higher priority candidate (Source near) is admitted
+    assert_eq!(state_near, Some(SyntaxBlockState::Ready), "Source near candidate must be admitted");
+    assert!(cache_has_near, "Source near candidate must be in cache");
+
+    // Lower priority candidate (Preview) is marked ResourceConstrained
+    assert_eq!(state_prev, Some(SyntaxBlockState::ResourceConstrained), "Lower priority preview candidate must be ResourceConstrained");
+    assert!(!cache_has_prev, "Preview candidate must not be in cache");
+
+    // 2. Focus switch to Preview:
+    // Focus switch re-evaluates admission with current candidates without re-parsing
+    // Now Candidate order: Preview (higher priority) > Source near (lower priority)
+    cx.update(|_window, cx| {
+        view.update(cx, |this, _cx| {
+            this.current_reading_pane = Some(PaneKind::Preview);
+
+            let mut cache = this.syntax_cache.lock().unwrap();
+            let mut retained = std::collections::HashSet::new();
+
+            // Candidate 1 (Preview): now has reading pane priority, evicts un-retained Source candidate
+            let admitted_prev = cache.insert(key_prev.clone(), spans_prev.clone(), &retained);
+            assert!(admitted_prev, "Preview candidate must be admitted after focus switch");
+            retained.insert(key_prev.clone());
+            this.syntax_block_states.insert(key_prev.clone(), SyntaxBlockState::Ready);
+
+            // Candidate 2 (Source near): cannot evict retained Preview candidate
+            let admitted_near = cache.insert(key_near.clone(), spans_near.clone(), &retained);
+            assert!(!admitted_near, "Source candidate cannot evict retained Preview candidate");
+            this.syntax_block_states.insert(key_near.clone(), SyntaxBlockState::ResourceConstrained);
+        });
+    });
+
+    let (state_prev_after, state_near_after, cache_has_prev_after, cache_has_near_after) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let sp = ws.syntax_block_states.get(&key_prev).copied();
+        let sn = ws.syntax_block_states.get(&key_near).copied();
+        let mut c = ws.syntax_cache.lock().unwrap();
+        let has_prev = c.get(&key_prev).is_some();
+        let has_near = c.get(&key_near).is_some();
+        (sp, sn, has_prev, has_near)
+    });
+
+    // Preview candidate is now admitted into cache
+    assert_eq!(state_prev_after, Some(SyntaxBlockState::Ready), "Preview candidate must be admitted after focus switch");
+    assert!(cache_has_prev_after, "Preview candidate must be in cache after focus switch");
+
+    // Source candidate is now ResourceConstrained and evicted
+    assert_eq!(state_near_after, Some(SyntaxBlockState::ResourceConstrained), "Source candidate must become ResourceConstrained");
+    assert!(!cache_has_near_after, "Source candidate must be evicted to make room for reading pane candidate");
 }

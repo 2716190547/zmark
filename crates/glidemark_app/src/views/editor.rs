@@ -1122,12 +1122,17 @@ pub fn render_editor_pane(
     scroll_handle: &UniformListScrollHandle,
     editor_left_offset: f32,
     on_click_line: Arc<dyn Fn(usize, usize, &mut Window, &mut App)>,
+    failures: &[crate::views::workspace::VisibleSyntaxFailure],
 ) -> impl IntoElement {
     let line_count = visual_lines.len().max(1);
     let (cursor_line, cursor_col) = cursor;
     let theme = theme.clone();
     let list_theme = theme.clone();
     let sanitized_lh = glidemark_core::config::Preferences::sanitize_line_height(line_height);
+
+    let list_visual_lines = visual_lines.clone();
+    let list_lines = lines.clone();
+    let list_on_click_line = on_click_line.clone();
 
     div()
         .flex_1()
@@ -1141,10 +1146,10 @@ pub fn render_editor_pane(
             uniform_list("editor_lines", line_count, move |range, window, _cx| {
                 let mut block_spans: std::collections::HashMap<glidemark_core::syntax::CodeKey, Arc<[glidemark_core::syntax::SyntaxSpan]>> = std::collections::HashMap::new();
                 if is_ast_in_sync && !code_blocks.is_empty() {
-                    let min_idx = range.start.min(visual_lines.len().saturating_sub(1));
-                    let max_idx = range.end.min(visual_lines.len());
-                    let start_p = visual_lines.get(min_idx).map(|v| v.physical_line_idx).unwrap_or(0);
-                    let end_p = visual_lines.get(max_idx.saturating_sub(1)).map(|v| v.physical_line_idx).unwrap_or(usize::MAX);
+                    let min_idx = range.start.min(list_visual_lines.len().saturating_sub(1));
+                    let max_idx = range.end.min(list_visual_lines.len());
+                    let start_p = list_visual_lines.get(min_idx).map(|v| v.physical_line_idx).unwrap_or(0);
+                    let end_p = list_visual_lines.get(max_idx.saturating_sub(1)).map(|v| v.physical_line_idx).unwrap_or(usize::MAX);
 
                     let mut cache = syntax_cache.lock().unwrap();
                     for b in code_blocks.iter() {
@@ -1162,16 +1167,16 @@ pub fn render_editor_pane(
 
                 range
                     .map(|vis_idx| {
-                        let vl = visual_lines.get(vis_idx);
+                        let vl = list_visual_lines.get(vis_idx);
                         let phys_idx = vl.map(|v| v.physical_line_idx).unwrap_or(0);
-                        let phys_line_str = lines.get(phys_idx).map(String::as_str).unwrap_or("");
+                        let phys_line_str = list_lines.get(phys_idx).map(String::as_str).unwrap_or("");
                         let subline_str: String = if let Some(v) = vl {
                             phys_line_str.chars().skip(v.char_start).take(v.char_len).collect()
                         } else {
                             phys_line_str.to_string()
                         };
 
-                        let is_last_subline_of_phys_line = visual_lines
+                        let is_last_subline_of_phys_line = list_visual_lines
                             .get(vis_idx + 1)
                             .map(|next| next.physical_line_idx != phys_idx)
                             .unwrap_or(true);
@@ -1279,7 +1284,7 @@ pub fn render_editor_pane(
                         };
                         let tokens = slice_tokens_for_visual_subline(&phys_tokens, sub_start, sub_len);
 
-                        let on_click_line = on_click_line.clone();
+                        let on_click_line = list_on_click_line.clone();
                         let row_h = calculate_line_row_height(font_size, sanitized_lh);
                         let tokens_click = tokens.clone();
 
@@ -1368,20 +1373,82 @@ pub fn render_editor_pane(
                 .right_3()
                 .flex()
                 .items_center()
-                .gap_1p5()
-                .px_2()
-                .py_1()
-                .rounded_full()
-                .bg(theme.bg)
-                .border_1()
-                .border_color(theme.border)
-                .text_size(px(10.))
-                .font_family("ui-sans-serif, system-ui")
-                .text_color(theme.text_muted)
-                .when(is_dirty, |el| {
-                    el.child(div().w(px(5.)).h(px(5.)).rounded_full().bg(theme.accent))
+                .gap_2()
+                .when(!failures.is_empty(), |el| {
+                    let first = &failures[0];
+                    let badge_text = if failures.len() == 1 {
+                        format!("L{} {} · {}", first.source_line, first.reason, strings.syntax_plain_readable)
+                    } else {
+                        format!("L{} {} · {} (+{})", first.source_line, first.reason, strings.syntax_plain_readable, failures.len() - 1)
+                    };
+                    let tooltip_text = failures
+                        .iter()
+                        .map(|f| format!("L{} {} · {}", f.source_line, f.reason, strings.syntax_plain_readable))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let on_click = on_click_line.clone();
+                    let vl_list = visual_lines.clone();
+                    let s_handle = scroll_handle.clone();
+                    let lines_for_click = lines.clone();
+                    el.child(
+                        div()
+                            .id("editor_syntax_failure_badge")
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .px_2()
+                            .py_1()
+                            .rounded_full()
+                            .bg(theme.bg)
+                            .border_1()
+                            .border_color(theme.border)
+                            .text_size(px(10.))
+                            .font_family("ui-sans-serif, system-ui")
+                            .text_color(theme.text_muted)
+                            .tooltip(move |_window, cx| {
+                                let t = tooltip_text.clone();
+                                cx.new(|_| crate::views::workspace::TooltipView { text: t }).into()
+                            })
+                            .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _window, cx| {
+                                let scroll_y = (-f32::from(s_handle.0.borrow().base_handle.offset().y)).max(0.0);
+                                let row_h = calculate_line_row_height(font_size, line_height).max(1.0);
+                                let click_y = f32::from(event.position.y) + scroll_y;
+                                let vis_idx = (click_y / row_h).floor().max(0.0) as usize;
+                                let x_offset = (f32::from(event.position.x) - editor_left_offset).max(0.0);
+                                let rel_col = if let Some(vl) = vl_list.get(vis_idx) {
+                                    if let Some(phys_line_str) = lines_for_click.get(vl.physical_line_idx) {
+                                        let subline_str: String = phys_line_str.chars().skip(vl.char_start).take(vl.char_len).collect();
+                                        calculate_click_char_col(&subline_str, x_offset, font_size)
+                                    } else {
+                                        0
+                                    }
+                                } else {
+                                    0
+                                };
+                                on_click(vis_idx, rel_col, _window, cx);
+                            })
+                            .child(badge_text),
+                    )
                 })
-                .child(format!("{} {}, {} {}", strings.status_line, cursor_line + 1, strings.status_col, cursor_col + 1)),
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .px_2()
+                        .py_1()
+                        .rounded_full()
+                        .bg(theme.bg)
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_size(px(10.))
+                        .font_family("ui-sans-serif, system-ui")
+                        .text_color(theme.text_muted)
+                        .when(is_dirty, |el| {
+                            el.child(div().w(px(5.)).h(px(5.)).rounded_full().bg(theme.accent))
+                        })
+                        .child(format!("{} {}, {} {}", strings.status_line, cursor_line + 1, strings.status_col, cursor_col + 1)),
+                ),
         )
 }
 

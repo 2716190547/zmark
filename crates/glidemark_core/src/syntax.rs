@@ -34,6 +34,9 @@ pub static TEST_LINE_DELTAS_MS: [AtomicU64; 8] = [
 pub static TEST_LINE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(feature = "test-observation")]
+pub static TEST_FORCE_WARM_FAILURE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "test-observation")]
 pub fn reset_test_clock() {
     TEST_MOCK_CLOCK_MS.store(0, Ordering::Relaxed);
     TEST_INITIAL_ADVANCE_MS.store(0, Ordering::Relaxed);
@@ -41,6 +44,7 @@ pub fn reset_test_clock() {
     for slot in &TEST_LINE_DELTAS_MS {
         slot.store(0, Ordering::Relaxed);
     }
+    TEST_FORCE_WARM_FAILURE.store(false, Ordering::Relaxed);
 }
 
 /// Canonical key identifying a code block's syntax highlighting work.
@@ -113,7 +117,6 @@ pub enum ParseResult {
     Cancelled,
     HardLimit,
     UnsupportedLanguage,
-    MappingInvalid,
     InitFailed,
 }
 
@@ -201,59 +204,65 @@ pub fn is_syntax_set_ready() -> bool {
     SYNTAX_SET.get().is_some()
 }
 
+/// The 10 canonical languages officially supported for syntax highlighting.
+pub const SUPPORTED_CANONICAL_LANGUAGES: [&'static str; 10] = [
+    "XML",
+    "HTML",
+    "Java",
+    "Python",
+    "JavaScript",
+    "JSON",
+    "YAML",
+    "SQL",
+    "Bourne Again Shell (bash)",
+    "Rust",
+];
+
+/// Returns the representative multi-line sample for a canonical language used for warming and validation.
+pub fn get_representative_warm_sample(canonical_lang: &str) -> Option<&'static str> {
+    match canonical_lang {
+        "XML" => Some("<!-- XML comment -->\n<root id=\"1\">\n  <item attr=\"val\">text</item>\n</root>\n"),
+        "HTML" => Some("<!DOCTYPE html>\n<html>\n  <head><title>GlideMark</title></head>\n  <body><p class=\"main\">Hello</p></body>\n</html>\n"),
+        "Java" => Some("// Java sample\npublic class Main {\n    public static void main(String[] args) {\n        System.out.println(42);\n    }\n}\n"),
+        "Python" => Some("# Python sample\ndef hello(name: str) -> str:\n    \"\"\"Greeting\"\"\"\n    return f'Hello {name}'\n"),
+        "JavaScript" => Some("// JS sample\nfunction calc(x) {\n    const mult = 42;\n    return x * mult;\n}\n"),
+        "JSON" => Some("{\n  \"name\": \"glidemark\",\n  \"count\": 123,\n  \"enabled\": true\n}\n"),
+        "YAML" => Some("# YAML sample\nkey: value\nitems:\n  - name: test\n    value: 1\n"),
+        "SQL" => Some("-- SQL query\nSELECT id, name, count(*)\nFROM users\nWHERE active = 1\nGROUP BY id, name;\n"),
+        "Bourne Again Shell (bash)" => Some("#!/bin/bash\n# Shell sample\nNAME=\"GlideMark\"\necho \"Running $NAME\"\nexit 0\n"),
+        "Rust" => Some("// Rust sample\npub fn add(a: i32, b: i32) -> i32 {\n    let sum = a + b;\n    sum\n}\n"),
+        _ => None,
+    }
+}
+
+/// Validates that a canonical language's syntax definition is warmed up and produces highlighted tokens.
+pub fn validate_language_warm(canonical_lang: &'static str) -> bool {
+    #[cfg(feature = "test-observation")]
+    if TEST_FORCE_WARM_FAILURE.load(Ordering::Relaxed) {
+        return false;
+    }
+    let Some(sample) = get_representative_warm_sample(canonical_lang) else {
+        return false;
+    };
+    match parse_code_spans_bounded(sample, Some(canonical_lang), None) {
+        ParseResult::Ready(spans) => spans.iter().any(|s| s.role != SyntaxRole::Plain),
+        _ => false,
+    }
+}
+
 /// Initializes `SYNTAX_SET` with syntect defaults and returns a static reference.
 pub fn init_syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(|| {
         let ss = SyntaxSet::load_defaults_newlines();
         // Pre-compile regexes for canonical syntaxes during initialization so parsing
         // code blocks never incurs one-time onig compilation against their parse budget.
-        let warm_samples: &[(&str, &str)] = &[
-            (
-                "XML",
-                "<!-- XML comment -->\n<root id=\"1\">\n  <item attr=\"val\">text</item>\n</root>\n",
-            ),
-            (
-                "HTML",
-                "<!DOCTYPE html>\n<html>\n  <head><title>GlideMark</title></head>\n  <body><p class=\"main\">Hello</p></body>\n</html>\n",
-            ),
-            (
-                "Java",
-                "// Java sample\npublic class Main {\n    public static void main(String[] args) {\n        System.out.println(42);\n    }\n}\n",
-            ),
-            (
-                "Python",
-                "# Python sample\ndef hello(name: str) -> str:\n    \"\"\"Greeting\"\"\"\n    return f'Hello {name}'\n",
-            ),
-            (
-                "JavaScript",
-                "// JS sample\nfunction calc(x) {\n    const mult = 42;\n    return x * mult;\n}\n",
-            ),
-            (
-                "JSON",
-                "{\n  \"name\": \"glidemark\",\n  \"count\": 123,\n  \"enabled\": true\n}\n",
-            ),
-            (
-                "YAML",
-                "# YAML sample\nkey: value\nitems:\n  - name: test\n    value: 1\n",
-            ),
-            (
-                "SQL",
-                "-- SQL query\nSELECT id, name, count(*)\nFROM users\nWHERE active = 1\nGROUP BY id, name;\n",
-            ),
-            (
-                "Bourne Again Shell (bash)",
-                "#!/bin/bash\n# Shell sample\nNAME=\"GlideMark\"\necho \"Running $NAME\"\nexit 0\n",
-            ),
-            (
-                "Rust",
-                "// Rust sample\npub fn add(a: i32, b: i32) -> i32 {\n    let sum = a + b;\n    sum\n}\n",
-            ),
-        ];
-        for (name, sample) in warm_samples {
-            if let Some(syntax) = ss.find_syntax_by_name(name) {
-                let mut state = ParseState::new(syntax);
-                for line in sample.split_inclusive('\n') {
-                    let _ = state.parse_line(line, &ss);
+        for name in &SUPPORTED_CANONICAL_LANGUAGES {
+            if let Some(sample) = get_representative_warm_sample(name) {
+                if let Some(syntax) = ss.find_syntax_by_name(name) {
+                    let mut state = ParseState::new(syntax);
+                    for line in sample.split_inclusive('\n') {
+                        let _ = state.parse_line(line, &ss);
+                    }
                 }
             }
         }
@@ -474,8 +483,10 @@ fn fallback_plain(code: &str) -> Vec<SyntaxSpan> {
     }
 }
 
+static PROCESS_START: OnceLock<Instant> = OnceLock::new();
+
 #[inline]
-fn now_ms(start_instant: Instant) -> u64 {
+pub fn now_ms() -> u64 {
     #[cfg(feature = "test-observation")]
     {
         let mock = TEST_MOCK_CLOCK_MS.load(Ordering::Relaxed);
@@ -483,7 +494,8 @@ fn now_ms(start_instant: Instant) -> u64 {
             return mock;
         }
     }
-    start_instant.elapsed().as_millis() as u64
+    let start = PROCESS_START.get_or_init(Instant::now);
+    Instant::now().duration_since(*start).as_millis() as u64
 }
 
 /// Parses the code payload into semantic `SyntaxSpan`s using syntect with an optional cancellation flag.
@@ -538,8 +550,7 @@ pub fn parse_code_spans_bounded(
         None => return ParseResult::InitFailed,
     };
 
-    let start_instant = Instant::now();
-    let start_ms: u64 = now_ms(start_instant);
+    let start_ms = now_ms();
 
     #[cfg(feature = "test-observation")]
     {
@@ -564,7 +575,7 @@ pub fn parse_code_spans_bounded(
         }
 
         // Check cumulative elapsed time before each line
-        let elapsed_ms = now_ms(start_instant).saturating_sub(start_ms);
+        let elapsed_ms = now_ms().saturating_sub(start_ms);
         if elapsed_ms >= PARSE_SOFT_BUDGET_MS {
             return ParseResult::BudgetExceeded;
         }
@@ -592,7 +603,7 @@ pub fn parse_code_spans_bounded(
         }
 
         // Check cumulative elapsed time immediately after regex return
-        let elapsed_ms = now_ms(start_instant).saturating_sub(start_ms);
+        let elapsed_ms = now_ms().saturating_sub(start_ms);
         if elapsed_ms >= PARSE_SOFT_BUDGET_MS {
             return ParseResult::BudgetExceeded;
         }
@@ -1059,5 +1070,39 @@ mod tests {
         let mut h2 = DefaultHasher::new();
         k2.hash(&mut h2);
         assert_eq!(h1.finish(), h2.finish(), "CodeKey hash must be content-based");
+    }
+
+    #[test]
+    fn test_supported_canonical_languages_and_validate_warm() {
+        assert_eq!(SUPPORTED_CANONICAL_LANGUAGES.len(), 10);
+        for lang in &SUPPORTED_CANONICAL_LANGUAGES {
+            assert!(
+                get_representative_warm_sample(lang).is_some(),
+                "sample must exist for {lang}"
+            );
+            assert!(
+                validate_language_warm(lang),
+                "validate_language_warm must succeed for {lang}"
+            );
+        }
+
+        assert!(!validate_language_warm("unsupported_xyz"));
+
+        #[cfg(feature = "test-observation")]
+        {
+            reset_test_clock();
+            TEST_FORCE_WARM_FAILURE.store(true, Ordering::Relaxed);
+            assert!(!validate_language_warm("Rust"));
+            reset_test_clock();
+            assert!(validate_language_warm("Rust"));
+        }
+    }
+
+    #[test]
+    fn test_monotonic_now_ms() {
+        let t1 = now_ms();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let t2 = now_ms();
+        assert!(t2 >= t1);
     }
 }

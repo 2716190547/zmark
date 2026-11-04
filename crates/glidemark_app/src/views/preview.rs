@@ -680,6 +680,7 @@ pub fn render_preview_pane_with_callbacks(
     is_selecting: bool,
     regions: Arc<RegionsRegistry>,
     syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
+    failures: &[crate::views::workspace::VisibleSyntaxFailure],
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
@@ -708,7 +709,7 @@ pub fn render_preview_pane_with_callbacks(
         });
     }
 
-    pane.child(
+    pane = pane.child(
         list(list_state.clone(), move |ix, _window, _cx| {
             let Some(block) = item_parsed.blocks.get(ix) else {
                 return div().into_any_element();
@@ -824,7 +825,101 @@ pub fn render_preview_pane_with_callbacks(
         .min_h(px(0.))
         .pt_6()
         .pb_6(),
-    )
+    );
+
+    if !failures.is_empty() {
+        let first = &failures[0];
+        let badge_text = if failures.len() == 1 {
+            format!("L{} {} · {}", first.source_line, first.reason, strings.syntax_plain_readable)
+        } else {
+            format!("L{} {} · {} (+{})", first.source_line, first.reason, strings.syntax_plain_readable, failures.len() - 1)
+        };
+        let tooltip_text = failures
+            .iter()
+            .map(|f| format!("L{} {} · {}", f.source_line, f.reason, strings.syntax_plain_readable))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let on_sel_down = callbacks.on_selection_change.clone();
+        let on_sel_move = callbacks.on_selection_change.clone();
+        let regions_down = regions.clone();
+        let regions_move = regions.clone();
+        let parsed_down = parsed.clone();
+        let parsed_move = parsed.clone();
+
+        pane = pane.child(
+            div()
+                .absolute()
+                .bottom_3()
+                .right_3()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_2()
+                .py_1()
+                .rounded_full()
+                .bg(theme.bg)
+                .border_1()
+                .border_color(theme.border)
+                .text_size(px(10.))
+                .font_family("ui-sans-serif, system-ui")
+                .text_color(theme.text_muted)
+                .id("preview_syntax_failure_badge")
+                .tooltip(move |_window, cx| {
+                    let t = tooltip_text.clone();
+                    cx.new(|_| CodeTooltipView { text: t }).into()
+                })
+                .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
+                    if let Some(ref sel_cb) = on_sel_down {
+                        let text_system = window.text_system();
+                        let reg = regions_down.lock().unwrap();
+                        for (ix, block) in parsed_down.blocks.iter().enumerate() {
+                            let flat = glidemark_core::ast::flatten_block(block, "0");
+                            let offset = hit_test_char_offset_in_block(
+                                text_system,
+                                &reg,
+                                ix,
+                                &flat.text,
+                                event.position,
+                                font_size,
+                                Bounds::default(),
+                            );
+                            let pos = PreviewCharPosition::new(ix, offset);
+                            sel_cb(Some(PreviewSelection::new(pos, pos)), true, window, cx);
+                            break;
+                        }
+                    }
+                })
+                .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
+                    if is_selecting {
+                        if let Some(ref sel_cb) = on_sel_move {
+                            if let Some(sel) = selection {
+                                let text_system = window.text_system();
+                                let reg = regions_move.lock().unwrap();
+                                for (ix, block) in parsed_move.blocks.iter().enumerate() {
+                                    let flat = glidemark_core::ast::flatten_block(block, "0");
+                                    let offset = hit_test_char_offset_in_block(
+                                        text_system,
+                                        &reg,
+                                        ix,
+                                        &flat.text,
+                                        event.position,
+                                        font_size,
+                                        Bounds::default(),
+                                    );
+                                    let head = PreviewCharPosition::new(ix, offset);
+                                    sel_cb(Some(PreviewSelection::new(sel.anchor, head)), true, window, cx);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                })
+                .child(badge_text),
+        );
+    }
+
+    pane
 }
 
 fn render_block_element(

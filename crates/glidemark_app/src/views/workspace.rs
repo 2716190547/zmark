@@ -19,6 +19,25 @@ pub enum ScrollOrigin {
     Preview,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneKind {
+    Source,
+    Preview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarmState {
+    Waiting,
+    Ready,
+    InitFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisibleSyntaxFailure {
+    pub source_line: usize,
+    pub reason: &'static str,
+}
+
 pub struct WorkspaceView {
     pub state: AppState,
     pub focus_handle: FocusHandle,
@@ -66,6 +85,14 @@ pub struct WorkspaceView {
     pub last_visible_syntax_keys: std::collections::HashSet<glidemark_core::syntax::CodeKey>,
     pub source_code_blocks: Arc<Vec<glidemark_core::ast::ParsedCodeBlock>>,
     pub source_code_blocks_rev: usize,
+    pub syntax_warm_states: std::collections::HashMap<&'static str, WarmState>,
+    pub syntax_warm_task_id: u64,
+    pub syntax_warm_task: Option<gpui::Task<()>>,
+    pub syntax_invalid_positions: std::collections::HashSet<(glidemark_core::syntax::CodeKey, usize)>,
+    pub current_reading_pane: Option<PaneKind>,
+    pub last_reading_pane: Option<PaneKind>,
+    pub current_ordered_candidates: Vec<glidemark_core::syntax::CodeKey>,
+    pub last_evaluated_reading_pane: Option<PaneKind>,
 }
 
 #[allow(dead_code)]
@@ -78,38 +105,19 @@ pub enum SyntaxBlockState {
     UnsupportedLanguage,
     MappingInvalid,
     InitFailed,
+    WaitingWarm,
+    Cancelled,
 }
 
 impl SyntaxBlockState {
-    #[allow(dead_code)]
-    pub fn localized_reason(&self, is_zh: bool) -> Option<&'static str> {
+    pub fn localized_reason<'a>(&self, strings: &'a glidemark_core::i18n::I18nStrings) -> Option<&'a str> {
         match self {
-            SyntaxBlockState::Ready | SyntaxBlockState::UnsupportedLanguage => None,
-            SyntaxBlockState::BudgetExceeded => Some(if is_zh {
-                "代码高亮解析超时（超过 50ms 预算）"
-            } else {
-                "Syntax highlighting timed out (> 50ms budget)"
-            }),
-            SyntaxBlockState::ResourceConstrained => Some(if is_zh {
-                "超出 4MiB 高亮缓存容量上限"
-            } else {
-                "Exceeded 4MiB syntax cache memory budget"
-            }),
-            SyntaxBlockState::HardLimit => Some(if is_zh {
-                "代码块超出大小限制（> 64KiB 或 > 2000 行）"
-            } else {
-                "Code block exceeds size limits (> 64KiB or > 2000 lines)"
-            }),
-            SyntaxBlockState::MappingInvalid => Some(if is_zh {
-                "代码行源位置映射无效"
-            } else {
-                "Invalid source line mapping"
-            }),
-            SyntaxBlockState::InitFailed => Some(if is_zh {
-                "语法解析器初始化失败"
-            } else {
-                "Syntax parser initialization failed"
-            }),
+            SyntaxBlockState::Ready | SyntaxBlockState::UnsupportedLanguage | SyntaxBlockState::WaitingWarm | SyntaxBlockState::Cancelled => None,
+            SyntaxBlockState::BudgetExceeded => Some(strings.syntax_budget_exceeded),
+            SyntaxBlockState::ResourceConstrained => Some(strings.syntax_resource_constrained),
+            SyntaxBlockState::HardLimit => Some(strings.syntax_hard_limit),
+            SyntaxBlockState::MappingInvalid => Some(strings.syntax_mapping_invalid),
+            SyntaxBlockState::InitFailed => Some(strings.syntax_init_failed),
         }
     }
 }
@@ -120,6 +128,8 @@ pub struct SyntaxBatchRequest {
     pub doc_key: Option<crate::state::DocKey>,
     pub revision: usize,
     pub blocks: Vec<glidemark_core::syntax::CodeKey>,
+    pub ordered_candidates: Vec<glidemark_core::syntax::CodeKey>,
+    pub reading_pane: Option<PaneKind>,
 }
 
 impl WorkspaceView {
@@ -146,7 +156,7 @@ impl WorkspaceView {
                     }).detach();
                 })
         });
-        let view = Self {
+        let mut view = Self {
             state,
             focus_handle: cx.focus_handle(),
             editor_scroll_handle: UniformListScrollHandle::new(),
@@ -193,18 +203,23 @@ impl WorkspaceView {
             last_visible_syntax_keys: std::collections::HashSet::new(),
             source_code_blocks: Arc::new(Vec::new()),
             source_code_blocks_rev: usize::MAX,
+            syntax_warm_states: {
+                let mut map = std::collections::HashMap::new();
+                for &lang in &glidemark_core::syntax::SUPPORTED_CANONICAL_LANGUAGES {
+                    map.insert(lang, WarmState::Waiting);
+                }
+                map
+            },
+            syntax_warm_task_id: 0,
+            syntax_warm_task: None,
+            syntax_invalid_positions: std::collections::HashSet::new(),
+            current_reading_pane: None,
+            last_reading_pane: None,
+            current_ordered_candidates: Vec::new(),
+            last_evaluated_reading_pane: None,
         };
 
-        // Background one-time initialization of syntax highlighting
-        cx.spawn(async move |this, app| {
-            app.background_executor().spawn(async {
-                glidemark_core::syntax::init_syntax_set();
-            }).await;
-            let _ = this.update(app, |this, cx| {
-                this.schedule_syntax_parse(cx);
-                cx.notify();
-            });
-        }).detach();
+        view.start_warm_coordination_task(cx);
 
         view
     }
@@ -222,6 +237,7 @@ impl WorkspaceView {
         self.syntax_attempts.clear();
         self.syntax_block_states.clear();
         self.last_visible_syntax_keys.clear();
+        self.current_ordered_candidates.clear();
         self.syntax_defer_armed = false;
         self.syntax_cancel_flag.store(true, Ordering::Relaxed);
         self.syntax_pending_request = None;
@@ -296,11 +312,219 @@ impl WorkspaceView {
     }
 
     /// Explicit user action via Refresh Preview button: resets attempt counters and triggers refresh.
-    pub fn reset_syntax_attempts_and_refresh(&mut self) {
+    pub fn reset_syntax_attempts_and_refresh(&mut self, cx: &mut Context<Self>) {
         self.syntax_attempts.clear();
-        self.syntax_block_states.clear();
+        self.syntax_block_states.retain(|_, s| matches!(s, SyntaxBlockState::Ready));
         self.last_visible_syntax_keys.clear();
+        self.current_ordered_candidates.clear();
+        for state in self.syntax_warm_states.values_mut() {
+            if *state == WarmState::InitFailed {
+                *state = WarmState::Waiting;
+            }
+        }
+        self.start_warm_coordination_task(cx);
         self.parse_now_and_refresh();
+        self.process_visible_syntax_defer(cx);
+        cx.notify();
+    }
+
+    pub fn start_warm_coordination_task(&mut self, cx: &mut Context<Self>) {
+        self.syntax_warm_task_id += 1;
+        let task_id = self.syntax_warm_task_id;
+        self.syntax_warm_task = Some(cx.spawn(async move |this, app| {
+            for &lang in &glidemark_core::syntax::SUPPORTED_CANONICAL_LANGUAGES {
+                let should_run = this.read_with(app, |this, _cx| {
+                    if task_id != this.syntax_warm_task_id {
+                        return false;
+                    }
+                    this.syntax_warm_states.get(lang).copied() != Some(WarmState::Ready)
+                }).unwrap_or(false);
+
+                if !should_run {
+                    continue;
+                }
+
+                let ok = app.background_executor().spawn(async move {
+                    glidemark_core::syntax::validate_language_warm(lang)
+                }).await;
+
+                let success = if ok {
+                    true
+                } else {
+                    app.background_executor().spawn(async move {
+                        glidemark_core::syntax::validate_language_warm(lang)
+                    }).await
+                };
+
+                let new_state = if success { WarmState::Ready } else { WarmState::InitFailed };
+
+                let cont = this.update(app, |this, cx| {
+                    if task_id == this.syntax_warm_task_id {
+                        this.syntax_warm_states.insert(lang, new_state);
+                        this.last_visible_syntax_keys.clear();
+                        this.process_visible_syntax_defer(cx);
+                        cx.notify();
+                        true
+                    } else {
+                        false
+                    }
+                }).unwrap_or(false);
+
+                if !cont {
+                    break;
+                }
+            }
+        }));
+    }
+
+    pub fn active_reading_pane(&self) -> PaneKind {
+        self.current_reading_pane
+            .or(self.last_reading_pane)
+            .unwrap_or_else(|| {
+                if matches!(self.state.view_mode, ViewMode::Preview) {
+                    PaneKind::Preview
+                } else {
+                    PaneKind::Source
+                }
+            })
+    }
+
+    pub fn reevaluate_admission(&mut self, order: &[glidemark_core::syntax::CodeKey]) {
+        let mut cache = self.syntax_cache.lock().unwrap();
+        let mut retained = std::collections::HashSet::new();
+        for key in order {
+            if let Some(spans) = cache.get(key) {
+                if cache.insert(key.clone(), spans, &retained) {
+                    retained.insert(key.clone());
+                    self.syntax_block_states.insert(key.clone(), SyntaxBlockState::Ready);
+                } else {
+                    self.syntax_block_states.insert(key.clone(), SyntaxBlockState::ResourceConstrained);
+                }
+            }
+        }
+    }
+
+    pub fn collect_visible_editor_failures(&self) -> Vec<VisibleSyntaxFailure> {
+        let mut failures = Vec::new();
+        if !matches!(self.state.view_mode, ViewMode::Source | ViewMode::Split) {
+            return failures;
+        }
+        let Some(editor_bounds) = self.editor_content_bounds else {
+            return failures;
+        };
+        if f32::from(editor_bounds.size.height) <= 0.0 {
+            return failures;
+        }
+        let offset_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
+        let row_h = crate::views::editor::calculate_line_row_height(
+            self.state.preferences.font_size,
+            glidemark_core::config::Preferences::sanitize_line_height(self.state.preferences.line_height),
+        );
+        let start_vis = (offset_y / row_h).floor().max(0.0) as usize;
+        let visible_h = f32::from(editor_bounds.size.height);
+        let visible_line_count = (visible_h / row_h).ceil().max(1.0) as usize;
+        let end_vis = start_vis + visible_line_count + 1;
+
+        let start_phys = self.cached_visual_lines.get(start_vis).map(|vl| vl.physical_line_idx).unwrap_or(0);
+        let end_phys = self.cached_visual_lines.get(end_vis.min(self.cached_visual_lines.len().saturating_sub(1))).map(|vl| vl.physical_line_idx).unwrap_or(usize::MAX);
+
+        let strings = self.state.strings;
+        for b in self.source_code_blocks.iter() {
+            let b_start = b.fence_open_line;
+            let b_end = b.fence_close_line.unwrap_or_else(|| {
+                b.lines.last().map(|l| l.source_line_idx).unwrap_or(b_start)
+            });
+            if b_start <= end_phys && b_end >= start_phys && !b.key.payload.is_empty() {
+                let source_line = b.fence_open_line + 1;
+                if self.syntax_invalid_positions.contains(&(b.key.clone(), b.fence_open_line)) {
+                    failures.push(VisibleSyntaxFailure {
+                        source_line,
+                        reason: strings.syntax_mapping_invalid,
+                    });
+                    continue;
+                }
+                if let Some(lang) = b.key.language {
+                    if let Some(WarmState::InitFailed) = self.syntax_warm_states.get(lang) {
+                        failures.push(VisibleSyntaxFailure {
+                            source_line,
+                            reason: strings.syntax_init_failed,
+                        });
+                        continue;
+                    }
+                }
+                if let Some(state) = self.syntax_block_states.get(&b.key) {
+                    if let Some(reason) = state.localized_reason(strings) {
+                        failures.push(VisibleSyntaxFailure {
+                            source_line,
+                            reason,
+                        });
+                    }
+                }
+            }
+        }
+        failures
+    }
+
+    pub fn collect_visible_preview_failures(&self) -> Vec<VisibleSyntaxFailure> {
+        let mut failures = Vec::new();
+        if !matches!(self.state.view_mode, ViewMode::Preview | ViewMode::Split) {
+            return failures;
+        }
+        let Some(preview_bounds) = self.preview_content_bounds else {
+            return failures;
+        };
+        let strings = self.state.strings;
+        let regions = self.rendered_regions.lock().unwrap();
+        let mut seen = std::collections::HashSet::new();
+
+        for r in regions.iter() {
+            if let Some(ref key) = r.content_key {
+                if !key.payload.is_empty() && preview_bounds.intersects(&r.bounds) {
+                    let (open_line, is_invalid) = self.source_code_blocks
+                        .iter()
+                        .find(|b| b.key == *key)
+                        .map(|b| (b.fence_open_line, !b.is_valid))
+                        .unwrap_or_else(|| {
+                            self.state.doc.parsed.code_blocks
+                                .iter()
+                                .find(|b| b.key == *key)
+                                .map(|b| (b.fence_open_line, !b.is_valid))
+                                .unwrap_or((0, false))
+                        });
+
+                    let source_line = open_line + 1;
+                    if !seen.insert((key.clone(), source_line)) {
+                        continue;
+                    }
+
+                    if is_invalid || self.syntax_invalid_positions.contains(&(key.clone(), open_line)) {
+                        failures.push(VisibleSyntaxFailure {
+                            source_line,
+                            reason: strings.syntax_mapping_invalid,
+                        });
+                        continue;
+                    }
+                    if let Some(lang) = key.language {
+                        if let Some(WarmState::InitFailed) = self.syntax_warm_states.get(lang) {
+                            failures.push(VisibleSyntaxFailure {
+                                source_line,
+                                reason: strings.syntax_init_failed,
+                            });
+                            continue;
+                        }
+                    }
+                    if let Some(state) = self.syntax_block_states.get(key) {
+                        if let Some(reason) = state.localized_reason(strings) {
+                            failures.push(VisibleSyntaxFailure {
+                                source_line,
+                                reason,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        failures
     }
 
     /// Aligns preview virtual list position to current editor cursor block.
@@ -363,6 +587,12 @@ impl WorkspaceView {
             if ast_blocks_changed || self.source_code_blocks.is_empty() {
                 self.source_code_blocks = Arc::new(self.state.doc.parsed.code_blocks.clone());
                 self.source_code_blocks_rev = rev;
+                self.syntax_invalid_positions.clear();
+                for b in self.state.doc.parsed.code_blocks.iter() {
+                    if !b.is_valid {
+                        self.syntax_invalid_positions.insert((b.key.clone(), b.fence_open_line));
+                    }
+                }
             }
         }
 
@@ -384,75 +614,159 @@ impl WorkspaceView {
 
     pub fn process_visible_syntax_defer(&mut self, cx: &mut Context<Self>) {
         self.syntax_defer_armed = false;
-        let mut visible_keys = std::collections::HashSet::new();
 
-        // 1. Keys from rendered preview regions that intersect preview content bounds
-        if let Some(preview_bounds) = self.preview_content_bounds {
-            let regions = self.rendered_regions.lock().unwrap();
-            for r in regions.iter() {
-                if let Some(ref key) = r.content_key {
-                    if !key.payload.is_empty() && preview_bounds.intersects(&r.bounds) {
-                        visible_keys.insert(key.clone());
+        struct CandidateItem {
+            key: glidemark_core::syntax::CodeKey,
+            pane: PaneKind,
+            dist_to_center: f32,
+            doc_line: usize,
+        }
+
+        let mut candidates: Vec<CandidateItem> = Vec::new();
+
+        // 1. Preview candidates from rendered preview regions that intersect preview content bounds
+        if matches!(self.state.view_mode, ViewMode::Preview | ViewMode::Split) {
+            if let Some(preview_bounds) = self.preview_content_bounds {
+                let preview_center_y = f32::from(preview_bounds.origin.y + preview_bounds.size.height * 0.5);
+                let regions = self.rendered_regions.lock().unwrap();
+                for r in regions.iter() {
+                    if let Some(ref key) = r.content_key {
+                        if !key.payload.is_empty() && preview_bounds.intersects(&r.bounds) {
+                            let doc_line = self.source_code_blocks
+                                .iter()
+                                .find(|b| b.key == *key)
+                                .map(|b| b.fence_open_line)
+                                .unwrap_or_else(|| {
+                                    self.state.doc.parsed.code_blocks
+                                        .iter()
+                                        .find(|b| b.key == *key)
+                                        .map(|b| b.fence_open_line)
+                                        .unwrap_or(0)
+                                });
+
+                            if self.syntax_invalid_positions.contains(&(key.clone(), doc_line)) {
+                                continue;
+                            }
+
+                            let region_mid_y = f32::from(r.bounds.origin.y + r.bounds.size.height * 0.5);
+                            let dist = (region_mid_y - preview_center_y).abs();
+                            candidates.push(CandidateItem {
+                                key: key.clone(),
+                                pane: PaneKind::Preview,
+                                dist_to_center: dist,
+                                doc_line,
+                            });
+                        }
                     }
                 }
             }
         }
 
-        // 2. Keys from editor visible lines using actual measured bounds
+        // 2. Editor candidates from measured bounds
         if matches!(self.state.view_mode, ViewMode::Source | ViewMode::Split) {
-            let offset_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
-            let row_h = crate::views::editor::calculate_line_row_height(
-                self.state.preferences.font_size,
-                glidemark_core::config::Preferences::sanitize_line_height(self.state.preferences.line_height),
-            );
-            let start_vis = (offset_y / row_h).floor().max(0.0) as usize;
-            let visible_h = self.editor_content_bounds.map(|b| f32::from(b.size.height)).unwrap_or(800.0);
-            let visible_line_count = (visible_h / row_h).ceil().max(1.0) as usize;
-            let end_vis = start_vis + visible_line_count + 1;
+            if let Some(editor_bounds) = self.editor_content_bounds {
+                if f32::from(editor_bounds.size.height) > 0.0 {
+                    let offset_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
+                    let row_h = crate::views::editor::calculate_line_row_height(
+                        self.state.preferences.font_size,
+                        glidemark_core::config::Preferences::sanitize_line_height(self.state.preferences.line_height),
+                    );
+                    let visible_h = f32::from(editor_bounds.size.height);
+                    let viewport_center_y = offset_y + visible_h * 0.5;
+                    let start_vis = (offset_y / row_h).floor().max(0.0) as usize;
+                    let visible_line_count = (visible_h / row_h).ceil().max(1.0) as usize;
+                    let end_vis = start_vis + visible_line_count + 1;
 
-            let start_phys = self.cached_visual_lines.get(start_vis).map(|vl| vl.physical_line_idx).unwrap_or(0);
-            let end_phys = self.cached_visual_lines.get(end_vis.min(self.cached_visual_lines.len().saturating_sub(1))).map(|vl| vl.physical_line_idx).unwrap_or(usize::MAX);
+                    let start_phys = self.cached_visual_lines.get(start_vis).map(|vl| vl.physical_line_idx).unwrap_or(0);
+                    let end_phys = self.cached_visual_lines.get(end_vis.min(self.cached_visual_lines.len().saturating_sub(1))).map(|vl| vl.physical_line_idx).unwrap_or(usize::MAX);
 
-            for b in self.source_code_blocks.iter() {
-                let b_start = b.fence_open_line;
-                let b_end = b.fence_close_line.unwrap_or_else(|| {
-                    b.lines.last().map(|l| l.source_line_idx).unwrap_or(b_start)
-                });
-                if b_start <= end_phys && b_end >= start_phys && !b.key.payload.is_empty() {
-                    visible_keys.insert(b.key.clone());
+                    for b in self.source_code_blocks.iter() {
+                        let b_start = b.fence_open_line;
+                        let b_end = b.fence_close_line.unwrap_or_else(|| {
+                            b.lines.last().map(|l| l.source_line_idx).unwrap_or(b_start)
+                        });
+                        if b_start <= end_phys && b_end >= start_phys && !b.key.payload.is_empty() {
+                            if self.syntax_invalid_positions.contains(&(b.key.clone(), b.fence_open_line)) {
+                                continue;
+                            }
+                            let block_mid_line = (b_start + b_end) as f32 * 0.5;
+                            let block_mid_y = block_mid_line * row_h;
+                            let dist = (block_mid_y - viewport_center_y).abs();
+                            candidates.push(CandidateItem {
+                                key: b.key.clone(),
+                                pane: PaneKind::Source,
+                                dist_to_center: dist,
+                                doc_line: b.fence_open_line,
+                            });
+                        }
+                    }
                 }
+            } else if matches!(self.state.view_mode, ViewMode::Source) {
+                // In SourceOnly without bounds, wait for prepaint
+                return;
             }
         }
 
-        // 3. Compare with last visible keys: if identical, 0 tasks!
-        if visible_keys == self.last_visible_syntax_keys {
+        // Sort candidates:
+        // 1) active reading pane first
+        // 2) relative distance to viewport center (smaller first)
+        // 3) document line order (smaller first)
+        let reading_pane = self.active_reading_pane();
+        candidates.sort_by(|a, b| {
+            let a_reading = a.pane == reading_pane;
+            let b_reading = b.pane == reading_pane;
+            if a_reading != b_reading {
+                return b_reading.cmp(&a_reading);
+            }
+            match a.dist_to_center.partial_cmp(&b.dist_to_center) {
+                Some(core::cmp::Ordering::Equal) | None => {}
+                Some(ord) => return ord,
+            }
+            a.doc_line.cmp(&b.doc_line)
+        });
+
+        // Deduplicate: preserve highest priority position
+        let mut ordered_visible_keys: Vec<glidemark_core::syntax::CodeKey> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for c in candidates {
+            if seen.insert(c.key.clone()) {
+                ordered_visible_keys.push(c.key);
+            }
+        }
+
+        let order_changed = ordered_visible_keys != self.current_ordered_candidates
+            || self.current_reading_pane != self.last_evaluated_reading_pane;
+        let current_keys_set: std::collections::HashSet<_> = ordered_visible_keys.iter().cloned().collect();
+
+        if !order_changed && current_keys_set == self.last_visible_syntax_keys {
             return;
         }
-        self.last_visible_syntax_keys = visible_keys.clone();
 
-        // 4. Order visible keys stably by document appearance order
-        let mut ordered_visible_keys: Vec<glidemark_core::syntax::CodeKey> = Vec::new();
-        for b in self.source_code_blocks.iter() {
-            if visible_keys.contains(&b.key) && !ordered_visible_keys.contains(&b.key) {
-                ordered_visible_keys.push(b.key.clone());
-            }
-        }
-        for b in self.state.doc.parsed.code_blocks.iter() {
-            if visible_keys.contains(&b.key) && !ordered_visible_keys.contains(&b.key) {
-                ordered_visible_keys.push(b.key.clone());
-            }
-        }
-        for k in &visible_keys {
-            if !ordered_visible_keys.contains(k) {
-                ordered_visible_keys.push(k.clone());
-            }
-        }
+        self.current_ordered_candidates = ordered_visible_keys.clone();
+        self.last_evaluated_reading_pane = self.current_reading_pane;
+        self.last_visible_syntax_keys = current_keys_set;
 
-        // 5. Find missing keys that need parsing
+        // Find missing keys that need parsing
         let mut missing_blocks = Vec::new();
         let mut cache = self.syntax_cache.lock().unwrap();
 
         for key in &ordered_visible_keys {
+            if let Some(lang) = key.language {
+                if let Some(state) = self.syntax_warm_states.get(lang) {
+                    match state {
+                        WarmState::Waiting => {
+                            self.syntax_block_states.insert(key.clone(), SyntaxBlockState::WaitingWarm);
+                            continue;
+                        }
+                        WarmState::InitFailed => {
+                            self.syntax_block_states.insert(key.clone(), SyntaxBlockState::InitFailed);
+                            continue;
+                        }
+                        WarmState::Ready => {}
+                    }
+                }
+            }
+
             if cache.get(key).is_none() {
                 if key.language.is_none() || key.payload.is_empty() {
                     let spans = Arc::from([glidemark_core::syntax::SyntaxSpan {
@@ -477,21 +791,28 @@ impl WorkspaceView {
         }
         drop(cache);
 
-        if !missing_blocks.is_empty() {
-            self.syntax_request_counter += 1;
-            let request = SyntaxBatchRequest {
-                request_id: self.syntax_request_counter,
-                doc_key: self.state.active.clone(),
-                revision: self.state.editor.revision,
-                blocks: missing_blocks,
-            };
+        if missing_blocks.is_empty() {
+            self.reevaluate_admission(&ordered_visible_keys);
+            self.invalidate_preview_list();
+            cx.notify();
+            return;
+        }
 
-            if self.syntax_active_task.is_some() {
-                self.syntax_cancel_flag.store(true, Ordering::Relaxed);
-                self.syntax_pending_request = Some(request);
-            } else {
-                self.run_syntax_batch(request, cx);
-            }
+        self.syntax_request_counter += 1;
+        let request = SyntaxBatchRequest {
+            request_id: self.syntax_request_counter,
+            doc_key: self.state.active.clone(),
+            revision: self.state.editor.revision,
+            blocks: missing_blocks,
+            ordered_candidates: self.current_ordered_candidates.clone(),
+            reading_pane: self.current_reading_pane,
+        };
+
+        if self.syntax_active_task.is_some() {
+            self.syntax_cancel_flag.store(true, Ordering::Relaxed);
+            self.syntax_pending_request = Some(request);
+        } else {
+            self.run_syntax_batch(request, cx);
         }
     }
 
@@ -527,25 +848,26 @@ impl WorkspaceView {
                 let current_doc_key = this.state.active.clone();
                 let current_rev = this.state.editor.revision;
                 let current_req_id = this.syntax_request_counter;
-                // Stale result guard: if document or revision has changed, discard!
+
                 if request.doc_key == current_doc_key
                     && request.revision == current_rev
                     && request.request_id == current_req_id
                 {
-                    let mut cache = this.syntax_cache.lock().unwrap();
-                    let retained_cache_keys: std::collections::HashSet<glidemark_core::syntax::CodeKey> = this
-                        .last_visible_syntax_keys
-                        .clone();
                     let mut retry_blocks = Vec::new();
+                    let mut new_ready = std::collections::HashMap::new();
 
                     for (key, res) in parsed_results {
                         match res {
                             glidemark_core::syntax::ParseResult::Ready(spans) => {
-                                let inserted = cache.insert(key.clone(), spans, &retained_cache_keys);
-                                if inserted {
-                                    this.syntax_block_states.insert(key, SyntaxBlockState::Ready);
+                                let is_candidate = if !this.current_ordered_candidates.is_empty() {
+                                    this.current_ordered_candidates.contains(&key)
+                                } else if !request.ordered_candidates.is_empty() {
+                                    request.ordered_candidates.contains(&key)
                                 } else {
-                                    this.syntax_block_states.insert(key, SyntaxBlockState::ResourceConstrained);
+                                    request.blocks.contains(&key)
+                                };
+                                if is_candidate {
+                                    new_ready.insert(key, spans);
                                 }
                             }
                             glidemark_core::syntax::ParseResult::BudgetExceeded => {
@@ -557,20 +879,49 @@ impl WorkspaceView {
                                     this.syntax_block_states.insert(key, SyntaxBlockState::BudgetExceeded);
                                 }
                             }
-                            glidemark_core::syntax::ParseResult::Cancelled => {
-                                // Cancelled requests do NOT enter cache and do NOT become permanent Plain!
-                            }
+                            glidemark_core::syntax::ParseResult::Cancelled => {}
                             glidemark_core::syntax::ParseResult::HardLimit => {
                                 this.syntax_block_states.insert(key, SyntaxBlockState::HardLimit);
                             }
                             glidemark_core::syntax::ParseResult::UnsupportedLanguage => {
                                 this.syntax_block_states.insert(key, SyntaxBlockState::UnsupportedLanguage);
                             }
-                            glidemark_core::syntax::ParseResult::MappingInvalid => {
-                                this.syntax_block_states.insert(key, SyntaxBlockState::MappingInvalid);
-                            }
                             glidemark_core::syntax::ParseResult::InitFailed => {
                                 this.syntax_block_states.insert(key, SyntaxBlockState::InitFailed);
+                            }
+                        }
+                    }
+
+                    let snapshot_matches = request.ordered_candidates == this.current_ordered_candidates
+                        && request.reading_pane == this.current_reading_pane;
+
+                    let eval_order = if snapshot_matches || this.current_ordered_candidates.is_empty() {
+                        if !request.ordered_candidates.is_empty() {
+                            request.ordered_candidates.clone()
+                        } else {
+                            request.blocks.clone()
+                        }
+                    } else {
+                        this.current_ordered_candidates.clone()
+                    };
+
+                    let mut cache = this.syntax_cache.lock().unwrap();
+                    let mut retained = std::collections::HashSet::new();
+
+                    for candidate in &eval_order {
+                        if let Some(spans) = new_ready.remove(candidate) {
+                            if cache.insert(candidate.clone(), spans, &retained) {
+                                retained.insert(candidate.clone());
+                                this.syntax_block_states.insert(candidate.clone(), SyntaxBlockState::Ready);
+                            } else {
+                                this.syntax_block_states.insert(candidate.clone(), SyntaxBlockState::ResourceConstrained);
+                            }
+                        } else if let Some(spans) = cache.get(candidate) {
+                            if cache.insert(candidate.clone(), spans, &retained) {
+                                retained.insert(candidate.clone());
+                                this.syntax_block_states.insert(candidate.clone(), SyntaxBlockState::Ready);
+                            } else {
+                                this.syntax_block_states.insert(candidate.clone(), SyntaxBlockState::ResourceConstrained);
                             }
                         }
                     }
@@ -583,6 +934,8 @@ impl WorkspaceView {
                             doc_key: current_doc_key,
                             revision: current_rev,
                             blocks: retry_blocks,
+                            ordered_candidates: this.current_ordered_candidates.clone(),
+                            reading_pane: this.current_reading_pane,
                         };
                         this.run_syntax_batch(retry_req, cx);
                     }
@@ -1728,6 +2081,18 @@ impl Render for WorkspaceView {
             }
         }
 
+        let is_focused = self.focus_handle.is_focused(window);
+        if is_focused {
+            let pane = if self.preview_focused { PaneKind::Preview } else { PaneKind::Source };
+            self.current_reading_pane = Some(pane);
+            self.last_reading_pane = Some(pane);
+        } else {
+            self.current_reading_pane = None;
+        }
+
+        let editor_failures = self.collect_visible_editor_failures();
+        let preview_failures = self.collect_visible_preview_failures();
+
         if self.is_preview_selecting && !self.focus_handle.is_focused(window) {
             self.is_preview_selecting = false;
             self.preview_autoscroll_task = None;
@@ -2542,7 +2907,7 @@ impl Render for WorkspaceView {
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _, _window, cx| {
-                                                this.reset_syntax_attempts_and_refresh();
+                                                this.reset_syntax_attempts_and_refresh(cx);
                                                 cx.notify();
                                             }),
                                         )
@@ -2686,6 +3051,7 @@ impl Render for WorkspaceView {
                                                         &self.editor_scroll_handle,
                                                         editor_left_offset,
                                                         on_click_line.clone(),
+                                                        &editor_failures,
                                                     ))
                                                     .into_any_element()
                                             }
@@ -2720,6 +3086,7 @@ impl Render for WorkspaceView {
                                                         self.is_preview_selecting,
                                                         self.rendered_regions.clone(),
                                                         self.syntax_cache.clone(),
+                                                        &preview_failures,
                                                     ))
                                                     .into_any_element()
                                             }
@@ -2773,6 +3140,7 @@ impl Render for WorkspaceView {
                                                             &self.editor_scroll_handle,
                                                             editor_left_offset,
                                                             on_click_line,
+                                                            &editor_failures,
                                                         ))
                                                 })
                                                 // Draggable Resizable Divider: 5px hit zone with 1px hairline
@@ -2847,6 +3215,7 @@ impl Render for WorkspaceView {
                                                                     self.is_preview_selecting,
                                                                     self.rendered_regions.clone(),
                                                                     self.syntax_cache.clone(),
+                                                                    &preview_failures,
                                                                 ))
                                                         }),
                                                 )
@@ -2868,8 +3237,9 @@ impl Render for WorkspaceView {
 }
 
 // Floating tooltip micro-capsule with dark frosted styling
-struct TooltipView {
-    text: String,
+#[derive(Clone)]
+pub(crate) struct TooltipView {
+    pub(crate) text: String,
 }
 
 impl Render for TooltipView {
