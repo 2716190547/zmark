@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-test-observation = []
+test-observation = ["glidemark_core/test-observation"]
 
 [dependencies]
 glidemark_core = { path = "../glidemark_core" }

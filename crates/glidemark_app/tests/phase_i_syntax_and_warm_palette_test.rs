@@ -5,16 +5,20 @@ use glidemark_app::views::preview::{apply_selection_to_highlights, obs};
 use glidemark_app::views::workspace::{SyntaxBatchRequest, WorkspaceView};
 use glidemark_core::document::Document;
 use glidemark_core::syntax::{
-    parse_code_spans, parse_code_spans_bounded, resolve_canonical_language, CodeKey,
-    ParseResult, SyntaxCache, SyntaxRole, MAX_CODE_BLOCK_BYTES,
-    TEST_LINE_HOOK, TEST_SIMULATED_ELAPSED_MS,
+    parse_code_spans, parse_code_spans_bounded, reset_test_clock, resolve_canonical_language,
+    CodeKey, ParseResult, SyntaxCache, SyntaxRole, MAX_CODE_BLOCK_BYTES,
+    TEST_INITIAL_ADVANCE_MS, TEST_LINE_DELTAS_MS, TEST_MOCK_CLOCK_MS,
 };
 use gpui::{HighlightStyle, TestAppContext};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+
+static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Test 1: Canonical language alias table and fallbacks per Phase I specification
 #[test]
 fn test_phase_i_canonical_language_aliases_and_plain_fallbacks() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     // 1. Canonical aliases table
     let expected_mappings = [
         ("xml", Some("XML")),
@@ -80,6 +84,7 @@ fn test_phase_i_canonical_language_aliases_and_plain_fallbacks() {
 /// Test 2: Maven XML Tag (Keyword) vs Attribute (Attribute) vs String vs Comment distinction
 #[test]
 fn test_phase_i_maven_xml_semantic_distinction() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let xml = r#"<!-- Maven POM configuration -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -170,6 +175,7 @@ pub fn calculate() -> i32 {
 /// Test 4: Threshold downgrades to Plain per Phase I boundary
 #[test]
 fn test_phase_i_threshold_downgrades_to_plain() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     // 1. > 64 KiB
     let huge_code = "let x = 1;\n".repeat(6000);
     assert!(huge_code.len() > MAX_CODE_BLOCK_BYTES);
@@ -196,6 +202,7 @@ fn test_phase_i_threshold_downgrades_to_plain() {
 /// Test 5: Invariant: UTF-8 contiguous non-overlapping coverage with Tab, CRLF, CJK, and Emoji
 #[test]
 fn test_phase_i_utf8_contiguous_non_overlapping_coverage() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let complex_code = "fn main() {\r\n\tlet cjk = \"你好，世界 🦀\";\r\n\tlet tab_indent = \t123;\r\n}\r\n";
     let spans = parse_code_spans(complex_code, Some("rust"));
 
@@ -226,8 +233,6 @@ fn test_phase_i_utf8_contiguous_non_overlapping_coverage() {
     let reconstructed: String = spans.iter().map(|s| &complex_code[s.range.clone()]).collect();
     assert_eq!(reconstructed, complex_code);
 }
-
-static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Test 6: Bounded LRU cache and theme independence
 #[test]
@@ -599,17 +604,48 @@ async fn test_phase_i_stale_doc_rejection_does_not_pollute_cache(cx: &mut TestAp
     });
     cx.run_until_parked();
 
-    let (current_rev, req_counter) = cx.update(|_window, cx| {
+    let (current_doc, current_rev, current_req_id) = cx.update(|_window, cx| {
         let ws = view.read(cx);
-        (ws.state.editor.revision, ws.syntax_request_counter)
+        (ws.state.active.clone(), ws.state.editor.revision, ws.syntax_request_counter)
     });
 
+    // Positive control: valid request with matching doc, rev, and req_id enters cache
+    let valid_code = "fn valid_doc_positive_control() {}";
+    let valid_key = CodeKey::from_raw(Some("rust"), Arc::from(valid_code));
+    let valid_request = SyntaxBatchRequest {
+        request_id: current_req_id,
+        doc_key: current_doc.clone(),
+        revision: current_rev,
+        blocks: vec![valid_key.clone()],
+    };
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.run_syntax_batch(valid_request, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    let valid_in_cache = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        cache.get(&valid_key).is_some()
+    });
+    assert!(valid_in_cache, "Positive control request must enter cache");
+
+    // Re-read current state
+    let (_current_doc, current_rev, current_req_id) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        (ws.state.active.clone(), ws.state.editor.revision, ws.syntax_request_counter)
+    });
+
+    // Stale doc request: different doc_key, BUT revision and request_id match exactly (no + 1!)
     let sentinel_doc = "fn should_be_rejected_doc() {}";
+    let sentinel_key = CodeKey::from_raw(Some("rust"), Arc::from(sentinel_doc));
     let stale_doc_request = SyntaxBatchRequest {
-        request_id: req_counter + 1,
+        request_id: current_req_id,
         doc_key: Some(DocKey::Scratch(999999)),
         revision: current_rev,
-        blocks: vec![CodeKey::from_raw(Some("rust"), Arc::from(sentinel_doc))],
+        blocks: vec![sentinel_key.clone()],
     };
 
     cx.update(|_window, cx| {
@@ -622,8 +658,7 @@ async fn test_phase_i_stale_doc_rejection_does_not_pollute_cache(cx: &mut TestAp
     let cache_contains_doc = cx.update(|_window, cx| {
         let ws = view.read(cx);
         let mut cache = ws.syntax_cache.lock().unwrap();
-        let key = CodeKey::from_raw(Some("rust"), Arc::from(sentinel_doc));
-        cache.get(&key).is_some()
+        cache.get(&sentinel_key).is_some()
     });
     assert!(
         !cache_contains_doc,
@@ -654,7 +689,7 @@ async fn test_phase_i_stale_revision_rejection_does_not_pollute_cache(cx: &mut T
     });
     cx.run_until_parked();
 
-    let (current_doc_key, current_rev, current_code_rev, req_counter) = cx.update(|_window, cx| {
+    let (current_doc_key, current_rev, _current_code_rev, current_req_id) = cx.update(|_window, cx| {
         let ws = view.read(cx);
         (
             ws.state.active.clone(),
@@ -664,12 +699,48 @@ async fn test_phase_i_stale_revision_rejection_does_not_pollute_cache(cx: &mut T
         )
     });
 
+    // Positive control: valid request with matching doc, rev, and req_id enters cache
+    let valid_code = "fn valid_rev_positive_control() {}";
+    let valid_key = CodeKey::from_raw(Some("rust"), Arc::from(valid_code));
+    let valid_request = SyntaxBatchRequest {
+        request_id: current_req_id,
+        doc_key: current_doc_key.clone(),
+        revision: current_rev,
+        blocks: vec![valid_key.clone()],
+    };
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.run_syntax_batch(valid_request, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    let valid_in_cache = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        cache.get(&valid_key).is_some()
+    });
+    assert!(valid_in_cache, "Positive control request must enter cache");
+
+    // Re-read current state
+    let (current_doc_key, current_rev, current_code_rev, current_req_id) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        (
+            ws.state.active.clone(),
+            ws.state.editor.revision,
+            ws.source_code_blocks_rev,
+            ws.syntax_request_counter,
+        )
+    });
+
+    // Stale revision request: revision is stale (e.g. current_rev.saturating_sub(1)), BUT doc_key and request_id match (no + 1!)
     let sentinel_rev = "fn should_be_rejected_rev() {}";
+    let sentinel_key = CodeKey::from_raw(Some("rust"), Arc::from(sentinel_rev));
     let stale_rev_request = SyntaxBatchRequest {
-        request_id: req_counter + 1,
+        request_id: current_req_id,
         doc_key: current_doc_key.clone(),
         revision: current_rev.saturating_sub(1),
-        blocks: vec![CodeKey::from_raw(Some("rust"), Arc::from(sentinel_rev))],
+        blocks: vec![sentinel_key.clone()],
     };
 
     cx.update(|_window, cx| {
@@ -682,8 +753,7 @@ async fn test_phase_i_stale_revision_rejection_does_not_pollute_cache(cx: &mut T
     let cache_contains_rev = cx.update(|_window, cx| {
         let ws = view.read(cx);
         let mut cache = ws.syntax_cache.lock().unwrap();
-        let key = CodeKey::from_raw(Some("rust"), Arc::from(sentinel_rev));
-        cache.get(&key).is_some()
+        cache.get(&sentinel_key).is_some()
     });
     assert!(
         !cache_contains_rev,
@@ -780,7 +850,70 @@ async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut T
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });
+    cx.run_until_parked();
 
+    // Set request counter to 10 so saturating_sub(1) is guaranteed strictly smaller
+    let (current_doc, current_rev, current_req_id) = cx.update(|_window, cx| {
+        view.update(cx, |this, _cx| {
+            this.syntax_request_counter = 10;
+            (this.state.active.clone(), this.state.editor.revision, this.syntax_request_counter)
+        })
+    });
+
+    // 1. Positive control: valid request with (current_doc, current_rev, current_req_id)
+    let valid_code = "fn valid_req_id_positive_control() {}";
+    let valid_key = CodeKey::from_raw(Some("rust"), Arc::from(valid_code));
+    let valid_req = SyntaxBatchRequest {
+        request_id: current_req_id,
+        doc_key: current_doc.clone(),
+        revision: current_rev,
+        blocks: vec![valid_key.clone()],
+    };
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.run_syntax_batch(valid_req, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    let valid_in_cache = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        cache.get(&valid_key).is_some()
+    });
+    assert!(valid_in_cache, "Positive control request with matching req_id must enter cache");
+
+    // 2. Stale request_id check: request_id is stale (current_req_id - 1), but doc_key and revision match
+    let (current_doc, current_rev, current_req_id) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        (ws.state.active.clone(), ws.state.editor.revision, ws.syntax_request_counter)
+    });
+    let stale_code = "fn should_be_rejected_stale_req_id() {}";
+    let stale_key = CodeKey::from_raw(Some("rust"), Arc::from(stale_code));
+    let stale_req = SyntaxBatchRequest {
+        request_id: current_req_id.saturating_sub(1),
+        doc_key: current_doc.clone(),
+        revision: current_rev,
+        blocks: vec![stale_key.clone()],
+    };
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.run_syntax_batch(stale_req, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    let stale_in_cache = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        cache.get(&stale_key).is_some()
+    });
+    assert!(
+        !stale_in_cache,
+        "Stale request_id must be rejected by guard and not enter cache"
+    );
+
+    // 3. Latest pending request is executed and admitted
     let code_first = "fn slow_first() { let x = 1; }";
     let key_first = CodeKey::from_raw(Some("rust"), Arc::from(code_first));
     let code_second = "fn latest_second() { let y = 2; }";
@@ -806,7 +939,7 @@ async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut T
                 revision: this.state.editor.revision,
                 blocks: vec![key_second.clone()],
             };
-            this.syntax_cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            this.syntax_cancel_flag.store(true, Ordering::Relaxed);
             this.syntax_pending_request = Some(req2);
         });
     });
@@ -999,80 +1132,50 @@ async fn test_phase_i_small_blocks_eviction_and_scroll_recovery(cx: &mut TestApp
     assert!(recovered_key0, "Block 0 must recover when scrolled back / re-requested");
 }
 
-/// Test 14: Cumulative 50ms soft budget without slow-line resets (controlled timing tests)
+/// Test 14: Cumulative 50ms soft budget without slow-line resets (deterministic mock clock)
 #[test]
 fn test_phase_i_cumulative_soft_budget_without_resets() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
-    // 1. Single line / line 0 timeout returns ParseResult::BudgetExceeded
-    TEST_SIMULATED_ELAPSED_MS.store(60, std::sync::atomic::Ordering::Relaxed);
+    // 1. Initial / line 0 timeout returns BudgetExceeded
+    reset_test_clock();
+    TEST_MOCK_CLOCK_MS.store(1000, Ordering::Relaxed);
+    TEST_INITIAL_ADVANCE_MS.store(60, Ordering::Relaxed);
     let res0 = parse_code_spans_bounded("let x = 1;\n", Some("rust"), None);
-    assert_eq!(
-        res0,
-        ParseResult::BudgetExceeded,
-        "Single line / line 0 timeout must return ParseResult::BudgetExceeded"
-    );
-    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(res0, ParseResult::BudgetExceeded);
+    reset_test_clock();
 
-    // 2. Multi-line timeout in the middle line returns ParseResult::BudgetExceeded
-    TEST_LINE_HOOK.store(0, std::sync::atomic::Ordering::Relaxed);
-    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
-    let handle_mid = std::thread::spawn(|| {
-        while TEST_LINE_HOOK.load(std::sync::atomic::Ordering::Relaxed) < 1 {
-            std::hint::spin_loop();
-        }
-        TEST_SIMULATED_ELAPSED_MS.store(60, std::sync::atomic::Ordering::Relaxed);
-    });
+    // 2. Multi-line timeout on middle line returns BudgetExceeded
+    reset_test_clock();
+    TEST_MOCK_CLOCK_MS.store(1000, Ordering::Relaxed);
+    TEST_LINE_DELTAS_MS[0].store(10, Ordering::Relaxed);
+    TEST_LINE_DELTAS_MS[1].store(45, Ordering::Relaxed);
     let code_3 = "let a = 1;\nlet b = 2;\nlet c = 3;\n";
     let res_mid = parse_code_spans_bounded(code_3, Some("rust"), None);
-    handle_mid.join().unwrap();
-    assert_eq!(
-        res_mid,
-        ParseResult::BudgetExceeded,
-        "Multi-line timeout on middle line must return ParseResult::BudgetExceeded"
-    );
-    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(res_mid, ParseResult::BudgetExceeded);
+    reset_test_clock();
 
-    // 3. Multi-line timeout on the final line returns ParseResult::BudgetExceeded
-    TEST_LINE_HOOK.store(0, std::sync::atomic::Ordering::Relaxed);
-    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
-    let handle_fin = std::thread::spawn(|| {
-        while TEST_LINE_HOOK.load(std::sync::atomic::Ordering::Relaxed) < 3 {
-            std::hint::spin_loop();
-        }
-        TEST_SIMULATED_ELAPSED_MS.store(60, std::sync::atomic::Ordering::Relaxed);
-    });
+    // 3. Multi-line timeout on final line returns BudgetExceeded
+    reset_test_clock();
+    TEST_MOCK_CLOCK_MS.store(1000, Ordering::Relaxed);
+    TEST_LINE_DELTAS_MS[0].store(15, Ordering::Relaxed);
+    TEST_LINE_DELTAS_MS[1].store(15, Ordering::Relaxed);
+    TEST_LINE_DELTAS_MS[2].store(25, Ordering::Relaxed);
     let res_fin = parse_code_spans_bounded(code_3, Some("rust"), None);
-    handle_fin.join().unwrap();
-    assert_eq!(
-        res_fin,
-        ParseResult::BudgetExceeded,
-        "Multi-line timeout on final line must return ParseResult::BudgetExceeded"
-    );
-    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(res_fin, ParseResult::BudgetExceeded);
+    reset_test_clock();
 
-    // 4. Verify slow line does NOT reset the cumulative timer
-    TEST_LINE_HOOK.store(0, std::sync::atomic::Ordering::Relaxed);
-    TEST_SIMULATED_ELAPSED_MS.store(25, std::sync::atomic::Ordering::Relaxed);
-    let handle_cum = std::thread::spawn(|| {
-        while TEST_LINE_HOOK.load(std::sync::atomic::Ordering::Relaxed) < 1 {
-            std::hint::spin_loop();
-        }
-        TEST_SIMULATED_ELAPSED_MS.store(52, std::sync::atomic::Ordering::Relaxed);
-    });
+    // 4. Slow lines without resets (cumulative 25ms + 28ms = 53ms >= 50ms) returns BudgetExceeded
+    reset_test_clock();
+    TEST_MOCK_CLOCK_MS.store(1000, Ordering::Relaxed);
+    TEST_LINE_DELTAS_MS[0].store(25, Ordering::Relaxed);
+    TEST_LINE_DELTAS_MS[1].store(28, Ordering::Relaxed);
+    TEST_LINE_DELTAS_MS[2].store(5, Ordering::Relaxed);
     let res_cum = parse_code_spans_bounded(code_3, Some("rust"), None);
-    handle_cum.join().unwrap();
-    assert_eq!(
-        res_cum,
-        ParseResult::BudgetExceeded,
-        "Cumulative budget across slow lines without resets must return ParseResult::BudgetExceeded"
-    );
-    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(res_cum, ParseResult::BudgetExceeded);
+    reset_test_clock();
 
-    // 5. Normal fast parsing without simulated delay returns Ready
+    // 5. Fast parsing without mock clock returns Ready
     let fast_res = parse_code_spans_bounded(code_3, Some("rust"), None);
-    assert!(
-        fast_res.is_ready(),
-        "Normal fast parsing must return ParseResult::Ready"
-    );
+    assert!(fast_res.is_ready());
 }

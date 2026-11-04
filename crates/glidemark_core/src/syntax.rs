@@ -13,10 +13,35 @@ use std::time::Instant;
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 
 #[cfg(feature = "test-observation")]
-pub static TEST_SIMULATED_ELAPSED_MS: AtomicU64 = AtomicU64::new(0);
+pub static TEST_MOCK_CLOCK_MS: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(feature = "test-observation")]
-pub static TEST_LINE_HOOK: AtomicUsize = AtomicUsize::new(0);
+pub static TEST_INITIAL_ADVANCE_MS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "test-observation")]
+pub static TEST_LINE_DELTAS_MS: [AtomicU64; 8] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+#[cfg(feature = "test-observation")]
+pub static TEST_LINE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "test-observation")]
+pub fn reset_test_clock() {
+    TEST_MOCK_CLOCK_MS.store(0, Ordering::Relaxed);
+    TEST_INITIAL_ADVANCE_MS.store(0, Ordering::Relaxed);
+    TEST_LINE_COUNT.store(0, Ordering::Relaxed);
+    for slot in &TEST_LINE_DELTAS_MS {
+        slot.store(0, Ordering::Relaxed);
+    }
+}
 
 /// Canonical key identifying a code block's syntax highlighting work.
 ///
@@ -501,6 +526,19 @@ pub fn parse_code_spans_bounded(
         None => return ParseResult::InitFailed,
     };
 
+    #[cfg(feature = "test-observation")]
+    let (use_mock_clock, mock_start_ms) = {
+        let mock = TEST_MOCK_CLOCK_MS.load(Ordering::Relaxed);
+        if mock > 0 {
+            let init_adv = TEST_INITIAL_ADVANCE_MS.load(Ordering::Relaxed);
+            if init_adv > 0 {
+                TEST_MOCK_CLOCK_MS.fetch_add(init_adv, Ordering::Relaxed);
+            }
+            (true, mock)
+        } else {
+            (false, 0)
+        }
+    };
     let start_time = Instant::now();
     let mut state = ParseState::new(syntax);
     let mut stack = ScopeStack::new();
@@ -517,17 +555,14 @@ pub fn parse_code_spans_bounded(
         }
 
         // Check cumulative elapsed time before each line
-        let test_extra_ms = {
-            #[cfg(feature = "test-observation")]
-            {
-                TEST_SIMULATED_ELAPSED_MS.load(Ordering::Relaxed)
-            }
-            #[cfg(not(feature = "test-observation"))]
-            {
-                0u64
-            }
+        #[cfg(feature = "test-observation")]
+        let elapsed_ms = if use_mock_clock {
+            TEST_MOCK_CLOCK_MS.load(Ordering::Relaxed).saturating_sub(mock_start_ms)
+        } else {
+            start_time.elapsed().as_millis() as u64
         };
-        let elapsed_ms = start_time.elapsed().as_millis() as u64 + test_extra_ms;
+        #[cfg(not(feature = "test-observation"))]
+        let elapsed_ms = start_time.elapsed().as_millis() as u64;
         if elapsed_ms >= PARSE_SOFT_BUDGET_MS {
             return ParseResult::BudgetExceeded;
         }
@@ -538,28 +573,31 @@ pub fn parse_code_spans_bounded(
             None => (remaining, ""),
         };
 
-        #[cfg(feature = "test-observation")]
-        {
-            TEST_LINE_HOOK.fetch_add(1, Ordering::Relaxed);
-        }
-
         let ops = match state.parse_line(line_with_end, ss) {
             Ok(ops) => ops,
             Err(_) => return ParseResult::InitFailed,
         };
 
+        #[cfg(feature = "test-observation")]
+        {
+            let idx = TEST_LINE_COUNT.fetch_add(1, Ordering::Relaxed);
+            if idx < TEST_LINE_DELTAS_MS.len() {
+                let delta = TEST_LINE_DELTAS_MS[idx].load(Ordering::Relaxed);
+                if delta > 0 {
+                    TEST_MOCK_CLOCK_MS.fetch_add(delta, Ordering::Relaxed);
+                }
+            }
+        }
+
         // Check cumulative elapsed time immediately after regex return
-        let test_extra_ms = {
-            #[cfg(feature = "test-observation")]
-            {
-                TEST_SIMULATED_ELAPSED_MS.load(Ordering::Relaxed)
-            }
-            #[cfg(not(feature = "test-observation"))]
-            {
-                0u64
-            }
+        #[cfg(feature = "test-observation")]
+        let elapsed_ms = if use_mock_clock {
+            TEST_MOCK_CLOCK_MS.load(Ordering::Relaxed).saturating_sub(mock_start_ms)
+        } else {
+            start_time.elapsed().as_millis() as u64
         };
-        let elapsed_ms = start_time.elapsed().as_millis() as u64 + test_extra_ms;
+        #[cfg(not(feature = "test-observation"))]
+        let elapsed_ms = start_time.elapsed().as_millis() as u64;
         if elapsed_ms >= PARSE_SOFT_BUDGET_MS {
             return ParseResult::BudgetExceeded;
         }

@@ -10,6 +10,10 @@ use std::sync::Arc;
 // Counting Allocator for Cache Accounting Test
 // -----------------------------------------------------------------------------
 
+extern "C" {
+    fn malloc_size(ptr: *const std::ffi::c_void) -> usize;
+}
+
 struct CountingAlloc;
 
 static ALLOCATED: AtomicUsize = AtomicUsize::new(0);
@@ -18,28 +22,27 @@ unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = System.alloc(layout);
         if !ptr.is_null() {
-            let sz = heap_usable_size(layout.size());
+            let sz = unsafe { malloc_size(ptr as *const _) };
             ALLOCATED.fetch_add(sz, Ordering::SeqCst);
         }
         ptr
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if !ptr.is_null() {
+            let sz = unsafe { malloc_size(ptr as *const _) };
+            ALLOCATED.fetch_sub(sz, Ordering::SeqCst);
+        }
         System.dealloc(ptr, layout);
-        let sz = heap_usable_size(layout.size());
-        ALLOCATED.fetch_sub(sz, Ordering::SeqCst);
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let old_sz = if ptr.is_null() { 0 } else { unsafe { malloc_size(ptr as *const _) } };
         let new_ptr = System.realloc(ptr, layout, new_size);
         if !new_ptr.is_null() {
-            let old_sz = heap_usable_size(layout.size());
-            let new_sz = heap_usable_size(new_size);
-            if new_sz > old_sz {
-                ALLOCATED.fetch_add(new_sz - old_sz, Ordering::SeqCst);
-            } else {
-                ALLOCATED.fetch_sub(old_sz - new_sz, Ordering::SeqCst);
-            }
+            let new_sz = unsafe { malloc_size(new_ptr as *const _) };
+            ALLOCATED.fetch_add(new_sz, Ordering::SeqCst);
+            ALLOCATED.fetch_sub(old_sz, Ordering::SeqCst);
         }
         new_ptr
     }
@@ -232,5 +235,28 @@ fn test_stage_a_cache_accounting_and_ledger() {
 
         let admitted2 = cache2.insert(k_b, sample_spans, &all_retained);
         assert!(!admitted2, "insert must return false when non-retained eviction cannot free enough space");
+    }
+
+    // 7. Drop diff: verify cache-owned bytes are strictly released upon drop
+    {
+        let code = "fn test_drop_cleanup() { let x = 42; }";
+        let spans_vec = parse_code_spans(code, Some("rust"));
+        let spans_slice = spans_vec.as_slice();
+
+        let before = current_allocated();
+        let mut cache = SyntaxCache::new();
+        let key = SyntaxCache::key(code, Some("rust"));
+        let spans: Arc<[SyntaxSpan]> = Arc::from(spans_slice);
+        assert!(cache.insert(key, spans, &HashSet::new()));
+        let during = current_allocated();
+        assert!(during > before);
+        let reported = cache.current_bytes();
+        drop(cache);
+        let after_drop = current_allocated();
+        let cache_owned = during.saturating_sub(after_drop);
+        let residual = after_drop.saturating_sub(before);
+        assert_eq!(residual, 0, "Residual memory after dropping cache must be 0");
+        let diff = (cache_owned as i64 - reported as i64).abs();
+        assert!(diff <= 64, "Cache owned memory must match ledger closely: cache_owned={}, reported={}", cache_owned, reported);
     }
 }
