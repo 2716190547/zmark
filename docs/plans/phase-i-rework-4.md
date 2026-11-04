@@ -2,6 +2,8 @@
 
 现行设计仍是独立签字 **1c9bbd1**，详见 [主规划](phase-i-color-and-media.md) 末节及 R1–R5。本清单只缩小每次交付/审查的范围，不增加新产品选择或重新解释资源预算。阶段 A 独立审过再派 B；不把部分修复称为 I1/I2 整体完成。
 
+状态：Reviewer 已对精确清单 **16666bf** 签字“无未解决实质异议，可派阶段 A”；当前只派阶段 A，B 尚未启动。
+
 ## 已确认的打回基线
 
 候选 **9ef5304**，独立审查 P1:7/P2:5，证据 `/private/tmp/glidemark-phase-i-i12-rework3-review/REVIEW_REPORT.md`。默认全量精确 **331 passed / 0 failed / 0 ignored**，48 个结果行；Phase H **21/0**（B3/B4 的 8 项与默认重叠），I0 6 项已在默认内；codesign 通过。该统计是当前失败实现的回归基线，不是功能合格证明。
@@ -35,6 +37,7 @@
 | editor.rs:378 `tokenize_code_line -> get_or_parse_code_spans` | 删除同步解析/全局写兼容 helper，调用它的旧测试迁移实例或纯 parse |
 | editor.rs:390 `extract_source_code_blocks` | 删除第二套 payload 扫描，App 消费 parser 描述及映射 |
 | editor.rs:310 `compute_fenced_code_lines`，:1076 几何调用 | 删除第三套 fence 扫描，几何 fenced mask 消费同一描述行范围，引用内代码也走单 run |
+| editor.rs:917 `wrap_document_to_visual_layout` | 无生产调用的旧包装，仍经旧分词读全局；删除或改为显式描述/实例输入，不为它保留全局旁路 |
 | phase_i_syntax_and_warm_palette_test.rs:3/235/239/265/277/478，visual_line_wrap_and_syntax_test.rs:7-8/192/204 | 迁移全局/旧 helper 调用至实例缓存或纯 parse，保留有效断言，不用 `allow(dead_code)` 保兼容 |
 
 A 暂保留现有 interim 可见窗口（workspace.rs:335 的 `start_vis+60`）供小窗口接线证据使用；**不宣称关闭 P1-6**，真实 bounds 明确在 B。`source_code_blocks` 将迁移为同 revision parser 描述；Test11 的 `Arc::ptr_eq` 不变 revision 复用契约同步保留或等价迁移，不能通过删除复用断言过关。描述落后时的临时 Plain 不授予回扫权限。
@@ -65,3 +68,11 @@ A 暂保留现有 interim 可见窗口（workspace.rs:335 的 `start_vis+60`）�
 - 任务完成并通过最终独立验收后由协调端推送创建保持打开的 PR。该授权不意味着每个未验收中间阶段提前发布。
 
 对 0e0f3d7 清单审查回应：补齐全部 global 依赖、第三套几何 fence 扫描及旧测试迁移；加入 AST 落后时 Plain 和立即 draw 证据；固定 A/B 共用运行期 CodeKey 与空/未知语言归一；明确 A 暂留60行窗口且保留描述 Arc 复用，真实高度只在 B 验收；把“一次解析”落实为唯一条目+生产调用计数和两个可编译路由回退红灯，记账采用独立持久分配测量。原1c9bbd1契约、阶段拆分和产品选择不变。此修订仍需独立确认后才派 A。
+
+## 阶段 A 派发签字记录
+
+Reviewer `w3:p7` 核准 **16666bf**，无未解决实质异议，证据 `/private/tmp/glidemark-phase-i-i12-rework4-review/REVIEW_REPORT_16666bf.md`。清单五处精度全部关闭，原设计不变，本次派发不用重复用户确认。
+
+执行时采纳非阻塞补充：上表已补旧 wrap 包装；edit-then-draw 检查中未变的既有代码行继续复用几何、新输入且未有描述的行按非 fenced 几何，不能回扫补色；优先让 AST canonical payload 与 CodeKey 共享 Arc，若保留独立 AST String 分配需如实报告，不把两份说成共享；增加一个 shell/bash 真实小块反例，验证 canonical 库名称不再被 raw alias 二次解析成 Plain。该问题已实证存在，不是仅检查字符串 API 名。
+
+本记录只确认阶段 A 的实施许可，不表示代码已合格。阶段 A 交付/独立审查仍按本清单；整体 I1/I2 在阶段 B 完成及终验前保持未完成。
