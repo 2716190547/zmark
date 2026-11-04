@@ -1,11 +1,11 @@
-use glidemark_app::state::{AppState, ViewMode};
+use glidemark_app::state::{AppState, DocKey, ViewMode};
 use glidemark_app::theme::ThemeColors;
 use glidemark_app::views::editor::{tokenize_document_lines, MarkdownTokenKind};
 use glidemark_app::views::preview::{apply_selection_to_highlights, obs};
-use glidemark_app::views::workspace::WorkspaceView;
+use glidemark_app::views::workspace::{SyntaxBatchRequest, SyntaxBlockItem, WorkspaceView};
 use glidemark_core::document::Document;
 use glidemark_core::syntax::{
-    clear_syntax_cache, get_or_parse_code_spans, parse_code_spans,
+    clear_syntax_cache, get_cached_code_spans, get_or_parse_code_spans, parse_code_spans,
     resolve_canonical_language, SyntaxRole, MAX_CODE_BLOCK_BYTES,
 };
 use gpui::{HighlightStyle, TestAppContext};
@@ -225,9 +225,12 @@ fn test_phase_i_utf8_contiguous_non_overlapping_coverage() {
     assert_eq!(reconstructed, complex_code);
 }
 
+static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Test 6: Bounded LRU cache and theme independence
 #[test]
 fn test_phase_i_bounded_lru_cache_and_theme_independence() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     clear_syntax_cache();
     let code = "def greet(name: str) -> str:\n    return f'Hello, {name}'";
 
@@ -257,6 +260,7 @@ fn test_phase_i_bounded_lru_cache_and_theme_independence() {
 /// Test 7: Preview and Editor consistency on the same code block
 #[test]
 fn test_phase_i_preview_and_editor_syntax_consistency() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     clear_syntax_cache();
     let markdown_doc = [
         "# Sample Document",
@@ -341,6 +345,7 @@ fn test_phase_i_preview_and_editor_syntax_consistency() {
 /// Test 8: Real Workspace Preview Render & Foreground Text Color Observation
 #[gpui::test]
 async fn test_phase_i_real_preview_render_and_selection_overlay(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     obs::reset();
     let xml_doc = "# Title\n\n```xml\n<project xmlns=\"http://maven.apache.org\">\n    <groupId>org.apache.maven</groupId>\n</project>\n```\n";
     let (view, cx) = cx.add_window_view(|_window, cx| {
@@ -409,6 +414,7 @@ async fn test_phase_i_real_preview_render_and_selection_overlay(cx: &mut TestApp
 /// Test 9: Real Workspace Editor Render & Token Kind Observation
 #[gpui::test]
 async fn test_phase_i_real_editor_render_tokens(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     obs::reset();
     let rust_doc = "# Title\n```rust\nfn main() {\n    let val = 42;\n    let msg = \"hello\";\n}\n```\n";
     let (_view, cx) = cx.add_window_view(|_window, cx| {
@@ -455,6 +461,7 @@ async fn test_phase_i_real_editor_render_tokens(cx: &mut TestAppContext) {
 /// Test 10: Cold start non-blocking initial render and asynchronous completion
 #[gpui::test]
 async fn test_phase_i_cold_start_nonblocking_and_async_refresh(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     clear_syntax_cache();
     let doc_str = "```rust\nfn cold() -> i32 { 100 }\n```\n";
     let (_view, cx) = cx.add_window_view(|_window, cx| {
@@ -487,6 +494,7 @@ async fn test_phase_i_cold_start_nonblocking_and_async_refresh(cx: &mut TestAppC
 /// Test 11: Cursor movement and scroll reuse tokens without reconstructing or reparsing
 #[gpui::test]
 async fn test_phase_i_scroll_and_cursor_reuse_without_reparsing(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let doc_str = "```rust\nfn test_reuse() {\n    let a = 1;\n}\n```\n";
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
@@ -529,6 +537,7 @@ async fn test_phase_i_scroll_and_cursor_reuse_without_reparsing(cx: &mut TestApp
 /// Test 12: Cancellation and stale revision guard
 #[gpui::test]
 async fn test_phase_i_cancellation_and_stale_revision_rejection(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let doc_str = "```rust\nfn stale_test() {}\n```\n";
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
@@ -546,28 +555,143 @@ async fn test_phase_i_cancellation_and_stale_revision_rejection(cx: &mut TestApp
             this.schedule_syntax_parse(cx);
         });
     });
+    cx.run_until_parked();
 
-    let current_rev = cx.update(|_window, cx| view.read(cx).state.editor.revision);
+    let (current_doc_key, current_rev, current_tokens_rev) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        (ws.state.active.clone(), ws.state.editor.revision, ws.cached_editor_tokens_rev)
+    });
 
-    // Stale batch request with old revision
-    let stale_request = glidemark_app::views::workspace::SyntaxBatchRequest {
-        doc_key: cx.update(|_window, cx| view.read(cx).state.active.clone()),
+    let sentinel_rev = "fn should_be_rejected_rev() {}";
+    let stale_rev_request = SyntaxBatchRequest {
+        doc_key: current_doc_key.clone(),
         revision: current_rev.saturating_sub(1),
-        blocks: vec![glidemark_app::views::workspace::SyntaxBlockItem {
-            block_id: 0,
+        blocks: vec![SyntaxBlockItem {
+            block_id: 101,
             lang: Some("rust".to_string()),
-            code: "fn should_be_rejected() {}".to_string(),
+            code: sentinel_rev.to_string(),
         }],
     };
 
-    // Stale guard: verify stale revision result is rejected
+    let sentinel_doc = "fn should_be_rejected_doc() {}";
+    let stale_doc_request = SyntaxBatchRequest {
+        doc_key: Some(DocKey::Scratch(999999)),
+        revision: current_rev,
+        blocks: vec![SyntaxBlockItem {
+            block_id: 102,
+            lang: Some("rust".to_string()),
+            code: sentinel_doc.to_string(),
+        }],
+    };
+
+    // Genuinely invoke run_syntax_batch with stale requests
     cx.update(|_window, cx| {
-        view.update(cx, |this, _cx| {
-            let current_doc_key = this.state.active.clone();
-            let current_rev = this.state.editor.revision;
-            assert_ne!(stale_request.revision, current_rev);
-            let is_accepted = stale_request.doc_key == current_doc_key && stale_request.revision == current_rev;
-            assert!(!is_accepted, "Stale revision result must be rejected");
+        view.update(cx, |this, cx| {
+            this.run_syntax_batch(stale_rev_request, cx);
+            this.run_syntax_batch(stale_doc_request, cx);
         });
     });
+
+    cx.run_until_parked();
+
+    // Assert that neither sentinel was inserted into the syntax cache
+    assert!(
+        get_cached_code_spans(sentinel_rev, Some("rust")).is_none(),
+        "Stale revision result must NOT be cached"
+    );
+    assert!(
+        get_cached_code_spans(sentinel_doc, Some("rust")).is_none(),
+        "Stale doc result must NOT be cached"
+    );
+
+    // Assert that cached_editor_tokens_rev was NOT rolled back
+    let final_tokens_rev = cx.update(|_window, cx| view.read(cx).cached_editor_tokens_rev);
+    assert_eq!(
+        final_tokens_rev, current_tokens_rev,
+        "cached_editor_tokens_rev must not be rolled back by stale response"
+    );
+}
+
+/// Test 13: 35-block cache thrashing and infinite render loop prevention
+#[gpui::test]
+async fn test_phase_i_33_blocks_cache_thrashing_infinite_render_loop(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let mut doc_str = String::new();
+    for i in 0..35 {
+        doc_str.push_str(&format!("```rust\nfn block_{}() -> usize {{ {}\n }}\n```\n", i, i));
+    }
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(doc_str);
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Source);
+        WorkspaceView::new(state, cx)
+    });
+
+    // Bounded parking time: must park cleanly in < 2 seconds (not hanging > 60s)
+    let park1_start = std::time::Instant::now();
+    cx.run_until_parked();
+    assert!(
+        park1_start.elapsed().as_secs() < 2,
+        "Source mode initial parking must complete in bounded time (< 2s)"
+    );
+
+    // Switch to Preview mode
+    cx.update(|_window, cx| {
+        view.update(cx, |this, _cx| {
+            this.state.set_view_mode(ViewMode::Preview);
+        });
+    });
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let park2_start = std::time::Instant::now();
+    cx.run_until_parked();
+    assert!(
+        park2_start.elapsed().as_secs() < 2,
+        "Preview mode parking must complete in bounded time (< 2s) without cache thrashing"
+    );
+
+    // Verify window.draw does not trigger perpetual tasks
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+}
+
+/// Test 14: Cumulative 50ms soft budget without slow-line resets
+#[test]
+fn test_phase_i_cumulative_soft_budget_without_resets() {
+    // 1. Fast block parses completely with rich syntax roles
+    let fast_code = "fn fast_func() {\n    let a = 123;\n    let s = \"hello\";\n}\n";
+    let fast_spans = parse_code_spans(fast_code, Some("rust"));
+    assert!(fast_spans.len() > 1);
+    assert!(fast_spans.iter().any(|s| s.role == SyntaxRole::Keyword));
+
+    // 2. Heavy code block: within threshold (<= 64KB, <= 2000 lines, <= 1000 chars/line)
+    // but cumulative parsing across many lines exceeds 50ms soft budget.
+    let mut heavy_code = String::new();
+    // Complex Rust patterns within 64KB limit (< 65,536 bytes) and <= 2000 lines.
+    // 750 lines * ~78 bytes = ~58.5 KB, consistently exceeding the 50ms soft budget (~65-75ms).
+    for i in 0..750 {
+        heavy_code.push_str(&format!(
+            "    let var_{:04} = (0..{}).map(|x| x * 2).filter(|x| x % 3 == 0).collect::<Vec<_>>();\n",
+            i, i % 100
+        ));
+    }
+    assert!(heavy_code.len() <= MAX_CODE_BLOCK_BYTES, "Must be <= 64KB limit, was {}", heavy_code.len());
+    let line_count = heavy_code.lines().count();
+    assert!(line_count <= 2000, "Must be <= 2000 lines, was {}", line_count);
+
+    let start = std::time::Instant::now();
+    let spans = parse_code_spans(&heavy_code, Some("rust"));
+    let duration = start.elapsed();
+    eprintln!("Heavy code len: {} bytes, {} lines, parsed in {:?}", heavy_code.len(), line_count, duration);
+
+    // Cumulative budget must fall back completely to Plain
+    assert_eq!(spans.len(), 1, "Cumulative budget exceeded must return exactly 1 span");
+    assert_eq!(spans[0].role, SyntaxRole::Plain);
+    assert_eq!(spans[0].range, 0..heavy_code.len());
 }

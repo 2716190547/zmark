@@ -56,7 +56,29 @@ pub fn is_syntax_set_ready() -> bool {
 
 /// Initializes `SYNTAX_SET` with syntect defaults and returns a static reference.
 pub fn init_syntax_set() -> &'static SyntaxSet {
-    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
+    SYNTAX_SET.get_or_init(|| {
+        let ss = SyntaxSet::load_defaults_newlines();
+        // Pre-compile regexes for canonical syntaxes during initialization so parsing
+        // code blocks never incurs one-time onig compilation against their parse budget.
+        for name in &[
+            "XML",
+            "HTML",
+            "Java",
+            "Python",
+            "JavaScript",
+            "JSON",
+            "YAML",
+            "SQL",
+            "Bourne Again Shell (bash)",
+            "Rust",
+        ] {
+            if let Some(syntax) = ss.find_syntax_by_name(name) {
+                let mut state = ParseState::new(syntax);
+                let _ = state.parse_line("\n", &ss);
+            }
+        }
+        ss
+    })
 }
 
 /// Maps a raw fence info string to a canonical language identifier recognized by GlideMark.
@@ -309,13 +331,12 @@ pub fn parse_code_spans_bounded(
         }
     }
 
-    let mut start_time = Instant::now();
+    let start_time = Instant::now();
     let mut state = ParseState::new(syntax);
     let mut stack = ScopeStack::new();
     let mut raw_spans: Vec<SyntaxSpan> = Vec::new();
 
     let mut line_start_byte = 0;
-    let mut is_first_line = true;
 
     // Iterate through lines preserving line endings for accurate regex anchors ($)
     let mut remaining = code;
@@ -325,8 +346,8 @@ pub fn parse_code_spans_bounded(
             return fallback_plain(code);
         }
 
-        // Soft budget check between lines (excluding cold-start first line regex compilation)
-        if !is_first_line && start_time.elapsed().as_millis() as u64 >= PARSE_SOFT_BUDGET_MS {
+        // Check cumulative elapsed time before each line
+        if start_time.elapsed().as_millis() as u64 >= PARSE_SOFT_BUDGET_MS {
             return fallback_plain(code);
         }
 
@@ -336,16 +357,14 @@ pub fn parse_code_spans_bounded(
             None => (remaining, ""),
         };
 
-        let line_parse_start = Instant::now();
         let ops = match state.parse_line(line_with_end, ss) {
             Ok(ops) => ops,
             Err(_) => return fallback_plain(code),
         };
-        let line_duration = line_parse_start.elapsed();
 
-        if is_first_line || line_duration.as_millis() >= 20 {
-            is_first_line = false;
-            start_time = Instant::now();
+        // Check cumulative elapsed time after regex return
+        if start_time.elapsed().as_millis() as u64 >= PARSE_SOFT_BUDGET_MS && !next_remaining.is_empty() {
+            return fallback_plain(code);
         }
 
         let mut last_col = 0;

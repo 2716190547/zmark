@@ -218,6 +218,9 @@ impl WorkspaceView {
         self.preview_mouse_window_pos = None;
         self.preview_list.reset(self.state.doc.parsed.blocks.len());
         self.rendered_regions.lock().unwrap().clear();
+        self.syntax_cancel_flag.store(true, Ordering::Relaxed);
+        self.syntax_pending_request = None;
+        self.schedule_syntax_parse_on_refresh();
     }
 
     pub fn update_search_query(&mut self, query: &str, cx: &mut Context<Self>) {
@@ -284,6 +287,26 @@ impl WorkspaceView {
             self.invalidate_preview_list();
             if self.state.view_mode == ViewMode::Split {
                 self.align_preview_to_cursor();
+            }
+        }
+        self.schedule_syntax_parse_on_refresh();
+    }
+
+    /// Synchronously parses any missing syntax blocks if syntax set is ready, and updates cached editor tokens.
+    pub fn schedule_syntax_parse_on_refresh(&mut self) {
+        let revision = self.state.editor.revision;
+        if self.cached_editor_tokens_rev != revision || self.cached_editor_tokens.is_empty() {
+            self.cached_editor_tokens = Arc::new(crate::views::editor::tokenize_document_lines(&self.state.editor.lines));
+            self.cached_editor_tokens_rev = revision;
+        }
+
+        if glidemark_core::syntax::is_syntax_set_ready() {
+            let blocks = self.collect_all_syntax_blocks();
+            for block in blocks {
+                if glidemark_core::syntax::get_cached_code_spans(&block.code, block.lang.as_deref()).is_none() {
+                    let spans = glidemark_core::syntax::parse_code_spans_bounded(&block.code, block.lang.as_deref(), None);
+                    glidemark_core::syntax::insert_cached_code_spans(&block.code, block.lang.as_deref(), Arc::from(spans));
+                }
             }
         }
     }
@@ -1582,12 +1605,6 @@ impl Render for WorkspaceView {
 
         let visual_lines = self.compute_visual_lines(window);
         let editor_tokens = self.compute_editor_tokens();
-        if self.syntax_active_task.is_none() {
-            let blocks = self.collect_all_syntax_blocks();
-            if blocks.iter().any(|b| glidemark_core::syntax::get_cached_code_spans(&b.code, b.lang.as_deref()).is_none()) {
-                self.schedule_syntax_parse(cx);
-            }
-        }
 
         let theme = &self.state.theme;
         let strings = self.state.strings;
