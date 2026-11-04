@@ -271,12 +271,39 @@ Reviewer 对 3a542fc 独立验收打回，P1:2。证据为 `/private/tmp/glidema
 
 - AST 使用已有 BlockElement 递归组合：BlockQuote 已有 Vec<BlockElement>，让其 parser 真正保留子块；ListItem 改为 checked + 有序 body: Vec<BlockElement>，替代 content + 单个 sub_list 双形态，使段落→代码→子列表→后续段落保留实际顺序。不同时维护等价的两份内容。复用 pulldown 事件，不另造 Markdown 语法器。
 - 递归解析与递归预览复用统一块函数，保留既有列表深度防护；超深输入安全回退保留文本，不静默吞掉子内容。普通无代码列表/引用已有渲染、任务状态和纯文本格式保持。HTML 导出同步消费新 body，避免新增 AST 在导出丢失。
-- 代码身份包含 root block 和子块路径（或等价源范围），顶层虚拟列表仍以 root 为单位。嵌套渲染传递真实 bounds、padding、flat 字符偏移；列表/引用的 plain_text 序列及分隔符由同一输出/偏移规则派生，复制和高亮不能各自再猜前缀长度。源码借同一事件源映射去掉语法容器前缀后着色，原文件不改。
+- 顶层虚拟列表仍以 root 为单位。代码描述保留定位所需源范围，**缓存和可见需求身份仅用 canonical language + payload**；相同内容多次出现共享一个结果，不再为调度增加 child-path 身份层。预览 region 已有 text、root block、flat offset/bounds，只补必要 canonical language 即可；root/子块偏移仅服务几何和纯文本投影。源码借同一事件源映射去掉语法容器前缀后着色，原文件不改。
 - 旧列表/引用样例的序列化文本与 Phase H B1/B2 真实选区/复制期望保持；新增样例明确段落与代码之间换行，不粘成 itemfn。至少验证列表/引用各一例以及二者组合嵌套的语言色、代码按钮复制、局部/跨父项拖选、实际命中、代码换行和虚拟高度/同步滚动。嵌套内容的范围/语义变化不能通过批量重写旧期望掩盖。
 - ParsedDocument 的代码描述和源映射随相同 revision 产生，不独立重扫当前 buffer 并套旧 AST。若解析节流暂用旧 AST，当前源码代码着色先 Plain，待该 revision 模型就绪后恢复；不在 UI 为补映射另起同步 parse。
 
 #### 对 9b2f059 规划审查的逐项回应
 
 ①接受 parser 的 LF/synthetic LF 现实，明确 canonical=parser 文本、源码逐行 byte 映射与失败回退；嵌套能力是新增范围，已由用户选择支持，补单一有序 AST body 和消费链路。②采纳已有 rendered_regions + 一处 editor bounds + draw 后 defer，删除额外签名层，纠正 scroll_by 事件表述和 cfg(test) API 限制。③采纳 4MiB 按实际字节准入和一句稳定溢出行为；不接受把本机 56KB/50ms 实测外推为不可溢出的证明，极端压力行为已获用户确认。④补每语言预热验证和最多一次块预算重试，首次冷编译不直接成为无声永久终止。候选尚待独立复审，未自行关闭技术异议。
+
+#### 对 c1abba8 规划审查的补充：记账与最小接口（本修订待复审）
+
+Reviewer 已核实前四项异议技术闭合，12 组 canonical 行映射均可行；剩余 R1 是代码派生 token 绕过预算，R2–R5 是必须写明的落地边界。以下细化并约束本轮方案，不扩大用户产品范围。
+
+**R1：内存与两侧一致性。** 4MiB 是**每个 Workspace 持久代码着色缓存**的额度，涵盖 canonical payload/key、spans、LRU/容纳索引的实际容量，以及任何额外保留的代码 token/角色派生结果；共享 Arc 数据只计一次。文档原文、同 revision AST/源映射和原有文字几何缓存仍按文档规模增长，明确不在此额度，也不宣称整个进程或整个编辑器固定 4MiB。帧内只为实际可见行创建临时颜色视图，尽量用原文范围而非复制字符串；它们是按可见内容增长的短生命周期渲染数据，须单列实测，不能跨帧保存成未记账的全篇代码着色表。
+
+- 删除 Workspace 的整篇代码角色 token 缓存及每批完成后全篇 tokenize_document_lines 重建；代码行的颜色 token 从**当前被容纳的常驻 spans**按行投影、在可见渲染时派生。缺失、未准入、逐出或资源降级时，同一帧两侧都按统一块状态 Plain；不能用旧 token 的颜色判断 Ready。
+- DocumentLayoutCache/CachedLineEntry 的代码行只保留几何所需的普通等宽文本/范围与视觉折行信息，不保留 SyntaxRole/CodeKeyword 等着色 token 副本。语法色不改变字重/字体/边距，驻留变化不应使字形度量重排。普通 Markdown 的字重/行内代码几何信息可继续按旧逻辑缓存；不得因此退回字符宽度猜测或破坏 Phase H 单键 shaped=1 的复用。该缓存属于前述明确排除的几何数据，不是代码颜色的第二结果缓存。
+- 缓存准入/逐出造成的可见颜色变更在后台批次完成的同一刷新中一致应用；当前帧可以短暂保留其已提交渲染数据，下一帧不得再从已淘汰 token 恢复颜色。验收同时查持久 token 容量随未驻留代码增长是否消失，以及预览 Plain/源码旧色的反例，不能只报 CACHE 自身字节。
+
+**R2：缓存所有权和容量接口。** 最小实现将现有 LRU 数据结构改为 Workspace 持有的一个具体 SyntaxCache 实例，源码/预览共用；不保留进程 static CACHE 再叠加多 Workspace pin 管理。只有语法集合/受限预热状态仍进程共享。切文档清空该 Workspace 的缓存、容纳集合和尝试表；其他窗口互不覆盖。后台只产出有界候选结果，入库和容纳由该 Workspace 统一处理，不持锁解析。一个具体类型和少量查找/准入方法即可，不建通用缓存接口。
+
+- 容纳集合是本 Workspace 按当前可见需求稳定排序后选出的内容 key 集合；插入/淘汰检查这个集合，禁止逐出本轮已决定容纳的可见结果。结果重试仅按明确状态，不因 bytes miss 自发循环。
+- 仅当 **doc/revision 或两侧可见内容 key 集合不等**、用户明确刷新、或 pending 的真实解析结果完成需要最终准入时重评估；1px 滚动但集合相同不重排容纳次序。相同集合的几何变化不会反复轮换颜色。
+- 有效非空区间互不重叠覆盖 payload，故 span 数不超过 payload 字节数。当前64KiB输入、24字节SyntaxSpan下，payload+spans的长度上界约1.57MiB，小于4MiB；这是长度上界，不冒充包含所有 allocator/container capacity 的精确分配上界。仍对实际容量做最终准入检查，单条实际超预算直接带原因降级，绝不无限重试；集合溢出执行已获用户确认的稳定资源降级。
+
+**R3：需求信号和每帧合并。** 缺失信号统一来自该 Workspace 的代码块状态/缓存，不从“某行只有一个 CodeText token”推断。源码用新增 editor bounds、已有滚动 offset/实际行高与视觉行映射，在已生成的代码描述中查可见内容 key；不重扫/拼接代码。预览复用当前帧 rendered_regions.text + canonical language 求 key，嵌套 root/flat offset 仅用于几何/排序。同帧相同内容两处出现仍只提交一次需求。
+
+- 一个 Workspace 的布局观测共享 **per-draw armed 标记**：预览各 region 与源码 bounds 只记录本帧数据，最多 arm 一个 draw 后 defer；回调消费后清标记。不能每个代码块各 arm 一次。
+- defer 只对当前 doc/revision 的帧数据求两侧集合、比较已提交集合并合并后台请求，不解析、不无条件 notify。切模式/切文档/窗格未布局时清理相应旧记录，overdraw 与真实遮罩求交；所有操作沿既有坐标系，不新增可见性注册表。
+
+**R4：一个 flatten 与 offset API。** 必须合并 ast.rs 的 to_plain_text、preview.rs 引用子块 offset 走查、列表 prefix_len/p_offset+=3 三处逻辑。提供一个小型块纯文本布局结果：最终文本和每个子内容的字符范围对应；插入的列表前缀、分隔换行、续行缩进由该函数唯一生成。若缩进使子块文本在父文本中不连续，返回逐段字符映射，不用一个 char_start 冒充线性偏移。to_plain_text 只取其文本，预览/regions/选区消费同一映射，不能在调用端再猜2/6/3等前缀宽度。它是现有三处逻辑的收敛，不建立通用文本布局框架。普通列表/引用纯文本的**字节**必须与现版本一致，既有 Phase H 复制期望不批量修改；新增嵌套代码的块边界与后续段落不得粘连，HTML 导出继续从单一 AST body 递归。
+
+**R5：尝试表生命周期。** 尝试表只持有当前 doc/revision 的内容 key 和计数，切文档/换 revision 清空；旧后台结果必须先过请求归属及 doc/revision 守卫，不能给新尝试表记数或覆盖 pending。每语言预热代次仅0/1，最多升一次；每块每代最多两次预算解析，故同一用户请求的自动尝试总数最多4次。显式刷新建立新的用户请求，但不能由 draw、滚动、cache eviction 或内部 notify 假冒刷新来归零重试。所有重试同样走 doc/revision 和当前请求归属守卫。
+
+返工必要验收补充：复用 Reviewer 已验证的12组 source mapping；一个表驱动检查同一结果两侧驻留/逐出一致，未驻留代码不留下整篇着色 token，几何仍正确；一条检查每 draw 仅一次 deferred 提交，同集合滚动不新开任务；纯文本统一API旧样例字节一致及新嵌套跨块选区；尝试表代次和切文档清理。仅补这些直接边界，不扩成独立治理套件。独立审查证据路径 `/private/tmp/glidemark-phase-i-i12-replan-review/REVIEW_REPORT_c1abba8.md`；新修订仍需精确版本签字，未派实现。
 
 本修订先送既有 Reviewer 挑战，重点是载荷/源范围可行性、视口事件闭环、4MiB 工作集边界及线程/计时证据。技术事实由协调者查证，新增产品取舍再交用户；明确无未解决实质异议前不派返工 #3。两个子代理实现/独立测试及阶段全量、打包和最终 PR 交付流程继续有效。
