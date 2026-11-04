@@ -211,6 +211,7 @@ pub struct TextLayoutRegion {
     pub padding_top: f32,
     pub padding_right: f32,
     pub flat_char_offset: usize,
+    pub content_key: Option<(String, String)>,
 }
 
 #[derive(Clone, Debug)]
@@ -224,6 +225,7 @@ pub struct TextRegionInfo {
     pub padding_top: f32,
     pub padding_right: f32,
     pub flat_char_offset: usize,
+    pub content_key: Option<(String, String)>,
 }
 
 pub type RegionsRegistry = std::sync::Mutex<Vec<TextLayoutRegion>>;
@@ -250,6 +252,7 @@ pub(crate) fn with_text_probe(el: gpui::Div, info: TextRegionInfo, regions: Arc<
                 padding_top: info.padding_top,
                 padding_right: info.padding_right,
                 flat_char_offset: info.flat_char_offset,
+                content_key: info.content_key.clone(),
             });
         },
         |_bounds, _paint, _window, _cx| {},
@@ -284,6 +287,7 @@ pub(crate) fn with_text_probe_stateful(el: gpui::Stateful<gpui::Div>, info: Text
                 padding_top: info.padding_top,
                 padding_right: info.padding_right,
                 flat_char_offset: info.flat_char_offset,
+                content_key: info.content_key.clone(),
             });
         },
         |_bounds, _paint, _window, _cx| {},
@@ -675,12 +679,14 @@ pub fn render_preview_pane_with_callbacks(
     selection: Option<PreviewSelection>,
     is_selecting: bool,
     regions: Arc<RegionsRegistry>,
+    syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
     let item_parsed = parsed.clone();
     let item_callbacks = callbacks.clone();
     let item_regions = regions.clone();
+    let item_syntax_cache = syntax_cache.clone();
     regions.lock().unwrap().clear();
 
     let mut pane = div()
@@ -708,7 +714,8 @@ pub fn render_preview_pane_with_callbacks(
                 return div().into_any_element();
             };
 
-            let block_text = block.to_plain_text();
+            let flat = glidemark_core::ast::flatten_block(block, "0");
+            let block_text = flat.text.clone();
             let block_char_len = block_text.chars().count();
             let selected_char_range = selection.and_then(|s| s.char_range_for_block(ix, block_char_len));
 
@@ -740,8 +747,10 @@ pub fn render_preview_pane_with_callbacks(
                     item_callbacks.on_open_lightbox.as_ref(),
                     selected_char_range,
                     ix,
-                    0,
                     item_regions.clone(),
+                    item_syntax_cache.clone(),
+                    &flat,
+                    "0",
                 ));
 
             if let Some(ref on_selection_change) = item_callbacks.on_selection_change {
@@ -828,8 +837,10 @@ fn render_block_element(
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
     selected_char_range: Option<std::ops::Range<usize>>,
     block_ix: usize,
-    base_char_offset: usize,
     regions: Arc<RegionsRegistry>,
+    syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
+    flat: &glidemark_core::ast::FlattenResult,
+    path: &str,
 ) -> AnyElement {
     match block {
         BlockElement::Heading { level, content } => {
@@ -854,7 +865,22 @@ fn render_block_element(
                 el = el.border_b_1().border_color(theme.border);
             }
 
-            el = el.child(render_styled_inlines(content, theme, font_size, selected_char_range));
+            let seg = flat.segments.iter().find(|s| s.child_path == path);
+            let flat_char_offset = seg.map(|s| s.char_range.start).unwrap_or(0);
+            let el_range = seg.and_then(|s| {
+                selected_char_range.as_ref().and_then(|range| {
+                    if range.start < s.char_range.end && range.end > s.char_range.start {
+                        let len = s.char_range.len();
+                        let start = range.start.saturating_sub(s.char_range.start).min(len);
+                        let end = range.end.saturating_sub(s.char_range.start).min(len);
+                        if start < end { Some(start..end) } else { None }
+                    } else {
+                        None
+                    }
+                })
+            });
+
+            el = el.child(render_styled_inlines(content, theme, font_size, el_range));
 
             with_text_probe(
                 el,
@@ -867,20 +893,36 @@ fn render_block_element(
                     padding_left: 0.0,
                     padding_top: 12.0,
                     padding_right: 0.0,
-                    flat_char_offset: base_char_offset,
+                    flat_char_offset,
+                    content_key: None,
                 },
                 regions,
             )
             .into_any_element()
         }
         BlockElement::Paragraph(content) => {
+            let seg = flat.segments.iter().find(|s| s.child_path == path);
+            let flat_char_offset = seg.map(|s| s.char_range.start).unwrap_or(0);
+            let el_range = seg.and_then(|s| {
+                selected_char_range.as_ref().and_then(|range| {
+                    if range.start < s.char_range.end && range.end > s.char_range.start {
+                        let len = s.char_range.len();
+                        let start = range.start.saturating_sub(s.char_range.start).min(len);
+                        let end = range.end.saturating_sub(s.char_range.start).min(len);
+                        if start < end { Some(start..end) } else { None }
+                    } else {
+                        None
+                    }
+                })
+            });
+
             let el = div()
                 .w_full()
                 .min_w(px(0.))
                 .text_size(px(base_font_size))
                 .line_height(relative(1.75))
                 .text_color(theme.text_primary)
-                .child(render_styled_inlines(content, theme, base_font_size, selected_char_range));
+                .child(render_styled_inlines(content, theme, base_font_size, el_range));
 
             with_text_probe(
                 el,
@@ -893,7 +935,8 @@ fn render_block_element(
                     padding_left: 0.0,
                     padding_top: 0.0,
                     padding_right: 0.0,
-                    flat_char_offset: base_char_offset,
+                    flat_char_offset,
+                    content_key: None,
                 },
                 regions,
             )
@@ -903,6 +946,21 @@ fn render_block_element(
             if lang.as_deref() == Some("mermaid") {
                 render_mermaid_diagram(code, theme, strings, base_font_size, on_open_lightbox)
             } else {
+                let seg = flat.segments.iter().find(|s| s.child_path == path);
+                let flat_char_offset = seg.map(|s| s.char_range.start).unwrap_or(0);
+                let el_range = seg.and_then(|s| {
+                    selected_char_range.as_ref().and_then(|range| {
+                        if range.start < s.char_range.end && range.end > s.char_range.start {
+                            let len = s.char_range.len();
+                            let start = range.start.saturating_sub(s.char_range.start).min(len);
+                            let end = range.end.saturating_sub(s.char_range.start).min(len);
+                            if start < end { Some(start..end) } else { None }
+                        } else {
+                            None
+                        }
+                    })
+                });
+
                 render_code_block(
                     lang.as_deref(),
                     code,
@@ -911,43 +969,19 @@ fn render_block_element(
                     base_font_size,
                     copied_code_hash,
                     on_copy,
-                    selected_char_range,
+                    el_range,
                     block_ix,
-                    base_char_offset,
+                    flat_char_offset,
                     regions,
+                    &syntax_cache,
                 )
             }
         }
         BlockElement::BlockQuote(blocks) => {
-            let mut cur_offset = 0;
-            let mut is_first_non_empty = true;
             let mut child_elements = Vec::new();
 
-            for b in blocks {
-                let text = b.to_plain_text();
-                let len = text.chars().count();
-                let (child_range, child_start) = if len == 0 {
-                    (None, cur_offset)
-                } else {
-                    if !is_first_non_empty {
-                        cur_offset += 1;
-                    }
-                    is_first_non_empty = false;
-                    let block_start = cur_offset;
-                    let block_end = cur_offset + len;
-                    let r = selected_char_range.as_ref().and_then(|range| {
-                        if range.start < block_end && range.end > block_start {
-                            let s = range.start.saturating_sub(block_start).min(len);
-                            let e = range.end.saturating_sub(block_start).min(len);
-                            if s < e { Some(s..e) } else { None }
-                        } else {
-                            None
-                        }
-                    });
-                    cur_offset += len;
-                    (r, block_start)
-                };
-
+            for (i, b) in blocks.iter().enumerate() {
+                let child_path = format!("{}.{}", path, i);
                 child_elements.push(render_block_element(
                     b,
                     theme,
@@ -956,10 +990,12 @@ fn render_block_element(
                     copied_code_hash,
                     on_copy,
                     on_open_lightbox,
-                    child_range,
+                    selected_char_range.clone(),
                     block_ix,
-                    base_char_offset + child_start,
                     regions.clone(),
+                    syntax_cache.clone(),
+                    flat,
+                    &child_path,
                 ));
             }
 
@@ -989,8 +1025,10 @@ fn render_block_element(
             on_open_lightbox,
             selected_char_range,
             block_ix,
-            base_char_offset,
             regions,
+            syntax_cache.clone(),
+            flat,
+            path,
         ),
         BlockElement::Table { headers, rows } => {
             let mut cur_offset = 0;
@@ -1029,7 +1067,8 @@ fn render_block_element(
                             padding_left: 12.0,
                             padding_top: 12.0,
                             padding_right: 12.0,
-                            flat_char_offset: base_char_offset + cell_start,
+                            flat_char_offset: cell_start,
+                            content_key: None,
                         },
                         regions.clone(),
                     )
@@ -1072,7 +1111,8 @@ fn render_block_element(
                                 padding_left: 12.0,
                                 padding_top: 12.0,
                                 padding_right: 12.0,
-                                flat_char_offset: base_char_offset + cell_start,
+                                flat_char_offset: cell_start,
+                                content_key: None,
                             },
                             regions.clone(),
                         )
@@ -1582,85 +1622,14 @@ fn render_list_element(
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
     selected_char_range: Option<std::ops::Range<usize>>,
     block_ix: usize,
-    base_char_offset: usize,
     regions: Arc<RegionsRegistry>,
+    syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
+    flat: &glidemark_core::ast::FlattenResult,
+    path: &str,
 ) -> AnyElement {
-    let mut cur_offset = 0;
     let mut item_elements = Vec::with_capacity(items.len());
 
     for (idx, item) in items.iter().enumerate() {
-        let prefix_len = if item.checked.is_some() {
-            6
-        } else if ordered {
-            format!("{}. ", idx + 1).chars().count()
-        } else {
-            2
-        };
-        let content_text = item.content.plain_text();
-        let content_len = content_text.chars().count();
-        let item_start = cur_offset + prefix_len;
-        let item_end = item_start + content_len;
-
-        let item_range = selected_char_range.as_ref().and_then(|range| {
-            if range.start < item_end && range.end > item_start {
-                let s = range.start.saturating_sub(item_start).min(content_len);
-                let e = range.end.saturating_sub(item_start).min(content_len);
-                if s < e { Some(s..e) } else { None }
-            } else {
-                None
-            }
-        });
-
-        let (sub_range, next_offset) = if let Some(sub) = &item.sub_list {
-            let sub_text = sub.to_plain_text();
-            if sub_text.is_empty() {
-                (None, item_end)
-            } else {
-                let mut first_sel = None;
-                let mut last_sel = None;
-                let mut p_offset = item_end;
-                let mut sub_char_idx = 0;
-                let sub_char_total = sub_text.chars().count();
-
-                for line in sub_text.lines() {
-                    p_offset += 3; // '\n' + "  "
-                    for _ in line.chars() {
-                        if let Some(ref range) = selected_char_range {
-                            if range.start <= p_offset && p_offset < range.end {
-                                if first_sel.is_none() {
-                                    first_sel = Some(sub_char_idx);
-                                }
-                                last_sel = Some(sub_char_idx + 1);
-                            }
-                        }
-                        p_offset += 1;
-                        sub_char_idx += 1;
-                    }
-                    if sub_char_idx < sub_char_total {
-                        if let Some(ref range) = selected_char_range {
-                            if range.start <= p_offset && p_offset < range.end {
-                                if first_sel.is_none() {
-                                    first_sel = Some(sub_char_idx);
-                                }
-                                last_sel = Some(sub_char_idx + 1);
-                            }
-                        }
-                        sub_char_idx += 1;
-                    }
-                }
-
-                let range = match (first_sel, last_sel) {
-                    (Some(s), Some(e)) if s < e => Some(s..e),
-                    _ => None,
-                };
-                (range, p_offset)
-            }
-        } else {
-            (None, item_end)
-        };
-
-        cur_offset = next_offset + 1;
-
         let bullet_element = if let Some(checked) = item.checked {
             div()
                 .mt_1()
@@ -1706,11 +1675,80 @@ fn render_list_element(
                 .child(bullet)
         };
 
-        let sub_element = item.sub_list.as_ref().map(|sub| {
-            div()
-                .pl_5()
-                .pt_1()
-                .child(if let BlockElement::List { ordered: sub_ordered, items: sub_items } = sub.as_ref() {
+        let mut first_child_el = None;
+        let mut subsequent_child_els = Vec::new();
+
+        for (ci, child) in item.body.iter().enumerate() {
+            let child_path = format!("{}.{}.{}", path, idx, ci);
+            let seg = flat.segments.iter().find(|s| s.child_path == child_path);
+            let flat_char_offset = seg.map(|s| s.char_range.start).unwrap_or(0);
+            let child_range = seg.and_then(|s| {
+                selected_char_range.as_ref().and_then(|range| {
+                    if range.start < s.char_range.end && range.end > s.char_range.start {
+                        let len = s.char_range.len();
+                        let start = range.start.saturating_sub(s.char_range.start).min(len);
+                        let end = range.end.saturating_sub(s.char_range.start).min(len);
+                        if start < end { Some(start..end) } else { None }
+                    } else {
+                        None
+                    }
+                })
+            });
+
+            if ci == 0 {
+                if let glidemark_core::ast::BlockElement::Paragraph(content) = child {
+                    let content_text = content.plain_text();
+                    first_child_el = Some(
+                        with_text_probe(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .text_size(px(base_font_size))
+                                .line_height(relative(1.6))
+                                .text_color(theme.text_primary)
+                                .child(render_styled_inlines(content, theme, base_font_size, child_range)),
+                            TextRegionInfo {
+                                block_ix,
+                                text: content_text,
+                                font_name: "ui-sans-serif, system-ui",
+                                font_size: base_font_size,
+                                line_height_factor: 1.6,
+                                padding_left: 0.0,
+                                padding_top: 0.0,
+                                padding_right: 0.0,
+                                flat_char_offset,
+                                content_key: None,
+                            },
+                            regions.clone(),
+                        )
+                        .into_any_element(),
+                    );
+                } else {
+                    let rendered = render_block_element(
+                        child,
+                        theme,
+                        strings,
+                        base_font_size,
+                        copied_code_hash,
+                        on_copy,
+                        on_open_lightbox,
+                        selected_char_range.clone(),
+                        block_ix,
+                        regions.clone(),
+                        syntax_cache.clone(),
+                        flat,
+                        &child_path,
+                    );
+                    first_child_el = Some(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .child(rendered)
+                            .into_any_element(),
+                    );
+                }
+            } else {
+                let rendered = if let glidemark_core::ast::BlockElement::List { ordered: sub_ordered, items: sub_items } = child {
                     render_list_element(
                         *sub_ordered,
                         sub_items,
@@ -1721,15 +1759,47 @@ fn render_list_element(
                         copied_code_hash,
                         on_copy,
                         on_open_lightbox,
-                        sub_range,
+                        selected_char_range.clone(),
                         block_ix,
-                        base_char_offset + item_end + 3,
                         regions.clone(),
+                        syntax_cache.clone(),
+                        flat,
+                        &child_path,
                     )
                 } else {
-                    render_block_element(sub, theme, strings, base_font_size, copied_code_hash, on_copy, on_open_lightbox, sub_range, block_ix, base_char_offset + item_end + 3, regions.clone())
-                })
-        });
+                    render_block_element(
+                        child,
+                        theme,
+                        strings,
+                        base_font_size,
+                        copied_code_hash,
+                        on_copy,
+                        on_open_lightbox,
+                        selected_char_range.clone(),
+                        block_ix,
+                        regions.clone(),
+                        syntax_cache.clone(),
+                        flat,
+                        &child_path,
+                    )
+                };
+                subsequent_child_els.push(
+                    div()
+                        .pl_5()
+                        .pt_1()
+                        .child(rendered),
+                );
+            }
+        }
+
+        let first_row = div()
+            .w_full()
+            .min_w(px(0.))
+            .flex()
+            .items_start()
+            .gap_2()
+            .child(bullet_element)
+            .children(first_child_el);
 
         item_elements.push(
             div()
@@ -1737,39 +1807,8 @@ fn render_list_element(
                 .min_w(px(0.))
                 .flex()
                 .flex_col()
-                .child(
-                    div()
-                        .w_full()
-                        .min_w(px(0.))
-                        .flex()
-                        .items_start()
-                        .gap_2()
-                        .child(bullet_element)
-                        .child(
-                            with_text_probe(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.))
-                                    .text_size(px(base_font_size))
-                                    .line_height(relative(1.6))
-                                    .text_color(theme.text_primary)
-                                    .child(render_styled_inlines(&item.content, theme, base_font_size, item_range)),
-                                TextRegionInfo {
-                                    block_ix,
-                                    text: content_text.clone(),
-                                    font_name: "ui-sans-serif, system-ui",
-                                    font_size: base_font_size,
-                                    line_height_factor: 1.6,
-                                    padding_left: 0.0,
-                                    padding_top: 0.0,
-                                    padding_right: 0.0,
-                                    flat_char_offset: base_char_offset + item_start,
-                                },
-                                regions.clone(),
-                            ),
-                        ),
-                )
-                .children(sub_element),
+                .child(first_row)
+                .children(subsequent_child_els),
         );
     }
 
@@ -1813,6 +1852,7 @@ fn render_code_block(
     block_ix: usize,
     base_char_offset: usize,
     regions: Arc<RegionsRegistry>,
+    syntax_cache: &Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
 ) -> AnyElement {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     code.hash(&mut hasher);
@@ -1825,16 +1865,26 @@ fn render_code_block(
     let code_to_copy = code.to_string();
     let code_text = if code.is_empty() { " ".to_string() } else { code.to_string() };
 
+    let canonical_lang = glidemark_core::syntax::resolve_canonical_language(lang)
+        .unwrap_or("Plain")
+        .to_string();
+    let content_key = Some((canonical_lang, code.to_string()));
+
     let should_wrap = should_wrap_code_block(lang);
 
     let group_name: SharedString = format!("code_block_{}", hash).into();
 
-    let spans = glidemark_core::syntax::get_cached_code_spans(code, lang).unwrap_or_else(|| {
-        Arc::from([glidemark_core::syntax::SyntaxSpan {
-            range: 0..code.len(),
-            role: glidemark_core::syntax::SyntaxRole::Plain,
-        }])
-    });
+    let spans = syntax_cache
+        .lock()
+        .unwrap()
+        .get(code, lang)
+        .or_else(|| glidemark_core::syntax::get_cached_code_spans(code, lang))
+        .unwrap_or_else(|| {
+            Arc::from([glidemark_core::syntax::SyntaxSpan {
+                range: 0..code.len(),
+                role: glidemark_core::syntax::SyntaxRole::Plain,
+            }])
+        });
     let syntax_highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = spans
         .iter()
         .filter(|s| s.range.start < s.range.end && s.range.end <= code_text.len())
@@ -1898,6 +1948,7 @@ fn render_code_block(
             padding_top: 12.0,
             padding_right: 12.0,
             flat_char_offset: base_char_offset,
+            content_key,
         },
         regions,
     );

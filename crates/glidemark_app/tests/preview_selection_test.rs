@@ -137,16 +137,14 @@ fn test_multi_block_selection_skips_rules_and_compacts_consecutive_lists() {
         ordered: false,
         items: vec![ListItem {
             checked: None,
-            content: InlineGroup(vec![InlineItem::Text("Item 1".into())]),
-            sub_list: None,
+            body: vec![BlockElement::Paragraph(InlineGroup(vec![InlineItem::Text("Item 1".into())]))],
         }],
     });
     blocks.push(BlockElement::List {
         ordered: true,
         items: vec![ListItem {
             checked: None,
-            content: InlineGroup(vec![InlineItem::Text("Item 2".into())]),
-            sub_list: None,
+            body: vec![BlockElement::Paragraph(InlineGroup(vec![InlineItem::Text("Item 2".into())]))],
         }],
     });
 

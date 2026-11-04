@@ -57,8 +57,12 @@ pub struct WorkspaceView {
     pub syntax_active_task: Option<gpui::Task<()>>,
     pub syntax_pending_request: Option<SyntaxBatchRequest>,
     pub syntax_cancel_flag: Arc<AtomicBool>,
-    pub cached_editor_tokens: Arc<Vec<Vec<crate::views::editor::MarkdownToken>>>,
-    pub cached_editor_tokens_rev: usize,
+    pub syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
+    pub syntax_attempts: std::collections::HashMap<(String, String), (u8, u8)>,
+    pub syntax_defer_armed: bool,
+    pub last_visible_syntax_keys: std::collections::HashSet<(String, String)>,
+    pub source_code_blocks: Arc<Vec<crate::views::editor::SourceCodeBlock>>,
+    pub source_code_blocks_rev: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -74,59 +78,6 @@ pub struct SyntaxBatchRequest {
     pub doc_key: Option<crate::state::DocKey>,
     pub revision: usize,
     pub blocks: Vec<SyntaxBlockItem>,
-}
-
-pub fn extract_syntax_blocks(lines: &[String]) -> Vec<SyntaxBlockItem> {
-    let mut blocks = Vec::new();
-    let mut in_fence = false;
-    let mut fence_lang: Option<String> = None;
-    let mut block_lines: Vec<String> = Vec::new();
-    let mut block_idx = 0;
-
-    for line in lines {
-        let trimmed = line.trim();
-        let is_fence_delim = trimmed.starts_with("```") || trimmed.starts_with("~~~");
-        if !in_fence {
-            if is_fence_delim {
-                in_fence = true;
-                let raw_tag = if let Some(stripped) = trimmed.strip_prefix("```") {
-                    stripped.trim()
-                } else if let Some(stripped) = trimmed.strip_prefix("~~~") {
-                    stripped.trim()
-                } else {
-                    ""
-                };
-                let lang_token = raw_tag.split_whitespace().next().unwrap_or("");
-                fence_lang = if lang_token.is_empty() {
-                    None
-                } else {
-                    Some(lang_token.to_string())
-                };
-                block_lines.clear();
-            }
-        } else if is_fence_delim {
-            let code = block_lines.join("\n");
-            blocks.push(SyntaxBlockItem {
-                block_id: block_idx,
-                lang: fence_lang.take(),
-                code,
-            });
-            block_idx += 1;
-            in_fence = false;
-            block_lines.clear();
-        } else {
-            block_lines.push(line.clone());
-        }
-    }
-    if in_fence && !block_lines.is_empty() {
-        let code = block_lines.join("\n");
-        blocks.push(SyntaxBlockItem {
-            block_id: block_idx,
-            lang: fence_lang,
-            code,
-        });
-    }
-    blocks
 }
 
 impl WorkspaceView {
@@ -191,8 +142,12 @@ impl WorkspaceView {
             syntax_active_task: None,
             syntax_pending_request: None,
             syntax_cancel_flag: Arc::new(AtomicBool::new(false)),
-            cached_editor_tokens: Arc::new(Vec::new()),
-            cached_editor_tokens_rev: usize::MAX,
+            syntax_cache: Arc::new(std::sync::Mutex::new(glidemark_core::syntax::SyntaxCache::new())),
+            syntax_attempts: std::collections::HashMap::new(),
+            syntax_defer_armed: false,
+            last_visible_syntax_keys: std::collections::HashSet::new(),
+            source_code_blocks: Arc::new(Vec::new()),
+            source_code_blocks_rev: usize::MAX,
         };
 
         // Background one-time initialization of syntax highlighting
@@ -218,9 +173,12 @@ impl WorkspaceView {
         self.preview_mouse_window_pos = None;
         self.preview_list.reset(self.state.doc.parsed.blocks.len());
         self.rendered_regions.lock().unwrap().clear();
+        self.syntax_cache.lock().unwrap().clear();
+        self.syntax_attempts.clear();
+        self.last_visible_syntax_keys.clear();
+        self.syntax_defer_armed = false;
         self.syntax_cancel_flag.store(true, Ordering::Relaxed);
         self.syntax_pending_request = None;
-        self.schedule_syntax_parse_on_refresh();
     }
 
     pub fn update_search_query(&mut self, query: &str, cx: &mut Context<Self>) {
@@ -289,26 +247,13 @@ impl WorkspaceView {
                 self.align_preview_to_cursor();
             }
         }
-        self.schedule_syntax_parse_on_refresh();
     }
 
-    /// Synchronously parses any missing syntax blocks if syntax set is ready, and updates cached editor tokens.
-    pub fn schedule_syntax_parse_on_refresh(&mut self) {
-        let revision = self.state.editor.revision;
-        if self.cached_editor_tokens_rev != revision || self.cached_editor_tokens.is_empty() {
-            self.cached_editor_tokens = Arc::new(crate::views::editor::tokenize_document_lines(&self.state.editor.lines));
-            self.cached_editor_tokens_rev = revision;
-        }
-
-        if glidemark_core::syntax::is_syntax_set_ready() {
-            let blocks = self.collect_all_syntax_blocks();
-            for block in blocks {
-                if glidemark_core::syntax::get_cached_code_spans(&block.code, block.lang.as_deref()).is_none() {
-                    let spans = glidemark_core::syntax::parse_code_spans_bounded(&block.code, block.lang.as_deref(), None);
-                    glidemark_core::syntax::insert_cached_code_spans(&block.code, block.lang.as_deref(), Arc::from(spans));
-                }
-            }
-        }
+    /// Explicit user action via Refresh Preview button: resets attempt counters and triggers refresh.
+    pub fn reset_syntax_attempts_and_refresh(&mut self) {
+        self.syntax_attempts.clear();
+        self.last_visible_syntax_keys.clear();
+        self.parse_now_and_refresh();
     }
 
     /// Aligns preview virtual list position to current editor cursor block.
@@ -363,63 +308,99 @@ impl WorkspaceView {
         lines_arc
     }
 
-    pub fn compute_editor_tokens(&mut self) -> Arc<Vec<Vec<crate::views::editor::MarkdownToken>>> {
-        let rev = self.state.editor.revision;
-        if self.cached_editor_tokens_rev == rev && !self.cached_editor_tokens.is_empty() {
-            return self.cached_editor_tokens.clone();
-        }
-        let tokens = Arc::new(crate::views::editor::tokenize_document_lines(&self.state.editor.lines));
-        self.cached_editor_tokens = tokens.clone();
-        self.cached_editor_tokens_rev = rev;
-        tokens
-    }
+    pub fn process_visible_syntax_defer(&mut self, cx: &mut Context<Self>) {
+        self.syntax_defer_armed = false;
+        let mut visible_keys = std::collections::HashSet::new();
 
-    pub fn collect_all_syntax_blocks(&self) -> Vec<SyntaxBlockItem> {
-        let mut blocks = extract_syntax_blocks(&self.state.editor.lines);
-        for block in &self.state.doc.parsed.blocks {
-            if let glidemark_core::ast::BlockElement::FencedCode { lang, code } = block {
-                if !blocks.iter().any(|b| b.code == *code && b.lang == *lang) {
-                    blocks.push(SyntaxBlockItem {
-                        block_id: blocks.len(),
-                        lang: lang.clone(),
+        // 1. Keys from rendered preview regions that intersect preview content bounds
+        if let Some(preview_bounds) = self.preview_content_bounds {
+            let regions = self.rendered_regions.lock().unwrap();
+            for r in regions.iter() {
+                if let Some(ref key) = r.content_key {
+                    if !key.1.is_empty() && preview_bounds.intersects(&r.bounds) {
+                        visible_keys.insert(key.clone());
+                    }
+                }
+            }
+        }
+
+        // 2. Keys from editor visible lines
+        if matches!(self.state.view_mode, ViewMode::Source | ViewMode::Split) {
+            let offset_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
+            let row_h = crate::views::editor::calculate_line_row_height(
+                self.state.preferences.font_size,
+                glidemark_core::config::Preferences::sanitize_line_height(self.state.preferences.line_height),
+            );
+            let start_vis = (offset_y / row_h).floor().max(0.0) as usize;
+            let end_vis = start_vis + 60;
+
+            let start_phys = self.cached_visual_lines.get(start_vis).map(|vl| vl.physical_line_idx).unwrap_or(0);
+            let end_phys = self.cached_visual_lines.get(end_vis.min(self.cached_visual_lines.len().saturating_sub(1))).map(|vl| vl.physical_line_idx).unwrap_or(usize::MAX);
+
+            for b in self.source_code_blocks.iter() {
+                let b_start = b.start_line;
+                let b_end = b.start_line + b.line_count;
+                if b_start <= end_phys && b_end >= start_phys && !b.code.is_empty() {
+                    let lang = glidemark_core::syntax::resolve_canonical_language(b.lang.as_deref())
+                        .unwrap_or("Plain")
+                        .to_string();
+                    visible_keys.insert((lang, b.code.clone()));
+                }
+            }
+        }
+
+        // 3. Compare with last visible keys: if identical, 0 tasks!
+        if visible_keys == self.last_visible_syntax_keys {
+            return;
+        }
+        self.last_visible_syntax_keys = visible_keys.clone();
+
+        // 4. Find missing keys that need parsing
+        let mut missing_blocks = Vec::new();
+        let cache = self.syntax_cache.lock().unwrap();
+
+        for key in &visible_keys {
+            let (canonical_lang, code) = key;
+            if cache.entries.get(&(code.clone(), canonical_lang.clone())).is_none() {
+                let (gen, count) = self.syntax_attempts.entry(key.clone()).or_insert((0, 0));
+                if *count < 2 {
+                    *count += 1;
+                    missing_blocks.push(SyntaxBlockItem {
+                        block_id: missing_blocks.len(),
+                        lang: Some(canonical_lang.clone()),
+                        code: code.clone(),
+                    });
+                } else if *gen == 0 && glidemark_core::syntax::is_syntax_set_ready() {
+                    *gen = 1;
+                    *count = 1;
+                    missing_blocks.push(SyntaxBlockItem {
+                        block_id: missing_blocks.len(),
+                        lang: Some(canonical_lang.clone()),
                         code: code.clone(),
                     });
                 }
             }
         }
-        blocks
+        drop(cache);
+
+        if !missing_blocks.is_empty() {
+            let request = SyntaxBatchRequest {
+                doc_key: self.state.active.clone(),
+                revision: self.state.editor.revision,
+                blocks: missing_blocks,
+            };
+
+            if self.syntax_active_task.is_some() {
+                self.syntax_cancel_flag.store(true, Ordering::Relaxed);
+                self.syntax_pending_request = Some(request);
+            } else {
+                self.run_syntax_batch(request, cx);
+            }
+        }
     }
 
     pub fn schedule_syntax_parse(&mut self, cx: &mut Context<Self>) {
-        let blocks = self.collect_all_syntax_blocks();
-        let doc_key = self.state.active.clone();
-        let revision = self.state.editor.revision;
-
-        let missing: Vec<SyntaxBlockItem> = blocks
-            .into_iter()
-            .filter(|b| glidemark_core::syntax::get_cached_code_spans(&b.code, b.lang.as_deref()).is_none())
-            .collect();
-
-        if missing.is_empty() {
-            if self.cached_editor_tokens_rev != revision || self.cached_editor_tokens.is_empty() {
-                self.cached_editor_tokens = Arc::new(crate::views::editor::tokenize_document_lines(&self.state.editor.lines));
-                self.cached_editor_tokens_rev = revision;
-            }
-            return;
-        }
-
-        let request = SyntaxBatchRequest {
-            doc_key,
-            revision,
-            blocks: missing,
-        };
-
-        if self.syntax_active_task.is_some() {
-            self.syntax_cancel_flag.store(true, Ordering::Relaxed);
-            self.syntax_pending_request = Some(request);
-        } else {
-            self.run_syntax_batch(request, cx);
-        }
+        self.process_visible_syntax_defer(cx);
     }
 
     pub fn run_syntax_batch(&mut self, request: SyntaxBatchRequest, cx: &mut Context<Self>) {
@@ -430,7 +411,7 @@ impl WorkspaceView {
 
         self.syntax_active_task = Some(cx.spawn(async move |this, app| {
             let parsed_results = app.background_executor().spawn(async move {
-                let mut results = Vec::with_capacity(blocks.len());
+                let mut results: Vec<(String, Option<String>, Arc<[glidemark_core::syntax::SyntaxSpan]>)> = Vec::with_capacity(blocks.len());
                 for block in blocks {
                     if cancel.load(Ordering::Relaxed) {
                         break;
@@ -451,11 +432,18 @@ impl WorkspaceView {
                 let current_rev = this.state.editor.revision;
                 // Stale result guard: if document or revision has changed, discard!
                 if request.doc_key == current_doc_key && request.revision == current_rev {
+                    let mut cache = this.syntax_cache.lock().unwrap();
+                    // Retain keys formatted as (code, lang) for SyntaxCache
+                    let retained_cache_keys: std::collections::HashSet<(String, String)> = this
+                        .last_visible_syntax_keys
+                        .iter()
+                        .map(|(lang, code)| (code.clone(), lang.clone()))
+                        .collect();
                     for (code, lang, spans) in parsed_results {
+                        cache.insert(&code, lang.as_deref(), spans.clone(), &retained_cache_keys);
                         glidemark_core::syntax::insert_cached_code_spans(&code, lang.as_deref(), spans);
                     }
-                    this.cached_editor_tokens = Arc::new(crate::views::editor::tokenize_document_lines(&this.state.editor.lines));
-                    this.cached_editor_tokens_rev = current_rev;
+                    drop(cache);
                     this.invalidate_preview_list();
                     cx.notify();
                 }
@@ -1604,7 +1592,20 @@ impl Render for WorkspaceView {
         }
 
         let visual_lines = self.compute_visual_lines(window);
-        let editor_tokens = self.compute_editor_tokens();
+        if self.source_code_blocks_rev != self.state.editor.revision || self.source_code_blocks.is_empty() {
+            self.source_code_blocks = Arc::new(crate::views::editor::extract_source_code_blocks(&self.state.editor.lines));
+            self.source_code_blocks_rev = self.state.editor.revision;
+        }
+
+        if !self.syntax_defer_armed {
+            self.syntax_defer_armed = true;
+            let view_defer = cx.entity().clone();
+            cx.defer(move |cx| {
+                view_defer.update(cx, |this, cx| {
+                    this.process_visible_syntax_defer(cx);
+                });
+            });
+        }
 
         let theme = &self.state.theme;
         let strings = self.state.strings;
@@ -2396,7 +2397,7 @@ impl Render for WorkspaceView {
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _, _window, cx| {
-                                                this.parse_now_and_refresh();
+                                                this.reset_syntax_attempts_and_refresh();
                                                 cx.notify();
                                             }),
                                         )
@@ -2513,7 +2514,8 @@ impl Render for WorkspaceView {
                                                 .child(render_editor_pane(
                                                     self.state.editor.lines.clone(),
                                                     visual_lines.clone(),
-                                                    editor_tokens.clone(),
+                                                    self.syntax_cache.clone(),
+                                                    self.source_code_blocks.clone(),
                                                     self.state.editor.cursor(),
                                                     theme,
                                                     strings,
@@ -2554,6 +2556,7 @@ impl Render for WorkspaceView {
                                                         self.preview_selection,
                                                         self.is_preview_selecting,
                                                         self.rendered_regions.clone(),
+                                                        self.syntax_cache.clone(),
                                                     ))
                                                     .into_any_element()
                                             }
@@ -2582,7 +2585,8 @@ impl Render for WorkspaceView {
                                                         .child(render_editor_pane(
                                                             self.state.editor.lines.clone(),
                                                             visual_lines.clone(),
-                                                            editor_tokens.clone(),
+                                                            self.syntax_cache.clone(),
+                                                            self.source_code_blocks.clone(),
                                                             self.state.editor.cursor(),
                                                             theme,
                                                             strings,
@@ -2665,6 +2669,7 @@ impl Render for WorkspaceView {
                                                                     self.preview_selection,
                                                                     self.is_preview_selecting,
                                                                     self.rendered_regions.clone(),
+                                                                    self.syntax_cache.clone(),
                                                                 ))
                                                         }),
                                                 )

@@ -65,9 +65,220 @@ pub struct HeadingItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListItem {
     pub checked: Option<bool>,
-    pub content: InlineGroup,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sub_list: Option<Box<BlockElement>>,
+    pub body: Vec<BlockElement>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlattenSegment {
+    pub child_path: String,
+    pub char_range: std::ops::Range<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlattenResult {
+    pub text: String,
+    pub segments: Vec<FlattenSegment>,
+}
+
+fn push_ensuring_single_lf(out: &mut String) {
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+}
+
+fn indent_text(s: &str) -> String {
+    let mut o = String::new();
+    for line in s.split_inclusive('\n') {
+        o.push_str("  ");
+        o.push_str(line);
+    }
+    o
+}
+
+fn char_len(s: &str) -> usize {
+    s.chars().count()
+}
+
+pub fn flatten_block(block: &BlockElement, path: &str) -> FlattenResult {
+    match block {
+        BlockElement::Heading { content, .. } => {
+            let text = content.plain_text();
+            let len = char_len(&text);
+            FlattenResult {
+                segments: if len > 0 {
+                    vec![FlattenSegment {
+                        child_path: path.to_string(),
+                        char_range: 0..len,
+                    }]
+                } else {
+                    Vec::new()
+                },
+                text,
+            }
+        }
+        BlockElement::Paragraph(content) => {
+            let text = content.plain_text();
+            let len = char_len(&text);
+            FlattenResult {
+                segments: if len > 0 {
+                    vec![FlattenSegment {
+                        child_path: path.to_string(),
+                        char_range: 0..len,
+                    }]
+                } else {
+                    Vec::new()
+                },
+                text,
+            }
+        }
+        BlockElement::FencedCode { code, .. } => {
+            let len = char_len(code);
+            FlattenResult {
+                segments: if len > 0 {
+                    vec![FlattenSegment {
+                        child_path: path.to_string(),
+                        char_range: 0..len,
+                    }]
+                } else {
+                    Vec::new()
+                },
+                text: code.clone(),
+            }
+        }
+        BlockElement::BlockQuote(children) => {
+            let mut out = String::new();
+            let mut segs = Vec::new();
+            for (i, c) in children.iter().enumerate() {
+                let child = flatten_block(c, &format!("{}.{}", path, i));
+                if child.text.is_empty() {
+                    segs.extend(child.segments);
+                    continue;
+                }
+                push_ensuring_single_lf(&mut out);
+                let start = char_len(&out);
+                out.push_str(&child.text);
+                let shift = start;
+                let total = char_len(&out) - start;
+                segs.push(FlattenSegment {
+                    child_path: format!("{}.{}.all", path, i),
+                    char_range: start..start + total,
+                });
+                segs.extend(child.segments.into_iter().map(|s| FlattenSegment {
+                    child_path: s.child_path,
+                    char_range: s.char_range.start + shift..s.char_range.end + shift,
+                }));
+            }
+            FlattenResult {
+                text: out,
+                segments: segs,
+            }
+        }
+        BlockElement::List { ordered, items } => {
+            let mut out = String::new();
+            let mut segs = Vec::new();
+            for (idx, item) in items.iter().enumerate() {
+                push_ensuring_single_lf(&mut out);
+                let marker = if let Some(checked) = item.checked {
+                    format!("- [{}] ", if checked { "x" } else { " " })
+                } else if *ordered {
+                    format!("{}. ", idx + 1)
+                } else {
+                    "- ".to_string()
+                };
+                out.push_str(&marker);
+                for (ci, child) in item.body.iter().enumerate() {
+                    let child_flat = flatten_block(child, &format!("{}.{}.{}", path, idx, ci));
+                    if child_flat.text.is_empty() {
+                        let cur = char_len(&out);
+                        segs.extend(child_flat.segments.into_iter().map(|s| FlattenSegment {
+                            child_path: s.child_path,
+                            char_range: cur..cur,
+                        }));
+                        continue;
+                    }
+                    if ci > 0 {
+                        push_ensuring_single_lf(&mut out);
+                    }
+                    let start = char_len(&out);
+                    if ci == 0 {
+                        let mut pieces = child_flat.text.split_inclusive('\n').peekable();
+                        let mut first_piece = true;
+                        while let Some(piece) = pieces.next() {
+                            if first_piece {
+                                out.push_str(piece);
+                                first_piece = false;
+                            } else {
+                                out.push_str("  ");
+                                out.push_str(piece);
+                            }
+                        }
+                    } else {
+                        out.push_str(&indent_text(&child_flat.text));
+                    }
+                    let total = char_len(&out) - start;
+                    segs.push(FlattenSegment {
+                        child_path: format!("{}.{}.{}.all", path, idx, ci),
+                        char_range: start..start + total,
+                    });
+                    let child_text = &child_flat.text;
+                    let is_first = ci == 0;
+                    let map_child_offset = |c: usize| -> usize {
+                        let c_clamped = c.min(char_len(child_text));
+                        let newlines = child_text.chars().take(c_clamped).filter(|&ch| ch == '\n').count();
+                        if is_first {
+                            start + c + 2 * newlines
+                        } else {
+                            start + c + 2 * (newlines + 1)
+                        }
+                    };
+                    segs.extend(child_flat.segments.into_iter().map(|s| FlattenSegment {
+                        child_path: s.child_path,
+                        char_range: map_child_offset(s.char_range.start)..map_child_offset(s.char_range.end),
+                    }));
+                }
+            }
+            FlattenResult {
+                text: out,
+                segments: segs,
+            }
+        }
+        BlockElement::Table { headers, rows } => {
+            let mut lines = Vec::new();
+            if !headers.is_empty() {
+                let header_line = headers
+                    .iter()
+                    .map(|h| h.plain_text())
+                    .collect::<Vec<_>>()
+                    .join("\t");
+                lines.push(header_line);
+            }
+            for row in rows {
+                let row_line = row
+                    .iter()
+                    .map(|c| c.plain_text())
+                    .collect::<Vec<_>>()
+                    .join("\t");
+                lines.push(row_line);
+            }
+            let text = lines.join("\n");
+            let len = char_len(&text);
+            FlattenResult {
+                segments: if len > 0 {
+                    vec![FlattenSegment {
+                        child_path: path.to_string(),
+                        char_range: 0..len,
+                    }]
+                } else {
+                    Vec::new()
+                },
+                text,
+            }
+        }
+        BlockElement::Rule => FlattenResult {
+            text: String::new(),
+            segments: Vec::new(),
+        },
+    }
 }
 
 /// A top-level Markdown block element.
@@ -96,63 +307,7 @@ pub enum BlockElement {
 
 impl BlockElement {
     pub fn to_plain_text(&self) -> String {
-        match self {
-            BlockElement::Heading { content, .. } => content.plain_text(),
-            BlockElement::Paragraph(content) => content.plain_text(),
-            BlockElement::FencedCode { code, .. } => code.clone(),
-            BlockElement::BlockQuote(elements) => elements
-                .iter()
-                .map(|el| el.to_plain_text())
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            BlockElement::List { ordered, items } => {
-                let mut lines = Vec::new();
-                for (i, item) in items.iter().enumerate() {
-                    let prefix = if let Some(checked) = item.checked {
-                        format!("- [{}] ", if checked { "x" } else { " " })
-                    } else if *ordered {
-                        format!("{}. ", i + 1)
-                    } else {
-                        "- ".to_string()
-                    };
-                    let mut item_str = format!("{}{}", prefix, item.content.plain_text());
-                    if let Some(sub) = &item.sub_list {
-                        let sub_text = sub.to_plain_text();
-                        if !sub_text.is_empty() {
-                            for line in sub_text.lines() {
-                                item_str.push('\n');
-                                item_str.push_str("  ");
-                                item_str.push_str(line);
-                            }
-                        }
-                    }
-                    lines.push(item_str);
-                }
-                lines.join("\n")
-            }
-            BlockElement::Table { headers, rows } => {
-                let mut lines = Vec::new();
-                if !headers.is_empty() {
-                    let header_line = headers
-                        .iter()
-                        .map(|h| h.plain_text())
-                        .collect::<Vec<_>>()
-                        .join("\t");
-                    lines.push(header_line);
-                }
-                for row in rows {
-                    let row_line = row
-                        .iter()
-                        .map(|c| c.plain_text())
-                        .collect::<Vec<_>>()
-                        .join("\t");
-                    lines.push(row_line);
-                }
-                lines.join("\n")
-            }
-            BlockElement::Rule => String::new(),
-        }
+        flatten_block(self, "0").text
     }
 }
 
@@ -164,6 +319,19 @@ pub struct ParsedDocument {
 }
 
 impl ParsedDocument {
+    pub fn to_plain_text(&self) -> String {
+        let mut out = String::new();
+        for block in &self.blocks {
+            let text = block.to_plain_text();
+            if !text.is_empty() {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&text);
+            }
+        }
+        out
+    }
     pub fn headings(&self) -> Vec<HeadingItem> {
         let mut list = Vec::new();
         for (idx, block) in self.blocks.iter().enumerate() {
@@ -297,143 +465,154 @@ pub fn parse_markdown(source: &str) -> ParsedDocument {
     let parser = Parser::new_ext(source, options).into_offset_iter();
     let mut iter = parser.peekable();
 
-    while let Some((event, range)) = iter.next() {
-        match event {
-            Event::Start(Tag::Heading { level, .. }) => {
-                let start_line = line_index.line_number(range.start);
-                let lvl = heading_level_to_u8(level);
-                let (inlines, end_range) = collect_inlines_until(&mut iter, &mut |e| {
-                    matches!(e, Event::End(TagEnd::Heading(_)))
-                });
-                let end_offset = end_range.map(|r| r.end).unwrap_or(range.end);
-                let end_line = line_index
-                    .line_number(end_offset.saturating_sub(1))
-                    .max(start_line);
-
-                let block_index = blocks.len();
-                blocks.push(BlockElement::Heading {
-                    level: lvl,
-                    content: inlines,
-                });
-                anchors.push(SourceAnchor::new(block_index, start_line, end_line));
-            }
-            Event::Start(Tag::Paragraph) => {
-                let start_line = line_index.line_number(range.start);
-                let (inlines, end_range) = collect_inlines_until(&mut iter, &mut |e| {
-                    matches!(e, Event::End(TagEnd::Paragraph))
-                });
-                let end_offset = end_range.map(|r| r.end).unwrap_or(range.end);
-                let end_line = line_index
-                    .line_number(end_offset.saturating_sub(1))
-                    .max(start_line);
-
-                let block_index = blocks.len();
-                blocks.push(BlockElement::Paragraph(inlines));
-                anchors.push(SourceAnchor::new(block_index, start_line, end_line));
-            }
-            Event::Start(Tag::CodeBlock(kind)) => {
-                let start_line = line_index.line_number(range.start);
-                let lang = match kind {
-                    CodeBlockKind::Fenced(l) => {
-                        let s = l.trim().to_string();
-                        if s.is_empty() {
-                            None
-                        } else {
-                            Some(s)
-                        }
-                    }
-                    CodeBlockKind::Indented => None,
-                };
-
-                let mut code = String::new();
-                let mut end_offset = range.end;
-                while let Some((sub_ev, sub_range)) = iter.peek() {
-                    match sub_ev {
-                        Event::End(TagEnd::CodeBlock) => {
-                            end_offset = sub_range.end;
-                            iter.next();
-                            break;
-                        }
-                        Event::Text(t) => {
-                            code.push_str(t);
-                            end_offset = sub_range.end;
-                            iter.next();
-                        }
-                        _ => {
-                            iter.next();
-                        }
-                    }
-                }
-
-                let end_line = line_index
-                    .line_number(end_offset.saturating_sub(1))
-                    .max(start_line);
-                let block_index = blocks.len();
-                blocks.push(BlockElement::FencedCode { lang, code });
-                anchors.push(SourceAnchor::new(block_index, start_line, end_line));
-            }
-            Event::Start(Tag::List(first_num)) => {
-                let start_line = line_index.line_number(range.start);
-                let ordered = first_num.is_some();
-                let (items, end_offset) = collect_list_items(&mut iter, range.end, 1);
-                let end_line = line_index
-                    .line_number(end_offset.saturating_sub(1))
-                    .max(start_line);
-
-                let block_index = blocks.len();
-                blocks.push(BlockElement::List { ordered, items });
-                anchors.push(SourceAnchor::new(block_index, start_line, end_line));
-            }
-            Event::Start(Tag::Table(_)) => {
-                let start_line = line_index.line_number(range.start);
-                let (headers, rows, end_offset) = collect_table(&mut iter, range.end);
-                let end_line = line_index
-                    .line_number(end_offset.saturating_sub(1))
-                    .max(start_line);
-
-                let block_index = blocks.len();
-                blocks.push(BlockElement::Table { headers, rows });
-                anchors.push(SourceAnchor::new(block_index, start_line, end_line));
-            }
-            Event::Start(Tag::BlockQuote(_)) => {
-                let start_line = line_index.line_number(range.start);
-                let mut inner_text = String::new();
-                let mut end_offset = range.end;
-                let mut depth = 1;
-                while let Some((sub_ev, sub_range)) = iter.next() {
-                    match sub_ev {
-                        Event::Start(Tag::BlockQuote(_)) => depth += 1,
-                        Event::End(TagEnd::BlockQuote(_)) => {
-                            depth -= 1;
-                            if depth == 0 {
-                                end_offset = sub_range.end;
-                                break;
-                            }
-                        }
-                        Event::Text(t) => inner_text.push_str(&t),
-                        _ => {}
-                    }
-                }
-                let end_line = line_index
-                    .line_number(end_offset.saturating_sub(1))
-                    .max(start_line);
-                let block_index = blocks.len();
-                blocks.push(BlockElement::BlockQuote(vec![BlockElement::Paragraph(
-                    InlineGroup(vec![InlineItem::Text(inner_text.trim().to_string())]),
-                )]));
-                anchors.push(SourceAnchor::new(block_index, start_line, end_line));
-            }
-            Event::Rule => {
-                let line = line_index.line_number(range.start);
-                let block_index = blocks.len();
-                blocks.push(BlockElement::Rule);
-                anchors.push(SourceAnchor::new(block_index, line, line));
-            }
-            _ => {}
+    while let Some((ev, range)) = iter.next() {
+        let start_line = line_index.line_number(range.start);
+        if let Some((block, end_offset)) = parse_single_block(ev, range, &mut iter) {
+            let end_line = line_index
+                .line_number(end_offset.saturating_sub(1))
+                .max(start_line);
+            let block_index = blocks.len();
+            blocks.push(block);
+            anchors.push(SourceAnchor::new(block_index, start_line, end_line));
         }
     }
 
     ParsedDocument { blocks, anchors }
+}
+
+fn is_inline_start(ev: &Event) -> bool {
+    matches!(
+        ev,
+        Event::Text(_)
+            | Event::Code(_)
+            | Event::InlineMath(_)
+            | Event::DisplayMath(_)
+            | Event::Html(_)
+            | Event::InlineHtml(_)
+            | Event::FootnoteReference(_)
+            | Event::SoftBreak
+            | Event::HardBreak
+            | Event::Start(
+                Tag::Strong
+                    | Tag::Emphasis
+                    | Tag::Strikethrough
+                    | Tag::Link { .. }
+                    | Tag::Image { .. }
+            )
+    )
+}
+
+fn parse_single_block<'a, I>(
+    ev: Event<'a>,
+    range: std::ops::Range<usize>,
+    iter: &mut std::iter::Peekable<I>,
+) -> Option<(BlockElement, usize)>
+where
+    I: Iterator<Item = (Event<'a>, std::ops::Range<usize>)>,
+{
+    match ev {
+        Event::Start(Tag::Heading { level, .. }) => {
+            let lvl = heading_level_to_u8(level);
+            let (inlines, end_range) =
+                collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Heading(_))));
+            let end_offset = end_range.map(|r| r.end).unwrap_or(range.end);
+            Some((
+                BlockElement::Heading {
+                    level: lvl,
+                    content: inlines,
+                },
+                end_offset,
+            ))
+        }
+        Event::Start(Tag::Paragraph) => {
+            let (inlines, end_range) =
+                collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Paragraph)));
+            let end_offset = end_range.map(|r| r.end).unwrap_or(range.end);
+            Some((BlockElement::Paragraph(inlines), end_offset))
+        }
+        Event::Start(Tag::CodeBlock(kind)) => {
+            let lang = match kind {
+                CodeBlockKind::Fenced(l) => {
+                    let s = l.trim().to_string();
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                }
+                CodeBlockKind::Indented => None,
+            };
+
+            let mut code = String::new();
+            let mut end_offset = range.end;
+            while let Some((sub_ev, sub_range)) = iter.peek() {
+                match sub_ev {
+                    Event::End(TagEnd::CodeBlock) => {
+                        end_offset = sub_range.end;
+                        iter.next();
+                        break;
+                    }
+                    Event::Text(t) => {
+                        code.push_str(t);
+                        end_offset = sub_range.end;
+                        iter.next();
+                    }
+                    _ => {
+                        iter.next();
+                    }
+                }
+            }
+            Some((BlockElement::FencedCode { lang, code }, end_offset))
+        }
+        Event::Start(Tag::List(first_num)) => {
+            let ordered = first_num.is_some();
+            let (items, end_offset) = collect_list_items(iter, range.end);
+            Some((BlockElement::List { ordered, items }, end_offset))
+        }
+        Event::Start(Tag::Table(_)) => {
+            let (headers, rows, end_offset) = collect_table(iter, range.end);
+            Some((BlockElement::Table { headers, rows }, end_offset))
+        }
+        Event::Start(Tag::BlockQuote(_)) => {
+            let mut child_blocks = Vec::new();
+            let mut quote_end = range.end;
+            while let Some((sub_ev, sub_range)) = iter.peek() {
+                if matches!(sub_ev, Event::End(TagEnd::BlockQuote(_))) {
+                    quote_end = sub_range.end;
+                    iter.next();
+                    break;
+                }
+                let (next_ev, next_r) = iter.next().unwrap();
+                quote_end = next_r.end;
+                if let Some((b, end_off)) = parse_single_block(next_ev, next_r, iter) {
+                    quote_end = end_off;
+                    child_blocks.push(b);
+                }
+            }
+            Some((BlockElement::BlockQuote(child_blocks), quote_end))
+        }
+        Event::Rule => Some((BlockElement::Rule, range.end)),
+        _ if is_inline_start(&ev) => {
+            let mut inlines = InlineGroup::new();
+            let mut end_offset = range.end;
+            handle_inline_event(ev, iter, &mut inlines);
+            while let Some((sub_ev, _)) = iter.peek() {
+                if is_inline_start(sub_ev) {
+                    let (next_ev, next_r) = iter.next().unwrap();
+                    end_offset = next_r.end;
+                    handle_inline_event(next_ev, iter, &mut inlines);
+                } else {
+                    break;
+                }
+            }
+            if inlines.0.is_empty() {
+                None
+            } else {
+                Some((BlockElement::Paragraph(inlines), end_offset))
+            }
+        }
+        _ => None,
+    }
 }
 
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {
@@ -548,7 +727,6 @@ fn inline_to_string(item: InlineItem) -> String {
 fn collect_list_items<'a, I>(
     iter: &mut std::iter::Peekable<I>,
     default_end: usize,
-    depth: usize,
 ) -> (Vec<ListItem>, usize)
 where
     I: Iterator<Item = (Event<'a>, std::ops::Range<usize>)>,
@@ -564,58 +742,30 @@ where
             }
             Event::Start(Tag::Item) => {
                 let mut checked = None;
-                let mut content = InlineGroup::new();
-                let mut sub_list = None;
+                let mut body = Vec::new();
+                let mut item_end = range.end;
 
                 while let Some((sub_ev, sub_range)) = iter.peek() {
-                    match sub_ev {
-                        Event::End(TagEnd::Item) => {
-                            end_offset = sub_range.end;
-                            iter.next();
-                            break;
-                        }
-                        Event::TaskListMarker(chk) => {
-                            checked = Some(*chk);
-                            iter.next();
-                        }
-                        Event::Start(Tag::List(first_num)) => {
-                            let ordered = first_num.is_some();
-                            let start_range = sub_range.clone();
-                            iter.next();
-                            if depth < 8 {
-                                let (sub_items, sub_end) = collect_list_items(iter, start_range.end, depth + 1);
-                                end_offset = sub_end;
-                                sub_list = Some(Box::new(BlockElement::List {
-                                    ordered,
-                                    items: sub_items,
-                                }));
-                            } else {
-                                let mut d = 1;
-                                while let Some((deep_ev, _)) = iter.next() {
-                                    match deep_ev {
-                                        Event::Start(Tag::List(_)) => d += 1,
-                                        Event::End(TagEnd::List(_)) => {
-                                            d -= 1;
-                                            if d == 0 {
-                                                break;
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                        }
-                        Event::Start(Tag::Paragraph) | Event::End(TagEnd::Paragraph) => {
-                            iter.next();
-                        }
-                        _ => {
-                            let (item_ev, r) = iter.next().unwrap();
-                            end_offset = r.end;
-                            handle_inline_event(item_ev, iter, &mut content);
-                        }
+                    if matches!(sub_ev, Event::End(TagEnd::Item)) {
+                        item_end = sub_range.end;
+                        iter.next();
+                        break;
+                    }
+                    if let Event::TaskListMarker(chk) = sub_ev {
+                        checked = Some(*chk);
+                        item_end = sub_range.end;
+                        iter.next();
+                        continue;
+                    }
+                    let (next_ev, next_r) = iter.next().unwrap();
+                    item_end = next_r.end;
+                    if let Some((b, end_off)) = parse_single_block(next_ev, next_r, iter) {
+                        item_end = end_off;
+                        body.push(b);
                     }
                 }
-                items.push(ListItem { checked, content, sub_list });
+                items.push(ListItem { checked, body });
+                end_offset = item_end;
             }
             _ => {}
         }
@@ -667,4 +817,85 @@ where
     }
 
     (headers, rows, end_offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pinned_expectations_and_flatten_rules() {
+        // 1. > first\n>\n> second => first\nsecond
+        let doc1 = parse_markdown("> first\n>\n> second");
+        assert_eq!(doc1.blocks.len(), 1);
+        assert_eq!(doc1.blocks[0].to_plain_text(), "first\nsecond");
+        assert_eq!(doc1.to_plain_text(), "first\nsecond");
+
+        // 2. - first para\n\n  second para => - first para\n  second para
+        let doc2 = parse_markdown("- first para\n\n  second para");
+        assert_eq!(doc2.blocks.len(), 1);
+        assert_eq!(doc2.blocks[0].to_plain_text(), "- first para\n  second para");
+
+        // 3. > ```rust\n> fn a() {}\n> ```\n> next => fn a() {}\nnext
+        let doc3 = parse_markdown("> ```rust\n> fn a() {}\n> ```\n> next");
+        assert_eq!(doc3.blocks.len(), 1);
+        assert_eq!(doc3.blocks[0].to_plain_text(), "fn a() {}\nnext");
+
+        // 4. List item with para -> code -> para => - before\n  fn a() {}\n  after
+        let doc4 = parse_markdown("- before\n  ```rust\n  fn a() {}\n  ```\n  after");
+        assert_eq!(doc4.blocks.len(), 1);
+        assert_eq!(doc4.blocks[0].to_plain_text(), "- before\n  fn a() {}\n  after");
+
+        // 5. Code with blank line in list: - x\n  a\n  \n  b\n
+        let doc5 = parse_markdown("- x\n  ```\n  a\n\n  b\n  ```");
+        assert_eq!(doc5.blocks.len(), 1);
+        assert_eq!(doc5.blocks[0].to_plain_text(), "- x\n  a\n  \n  b\n");
+
+        // 6. Code as first child in list: - fn a() {}\n  let b = 1;\n
+        let doc6 = parse_markdown("- ```\n  fn a() {}\n  let b = 1;\n  ```");
+        assert_eq!(doc6.blocks.len(), 1);
+        assert_eq!(doc6.blocks[0].to_plain_text(), "- fn a() {}\n  let b = 1;\n");
+
+        // 7. Adjacent code blocks in quote: a\nb\nafter
+        let doc7 = parse_markdown("> ```\n> a\n> ```\n> ```\n> b\n> ```\n> after");
+        assert_eq!(doc7.blocks.len(), 1);
+        assert_eq!(doc7.blocks[0].to_plain_text(), "a\nb\nafter");
+    }
+
+    #[test]
+    fn test_flatten_block_segments_mapping() {
+        let doc = parse_markdown("- before\n  ```rust\n  fn a() {}\n  ```\n  after");
+        let flat = flatten_block(&doc.blocks[0], "0");
+        assert_eq!(flat.text, "- before\n  fn a() {}\n  after");
+        assert!(!flat.segments.is_empty());
+        // Verify every segment char range is within text char boundaries
+        let total_chars = flat.text.chars().count();
+        for seg in &flat.segments {
+            assert!(seg.char_range.start <= seg.char_range.end);
+            assert!(seg.char_range.end <= total_chars, "segment {:?} exceeds total chars {}", seg, total_chars);
+        }
+    }
+
+    #[test]
+    fn test_nested_list_body_structure() {
+        let doc = parse_markdown("- parent\n  - child 1\n  - child 2");
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            BlockElement::List { items, .. } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].body.len(), 2);
+                match &items[0].body[0] {
+                    BlockElement::Paragraph(p) => assert_eq!(p.plain_text(), "parent"),
+                    _ => panic!("expected paragraph"),
+                }
+                match &items[0].body[1] {
+                    BlockElement::List { items: child_items, .. } => {
+                        assert_eq!(child_items.len(), 2);
+                    }
+                    _ => panic!("expected child list"),
+                }
+            }
+            _ => panic!("expected list"),
+        }
+    }
 }

@@ -1,12 +1,17 @@
 use crate::ast::{parse_markdown, BlockElement, InlineGroup, InlineItem, ParsedDocument};
 
-/// Export a parsed document into a standalone single-file HTML document.
-pub fn export_html(doc: &ParsedDocument, title: &str) -> String {
+/// Render a parsed document into HTML snippet body.
+pub fn render_html(doc: &ParsedDocument) -> String {
     let mut body_html = String::new();
     for block in &doc.blocks {
         render_block(block, &mut body_html);
     }
+    body_html
+}
 
+/// Export a parsed document into a standalone single-file HTML document.
+pub fn export_html(doc: &ParsedDocument, title: &str) -> String {
+    let body_html = render_html(doc);
     let escaped_title = escape_html(title);
     format!(
         r#"<!DOCTYPE html>
@@ -77,10 +82,8 @@ fn render_block(block: &BlockElement, out: &mut String) {
                         out.push_str("<input type=\"checkbox\" disabled> ");
                     }
                 }
-                render_inline_group(&item.content, out);
-                if let Some(ref sub) = item.sub_list {
-                    out.push('\n');
-                    render_block(sub, out);
+                for child in &item.body {
+                    render_block(child, out);
                 }
                 out.push_str("</li>\n");
             }

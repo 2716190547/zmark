@@ -362,8 +362,8 @@ pub fn parse_code_spans_bounded(
             Err(_) => return fallback_plain(code),
         };
 
-        // Check cumulative elapsed time after regex return
-        if start_time.elapsed().as_millis() as u64 >= PARSE_SOFT_BUDGET_MS && !next_remaining.is_empty() {
+        // Check cumulative elapsed time immediately after regex return
+        if start_time.elapsed().as_millis() as u64 >= PARSE_SOFT_BUDGET_MS {
             return fallback_plain(code);
         }
 
@@ -406,93 +406,119 @@ pub fn parse_code_spans(code: &str, raw_lang: Option<&str>) -> Vec<SyntaxSpan> {
 }
 
 // -----------------------------------------------------------------------------
-// Bounded LRU Cache (Capacity: 32 blocks, 4 MiB)
+// SyntaxCache (Per-Workspace Instance, 4 MiB budget, LRU with Retained Keys)
 // -----------------------------------------------------------------------------
 
-struct CacheEntry {
-    canonical_lang: &'static str,
-    code_hash: u64,
-    code: String,
-    spans: Arc<[SyntaxSpan]>,
-    size_bytes: usize,
+#[derive(Clone, Debug)]
+pub struct SyntaxCache {
+    pub entries: std::collections::HashMap<(String, String), Arc<[SyntaxSpan]>>,
+    pub lru: std::collections::VecDeque<(String, String)>,
+    pub current_bytes: usize,
+    pub max_bytes: usize, // 4 * 1024 * 1024 (4 MiB)
 }
 
-struct LruSyntaxCache {
-    entries: Vec<CacheEntry>,
-    total_bytes: usize,
+fn compute_entry_bytes(code: &str, lang: &str, spans_len: usize) -> usize {
+    code.len() + lang.len() + spans_len * std::mem::size_of::<SyntaxSpan>() + 64
 }
 
-impl LruSyntaxCache {
-    fn new() -> Self {
+impl SyntaxCache {
+    pub fn new() -> Self {
         Self {
-            entries: Vec::with_capacity(MAX_CACHE_ENTRIES),
-            total_bytes: 0,
+            entries: std::collections::HashMap::new(),
+            lru: std::collections::VecDeque::new(),
+            current_bytes: 0,
+            max_bytes: MAX_CACHE_BYTES,
         }
     }
 
-    fn get(&mut self, canonical_lang: &'static str, code_hash: u64, code: &str) -> Option<Arc<[SyntaxSpan]>> {
-        if let Some(pos) = self.entries.iter().position(|e| {
-            e.canonical_lang == canonical_lang && e.code_hash == code_hash && e.code == code
-        }) {
-            // Move to most recently used (back of vector)
-            let entry = self.entries.remove(pos);
-            let spans = entry.spans.clone();
-            self.entries.push(entry);
+    pub fn key(code: &str, raw_lang: Option<&str>) -> (String, String) {
+        let lang = resolve_canonical_language(raw_lang)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| raw_lang.unwrap_or("").trim().to_string());
+        (code.to_string(), lang)
+    }
+
+    pub fn get(&mut self, code: &str, raw_lang: Option<&str>) -> Option<Arc<[SyntaxSpan]>> {
+        let key = Self::key(code, raw_lang);
+        if let Some(spans) = self.entries.get(&key).cloned() {
+            if let Some(pos) = self.lru.iter().position(|k| k == &key) {
+                self.lru.remove(pos);
+            }
+            self.lru.push_back(key);
             Some(spans)
         } else {
             None
         }
     }
 
-    fn insert(
+    pub fn insert(
         &mut self,
-        canonical_lang: &'static str,
-        code_hash: u64,
         code: &str,
+        raw_lang: Option<&str>,
         spans: Arc<[SyntaxSpan]>,
+        retained_keys: &std::collections::HashSet<(String, String)>,
     ) {
-        let entry_size = std::mem::size_of::<CacheEntry>()
-            + code.len()
-            + spans.len() * std::mem::size_of::<SyntaxSpan>();
+        let key = Self::key(code, raw_lang);
+        let entry_size = compute_entry_bytes(&key.0, &key.1, spans.len());
 
-        if entry_size > MAX_CACHE_BYTES {
-            // Block is too large to fit in cache
+        if entry_size > self.max_bytes {
             return;
         }
 
-        // Evict if over count or size limit
-        while self.entries.len() >= MAX_CACHE_ENTRIES
-            || (self.total_bytes + entry_size > MAX_CACHE_BYTES && !self.entries.is_empty())
-        {
-            let evicted = self.entries.remove(0);
-            self.total_bytes = self.total_bytes.saturating_sub(evicted.size_bytes);
+        if let Some(old_spans) = self.entries.get(&key) {
+            let old_size = compute_entry_bytes(&key.0, &key.1, old_spans.len());
+            self.current_bytes = self.current_bytes.saturating_sub(old_size);
+            if let Some(pos) = self.lru.iter().position(|k| k == &key) {
+                self.lru.remove(pos);
+            }
         }
 
-        self.total_bytes += entry_size;
-        self.entries.push(CacheEntry {
-            canonical_lang,
-            code_hash,
-            code: code.to_string(),
-            spans,
-            size_bytes: entry_size,
-        });
+        while self.current_bytes + entry_size > self.max_bytes {
+            let evict_idx = self
+                .lru
+                .iter()
+                .position(|k| !retained_keys.contains(k));
+            if let Some(idx) = evict_idx {
+                let evicted_key = self.lru.remove(idx).unwrap();
+                if let Some(evicted_spans) = self.entries.remove(&evicted_key) {
+                    let evicted_size =
+                        compute_entry_bytes(&evicted_key.0, &evicted_key.1, evicted_spans.len());
+                    self.current_bytes = self.current_bytes.saturating_sub(evicted_size);
+                }
+            } else {
+                break;
+            }
+        }
+
+        if self.current_bytes + entry_size <= self.max_bytes {
+            self.entries.insert(key.clone(), spans);
+            self.lru.push_back(key);
+            self.current_bytes += entry_size;
+        }
     }
 
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.entries.clear();
-        self.total_bytes = 0;
+        self.lru.clear();
+        self.current_bytes = 0;
+    }
+
+    pub fn current_bytes(&self) -> usize {
+        self.current_bytes
+    }
+
+    pub fn max_bytes(&self) -> usize {
+        self.max_bytes
     }
 }
 
-static CACHE: LazyLock<Mutex<LruSyntaxCache>> = LazyLock::new(|| Mutex::new(LruSyntaxCache::new()));
-
-fn compute_code_hash(canonical: &str, code: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    canonical.hash(&mut hasher);
-    code.hash(&mut hasher);
-    hasher.finish()
+impl Default for SyntaxCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
+
+static CACHE: LazyLock<Mutex<SyntaxCache>> = LazyLock::new(|| Mutex::new(SyntaxCache::new()));
 
 /// Clears the global syntax cache (useful for testing and memory reclaim).
 pub fn clear_syntax_cache() {
@@ -511,14 +537,12 @@ pub fn get_cached_code_spans(code: &str, raw_lang: Option<&str>) -> Option<Arc<[
     if code.is_empty() {
         return Some(fallback_plain(code).into());
     }
-    let canonical = match resolve_canonical_language(raw_lang) {
-        Some(c) => c,
-        None => return Some(fallback_plain(code).into()),
-    };
+    if resolve_canonical_language(raw_lang).is_none() {
+        return Some(fallback_plain(code).into());
+    }
 
-    let code_hash = compute_code_hash(canonical, code);
     if let Ok(mut cache) = CACHE.lock() {
-        if let Some(spans) = cache.get(canonical, code_hash, code) {
+        if let Some(spans) = cache.get(code, raw_lang) {
             return Some(spans);
         }
     }
@@ -527,13 +551,12 @@ pub fn get_cached_code_spans(code: &str, raw_lang: Option<&str>) -> Option<Arc<[
 
 /// Inserts pre-parsed spans into the syntax cache.
 pub fn insert_cached_code_spans(code: &str, raw_lang: Option<&str>, spans: Arc<[SyntaxSpan]>) {
-    let canonical = match resolve_canonical_language(raw_lang) {
-        Some(c) => c,
-        None => return,
-    };
-    let code_hash = compute_code_hash(canonical, code);
+    if resolve_canonical_language(raw_lang).is_none() {
+        return;
+    }
+    let empty_retained = std::collections::HashSet::new();
     if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(canonical, code_hash, code, spans);
+        cache.insert(code, raw_lang, spans, &empty_retained);
     }
 }
 
@@ -724,5 +747,42 @@ mod tests {
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].role, SyntaxRole::Plain);
         assert_eq!(spans[0].range, 0..code.len());
+    }
+
+    #[test]
+    fn test_syntax_cache_lru_and_retained_keys_eviction() {
+        let mut cache = SyntaxCache::new();
+        // Artificially lower max_bytes to test eviction
+        let sample_spans: Arc<[SyntaxSpan]> = Arc::new([SyntaxSpan {
+            range: 0..10,
+            role: SyntaxRole::Plain,
+        }]);
+        let size_per_entry = compute_entry_bytes("code_a", "Rust", 1);
+        cache.max_bytes = size_per_entry * 2 + 10; // Can hold at most 2 entries
+
+        let mut retained = std::collections::HashSet::new();
+
+        // Insert A and B
+        cache.insert("code_a", Some("rust"), sample_spans.clone(), &retained);
+        cache.insert("code_b", Some("rust"), sample_spans.clone(), &retained);
+        assert_eq!(cache.entries.len(), 2);
+
+        // Retain A, insert C -> B must be evicted (A is protected even though A was inserted first!)
+        let key_a = SyntaxCache::key("code_a", Some("rust"));
+        retained.insert(key_a.clone());
+
+        cache.insert("code_c", Some("rust"), sample_spans.clone(), &retained);
+        assert_eq!(cache.entries.len(), 2);
+        assert!(cache.entries.contains_key(&key_a), "A must be retained in cache");
+        let key_b = SyntaxCache::key("code_b", Some("rust"));
+        assert!(!cache.entries.contains_key(&key_b), "B must have been evicted");
+        let key_c = SyntaxCache::key("code_c", Some("rust"));
+        assert!(cache.entries.contains_key(&key_c), "C must be present");
+
+        // Clear resets everything
+        cache.clear();
+        assert_eq!(cache.current_bytes(), 0);
+        assert_eq!(cache.entries.len(), 0);
+        assert_eq!(cache.lru.len(), 0);
     }
 }

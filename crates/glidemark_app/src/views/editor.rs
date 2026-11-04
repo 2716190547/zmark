@@ -370,17 +370,85 @@ pub fn spans_to_code_tokens(
 #[allow(dead_code)]
 pub fn tokenize_code_line(line: &str) -> Vec<MarkdownToken> {
     if line.is_empty() {
-        return Vec::new();
-    }
-    let trimmed = line.trim();
-    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
         return vec![MarkdownToken {
-            text: line.to_string(),
-            kind: MarkdownTokenKind::CodeDelimiter,
+            text: " ".to_string(),
+            kind: MarkdownTokenKind::CodeText,
         }];
     }
     let spans = glidemark_core::syntax::get_or_parse_code_spans(line, Some("rust"));
     spans_to_code_tokens(line, &spans)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceCodeBlock {
+    pub lang: Option<String>,
+    pub code: String,
+    pub start_line: usize,
+    pub line_count: usize,
+}
+
+pub fn extract_source_code_blocks(lines: &[String]) -> Vec<SourceCodeBlock> {
+    let mut blocks = Vec::new();
+    let mut in_fence = false;
+    let mut fence_lang: Option<String> = None;
+    let mut block_lines: Vec<String> = Vec::new();
+    let mut block_start_line = 0;
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let is_fence_delim = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+
+        if !in_fence {
+            if is_fence_delim {
+                in_fence = true;
+                let raw_tag = if let Some(stripped) = trimmed.strip_prefix("```") {
+                    stripped.trim()
+                } else if let Some(stripped) = trimmed.strip_prefix("~~~") {
+                    stripped.trim()
+                } else {
+                    ""
+                };
+                let lang_token = raw_tag.split_whitespace().next().unwrap_or("");
+                fence_lang = if lang_token.is_empty() {
+                    None
+                } else {
+                    Some(lang_token.to_string())
+                };
+                block_lines.clear();
+                block_start_line = line_idx + 1;
+            }
+        } else if is_fence_delim {
+            let mut code = block_lines.join("\n");
+            if !code.is_empty() {
+                code.push('\n');
+            }
+            blocks.push(SourceCodeBlock {
+                lang: fence_lang.take(),
+                code,
+                start_line: block_start_line,
+                line_count: block_lines.len(),
+            });
+            in_fence = false;
+            block_lines.clear();
+        } else {
+            block_lines.push(line.clone());
+        }
+    }
+
+    if in_fence && !block_lines.is_empty() {
+        let mut code = block_lines.join("\n");
+        if !code.is_empty() {
+            code.push('\n');
+        }
+        blocks.push(SourceCodeBlock {
+            lang: fence_lang,
+            code,
+            start_line: block_start_line,
+            line_count: block_lines.len(),
+        });
+    }
+
+    blocks
 }
 
 pub fn tokenize_document_lines<S: AsRef<str>>(lines: &[S]) -> Vec<Vec<MarkdownToken>> {
@@ -890,7 +958,6 @@ pub struct CachedLineEntry {
     pub is_fenced: bool,
     pub spans: Vec<LineVisualSpan>,
     pub natural_width_px: f32,
-    pub tokens: Vec<MarkdownToken>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -912,15 +979,22 @@ fn shape_single_line(
     i: usize,
     line: &str,
     is_fenced: bool,
-    tokens: &[MarkdownToken],
     max_width_px: f32,
     font_size: f32,
 ) -> CachedLineEntry {
+    let tokens = if is_fenced {
+        vec![MarkdownToken {
+            text: line.to_string(),
+            kind: MarkdownTokenKind::CodeText,
+        }]
+    } else {
+        tokenize_markdown_line(line)
+    };
     let (vl, natural_width_px) = wrap_line_to_visual_layout_with_width(
         text_system,
         i,
         line,
-        tokens,
+        &tokens,
         max_width_px,
         font_size,
     );
@@ -937,7 +1011,6 @@ fn shape_single_line(
         is_fenced,
         spans,
         natural_width_px,
-        tokens: tokens.to_vec(),
     }
 }
 
@@ -946,7 +1019,6 @@ fn evaluate_matching_line(
     i: usize,
     line: &str,
     is_fenced: bool,
-    tokens: &[MarkdownToken],
     width_changed: bool,
     max_width_px: f32,
     font_size: f32,
@@ -965,13 +1037,12 @@ fn evaluate_matching_line(
                     is_first: true,
                 }],
                 natural_width_px: old.natural_width_px,
-                tokens: tokens.to_vec(),
             },
             true,
         )
     } else {
         (
-            shape_single_line(text_system, i, line, is_fenced, tokens, max_width_px, font_size),
+            shape_single_line(text_system, i, line, is_fenced, max_width_px, font_size),
             false,
         )
     }
@@ -1002,7 +1073,6 @@ impl DocumentLayoutCache {
             self.entries.clear();
         }
 
-        let doc_tokens = tokenize_document_lines(lines);
         let fenced_lines = compute_fenced_code_lines(lines);
         let mut shaped_count = 0;
         let mut reused_count = 0;
@@ -1011,20 +1081,18 @@ impl DocumentLayoutCache {
         let mut new_entries = Vec::with_capacity(lines.len());
 
         if !font_changed && old_entries.len() == lines.len() {
-            for (i, ((line, &is_fenced), tokens)) in lines
+            for (i, (line, &is_fenced)) in lines
                 .iter()
                 .zip(fenced_lines.iter())
-                .zip(doc_tokens.iter())
                 .enumerate()
             {
                 let old = &old_entries[i];
-                if old.is_fenced == is_fenced && old.text == *line && &old.tokens == tokens {
+                if old.is_fenced == is_fenced && old.text == *line {
                     let (entry, is_reused) = evaluate_matching_line(
                         old,
                         i,
                         line,
                         is_fenced,
-                        tokens,
                         width_changed,
                         max_width_px,
                         font_size,
@@ -1042,7 +1110,6 @@ impl DocumentLayoutCache {
                         i,
                         line,
                         is_fenced,
-                        tokens,
                         max_width_px,
                         font_size,
                     ));
@@ -1055,7 +1122,6 @@ impl DocumentLayoutCache {
                 && prefix < old_entries.len()
                 && old_entries[prefix].is_fenced == fenced_lines[prefix]
                 && old_entries[prefix].text == lines[prefix]
-                && old_entries[prefix].tokens == doc_tokens[prefix]
             {
                 prefix += 1;
             }
@@ -1067,8 +1133,6 @@ impl DocumentLayoutCache {
                     == fenced_lines[lines.len() - 1 - suffix]
                 && old_entries[old_entries.len() - 1 - suffix].text
                     == lines[lines.len() - 1 - suffix]
-                && old_entries[old_entries.len() - 1 - suffix].tokens
-                    == doc_tokens[lines.len() - 1 - suffix]
             {
                 suffix += 1;
             }
@@ -1079,7 +1143,6 @@ impl DocumentLayoutCache {
                     i,
                     &lines[i],
                     fenced_lines[i],
-                    &doc_tokens[i],
                     width_changed,
                     max_width_px,
                     font_size,
@@ -1100,7 +1163,6 @@ impl DocumentLayoutCache {
                     i,
                     &lines[i],
                     fenced_lines[i],
-                    &doc_tokens[i],
                     max_width_px,
                     font_size,
                 ));
@@ -1115,7 +1177,6 @@ impl DocumentLayoutCache {
                     i,
                     &lines[i],
                     fenced_lines[i],
-                    &doc_tokens[i],
                     width_changed,
                     max_width_px,
                     font_size,
@@ -1129,9 +1190,9 @@ impl DocumentLayoutCache {
                 }
             }
         } else {
-            for (i, (line, (&is_fenced, tokens))) in lines
+            for (i, (line, &is_fenced)) in lines
                 .iter()
-                .zip(fenced_lines.iter().zip(doc_tokens.iter()))
+                .zip(fenced_lines.iter())
                 .enumerate()
             {
                 new_entries.push(shape_single_line(
@@ -1139,7 +1200,6 @@ impl DocumentLayoutCache {
                     i,
                     line,
                     is_fenced,
-                    tokens,
                     max_width_px,
                     font_size,
                 ));
@@ -1279,7 +1339,8 @@ pub fn slice_tokens_for_visual_subline(
 pub fn render_editor_pane(
     lines: Arc<Vec<String>>,
     visual_lines: Arc<Vec<VisualLine>>,
-    doc_tokens: Arc<Vec<Vec<MarkdownToken>>>,
+    syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
+    code_blocks: Arc<Vec<SourceCodeBlock>>,
     cursor: (usize, usize),
     theme: &ThemeColors,
     strings: &'static glidemark_core::i18n::I18nStrings,
@@ -1335,10 +1396,52 @@ pub fn render_editor_pane(
                             String::new()
                         };
 
-                        let phys_tokens = doc_tokens
-                            .get(phys_idx)
-                            .cloned()
-                            .unwrap_or_else(|| tokenize_markdown_line(phys_line_str));
+                        let phys_tokens = {
+                            let block = code_blocks.iter().find(|b| {
+                                phys_idx >= b.start_line && phys_idx < b.start_line + b.line_count
+                            });
+
+                            if let Some(b) = block {
+                                let mut cache = syntax_cache.lock().unwrap();
+                                if let Some(spans) = cache.get(&b.code, b.lang.as_deref()) {
+                                    let mut byte_offset = 0;
+                                    for i in b.start_line..phys_idx {
+                                        if let Some(l) = lines.get(i) {
+                                            byte_offset += l.len() + 1;
+                                        }
+                                    }
+                                    let line_len = phys_line_str.len();
+                                    let line_end = byte_offset + line_len;
+                                    let mut line_spans = Vec::new();
+                                    for span in spans.iter() {
+                                        let overlap_start = span.range.start.max(byte_offset);
+                                        let overlap_end = span.range.end.min(line_end);
+                                        if overlap_start < overlap_end {
+                                            line_spans.push(glidemark_core::syntax::SyntaxSpan {
+                                                range: (overlap_start - byte_offset)..(overlap_end - byte_offset),
+                                                role: span.role,
+                                            });
+                                        }
+                                    }
+                                    spans_to_code_tokens(phys_line_str, &line_spans)
+                                } else {
+                                    vec![MarkdownToken {
+                                        text: phys_line_str.to_string(),
+                                        kind: MarkdownTokenKind::CodeText,
+                                    }]
+                                }
+                            } else {
+                                let trimmed = phys_line_str.trim();
+                                if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                                    vec![MarkdownToken {
+                                        text: phys_line_str.to_string(),
+                                        kind: MarkdownTokenKind::CodeDelimiter,
+                                    }]
+                                } else {
+                                    tokenize_markdown_line(phys_line_str)
+                                }
+                            }
+                        };
                         let (sub_start, sub_len) = if let Some(v) = vl {
                             (v.char_start, v.char_len)
                         } else {

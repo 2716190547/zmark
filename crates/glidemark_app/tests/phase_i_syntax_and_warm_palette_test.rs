@@ -5,7 +5,7 @@ use glidemark_app::views::preview::{apply_selection_to_highlights, obs};
 use glidemark_app::views::workspace::{SyntaxBatchRequest, SyntaxBlockItem, WorkspaceView};
 use glidemark_core::document::Document;
 use glidemark_core::syntax::{
-    clear_syntax_cache, get_cached_code_spans, get_or_parse_code_spans, parse_code_spans,
+    clear_syntax_cache, get_or_parse_code_spans, parse_code_spans,
     resolve_canonical_language, SyntaxRole, MAX_CODE_BLOCK_BYTES,
 };
 use gpui::{HighlightStyle, TestAppContext};
@@ -132,6 +132,7 @@ fn test_phase_i_maven_xml_semantic_distinction() {
 /// Test 3: Multi-line continuity across lines (comments and strings)
 #[test]
 fn test_phase_i_multiline_syntax_continuity() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rust_code = r#"/*
  * Multi-line Rust block comment
  * continuing across lines
@@ -357,9 +358,15 @@ async fn test_phase_i_real_preview_render_and_selection_overlay(cx: &mut TestApp
         WorkspaceView::new(state, cx)
     });
 
-    // Run until background syntax scheduler finishes parsing
+    // First draw to register visible region in preview list
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    // Run until deferred background syntax scheduler finishes parsing
     cx.run_until_parked();
 
+    // Subsequent draw renders with syntax highlights
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
@@ -425,9 +432,15 @@ async fn test_phase_i_real_editor_render_tokens(cx: &mut TestAppContext) {
         WorkspaceView::new(state, cx)
     });
 
-    // Run until background syntax scheduler finishes parsing
+    // First draw to register visible region in preview list
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    // Run until deferred background syntax scheduler finishes parsing
     cx.run_until_parked();
 
+    // Subsequent draw renders with syntax highlights
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
@@ -509,11 +522,11 @@ async fn test_phase_i_scroll_and_cursor_reuse_without_reparsing(cx: &mut TestApp
         let _ = window.draw(cx);
     });
 
-    let (initial_tokens, initial_rev) = cx.update(|_window, cx| {
+    let (initial_blocks, initial_rev) = cx.update(|_window, cx| {
         let ws = view.read(cx);
-        (ws.cached_editor_tokens.clone(), ws.cached_editor_tokens_rev)
+        (ws.source_code_blocks.clone(), ws.source_code_blocks_rev)
     });
-    assert!(!initial_tokens.is_empty());
+    assert!(!initial_blocks.is_empty());
 
     // Move cursor right: revision does NOT change
     cx.update(|_window, cx| {
@@ -526,12 +539,12 @@ async fn test_phase_i_scroll_and_cursor_reuse_without_reparsing(cx: &mut TestApp
         let _ = window.draw(cx);
     });
 
-    let (moved_tokens, moved_rev) = cx.update(|_window, cx| {
+    let (moved_blocks, moved_rev) = cx.update(|_window, cx| {
         let ws = view.read(cx);
-        (ws.cached_editor_tokens.clone(), ws.cached_editor_tokens_rev)
+        (ws.source_code_blocks.clone(), ws.source_code_blocks_rev)
     });
     assert_eq!(moved_rev, initial_rev, "Cursor movement must not bump revision");
-    assert!(Arc::ptr_eq(&initial_tokens, &moved_tokens), "Tokens must be 100% reused across cursor moves");
+    assert!(Arc::ptr_eq(&initial_blocks, &moved_blocks), "Source code blocks must be 100% reused across cursor moves");
 }
 
 /// Test 12: Cancellation and stale revision guard
@@ -557,9 +570,9 @@ async fn test_phase_i_cancellation_and_stale_revision_rejection(cx: &mut TestApp
     });
     cx.run_until_parked();
 
-    let (current_doc_key, current_rev, current_tokens_rev) = cx.update(|_window, cx| {
+    let (current_doc_key, current_rev, current_code_rev) = cx.update(|_window, cx| {
         let ws = view.read(cx);
-        (ws.state.active.clone(), ws.state.editor.revision, ws.cached_editor_tokens_rev)
+        (ws.state.active.clone(), ws.state.editor.revision, ws.source_code_blocks_rev)
     });
 
     let sentinel_rev = "fn should_be_rejected_rev() {}";
@@ -594,21 +607,31 @@ async fn test_phase_i_cancellation_and_stale_revision_rejection(cx: &mut TestApp
 
     cx.run_until_parked();
 
-    // Assert that neither sentinel was inserted into the syntax cache
+    // Assert that neither sentinel was inserted into the workspace syntax cache
+    let cache_contains_rev = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let cache = ws.syntax_cache.lock().unwrap();
+        cache.entries.contains_key(&(sentinel_rev.to_string(), "rust".to_string()))
+    });
+    let cache_contains_doc = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let cache = ws.syntax_cache.lock().unwrap();
+        cache.entries.contains_key(&(sentinel_doc.to_string(), "rust".to_string()))
+    });
     assert!(
-        get_cached_code_spans(sentinel_rev, Some("rust")).is_none(),
-        "Stale revision result must NOT be cached"
+        !cache_contains_rev,
+        "Stale revision result must NOT be cached in workspace"
     );
     assert!(
-        get_cached_code_spans(sentinel_doc, Some("rust")).is_none(),
-        "Stale doc result must NOT be cached"
+        !cache_contains_doc,
+        "Stale doc result must NOT be cached in workspace"
     );
 
-    // Assert that cached_editor_tokens_rev was NOT rolled back
-    let final_tokens_rev = cx.update(|_window, cx| view.read(cx).cached_editor_tokens_rev);
+    // Assert that source_code_blocks_rev was NOT rolled back
+    let final_code_rev = cx.update(|_window, cx| view.read(cx).source_code_blocks_rev);
     assert_eq!(
-        final_tokens_rev, current_tokens_rev,
-        "cached_editor_tokens_rev must not be rolled back by stale response"
+        final_code_rev, current_code_rev,
+        "source_code_blocks_rev must not be rolled back by stale response"
     );
 }
 
