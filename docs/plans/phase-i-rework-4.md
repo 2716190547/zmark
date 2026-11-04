@@ -76,3 +76,15 @@ Reviewer `w3:p7` 核准 **16666bf**，无未解决实质异议，证据 `/privat
 执行时采纳非阻塞补充：上表已补旧 wrap 包装；edit-then-draw 检查中未变的既有代码行继续复用几何、新输入且未有描述的行按非 fenced 几何，不能回扫补色；优先让 AST canonical payload 与 CodeKey 共享 Arc，若保留独立 AST String 分配需如实报告，不把两份说成共享；增加一个 shell/bash 真实小块反例，验证 canonical 库名称不再被 raw alias 二次解析成 Plain。该问题已实证存在，不是仅检查字符串 API 名。
 
 本记录只确认阶段 A 的实施许可，不表示代码已合格。阶段 A 交付/独立审查仍按本清单；整体 I1/I2 在阶段 B 完成及终验前保持未完成。
+
+## 阶段 A 首交打回与小范围补修
+
+候选 **cc861db** 独立审查为阶段 A 打回（A 内 P1:1/P2:5），证据 `/private/tmp/glidemark-phase-i-i12-rework4-stage-a-review/REVIEW_REPORT.md`。Reviewer 已独立验证映射/单实例等生产主体基本成立；默认 **339/0/0，48结果行**，H **21/0**，I0 6项含默认。唯一审查阻断是两条已要求的判别证据未落地：M1 将 preview content_key 置 None、M2 去掉 debounce 的 is_ast_in_sync 门，交付四用例仍全绿。仅 Bash canonical 回退能使现有用例变红。
+
+本次补修加强现有 edit-then-draw 用例：真实编辑并同步 buffer 后、不 park 立即 draw，断言目标代码行单一 CodeText/完整原文、无旧 Keyword/Number/CodeDelimiter；同 revision 描述到达后再断言实际彩色。另补一条 Preview-only 的真实 draw→后台→draw，断言本实例恰一条非 Plain 且实际预览高亮；不得借 Source/Split 提供需求。M2/M1 各自必须使对应检查精确变红，恢复生产实现后通过。不新增参考实现或只断言缓存非空。
+
+协调者源码补核发现：editor.rs:1279 与 preview.rs:1911 的观测调用未受 feature 隔离，obs 模块全局 Vec 每帧保留代码 token/highlights 副本。该长期积累违反 A 的持久着色数据约束，一并改为 **test-observation 下才启用采集**；正常无该 feature 的构建不写这些日志。依赖观测的现有及新增 UI 用例明确用该 feature 运行并单列结果，不能删断言/ignore 后宣称默认已覆盖它们。不改历史测试策略，仅关掉生产观测旁路。
+
+已知 P2 不视作无风险：缩进代码描述的无效/错误呈现、实际堆含舍入超 ledger 约3.9%、insert bool 尚未消费、逐行 get/反复 shrink 的性能、同 revision AST 落地后几何 mask 未刷新。它们在 B 的状态/准入/视口收口时逐项处理并复验，当前不宣称真实堆严格≤4MiB，也**不批准**默认允许4%超额。B 最终准入须符合原预算契约或返回规划讨论，不能沿用 P2 标签静默放宽。
+
+补修交付仍仅供 A 独立复审，整体保持 BLOCKED(B待执行)；最终全量与观测 UI/Phase H 专项、打包/签名、代理结束与精确统计照旧。
