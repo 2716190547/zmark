@@ -138,9 +138,10 @@ fn test_stage_a_canonical_bash_resolution() {
     );
 
     // 3. parse_code_spans_bounded with canonical name produces shell syntax spans (NOT plain fallback)
-    let spans_canonical = parse_code_spans_bounded("echo 'hello' && exit 0", Some("Bourne Again Shell (bash)"), None);
-    let spans_alias = parse_code_spans_bounded("echo 'hello' && exit 0", Some("bash"), None);
-    assert_eq!(spans_canonical, spans_alias);
+    let res_canonical = parse_code_spans_bounded("echo 'hello' && exit 0", Some("Bourne Again Shell (bash)"), None);
+    let res_alias = parse_code_spans_bounded("echo 'hello' && exit 0", Some("bash"), None);
+    assert_eq!(res_canonical, res_alias);
+    let spans_canonical = res_canonical.spans().expect("canonical bash parsing should produce Ready spans");
     assert!(
         spans_canonical.iter().any(|s| s.role != SyntaxRole::Plain),
         "Bourne Again Shell (bash) must produce syntax-highlighted roles, not plain fallback: {:?}",
@@ -148,7 +149,7 @@ fn test_stage_a_canonical_bash_resolution() {
     );
 
     // 4. Verify "echo 1" canonical resolution matches alias without panicking or mismatch
-    let spans_1 = parse_code_spans_bounded("echo 1", Some("Bourne Again Shell (bash)"), None);
-    let spans_1_alias = parse_code_spans_bounded("echo 1", Some("bash"), None);
-    assert_eq!(spans_1, spans_1_alias);
+    let res_1 = parse_code_spans_bounded("echo 1", Some("Bourne Again Shell (bash)"), None);
+    let res_1_alias = parse_code_spans_bounded("echo 1", Some("bash"), None);
+    assert_eq!(res_1, res_1_alias);
 }

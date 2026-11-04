@@ -3,6 +3,9 @@ name = "glidemark_core"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+test-observation = []
+
 [dependencies]
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 serde = { version = "1.0", features = ["derive"] }

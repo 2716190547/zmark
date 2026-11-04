@@ -145,24 +145,21 @@ async fn test_workspace_edit_then_draw_buffer_leads_ast(cx: &mut TestAppContext)
         let _ = window.draw(cx);
     });
 
-    #[cfg(feature = "test-observation")]
-    {
-        // Read the tokens of line 4 (which is where `fn a() {}` has shifted) via `obs::editor_tokens(4)`
-        let tokens = obs::editor_tokens(4).expect("tokens for line 4 must be Some");
-        assert!(!tokens.is_empty(), "tokens for line 4 must not be empty");
-        assert!(
-            tokens.iter().all(|t| t.kind == MarkdownTokenKind::CodeText || t.kind == MarkdownTokenKind::Plain),
-            "All tokens must be CodeText (or Plain), got: {:?}",
-            tokens
-        );
-        assert!(
-            !tokens.iter().any(|t| matches!(t.kind, MarkdownTokenKind::Keyword | MarkdownTokenKind::Number | MarkdownTokenKind::CodeDelimiter)),
-            "No token should be Keyword, Number, or CodeDelimiter during stale debounce, got: {:?}",
-            tokens
-        );
-        let combined_text: String = tokens.iter().map(|t| t.text.as_str()).collect();
-        assert_eq!(combined_text, "fn a() {}");
-    }
+    // Read the tokens of line 4 (which is where `fn a() {}` has shifted) via `obs::editor_tokens(4)`
+    let tokens = obs::editor_tokens(4).expect("tokens for line 4 must be Some");
+    assert!(!tokens.is_empty(), "tokens for line 4 must not be empty");
+    assert!(
+        tokens.iter().all(|t| t.kind == MarkdownTokenKind::CodeText || t.kind == MarkdownTokenKind::Plain),
+        "All tokens must be CodeText (or Plain), got: {:?}",
+        tokens
+    );
+    assert!(
+        !tokens.iter().any(|t| matches!(t.kind, MarkdownTokenKind::Keyword | MarkdownTokenKind::Number | MarkdownTokenKind::CodeDelimiter)),
+        "No token should be Keyword, Number, or CodeDelimiter during stale debounce, got: {:?}",
+        tokens
+    );
+    let combined_text: String = tokens.iter().map(|t| t.text.as_str()).collect();
+    assert_eq!(combined_text, "fn a() {}");
 
     // Now let the debounce parse land:
     cx.executor().advance_clock(std::time::Duration::from_millis(150));
@@ -172,16 +169,13 @@ async fn test_workspace_edit_then_draw_buffer_leads_ast(cx: &mut TestAppContext)
     });
     cx.run_until_parked();
 
-    #[cfg(feature = "test-observation")]
-    {
-        // Read obs::editor_tokens(4) again:
-        let tokens_after = obs::editor_tokens(4).expect("tokens for line 4 after parse must be Some");
-        assert!(
-            tokens_after.iter().any(|t| t.kind == MarkdownTokenKind::Keyword && t.text == "fn"),
-            "Tokens must contain Keyword for 'fn', got: {:?}",
-            tokens_after
-        );
-    }
+    // Read obs::editor_tokens(4) again:
+    let tokens_after = obs::editor_tokens(4).expect("tokens for line 4 after parse must be Some");
+    assert!(
+        tokens_after.iter().any(|t| t.kind == MarkdownTokenKind::Keyword && t.text == "fn"),
+        "Tokens must contain Keyword for 'fn', got: {:?}",
+        tokens_after
+    );
     cx.update(|_window, cx| {
         let ws = view.read(cx);
         assert!(!ws.state.doc.is_parse_stale(), "AST must no longer be stale");
@@ -224,14 +218,11 @@ async fn test_workspace_preview_only_highlight_and_single_entry(cx: &mut TestApp
             entry.spans
         );
 
-        #[cfg(feature = "test-observation")]
-        {
-            let last_highlights = obs::last_code_highlights().expect("obs::last_code_highlights must be Some");
-            assert!(
-                last_highlights.iter().any(|(_, h)| h.color == Some(ws.state.theme.syntax_keyword)),
-                "Highlights must contain a highlight with syntax_keyword color"
-            );
-        }
+        let last_highlights = obs::last_code_highlights().expect("obs::last_code_highlights must be Some");
+        assert!(
+            last_highlights.iter().any(|(_, h)| h.color == Some(ws.state.theme.syntax_keyword)),
+            "Highlights must contain a highlight with syntax_keyword color"
+        );
     });
 }
 

@@ -621,6 +621,7 @@ where
             Some((BlockElement::Paragraph(inlines), end_offset))
         }
         Event::Start(Tag::CodeBlock(kind)) => {
+            let is_indented = matches!(kind, CodeBlockKind::Indented);
             let raw_info = match kind {
                 CodeBlockKind::Fenced(l) => {
                     let s = l.trim().to_string();
@@ -657,7 +658,8 @@ where
             let canonical_lang = resolve_canonical_language(raw_info.as_deref());
             let key = CodeKey::new(canonical_lang, payload.clone());
 
-            let fence_open_line = line_index.line_idx(range.start);
+            let start_line = line_index.line_idx(range.start);
+            let fence_open_line = start_line;
 
             let mut payload_lines = Vec::new();
             let mut p_start = 0;
@@ -676,7 +678,11 @@ where
             let mut is_valid = true;
 
             for (k, (payload_range, payload_line)) in payload_lines.into_iter().enumerate() {
-                let source_line_idx = fence_open_line + 1 + k;
+                let source_line_idx = if is_indented {
+                    start_line + k
+                } else {
+                    fence_open_line + 1 + k
+                };
                 let Some(source_line) = line_index.line_str(source_line_idx, source) else {
                     is_valid = false;
                     break;
@@ -698,6 +704,16 @@ where
 
                 let (prefix_len, content_len, line_valid) = if payload_content.is_empty() {
                     (source_content.len(), 0, true)
+                } else if is_indented {
+                    if source_content.ends_with(payload_content) {
+                        let c_len = payload_content.len();
+                        let p_len = source_content.len() - c_len;
+                        (p_len, c_len, true)
+                    } else if let Some(idx) = source_content.find(payload_content) {
+                        (idx, payload_content.len(), true)
+                    } else {
+                        (0, source_content.len().min(payload_content.len()), false)
+                    }
                 } else if source_content.ends_with(payload_content) {
                     let c_len = payload_content.len();
                     let p_len = source_content.len() - c_len;
@@ -722,17 +738,21 @@ where
                 });
             }
 
-            let candidate_close_line = fence_open_line + 1 + num_lines;
-            let fence_close_line = if let Some(cand_str) = line_index.line_str(candidate_close_line, source) {
-                let cand_trimmed = cand_str.trim();
-                let cand_no_quote = cand_trimmed.trim_start_matches(|c: char| c == '>' || c.is_whitespace());
-                if cand_no_quote.starts_with("```") || cand_no_quote.starts_with("~~~") {
-                    Some(candidate_close_line)
+            let fence_close_line = if is_indented {
+                None
+            } else {
+                let candidate_close_line = fence_open_line + 1 + num_lines;
+                if let Some(cand_str) = line_index.line_str(candidate_close_line, source) {
+                    let cand_trimmed = cand_str.trim();
+                    let cand_no_quote = cand_trimmed.trim_start_matches(|c: char| c == '>' || c.is_whitespace());
+                    if cand_no_quote.starts_with("```") || cand_no_quote.starts_with("~~~") {
+                        Some(candidate_close_line)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
-            } else {
-                None
             };
 
             code_blocks.push(ParsedCodeBlock {
@@ -1226,5 +1246,22 @@ mod tests {
         assert_eq!(cb7.fence_close_line, Some(1));
         assert!(cb7.lines.is_empty());
         assert!(cb7.is_valid);
+
+        // 8. Indented code block mapping
+        let src8 = "    foo\n    bar\n";
+        let doc8 = parse_markdown(src8);
+        assert_eq!(doc8.code_blocks.len(), 1);
+        let cb8 = &doc8.code_blocks[0];
+        assert_eq!(cb8.fence_open_line, 0);
+        assert_eq!(cb8.fence_close_line, None);
+        assert!(cb8.key.is_plain());
+        assert!(cb8.is_valid);
+        assert_eq!(cb8.lines.len(), 2);
+        assert_eq!(cb8.lines[0].source_line_idx, 0);
+        assert_eq!(cb8.lines[0].prefix_len, 4);
+        assert_eq!(cb8.lines[0].content_len, 3); // "foo"
+        assert_eq!(cb8.lines[1].source_line_idx, 1);
+        assert_eq!(cb8.lines[1].prefix_len, 4);
+        assert_eq!(cb8.lines[1].content_len, 3); // "bar"
     }
 }

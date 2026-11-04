@@ -1,5 +1,5 @@
 use glidemark_core::syntax::{
-    parse_code_spans, CacheEntry, CodeKey, SyntaxCache, SyntaxRole, SyntaxSpan,
+    heap_usable_size, parse_code_spans, CacheEntry, CodeKey, SyntaxCache, SyntaxRole, SyntaxSpan,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashSet;
@@ -18,23 +18,27 @@ unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = System.alloc(layout);
         if !ptr.is_null() {
-            ALLOCATED.fetch_add(layout.size(), Ordering::SeqCst);
+            let sz = heap_usable_size(layout.size());
+            ALLOCATED.fetch_add(sz, Ordering::SeqCst);
         }
         ptr
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         System.dealloc(ptr, layout);
-        ALLOCATED.fetch_sub(layout.size(), Ordering::SeqCst);
+        let sz = heap_usable_size(layout.size());
+        ALLOCATED.fetch_sub(sz, Ordering::SeqCst);
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         let new_ptr = System.realloc(ptr, layout, new_size);
         if !new_ptr.is_null() {
-            if new_size > layout.size() {
-                ALLOCATED.fetch_add(new_size - layout.size(), Ordering::SeqCst);
+            let old_sz = heap_usable_size(layout.size());
+            let new_sz = heap_usable_size(new_size);
+            if new_sz > old_sz {
+                ALLOCATED.fetch_add(new_sz - old_sz, Ordering::SeqCst);
             } else {
-                ALLOCATED.fetch_sub(layout.size() - new_size, Ordering::SeqCst);
+                ALLOCATED.fetch_sub(old_sz - new_sz, Ordering::SeqCst);
             }
         }
         new_ptr
@@ -150,7 +154,7 @@ fn test_stage_a_cache_accounting_and_ledger() {
 
         let heap1 = SyntaxCache::entry_heap_bytes(&key1, &sample_spans);
         let heap2 = SyntaxCache::entry_heap_bytes(&key2, &sample_spans);
-        let container_overhead = 2 * std::mem::size_of::<CacheEntry>();
+        let container_overhead = heap_usable_size(2 * std::mem::size_of::<CacheEntry>());
         cache.max_bytes = container_overhead + heap1 + heap2; // exactly fits 2 entries
 
         let retained = HashSet::new();
@@ -180,7 +184,7 @@ fn test_stage_a_cache_accounting_and_ledger() {
 
         let heap1 = SyntaxCache::entry_heap_bytes(&key1, &sample_spans);
         let heap2 = SyntaxCache::entry_heap_bytes(&key2, &sample_spans);
-        let container_overhead = 2 * std::mem::size_of::<CacheEntry>();
+        let container_overhead = heap_usable_size(2 * std::mem::size_of::<CacheEntry>());
         cache.max_bytes = container_overhead + heap1 + heap2;
 
         let mut retained = HashSet::new();
@@ -219,7 +223,7 @@ fn test_stage_a_cache_accounting_and_ledger() {
         let k_a = SyntaxCache::key("code_a", Some("rust"));
         let k_b = SyntaxCache::key("code_b", Some("rust"));
         let heap_a = SyntaxCache::entry_heap_bytes(&k_a, &sample_spans);
-        let overhead = std::mem::size_of::<CacheEntry>();
+        let overhead = heap_usable_size(std::mem::size_of::<CacheEntry>());
         cache2.max_bytes = overhead + heap_a; // can only hold 1 entry
 
         let mut all_retained = HashSet::new();

@@ -1139,6 +1139,27 @@ pub fn render_editor_pane(
         .bg(theme.surface)
         .child(
             uniform_list("editor_lines", line_count, move |range, window, _cx| {
+                let mut block_spans: std::collections::HashMap<glidemark_core::syntax::CodeKey, Arc<[glidemark_core::syntax::SyntaxSpan]>> = std::collections::HashMap::new();
+                if is_ast_in_sync && !code_blocks.is_empty() {
+                    let min_idx = range.start.min(visual_lines.len().saturating_sub(1));
+                    let max_idx = range.end.min(visual_lines.len());
+                    let start_p = visual_lines.get(min_idx).map(|v| v.physical_line_idx).unwrap_or(0);
+                    let end_p = visual_lines.get(max_idx.saturating_sub(1)).map(|v| v.physical_line_idx).unwrap_or(usize::MAX);
+
+                    let mut cache = syntax_cache.lock().unwrap();
+                    for b in code_blocks.iter() {
+                        let b_start = b.fence_open_line;
+                        let b_end = b.fence_close_line.unwrap_or_else(|| {
+                            b.lines.last().map(|l| l.source_line_idx).unwrap_or(b_start)
+                        });
+                        if b_start <= end_p && b_end >= start_p {
+                            if let Some(spans) = cache.get(&b.key) {
+                                block_spans.insert(b.key.clone(), spans);
+                            }
+                        }
+                    }
+                }
+
                 range
                     .map(|vis_idx| {
                         let vl = visual_lines.get(vis_idx);
@@ -1209,8 +1230,7 @@ pub fn render_editor_pane(
                                             kind: MarkdownTokenKind::CodeText,
                                         }]
                                     } else {
-                                        let mut cache = syntax_cache.lock().unwrap();
-                                        if let Some(spans) = cache.get(&b.key) {
+                                        if let Some(spans) = block_spans.get(&b.key) {
                                             let mut line_spans = Vec::new();
                                             for span in spans.iter() {
                                                 let overlap_start = span.range.start.max(mapping.payload_range.start);

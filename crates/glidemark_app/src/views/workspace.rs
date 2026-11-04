@@ -48,6 +48,7 @@ pub struct WorkspaceView {
     pub preview_autoscroll_task: Option<gpui::Task<()>>,
     pub preview_mouse_window_pos: Option<Point<Pixels>>,
     pub preview_content_bounds: Option<Bounds<Pixels>>,
+    pub editor_content_bounds: Option<Bounds<Pixels>>,
     pub document_layout_cache: crate::views::editor::DocumentLayoutCache,
     pub cached_visual_rev: usize,
     pub cached_visual_width_bits: u64,
@@ -57,16 +58,65 @@ pub struct WorkspaceView {
     pub syntax_active_task: Option<gpui::Task<()>>,
     pub syntax_pending_request: Option<SyntaxBatchRequest>,
     pub syntax_cancel_flag: Arc<AtomicBool>,
+    pub syntax_request_counter: u64,
     pub syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
     pub syntax_attempts: std::collections::HashMap<glidemark_core::syntax::CodeKey, (u8, u8)>,
+    pub syntax_block_states: std::collections::HashMap<glidemark_core::syntax::CodeKey, SyntaxBlockState>,
     pub syntax_defer_armed: bool,
     pub last_visible_syntax_keys: std::collections::HashSet<glidemark_core::syntax::CodeKey>,
     pub source_code_blocks: Arc<Vec<glidemark_core::ast::ParsedCodeBlock>>,
     pub source_code_blocks_rev: usize,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxBlockState {
+    Ready,
+    BudgetExceeded,
+    ResourceConstrained,
+    HardLimit,
+    UnsupportedLanguage,
+    MappingInvalid,
+    InitFailed,
+}
+
+impl SyntaxBlockState {
+    #[allow(dead_code)]
+    pub fn localized_reason(&self, is_zh: bool) -> Option<&'static str> {
+        match self {
+            SyntaxBlockState::Ready | SyntaxBlockState::UnsupportedLanguage => None,
+            SyntaxBlockState::BudgetExceeded => Some(if is_zh {
+                "代码高亮解析超时（超过 50ms 预算）"
+            } else {
+                "Syntax highlighting timed out (> 50ms budget)"
+            }),
+            SyntaxBlockState::ResourceConstrained => Some(if is_zh {
+                "超出 4MiB 高亮缓存容量上限"
+            } else {
+                "Exceeded 4MiB syntax cache memory budget"
+            }),
+            SyntaxBlockState::HardLimit => Some(if is_zh {
+                "代码块超出大小限制（> 64KiB 或 > 2000 行）"
+            } else {
+                "Code block exceeds size limits (> 64KiB or > 2000 lines)"
+            }),
+            SyntaxBlockState::MappingInvalid => Some(if is_zh {
+                "代码行源位置映射无效"
+            } else {
+                "Invalid source line mapping"
+            }),
+            SyntaxBlockState::InitFailed => Some(if is_zh {
+                "语法解析器初始化失败"
+            } else {
+                "Syntax parser initialization failed"
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SyntaxBatchRequest {
+    pub request_id: u64,
     pub doc_key: Option<crate::state::DocKey>,
     pub revision: usize,
     pub blocks: Vec<glidemark_core::syntax::CodeKey>,
@@ -125,6 +175,7 @@ impl WorkspaceView {
             preview_autoscroll_task: None,
             preview_mouse_window_pos: None,
             preview_content_bounds: None,
+            editor_content_bounds: None,
             document_layout_cache: crate::views::editor::DocumentLayoutCache::new(),
             cached_visual_rev: usize::MAX,
             cached_visual_width_bits: 0,
@@ -134,8 +185,10 @@ impl WorkspaceView {
             syntax_active_task: None,
             syntax_pending_request: None,
             syntax_cancel_flag: Arc::new(AtomicBool::new(false)),
+            syntax_request_counter: 0,
             syntax_cache: Arc::new(std::sync::Mutex::new(glidemark_core::syntax::SyntaxCache::new())),
             syntax_attempts: std::collections::HashMap::new(),
+            syntax_block_states: std::collections::HashMap::new(),
             syntax_defer_armed: false,
             last_visible_syntax_keys: std::collections::HashSet::new(),
             source_code_blocks: Arc::new(Vec::new()),
@@ -167,6 +220,7 @@ impl WorkspaceView {
         self.rendered_regions.lock().unwrap().clear();
         self.syntax_cache.lock().unwrap().clear();
         self.syntax_attempts.clear();
+        self.syntax_block_states.clear();
         self.last_visible_syntax_keys.clear();
         self.syntax_defer_armed = false;
         self.syntax_cancel_flag.store(true, Ordering::Relaxed);
@@ -244,6 +298,7 @@ impl WorkspaceView {
     /// Explicit user action via Refresh Preview button: resets attempt counters and triggers refresh.
     pub fn reset_syntax_attempts_and_refresh(&mut self) {
         self.syntax_attempts.clear();
+        self.syntax_block_states.clear();
         self.last_visible_syntax_keys.clear();
         self.parse_now_and_refresh();
     }
@@ -292,18 +347,22 @@ impl WorkspaceView {
         let width_bits = max_width_px.round() as u64;
         let font_bits = font_size.to_bits();
 
+        let ast_blocks_changed = !self.state.doc.is_parse_stale()
+            && (self.source_code_blocks_rev != rev || *self.source_code_blocks != self.state.doc.parsed.code_blocks);
+
         if !self.cached_visual_lines.is_empty()
             && self.cached_visual_rev == rev
             && self.cached_visual_width_bits == width_bits
             && self.cached_visual_font_bits == font_bits
+            && !ast_blocks_changed
         {
             return self.cached_visual_lines.clone();
         }
 
         if !self.state.doc.is_parse_stale() {
-            if self.source_code_blocks_rev != self.state.editor.revision || self.source_code_blocks.is_empty() {
+            if ast_blocks_changed || self.source_code_blocks.is_empty() {
                 self.source_code_blocks = Arc::new(self.state.doc.parsed.code_blocks.clone());
-                self.source_code_blocks_rev = self.state.editor.revision;
+                self.source_code_blocks_rev = rev;
             }
         }
 
@@ -339,7 +398,7 @@ impl WorkspaceView {
             }
         }
 
-        // 2. Keys from editor visible lines
+        // 2. Keys from editor visible lines using actual measured bounds
         if matches!(self.state.view_mode, ViewMode::Source | ViewMode::Split) {
             let offset_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
             let row_h = crate::views::editor::calculate_line_row_height(
@@ -347,7 +406,9 @@ impl WorkspaceView {
                 glidemark_core::config::Preferences::sanitize_line_height(self.state.preferences.line_height),
             );
             let start_vis = (offset_y / row_h).floor().max(0.0) as usize;
-            let end_vis = start_vis + 60;
+            let visible_h = self.editor_content_bounds.map(|b| f32::from(b.size.height)).unwrap_or(800.0);
+            let visible_line_count = (visible_h / row_h).ceil().max(1.0) as usize;
+            let end_vis = start_vis + visible_line_count + 1;
 
             let start_phys = self.cached_visual_lines.get(start_vis).map(|vl| vl.physical_line_idx).unwrap_or(0);
             let end_phys = self.cached_visual_lines.get(end_vis.min(self.cached_visual_lines.len().saturating_sub(1))).map(|vl| vl.physical_line_idx).unwrap_or(usize::MAX);
@@ -369,11 +430,29 @@ impl WorkspaceView {
         }
         self.last_visible_syntax_keys = visible_keys.clone();
 
-        // 4. Find missing keys that need parsing
+        // 4. Order visible keys stably by document appearance order
+        let mut ordered_visible_keys: Vec<glidemark_core::syntax::CodeKey> = Vec::new();
+        for b in self.source_code_blocks.iter() {
+            if visible_keys.contains(&b.key) && !ordered_visible_keys.contains(&b.key) {
+                ordered_visible_keys.push(b.key.clone());
+            }
+        }
+        for b in self.state.doc.parsed.code_blocks.iter() {
+            if visible_keys.contains(&b.key) && !ordered_visible_keys.contains(&b.key) {
+                ordered_visible_keys.push(b.key.clone());
+            }
+        }
+        for k in &visible_keys {
+            if !ordered_visible_keys.contains(k) {
+                ordered_visible_keys.push(k.clone());
+            }
+        }
+
+        // 5. Find missing keys that need parsing
         let mut missing_blocks = Vec::new();
         let mut cache = self.syntax_cache.lock().unwrap();
 
-        for key in &visible_keys {
+        for key in &ordered_visible_keys {
             if cache.get(key).is_none() {
                 if key.language.is_none() || key.payload.is_empty() {
                     let spans = Arc::from([glidemark_core::syntax::SyntaxSpan {
@@ -399,7 +478,9 @@ impl WorkspaceView {
         drop(cache);
 
         if !missing_blocks.is_empty() {
+            self.syntax_request_counter += 1;
             let request = SyntaxBatchRequest {
+                request_id: self.syntax_request_counter,
                 doc_key: self.state.active.clone(),
                 revision: self.state.editor.revision,
                 blocks: missing_blocks,
@@ -426,17 +507,17 @@ impl WorkspaceView {
 
         self.syntax_active_task = Some(cx.spawn(async move |this, app| {
             let parsed_results = app.background_executor().spawn(async move {
-                let mut results: Vec<(glidemark_core::syntax::CodeKey, Arc<[glidemark_core::syntax::SyntaxSpan]>)> = Vec::with_capacity(blocks.len());
+                let mut results: Vec<(glidemark_core::syntax::CodeKey, glidemark_core::syntax::ParseResult)> = Vec::with_capacity(blocks.len());
                 for key in blocks {
                     if cancel.load(Ordering::Relaxed) {
                         break;
                     }
-                    let spans = glidemark_core::syntax::parse_code_spans_bounded(
+                    let res = glidemark_core::syntax::parse_code_spans_bounded(
                         &key.payload,
                         key.language,
                         Some(&cancel),
                     );
-                    results.push((key, Arc::from(spans)));
+                    results.push((key, res));
                 }
                 results
             }).await;
@@ -445,16 +526,67 @@ impl WorkspaceView {
                 this.syntax_active_task = None;
                 let current_doc_key = this.state.active.clone();
                 let current_rev = this.state.editor.revision;
+                let current_req_id = this.syntax_request_counter;
                 // Stale result guard: if document or revision has changed, discard!
-                if request.doc_key == current_doc_key && request.revision == current_rev {
+                if request.doc_key == current_doc_key
+                    && request.revision == current_rev
+                    && request.request_id == current_req_id
+                {
                     let mut cache = this.syntax_cache.lock().unwrap();
                     let retained_cache_keys: std::collections::HashSet<glidemark_core::syntax::CodeKey> = this
                         .last_visible_syntax_keys
                         .clone();
-                    for (key, spans) in parsed_results {
-                        cache.insert(key, spans, &retained_cache_keys);
+                    let mut retry_blocks = Vec::new();
+
+                    for (key, res) in parsed_results {
+                        match res {
+                            glidemark_core::syntax::ParseResult::Ready(spans) => {
+                                let inserted = cache.insert(key.clone(), spans, &retained_cache_keys);
+                                if inserted {
+                                    this.syntax_block_states.insert(key, SyntaxBlockState::Ready);
+                                } else {
+                                    this.syntax_block_states.insert(key, SyntaxBlockState::ResourceConstrained);
+                                }
+                            }
+                            glidemark_core::syntax::ParseResult::BudgetExceeded => {
+                                let (_gen, count) = this.syntax_attempts.entry(key.clone()).or_insert((0, 1));
+                                if *count < 2 {
+                                    *count += 1;
+                                    retry_blocks.push(key);
+                                } else {
+                                    this.syntax_block_states.insert(key, SyntaxBlockState::BudgetExceeded);
+                                }
+                            }
+                            glidemark_core::syntax::ParseResult::Cancelled => {
+                                // Cancelled requests do NOT enter cache and do NOT become permanent Plain!
+                            }
+                            glidemark_core::syntax::ParseResult::HardLimit => {
+                                this.syntax_block_states.insert(key, SyntaxBlockState::HardLimit);
+                            }
+                            glidemark_core::syntax::ParseResult::UnsupportedLanguage => {
+                                this.syntax_block_states.insert(key, SyntaxBlockState::UnsupportedLanguage);
+                            }
+                            glidemark_core::syntax::ParseResult::MappingInvalid => {
+                                this.syntax_block_states.insert(key, SyntaxBlockState::MappingInvalid);
+                            }
+                            glidemark_core::syntax::ParseResult::InitFailed => {
+                                this.syntax_block_states.insert(key, SyntaxBlockState::InitFailed);
+                            }
+                        }
                     }
                     drop(cache);
+
+                    if !retry_blocks.is_empty() {
+                        this.syntax_request_counter += 1;
+                        let retry_req = SyntaxBatchRequest {
+                            request_id: this.syntax_request_counter,
+                            doc_key: current_doc_key,
+                            revision: current_rev,
+                            blocks: retry_blocks,
+                        };
+                        this.run_syntax_batch(retry_req, cx);
+                    }
+
                     this.invalidate_preview_list();
                     cx.notify();
                 }
@@ -2517,30 +2649,46 @@ impl Render for WorkspaceView {
                                     } else {
                                         let editor_left_offset = crate::views::editor::calculate_editor_left_offset(self.state.drawer_open, 0.0);
                                         match view_mode {
-                                            ViewMode::Source => div()
-                                                .size_full()
-                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _event: &MouseDownEvent, window, cx| {
-                                                    window.focus(&this.focus_handle);
-                                                    this.search_focused = false;
-                                                    cx.notify();
-                                                }))
-                                                .child(render_editor_pane(
-                                                    self.state.editor.lines.clone(),
-                                                    visual_lines.clone(),
-                                                    self.syntax_cache.clone(),
-                                                    self.source_code_blocks.clone(),
-                                                    !self.state.doc.is_parse_stale(),
-                                                    self.state.editor.cursor(),
-                                                    theme,
-                                                    strings,
-                                                    self.state.preferences.font_size,
-                                                    self.state.preferences.line_height,
-                                                    is_dirty,
-                                                    &self.editor_scroll_handle,
-                                                    editor_left_offset,
-                                                    on_click_line.clone(),
-                                                ))
-                                                .into_any_element(),
+                                            ViewMode::Source => {
+                                                let view_bounds = cx.entity().clone();
+                                                div()
+                                                    .size_full()
+                                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                        window.focus(&this.focus_handle);
+                                                        this.search_focused = false;
+                                                        cx.notify();
+                                                    }))
+                                                    .child(
+                                                        canvas(
+                                                            move |bounds, _window, cx| {
+                                                                view_bounds.update(cx, |this, _cx| {
+                                                                    this.editor_content_bounds = Some(bounds);
+                                                                    this.preview_content_bounds = None;
+                                                                });
+                                                            },
+                                                            |_bounds, _, _window, _cx| {},
+                                                        )
+                                                        .absolute()
+                                                        .size_full(),
+                                                    )
+                                                    .child(render_editor_pane(
+                                                        self.state.editor.lines.clone(),
+                                                        visual_lines.clone(),
+                                                        self.syntax_cache.clone(),
+                                                        self.source_code_blocks.clone(),
+                                                        !self.state.doc.is_parse_stale(),
+                                                        self.state.editor.cursor(),
+                                                        theme,
+                                                        strings,
+                                                        self.state.preferences.font_size,
+                                                        self.state.preferences.line_height,
+                                                        is_dirty,
+                                                        &self.editor_scroll_handle,
+                                                        editor_left_offset,
+                                                        on_click_line.clone(),
+                                                    ))
+                                                    .into_any_element()
+                                            }
                                             ViewMode::Preview => {
                                                 let view_bounds = cx.entity().clone();
                                                 div()
@@ -2551,6 +2699,7 @@ impl Render for WorkspaceView {
                                                             move |bounds, _window, cx| {
                                                                 view_bounds.update(cx, |this, _cx| {
                                                                     this.preview_content_bounds = Some(bounds);
+                                                                    this.editor_content_bounds = None;
                                                                 });
                                                             },
                                                             |_bounds, _, _window, _cx| {},
@@ -2579,7 +2728,8 @@ impl Render for WorkspaceView {
                                                 .flex()
                                                 .overflow_hidden()
                                                 // Left Editor Pane
-                                                .child(
+                                                .child({
+                                                    let view_bounds = cx.entity().clone();
                                                     div()
                                                         .w(relative(self.split_ratio))
                                                         .min_w(px(0.))
@@ -2596,6 +2746,18 @@ impl Render for WorkspaceView {
                                                         .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
                                                             this.handle_editor_scroll_wheel(event, window, cx);
                                                         }))
+                                                        .child(
+                                                            canvas(
+                                                                move |bounds, _window, cx| {
+                                                                    view_bounds.update(cx, |this, _cx| {
+                                                                        this.editor_content_bounds = Some(bounds);
+                                                                    });
+                                                                },
+                                                                |_bounds, _, _window, _cx| {},
+                                                            )
+                                                            .absolute()
+                                                            .size_full(),
+                                                        )
                                                         .child(render_editor_pane(
                                                             self.state.editor.lines.clone(),
                                                             visual_lines.clone(),
@@ -2611,8 +2773,8 @@ impl Render for WorkspaceView {
                                                             &self.editor_scroll_handle,
                                                             editor_left_offset,
                                                             on_click_line,
-                                                        )),
-                                                )
+                                                        ))
+                                                })
                                                 // Draggable Resizable Divider: 5px hit zone with 1px hairline
                                                 .child(
                                                     div()

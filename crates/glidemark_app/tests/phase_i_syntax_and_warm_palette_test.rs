@@ -5,8 +5,9 @@ use glidemark_app::views::preview::{apply_selection_to_highlights, obs};
 use glidemark_app::views::workspace::{SyntaxBatchRequest, WorkspaceView};
 use glidemark_core::document::Document;
 use glidemark_core::syntax::{
-    parse_code_spans, resolve_canonical_language, CodeKey, SyntaxCache, SyntaxRole,
-    MAX_CODE_BLOCK_BYTES,
+    parse_code_spans, parse_code_spans_bounded, resolve_canonical_language, CodeKey,
+    ParseResult, SyntaxCache, SyntaxRole, MAX_CODE_BLOCK_BYTES,
+    TEST_LINE_HOOK, TEST_SIMULATED_ELAPSED_MS,
 };
 use gpui::{HighlightStyle, TestAppContext};
 use std::sync::Arc;
@@ -584,11 +585,57 @@ async fn test_phase_i_scroll_and_cursor_reuse_without_reparsing(cx: &mut TestApp
     assert!(Arc::ptr_eq(&initial_blocks, &moved_blocks), "Source code blocks must be 100% reused across cursor moves");
 }
 
-/// Test 12: Cancellation and stale revision guard
+/// Test 12a: Old doc completion is rejected by guard and does not pollute cache
 #[gpui::test]
-async fn test_phase_i_cancellation_and_stale_revision_rejection(cx: &mut TestAppContext) {
+async fn test_phase_i_stale_doc_rejection_does_not_pollute_cache(cx: &mut TestAppContext) {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let doc_str = "```rust\nfn stale_test() {}\n```\n";
+    let doc_str = "```rust\nfn doc_test() {}\n```\n";
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(doc_str.to_string());
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Source);
+        WorkspaceView::new(state, cx)
+    });
+    cx.run_until_parked();
+
+    let (current_rev, req_counter) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        (ws.state.editor.revision, ws.syntax_request_counter)
+    });
+
+    let sentinel_doc = "fn should_be_rejected_doc() {}";
+    let stale_doc_request = SyntaxBatchRequest {
+        request_id: req_counter + 1,
+        doc_key: Some(DocKey::Scratch(999999)),
+        revision: current_rev,
+        blocks: vec![CodeKey::from_raw(Some("rust"), Arc::from(sentinel_doc))],
+    };
+
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.run_syntax_batch(stale_doc_request, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    let cache_contains_doc = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        let key = CodeKey::from_raw(Some("rust"), Arc::from(sentinel_doc));
+        cache.get(&key).is_some()
+    });
+    assert!(
+        !cache_contains_doc,
+        "Old doc completion must be rejected by guard and not pollute cache"
+    );
+}
+
+/// Test 12b: Old revision completion is rejected by guard and does not pollute cache
+#[gpui::test]
+async fn test_phase_i_stale_revision_rejection_does_not_pollute_cache(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let doc_str = "```rust\nfn rev_test() {}\n```\n";
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(doc_str.to_string());
@@ -607,58 +654,42 @@ async fn test_phase_i_cancellation_and_stale_revision_rejection(cx: &mut TestApp
     });
     cx.run_until_parked();
 
-    let (current_doc_key, current_rev, current_code_rev) = cx.update(|_window, cx| {
+    let (current_doc_key, current_rev, current_code_rev, req_counter) = cx.update(|_window, cx| {
         let ws = view.read(cx);
-        (ws.state.active.clone(), ws.state.editor.revision, ws.source_code_blocks_rev)
+        (
+            ws.state.active.clone(),
+            ws.state.editor.revision,
+            ws.source_code_blocks_rev,
+            ws.syntax_request_counter,
+        )
     });
 
     let sentinel_rev = "fn should_be_rejected_rev() {}";
     let stale_rev_request = SyntaxBatchRequest {
+        request_id: req_counter + 1,
         doc_key: current_doc_key.clone(),
         revision: current_rev.saturating_sub(1),
         blocks: vec![CodeKey::from_raw(Some("rust"), Arc::from(sentinel_rev))],
     };
 
-    let sentinel_doc = "fn should_be_rejected_doc() {}";
-    let stale_doc_request = SyntaxBatchRequest {
-        doc_key: Some(DocKey::Scratch(999999)),
-        revision: current_rev,
-        blocks: vec![CodeKey::from_raw(Some("rust"), Arc::from(sentinel_doc))],
-    };
-
-    // Genuinely invoke run_syntax_batch with stale requests
     cx.update(|_window, cx| {
         view.update(cx, |this, cx| {
             this.run_syntax_batch(stale_rev_request, cx);
-            this.run_syntax_batch(stale_doc_request, cx);
         });
     });
-
     cx.run_until_parked();
 
-    // Assert that neither sentinel was inserted into the workspace syntax cache
     let cache_contains_rev = cx.update(|_window, cx| {
         let ws = view.read(cx);
         let mut cache = ws.syntax_cache.lock().unwrap();
         let key = CodeKey::from_raw(Some("rust"), Arc::from(sentinel_rev));
         cache.get(&key).is_some()
     });
-    let cache_contains_doc = cx.update(|_window, cx| {
-        let ws = view.read(cx);
-        let mut cache = ws.syntax_cache.lock().unwrap();
-        let key = CodeKey::from_raw(Some("rust"), Arc::from(sentinel_doc));
-        cache.get(&key).is_some()
-    });
     assert!(
         !cache_contains_rev,
-        "Stale revision result must NOT be cached in workspace"
-    );
-    assert!(
-        !cache_contains_doc,
-        "Stale doc result must NOT be cached in workspace"
+        "Old revision completion must be rejected by guard and not pollute cache"
     );
 
-    // Assert that source_code_blocks_rev was NOT rolled back
     let final_code_rev = cx.update(|_window, cx| view.read(cx).source_code_blocks_rev);
     assert_eq!(
         final_code_rev, current_code_rev,
@@ -666,14 +697,227 @@ async fn test_phase_i_cancellation_and_stale_revision_rejection(cx: &mut TestApp
     );
 }
 
-/// Test 13: 35-block cache thrashing and infinite render loop prevention
+/// Test 12c: Cancelled request does not enter cache and does not become permanent Plain
+#[gpui::test]
+async fn test_phase_i_cancellation_does_not_enter_cache_and_not_permanent_plain(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let doc_str = "```rust\nfn cancelled_test() { let x = 1; }\n```\n";
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(doc_str.to_string());
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Source);
+        WorkspaceView::new(state, cx)
+    });
+
+    let cancel_code = "fn to_be_cancelled() { let a = 99; }";
+    let key = CodeKey::from_raw(Some("rust"), Arc::from(cancel_code));
+
+    // Manually run a batch and immediately cancel it
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.syntax_request_counter += 1;
+            let req = SyntaxBatchRequest {
+                request_id: this.syntax_request_counter,
+                doc_key: this.state.active.clone(),
+                revision: this.state.editor.revision,
+                blocks: vec![key.clone()],
+            };
+            this.run_syntax_batch(req, cx);
+            this.syntax_cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+    });
+    cx.run_until_parked();
+
+    // Verify cancelled request did NOT enter cache
+    let (in_cache, state_is_plain) = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        let in_cache = cache.get(&key).is_some();
+        let block_state = ws.syntax_block_states.get(&key).copied();
+        (in_cache, block_state)
+    });
+    assert!(!in_cache, "Cancelled request must NOT enter cache");
+    assert_ne!(state_is_plain, Some(glidemark_app::views::workspace::SyntaxBlockState::HardLimit));
+
+    // Now re-request the same block normally: it must be parsed and admitted with syntax highlighting
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.syntax_request_counter += 1;
+            let req = SyntaxBatchRequest {
+                request_id: this.syntax_request_counter,
+                doc_key: this.state.active.clone(),
+                revision: this.state.editor.revision,
+                blocks: vec![key.clone()],
+            };
+            this.run_syntax_batch(req, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    let cached_spans = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        cache.get(&key)
+    });
+    let spans = cached_spans.expect("Re-requested block must be admitted into cache");
+    assert!(
+        spans.iter().any(|s| s.role == SyntaxRole::Keyword),
+        "Cancelled block re-requested must not become permanent Plain: {:?}",
+        spans
+    );
+}
+
+/// Test 12d: Latest pending request is executed and admitted
+#[gpui::test]
+async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let doc_str = "```rust\nfn initial() {}\n```\n";
+    let (view, cx) = cx.add_window_view(|_window, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(doc_str.to_string());
+        let mut state = AppState::new(doc);
+        state.set_view_mode(ViewMode::Source);
+        WorkspaceView::new(state, cx)
+    });
+
+    let code_first = "fn slow_first() { let x = 1; }";
+    let key_first = CodeKey::from_raw(Some("rust"), Arc::from(code_first));
+    let code_second = "fn latest_second() { let y = 2; }";
+    let key_second = CodeKey::from_raw(Some("rust"), Arc::from(code_second));
+
+    // Launch first batch, then queue second batch while first is active
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.syntax_request_counter += 1;
+            let req1 = SyntaxBatchRequest {
+                request_id: this.syntax_request_counter,
+                doc_key: this.state.active.clone(),
+                revision: this.state.editor.revision,
+                blocks: vec![key_first.clone()],
+            };
+            this.run_syntax_batch(req1, cx);
+
+            // While active, queue second request
+            this.syntax_request_counter += 1;
+            let req2 = SyntaxBatchRequest {
+                request_id: this.syntax_request_counter,
+                doc_key: this.state.active.clone(),
+                revision: this.state.editor.revision,
+                blocks: vec![key_second.clone()],
+            };
+            this.syntax_cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            this.syntax_pending_request = Some(req2);
+        });
+    });
+
+    cx.run_until_parked();
+
+    // Verify latest pending request was executed and admitted
+    let cached_second = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        cache.get(&key_second)
+    });
+    let spans2 = cached_second.expect("Latest pending request must be executed and admitted into cache");
+    assert!(
+        spans2.iter().any(|s| s.role == SyntaxRole::Keyword),
+        "Latest pending request spans must be highlighted: {:?}",
+        spans2
+    );
+}
+
+/// Test 13: 8 / 17 / 33 / 35 small block tests with both sides colored, 1 parse per key, and loop prevention
 #[gpui::test]
 async fn test_phase_i_33_blocks_cache_thrashing_infinite_render_loop(cx: &mut TestAppContext) {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    for &block_count in &[8, 17, 33, 35] {
+        obs::reset();
+        let mut doc_str = String::new();
+        for i in 0..block_count {
+            doc_str.push_str(&format!(
+                "```rust\nfn b_{}() -> usize {{\n    let x = {};\n    x\n}}\n```\n",
+                i, i
+            ));
+        }
+
+        let (view, cx) = cx.add_window_view(|_window, cx| {
+            let mut doc = Document::new_scratch();
+            doc.update_buffer(doc_str);
+            let mut state = AppState::new(doc);
+            state.set_view_mode(ViewMode::Split);
+            WorkspaceView::new(state, cx)
+        });
+
+        // 1. Initial draw & bounded parking (< 2s)
+        let park1_start = std::time::Instant::now();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+        assert!(
+            park1_start.elapsed().as_secs() < 2,
+            "Parking for {} blocks must complete in < 2s without infinite loop",
+            block_count
+        );
+
+        // Subsequent draw with syntax highlights
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        // 2. 1 parse per key: verify cache entries does not exceed block_count (no 2x duplication between editor and preview)
+        cx.update(|_window, cx| {
+            let ws = view.read(cx);
+            let cache = ws.syntax_cache.lock().unwrap();
+            assert!(
+                cache.entries.len() <= block_count,
+                "Cache entries count ({}) must not exceed block_count ({}) - single parse per key",
+                cache.entries.len(),
+                block_count
+            );
+        });
+
+        // 3. Both sides colored check on first visible block
+        let (has_editor_color, has_preview_color) = cx.update(|_window, cx| {
+            let ws = view.read(cx);
+            // Check editor tokens
+            let tokens = obs::editor_tokens(1).unwrap_or_default();
+            let editor_kw = tokens.iter().any(|t| t.kind == MarkdownTokenKind::Keyword && t.text == "fn");
+
+            // Check preview highlights
+            let highlights = obs::last_code_highlights().unwrap_or_default();
+            let preview_kw = highlights.iter().any(|(_, h)| h.color == Some(ws.state.theme.syntax_keyword));
+
+            (editor_kw, preview_kw)
+        });
+        assert!(
+            has_editor_color,
+            "Editor side must have syntax colors for block_count={}",
+            block_count
+        );
+        assert!(
+            has_preview_color,
+            "Preview side must have syntax colors for block_count={}",
+            block_count
+        );
+    }
+}
+
+/// Test 13b: Eviction when exceeding budget / capacity and recovery when scrolled back
+#[gpui::test]
+async fn test_phase_i_small_blocks_eviction_and_scroll_recovery(cx: &mut TestAppContext) {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let mut doc_str = String::new();
     for i in 0..35 {
-        doc_str.push_str(&format!("```rust\nfn block_{}() -> usize {{ {}\n }}\n```\n", i, i));
+        doc_str.push_str(&format!(
+            "```rust\nfn block_{}() -> usize {{\n    let x = {};\n    x\n}}\n```\n",
+            i, i
+        ));
     }
+
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(doc_str);
@@ -682,70 +926,153 @@ async fn test_phase_i_33_blocks_cache_thrashing_infinite_render_loop(cx: &mut Te
         WorkspaceView::new(state, cx)
     });
 
-    // Bounded parking time: must park cleanly in < 2 seconds (not hanging > 60s)
-    let park1_start = std::time::Instant::now();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
     cx.run_until_parked();
-    assert!(
-        park1_start.elapsed().as_secs() < 2,
-        "Source mode initial parking must complete in bounded time (< 2s)"
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let key0 = CodeKey::from_raw(
+        Some("rust"),
+        Arc::from("fn block_0() -> usize {\n    let x = 0;\n    x\n}\n"),
     );
 
-    // Switch to Preview mode
+    // Set cache budget to tightly hold only 5 entries to test eviction
+    let sample_spans = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        let spans = cache.get(&key0).unwrap_or_else(|| Arc::from([]));
+        let entry_heap = glidemark_core::syntax::SyntaxCache::entry_heap_bytes(&key0, &spans);
+        let overhead = glidemark_core::syntax::heap_usable_size(5 * std::mem::size_of::<glidemark_core::syntax::CacheEntry>());
+        cache.max_bytes = overhead + 5 * entry_heap;
+        spans
+    });
+
+    // Insert additional blocks until block 0 is evicted
     cx.update(|_window, cx| {
         view.update(cx, |this, _cx| {
-            this.state.set_view_mode(ViewMode::Preview);
+            let mut cache = this.syntax_cache.lock().unwrap();
+            let retained = std::collections::HashSet::new();
+            for i in 10..20 {
+                let key_i = CodeKey::from_raw(
+                    Some("rust"),
+                    Arc::from(format!(
+                        "fn block_{}() -> usize {{\n    let x = {};\n    x\n}}\n",
+                        i, i
+                    )),
+                );
+                cache.insert(key_i, sample_spans.clone(), &retained);
+            }
         });
     });
 
-    cx.update(|window, cx| {
-        let _ = window.draw(cx);
+    // Verify block 0 was evicted
+    let contains_key0 = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        cache.get(&key0).is_some()
     });
+    assert!(!contains_key0, "Block 0 must be evicted when capacity/budget is exceeded");
 
-    let park2_start = std::time::Instant::now();
-    cx.run_until_parked();
-    assert!(
-        park2_start.elapsed().as_secs() < 2,
-        "Preview mode parking must complete in bounded time (< 2s) without cache thrashing"
-    );
-
-    // Verify window.draw does not trigger perpetual tasks
-    cx.update(|window, cx| {
-        let _ = window.draw(cx);
+    // Scroll back / re-request block 0: verify it recovers!
+    cx.update(|_window, cx| {
+        view.update(cx, |this, cx| {
+            this.syntax_request_counter += 1;
+            let req = SyntaxBatchRequest {
+                request_id: this.syntax_request_counter,
+                doc_key: this.state.active.clone(),
+                revision: this.state.editor.revision,
+                blocks: vec![key0.clone()],
+            };
+            this.run_syntax_batch(req, cx);
+        });
     });
     cx.run_until_parked();
+
+    let recovered_key0 = cx.update(|_window, cx| {
+        let ws = view.read(cx);
+        let mut cache = ws.syntax_cache.lock().unwrap();
+        cache.get(&key0).is_some()
+    });
+    assert!(recovered_key0, "Block 0 must recover when scrolled back / re-requested");
 }
 
-/// Test 14: Cumulative 50ms soft budget without slow-line resets
+/// Test 14: Cumulative 50ms soft budget without slow-line resets (controlled timing tests)
 #[test]
 fn test_phase_i_cumulative_soft_budget_without_resets() {
-    // 1. Fast block parses completely with rich syntax roles
-    let fast_code = "fn fast_func() {\n    let a = 123;\n    let s = \"hello\";\n}\n";
-    let fast_spans = parse_code_spans(fast_code, Some("rust"));
-    assert!(fast_spans.len() > 1);
-    assert!(fast_spans.iter().any(|s| s.role == SyntaxRole::Keyword));
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
-    // 2. Heavy code block: within threshold (<= 64KB, <= 2000 lines, <= 1000 chars/line)
-    // but cumulative parsing across many lines exceeds 50ms soft budget.
-    let mut heavy_code = String::new();
-    // Complex Rust patterns within 64KB limit (< 65,536 bytes) and <= 2000 lines.
-    // 750 lines * ~78 bytes = ~58.5 KB, consistently exceeding the 50ms soft budget (~65-75ms).
-    for i in 0..750 {
-        heavy_code.push_str(&format!(
-            "    let var_{:04} = (0..{}).map(|x| x * 2).filter(|x| x % 3 == 0).collect::<Vec<_>>();\n",
-            i, i % 100
-        ));
-    }
-    assert!(heavy_code.len() <= MAX_CODE_BLOCK_BYTES, "Must be <= 64KB limit, was {}", heavy_code.len());
-    let line_count = heavy_code.lines().count();
-    assert!(line_count <= 2000, "Must be <= 2000 lines, was {}", line_count);
+    // 1. Single line / line 0 timeout returns ParseResult::BudgetExceeded
+    TEST_SIMULATED_ELAPSED_MS.store(60, std::sync::atomic::Ordering::Relaxed);
+    let res0 = parse_code_spans_bounded("let x = 1;\n", Some("rust"), None);
+    assert_eq!(
+        res0,
+        ParseResult::BudgetExceeded,
+        "Single line / line 0 timeout must return ParseResult::BudgetExceeded"
+    );
+    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
 
-    let start = std::time::Instant::now();
-    let spans = parse_code_spans(&heavy_code, Some("rust"));
-    let duration = start.elapsed();
-    eprintln!("Heavy code len: {} bytes, {} lines, parsed in {:?}", heavy_code.len(), line_count, duration);
+    // 2. Multi-line timeout in the middle line returns ParseResult::BudgetExceeded
+    TEST_LINE_HOOK.store(0, std::sync::atomic::Ordering::Relaxed);
+    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    let handle_mid = std::thread::spawn(|| {
+        while TEST_LINE_HOOK.load(std::sync::atomic::Ordering::Relaxed) < 1 {
+            std::hint::spin_loop();
+        }
+        TEST_SIMULATED_ELAPSED_MS.store(60, std::sync::atomic::Ordering::Relaxed);
+    });
+    let code_3 = "let a = 1;\nlet b = 2;\nlet c = 3;\n";
+    let res_mid = parse_code_spans_bounded(code_3, Some("rust"), None);
+    handle_mid.join().unwrap();
+    assert_eq!(
+        res_mid,
+        ParseResult::BudgetExceeded,
+        "Multi-line timeout on middle line must return ParseResult::BudgetExceeded"
+    );
+    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
 
-    // Cumulative budget must fall back completely to Plain
-    assert_eq!(spans.len(), 1, "Cumulative budget exceeded must return exactly 1 span");
-    assert_eq!(spans[0].role, SyntaxRole::Plain);
-    assert_eq!(spans[0].range, 0..heavy_code.len());
+    // 3. Multi-line timeout on the final line returns ParseResult::BudgetExceeded
+    TEST_LINE_HOOK.store(0, std::sync::atomic::Ordering::Relaxed);
+    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    let handle_fin = std::thread::spawn(|| {
+        while TEST_LINE_HOOK.load(std::sync::atomic::Ordering::Relaxed) < 3 {
+            std::hint::spin_loop();
+        }
+        TEST_SIMULATED_ELAPSED_MS.store(60, std::sync::atomic::Ordering::Relaxed);
+    });
+    let res_fin = parse_code_spans_bounded(code_3, Some("rust"), None);
+    handle_fin.join().unwrap();
+    assert_eq!(
+        res_fin,
+        ParseResult::BudgetExceeded,
+        "Multi-line timeout on final line must return ParseResult::BudgetExceeded"
+    );
+    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+
+    // 4. Verify slow line does NOT reset the cumulative timer
+    TEST_LINE_HOOK.store(0, std::sync::atomic::Ordering::Relaxed);
+    TEST_SIMULATED_ELAPSED_MS.store(25, std::sync::atomic::Ordering::Relaxed);
+    let handle_cum = std::thread::spawn(|| {
+        while TEST_LINE_HOOK.load(std::sync::atomic::Ordering::Relaxed) < 1 {
+            std::hint::spin_loop();
+        }
+        TEST_SIMULATED_ELAPSED_MS.store(52, std::sync::atomic::Ordering::Relaxed);
+    });
+    let res_cum = parse_code_spans_bounded(code_3, Some("rust"), None);
+    handle_cum.join().unwrap();
+    assert_eq!(
+        res_cum,
+        ParseResult::BudgetExceeded,
+        "Cumulative budget across slow lines without resets must return ParseResult::BudgetExceeded"
+    );
+    TEST_SIMULATED_ELAPSED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+
+    // 5. Normal fast parsing without simulated delay returns Ready
+    let fast_res = parse_code_spans_bounded(code_3, Some("rust"), None);
+    assert!(
+        fast_res.is_ready(),
+        "Normal fast parsing must return ParseResult::Ready"
+    );
 }

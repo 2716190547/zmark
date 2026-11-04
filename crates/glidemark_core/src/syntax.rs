@@ -6,9 +6,17 @@
 
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "test-observation")]
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
+
+#[cfg(feature = "test-observation")]
+pub static TEST_SIMULATED_ELAPSED_MS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "test-observation")]
+pub static TEST_LINE_HOOK: AtomicUsize = AtomicUsize::new(0);
 
 /// Canonical key identifying a code block's syntax highlighting work.
 ///
@@ -72,6 +80,76 @@ pub struct SyntaxSpan {
     pub role: SyntaxRole,
 }
 
+/// Result of parsing a code block with bounded resources.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseResult {
+    Ready(Arc<[SyntaxSpan]>),
+    BudgetExceeded,
+    Cancelled,
+    HardLimit,
+    UnsupportedLanguage,
+    MappingInvalid,
+    InitFailed,
+}
+
+impl ParseResult {
+    pub fn is_ready(&self) -> bool {
+        matches!(self, ParseResult::Ready(_))
+    }
+
+    pub fn spans(&self) -> Option<&Arc<[SyntaxSpan]>> {
+        match self {
+            ParseResult::Ready(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_spans(&self) -> &[SyntaxSpan] {
+        match self {
+            ParseResult::Ready(s) => s,
+            _ => &[],
+        }
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, SyntaxSpan> {
+        self.as_spans().iter()
+    }
+}
+
+impl std::ops::Deref for ParseResult {
+    type Target = [SyntaxSpan];
+    fn deref(&self) -> &Self::Target {
+        self.as_spans()
+    }
+}
+
+impl<'a> IntoIterator for &'a ParseResult {
+    type Item = &'a SyntaxSpan;
+    type IntoIter = std::slice::Iter<'a, SyntaxSpan>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl From<ParseResult> for Arc<[SyntaxSpan]> {
+    fn from(res: ParseResult) -> Self {
+        match res {
+            ParseResult::Ready(spans) => spans,
+            _ => Arc::from([]),
+        }
+    }
+}
+
+impl From<&ParseResult> for Arc<[SyntaxSpan]> {
+    fn from(res: &ParseResult) -> Self {
+        match res {
+            ParseResult::Ready(spans) => spans.clone(),
+            _ => Arc::from([]),
+        }
+    }
+}
+
 /// Maximum allowed code block payload in bytes (64 KiB).
 pub const MAX_CODE_BLOCK_BYTES: usize = 64 * 1024;
 
@@ -105,21 +183,53 @@ pub fn init_syntax_set() -> &'static SyntaxSet {
         // Pre-compile regexes for canonical syntaxes during initialization so parsing
         // code blocks never incurs one-time onig compilation against their parse budget.
         let warm_samples: &[(&str, &str)] = &[
-            ("XML", "<tag attr=\"val\">text</tag>\n"),
-            ("HTML", "<div class=\"foo\">hello</div>\n"),
-            ("Java", "public static void main(String[] args) {}\n"),
-            ("Python", "def hello(name: str):\n    return f'{name}'\n"),
-            ("JavaScript", "function test() { const x = 42; return x; }\n"),
-            ("JSON", "{\"key\": [123, true, null]}\n"),
-            ("YAML", "key: value\nlist:\n  - item\n"),
-            ("SQL", "SELECT id, name FROM users WHERE id = 1;\n"),
-            ("Bourne Again Shell (bash)", "#!/bin/bash\necho 'hello' && exit 0\n"),
-            ("Rust", "pub fn add(a: i32) -> i32 { a + 1 }\n"),
+            (
+                "XML",
+                "<!-- XML comment -->\n<root id=\"1\">\n  <item attr=\"val\">text</item>\n</root>\n",
+            ),
+            (
+                "HTML",
+                "<!DOCTYPE html>\n<html>\n  <head><title>GlideMark</title></head>\n  <body><p class=\"main\">Hello</p></body>\n</html>\n",
+            ),
+            (
+                "Java",
+                "// Java sample\npublic class Main {\n    public static void main(String[] args) {\n        System.out.println(42);\n    }\n}\n",
+            ),
+            (
+                "Python",
+                "# Python sample\ndef hello(name: str) -> str:\n    \"\"\"Greeting\"\"\"\n    return f'Hello {name}'\n",
+            ),
+            (
+                "JavaScript",
+                "// JS sample\nfunction calc(x) {\n    const mult = 42;\n    return x * mult;\n}\n",
+            ),
+            (
+                "JSON",
+                "{\n  \"name\": \"glidemark\",\n  \"count\": 123,\n  \"enabled\": true\n}\n",
+            ),
+            (
+                "YAML",
+                "# YAML sample\nkey: value\nitems:\n  - name: test\n    value: 1\n",
+            ),
+            (
+                "SQL",
+                "-- SQL query\nSELECT id, name, count(*)\nFROM users\nWHERE active = 1\nGROUP BY id, name;\n",
+            ),
+            (
+                "Bourne Again Shell (bash)",
+                "#!/bin/bash\n# Shell sample\nNAME=\"GlideMark\"\necho \"Running $NAME\"\nexit 0\n",
+            ),
+            (
+                "Rust",
+                "// Rust sample\npub fn add(a: i32, b: i32) -> i32 {\n    let sum = a + b;\n    sum\n}\n",
+            ),
         ];
         for (name, sample) in warm_samples {
             if let Some(syntax) = ss.find_syntax_by_name(name) {
                 let mut state = ParseState::new(syntax);
-                let _ = state.parse_line(sample, &ss);
+                for line in sample.split_inclusive('\n') {
+                    let _ = state.parse_line(line, &ss);
+                }
             }
         }
         ss
@@ -343,7 +453,7 @@ fn fallback_plain(code: &str) -> Vec<SyntaxSpan> {
 ///
 /// Implements:
 /// - Explicit size/threshold validation:
-///   `> 64 KiB`, `> 2000 lines`, or any line `> 1000 unicode scalars` -> returns full Plain.
+///   `> 64 KiB`, `> 2000 lines`, or any line `> 1000 unicode scalars` -> returns `HardLimit`.
 /// - Multi-line state continuity via syntect `ParseState` and `ScopeStack`.
 /// - 50ms soft budget across lines.
 /// - Immediate cooperative cancellation between lines.
@@ -352,44 +462,44 @@ pub fn parse_code_spans_bounded(
     code: &str,
     raw_lang: Option<&str>,
     cancel_flag: Option<&AtomicBool>,
-) -> Vec<SyntaxSpan> {
+) -> ParseResult {
     if code.is_empty() {
-        return Vec::new();
+        return ParseResult::Ready(Arc::from([]));
     }
 
     if cancel_flag.map(|f| f.load(Ordering::Relaxed)).unwrap_or(false) {
-        return fallback_plain(code);
+        return ParseResult::Cancelled;
     }
 
     // Threshold check 1: byte length
     if code.len() > MAX_CODE_BLOCK_BYTES {
-        return fallback_plain(code);
+        return ParseResult::HardLimit;
     }
-
-    // Canonical language resolution
-    let canonical = match resolve_canonical_language(raw_lang) {
-        Some(c) => c,
-        None => return fallback_plain(code),
-    };
-
-    let ss = init_syntax_set();
-    let syntax = match find_syntax_for_canonical(canonical) {
-        Some(s) => s,
-        None => return fallback_plain(code),
-    };
 
     // Pre-check line count and line unicode scalar count
     let mut line_count = 0;
     for line in code.split('\n') {
         let stripped = line.strip_suffix('\r').unwrap_or(line);
         if stripped.chars().count() > MAX_LINE_UNICODE_SCALARS {
-            return fallback_plain(code);
+            return ParseResult::HardLimit;
         }
         line_count += 1;
         if line_count > MAX_CODE_BLOCK_LINES {
-            return fallback_plain(code);
+            return ParseResult::HardLimit;
         }
     }
+
+    // Canonical language resolution
+    let canonical = match resolve_canonical_language(raw_lang) {
+        Some(c) => c,
+        None => return ParseResult::UnsupportedLanguage,
+    };
+
+    let ss = init_syntax_set();
+    let syntax = match find_syntax_for_canonical(canonical) {
+        Some(s) => s,
+        None => return ParseResult::InitFailed,
+    };
 
     let start_time = Instant::now();
     let mut state = ParseState::new(syntax);
@@ -403,12 +513,23 @@ pub fn parse_code_spans_bounded(
     while !remaining.is_empty() {
         // Cancellation check between lines
         if cancel_flag.map(|f| f.load(Ordering::Relaxed)).unwrap_or(false) {
-            return fallback_plain(code);
+            return ParseResult::Cancelled;
         }
 
         // Check cumulative elapsed time before each line
-        if start_time.elapsed().as_millis() as u64 >= PARSE_SOFT_BUDGET_MS {
-            return fallback_plain(code);
+        let test_extra_ms = {
+            #[cfg(feature = "test-observation")]
+            {
+                TEST_SIMULATED_ELAPSED_MS.load(Ordering::Relaxed)
+            }
+            #[cfg(not(feature = "test-observation"))]
+            {
+                0u64
+            }
+        };
+        let elapsed_ms = start_time.elapsed().as_millis() as u64 + test_extra_ms;
+        if elapsed_ms >= PARSE_SOFT_BUDGET_MS {
+            return ParseResult::BudgetExceeded;
         }
 
         let next_newline = remaining.find('\n');
@@ -417,14 +538,30 @@ pub fn parse_code_spans_bounded(
             None => (remaining, ""),
         };
 
+        #[cfg(feature = "test-observation")]
+        {
+            TEST_LINE_HOOK.fetch_add(1, Ordering::Relaxed);
+        }
+
         let ops = match state.parse_line(line_with_end, ss) {
             Ok(ops) => ops,
-            Err(_) => return fallback_plain(code),
+            Err(_) => return ParseResult::InitFailed,
         };
 
         // Check cumulative elapsed time immediately after regex return
-        if start_time.elapsed().as_millis() as u64 >= PARSE_SOFT_BUDGET_MS {
-            return fallback_plain(code);
+        let test_extra_ms = {
+            #[cfg(feature = "test-observation")]
+            {
+                TEST_SIMULATED_ELAPSED_MS.load(Ordering::Relaxed)
+            }
+            #[cfg(not(feature = "test-observation"))]
+            {
+                0u64
+            }
+        };
+        let elapsed_ms = start_time.elapsed().as_millis() as u64 + test_extra_ms;
+        if elapsed_ms >= PARSE_SOFT_BUDGET_MS {
+            return ParseResult::BudgetExceeded;
         }
 
         let mut last_col = 0;
@@ -457,12 +594,30 @@ pub fn parse_code_spans_bounded(
         remaining = next_remaining;
     }
 
-    normalize_and_fill_spans(code, raw_spans)
+    ParseResult::Ready(Arc::from(normalize_and_fill_spans(code, raw_spans)))
 }
 
 /// Parses the code payload into semantic `SyntaxSpan`s using syntect.
 pub fn parse_code_spans(code: &str, raw_lang: Option<&str>) -> Vec<SyntaxSpan> {
-    parse_code_spans_bounded(code, raw_lang, None)
+    match parse_code_spans_bounded(code, raw_lang, None) {
+        ParseResult::Ready(spans) => spans.to_vec(),
+        _ => fallback_plain(code),
+    }
+}
+
+/// Returns the actual usable heap allocation size for a requested size on the current platform.
+pub fn heap_usable_size(size: usize) -> usize {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn malloc_good_size(size: usize) -> usize;
+        }
+        unsafe { malloc_good_size(size) }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        (size + 15) & !15
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -493,12 +648,22 @@ impl SyntaxCache {
         CodeKey::from_raw(raw_lang, Arc::from(code))
     }
 
+    pub fn heap_usable_size(size: usize) -> usize {
+        heap_usable_size(size)
+    }
+
     pub fn entry_heap_bytes(key: &CodeKey, spans: &Arc<[SyntaxSpan]>) -> usize {
-        key.payload.len() + 16 + spans.len() * std::mem::size_of::<SyntaxSpan>() + 16
+        let payload_bytes = heap_usable_size(16 + key.payload.len());
+        let spans_bytes = heap_usable_size(16 + spans.len() * std::mem::size_of::<SyntaxSpan>());
+        payload_bytes + spans_bytes
     }
 
     pub fn current_bytes(&self) -> usize {
-        let container_bytes = self.entries.capacity() * std::mem::size_of::<CacheEntry>();
+        let container_bytes = if self.entries.capacity() == 0 {
+            0
+        } else {
+            heap_usable_size(self.entries.capacity() * std::mem::size_of::<CacheEntry>())
+        };
         let heap_bytes: usize = self
             .entries
             .iter()
@@ -534,7 +699,7 @@ impl SyntaxCache {
         retained_keys: &std::collections::HashSet<CodeKey>,
     ) -> bool {
         let needed_entry_heap = Self::entry_heap_bytes(&key, &spans);
-        let min_entry_size = needed_entry_heap + std::mem::size_of::<CacheEntry>();
+        let min_entry_size = needed_entry_heap + heap_usable_size(std::mem::size_of::<CacheEntry>());
 
         if min_entry_size > self.max_bytes {
             return false;
@@ -543,7 +708,6 @@ impl SyntaxCache {
         // If key already exists, remove it first
         if let Some(pos) = self.entries.iter().position(|e| e.key == key) {
             self.entries.remove(pos);
-            self.entries.shrink_to_fit();
         }
 
         loop {
@@ -553,7 +717,7 @@ impl SyntaxCache {
                 self.entries.capacity()
             };
 
-            let container_bytes = prospective_cap * std::mem::size_of::<CacheEntry>();
+            let container_bytes = heap_usable_size(prospective_cap * std::mem::size_of::<CacheEntry>());
             let current_heap: usize = self
                 .entries
                 .iter()
@@ -575,7 +739,6 @@ impl SyntaxCache {
                 .position(|e| !retained_keys.contains(&e.key))
             {
                 self.entries.remove(evict_idx);
-                self.entries.shrink_to_fit();
             } else {
                 // Cannot evict any more non-retained entries to fit
                 return false;
@@ -774,10 +937,34 @@ mod tests {
     fn test_parse_code_spans_bounded_cancellation() {
         let cancel = AtomicBool::new(true);
         let code = "fn cancel_me() { println!(\"test\"); }";
-        let spans = parse_code_spans_bounded(code, Some("rust"), Some(&cancel));
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].role, SyntaxRole::Plain);
-        assert_eq!(spans[0].range, 0..code.len());
+        let res = parse_code_spans_bounded(code, Some("rust"), Some(&cancel));
+        assert_eq!(res, ParseResult::Cancelled);
+        assert!(!res.is_ready());
+        assert!(res.spans().is_none());
+    }
+
+    #[test]
+    fn test_parse_code_spans_bounded_results() {
+        // Empty
+        assert_eq!(parse_code_spans_bounded("", Some("rust"), None), ParseResult::Ready(Arc::from([])));
+
+        // HardLimit - byte size
+        let huge = "a".repeat(MAX_CODE_BLOCK_BYTES + 1);
+        assert_eq!(parse_code_spans_bounded(&huge, Some("rust"), None), ParseResult::HardLimit);
+
+        // HardLimit - line length
+        let long_line = "a".repeat(MAX_LINE_UNICODE_SCALARS + 1);
+        assert_eq!(parse_code_spans_bounded(&long_line, Some("rust"), None), ParseResult::HardLimit);
+
+        // UnsupportedLanguage
+        assert_eq!(parse_code_spans_bounded("code", Some("unknown_xyz"), None), ParseResult::UnsupportedLanguage);
+        assert_eq!(parse_code_spans_bounded("code", None, None), ParseResult::UnsupportedLanguage);
+
+        // Ready
+        let ready_res = parse_code_spans_bounded("fn test() {}", Some("rust"), None);
+        assert!(ready_res.is_ready());
+        assert!(ready_res.spans().is_some());
+        assert!(!ready_res.is_empty());
     }
 
     #[test]
@@ -794,7 +981,7 @@ mod tests {
 
         let heap_a = SyntaxCache::entry_heap_bytes(&key_a, &sample_spans);
         let heap_b = SyntaxCache::entry_heap_bytes(&key_b, &sample_spans);
-        let entry_cap_bytes = 2 * std::mem::size_of::<CacheEntry>();
+        let entry_cap_bytes = heap_usable_size(2 * std::mem::size_of::<CacheEntry>());
 
         // Set max_bytes to hold exactly 2 entries
         cache.max_bytes = entry_cap_bytes + heap_a + heap_b;
