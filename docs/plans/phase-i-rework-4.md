@@ -185,3 +185,11 @@ Reviewer指出O1—O6，证据 `/private/tmp/glidemark-phase-i-i12-rework4-stage
 证据 `/private/tmp/glidemark-phase-i-i12-rework4-stage-b-fix4-plan-review/REVIEW_REPORT.md`。O3-b选上述A（key级状态+位置级无效集合），O4-b选上述“核对有序Vec/窗格，不一致即按当前快照重评”，覆盖无missing不发请求的晚完成路径；O2已补共享焦点只作阅读偏好、允许短暂陈旧的事实边界。
 
 **O1-b显式刷新同时恢复warm失败态。** `reset_syntax_attempts_and_refresh` 除清用户attempt/失败状态/可见快照，还把失败语言的WarmState重建为Waiting、warm代次重置0，并重启需要的有限warm协调任务；已Ready语言无需重复预热。重启时取消旧warm任务，回调必须核对当前warm任务身份，不能用晚到旧失败覆盖刷新后的状态。用户可再次显式请求，但每次自动预热仍至多两轮、用户块解析仍遵循既有限额。draw/scroll/evict/save/Cmd+S/内部notify不重建warm失败态；切文档保留同Workspace的语言warm状态，仍不能假冒明确刷新。加入“首次warm最终失败→明确刷新后ready并实际着色；保存/滚动不重置”这一最小判别检查。以上仅补齐既有重试入口语义，等待本修订规划签字，不提前派实现。
+
+### 剩余三项接线规划签字与执行许可
+
+Reviewer `w3:p7` 对精确 **d8013ae** 明确“无未解决实质异议，可派执行”，证据 `/private/tmp/glidemark-phase-i-i12-rework4-stage-b-fix5-plan-review/REVIEW_REPORT.md`。O1—O6及后三处定案均关闭，旧产品授权不变，现派实施，不重复用户确认。`reset_syntax_attempts_and_refresh` 可增加 `cx: &mut Context<Self>`，既有listener调用点可直接传入，不为重启warm绕道保存入口。
+
+采纳两条非阻塞补充的最小选择：完成回调中**非当前候选的Ready结果直接丢弃**，不入cache/retained/准入，不为了潜在复用增加账本或状态分支；warm最终失败检查仅在 `test-observation` 下以一个static强制底层校验结果，用现有隔离与Drop恢复，**不替代生产warm调度/重试/通知**。普通构建无该钩子。
+
+执行按上述清单与其就地O1—O6/O1-b修订合并理解，不沿用已替换的旧O4口径。子代理A负责Core语法/预热/单调时钟及i18n生产文件，子代理B负责独立测试文件，主执行端负责App workspace/editor/preview接线与整体整合；先约定最小接口、明确文件所有权，实际并发并记录ID，不能代写另一套算法或把工作全收回主代理。必要中间提交用相关检查，最终候选才全量与明确feature/H门禁、打包验签；本轮不提前实施I3/测试清理或发布最终PR。交付仍须独立终验，即使三项已自测完成，整体Phase I也不称DONE。
