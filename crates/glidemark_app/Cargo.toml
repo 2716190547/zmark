@@ -31,3 +31,13 @@ path = "tests/phase_h_b3_autoscroll_real_events.rs"
 [[test]]
 name = "phase_h_b4_cmd_c_routing"
 path = "tests/phase_h_b4_cmd_c_routing.rs"
+
+[[test]]
+name = "phase_i_syntax_and_warm_palette_test"
+path = "tests/phase_i_syntax_and_warm_palette_test.rs"
+required-features = ["test-observation"]
+
+[[test]]
+name = "rework4_stage_a_workspace_test"
+path = "tests/rework4_stage_a_workspace_test.rs"
+required-features = ["test-observation"]

@@ -1314,31 +1314,41 @@ pub fn render_styled_text_only(
 
 pub mod obs {
     use gpui::{Bounds, HighlightStyle, Pixels};
+    #[cfg(feature = "test-observation")]
     use std::sync::{Mutex, OnceLock};
 
+    #[cfg(feature = "test-observation")]
     type BoundsLog = Mutex<Vec<(String, Bounds<Pixels>)>>;
+    #[cfg(feature = "test-observation")]
     type RangeLog = Mutex<Vec<(String, Option<std::ops::Range<usize>>)>>;
+    #[cfg(feature = "test-observation")]
     type CodeHighlightsLog = Mutex<Vec<(String, Vec<(std::ops::Range<usize>, HighlightStyle)>)>>;
+    #[cfg(feature = "test-observation")]
     type EditorTokensLog = Mutex<Vec<(usize, Vec<crate::views::editor::MarkdownToken>)>>;
 
+    #[cfg(feature = "test-observation")]
     fn bounds_log() -> &'static BoundsLog {
         static L: OnceLock<BoundsLog> = OnceLock::new();
         L.get_or_init(Default::default)
     }
+    #[cfg(feature = "test-observation")]
     fn range_log() -> &'static RangeLog {
         static L: OnceLock<RangeLog> = OnceLock::new();
         L.get_or_init(Default::default)
     }
+    #[cfg(feature = "test-observation")]
     fn code_highlights_log() -> &'static CodeHighlightsLog {
         static L: OnceLock<CodeHighlightsLog> = OnceLock::new();
         L.get_or_init(Default::default)
     }
+    #[cfg(feature = "test-observation")]
     fn editor_tokens_log() -> &'static EditorTokensLog {
         static L: OnceLock<EditorTokensLog> = OnceLock::new();
         L.get_or_init(Default::default)
     }
 
     #[allow(dead_code)]
+    #[cfg(feature = "test-observation")]
     pub fn reset() {
         bounds_log().lock().unwrap().clear();
         range_log().lock().unwrap().clear();
@@ -1346,6 +1356,12 @@ pub mod obs {
         editor_tokens_log().lock().unwrap().clear();
     }
     #[allow(dead_code)]
+    #[cfg(not(feature = "test-observation"))]
+    #[inline(always)]
+    pub fn reset() {}
+
+    #[allow(dead_code)]
+    #[cfg(feature = "test-observation")]
     pub fn text_bounds(key: &str) -> Option<(f32, f32, f32, f32)> {
         bounds_log().lock().unwrap().iter().rev().find(|(k, _)| k == key).map(|(_, b)| {
             (
@@ -1357,35 +1373,99 @@ pub mod obs {
         })
     }
     #[allow(dead_code)]
+    #[cfg(not(feature = "test-observation"))]
+    #[inline(always)]
+    pub fn text_bounds(_key: &str) -> Option<(f32, f32, f32, f32)> {
+        None
+    }
+
+    #[allow(dead_code)]
+    #[cfg(feature = "test-observation")]
     pub fn highlights() -> Vec<(String, Option<std::ops::Range<usize>>)> {
         range_log().lock().unwrap().clone()
     }
     #[allow(dead_code)]
+    #[cfg(not(feature = "test-observation"))]
+    #[inline(always)]
+    pub fn highlights() -> Vec<(String, Option<std::ops::Range<usize>>)> {
+        Vec::new()
+    }
+
+    #[allow(dead_code)]
+    #[cfg(feature = "test-observation")]
     pub fn last_code_highlights() -> Option<Vec<(std::ops::Range<usize>, HighlightStyle)>> {
         code_highlights_log().lock().unwrap().last().map(|(_, h)| h.clone())
     }
     #[allow(dead_code)]
+    #[cfg(not(feature = "test-observation"))]
+    #[inline(always)]
+    pub fn last_code_highlights() -> Option<Vec<(std::ops::Range<usize>, HighlightStyle)>> {
+        None
+    }
+
+    #[allow(dead_code)]
+    #[cfg(feature = "test-observation")]
     pub fn editor_tokens(phys_idx: usize) -> Option<Vec<crate::views::editor::MarkdownToken>> {
         editor_tokens_log().lock().unwrap().iter().rev().find(|(idx, _)| *idx == phys_idx).map(|(_, t)| t.clone())
     }
     #[allow(dead_code)]
+    #[cfg(not(feature = "test-observation"))]
+    #[inline(always)]
+    pub fn editor_tokens(_phys_idx: usize) -> Option<Vec<crate::views::editor::MarkdownToken>> {
+        None
+    }
+
+    #[allow(dead_code)]
+    #[cfg(feature = "test-observation")]
     pub fn last_editor_tokens() -> Option<Vec<crate::views::editor::MarkdownToken>> {
         editor_tokens_log().lock().unwrap().last().map(|(_, t)| t.clone())
     }
     #[allow(dead_code)]
+    #[cfg(not(feature = "test-observation"))]
+    #[inline(always)]
+    pub fn last_editor_tokens() -> Option<Vec<crate::views::editor::MarkdownToken>> {
+        None
+    }
+
+    #[allow(dead_code)]
+    #[cfg(feature = "test-observation")]
     pub(crate) fn log_bounds(key: &str, bounds: Bounds<Pixels>) {
         bounds_log().lock().unwrap().push((key.to_string(), bounds));
     }
     #[allow(dead_code)]
+    #[cfg(not(feature = "test-observation"))]
+    #[inline(always)]
+    pub(crate) fn log_bounds(_key: &str, _bounds: Bounds<Pixels>) {}
+
+    #[allow(dead_code)]
+    #[cfg(feature = "test-observation")]
     pub(crate) fn log_highlight(text: &str, range: &Option<std::ops::Range<usize>>) {
         range_log().lock().unwrap().push((text.to_string(), range.clone()));
     }
+    #[allow(dead_code)]
+    #[cfg(not(feature = "test-observation"))]
+    #[inline(always)]
+    pub(crate) fn log_highlight(_text: &str, _range: &Option<std::ops::Range<usize>>) {}
+
+    #[allow(dead_code)]
+    #[cfg(feature = "test-observation")]
     pub(crate) fn log_code_highlights(code: &str, highlights: &[(std::ops::Range<usize>, HighlightStyle)]) {
         code_highlights_log().lock().unwrap().push((code.to_string(), highlights.to_vec()));
     }
+    #[allow(dead_code)]
+    #[cfg(not(feature = "test-observation"))]
+    #[inline(always)]
+    pub(crate) fn log_code_highlights(_code: &str, _highlights: &[(std::ops::Range<usize>, HighlightStyle)]) {}
+
+    #[allow(dead_code)]
+    #[cfg(feature = "test-observation")]
     pub(crate) fn log_editor_tokens(phys_idx: usize, tokens: &[crate::views::editor::MarkdownToken]) {
         editor_tokens_log().lock().unwrap().push((phys_idx, tokens.to_vec()));
     }
+    #[allow(dead_code)]
+    #[cfg(not(feature = "test-observation"))]
+    #[inline(always)]
+    pub(crate) fn log_editor_tokens(_phys_idx: usize, _tokens: &[crate::views::editor::MarkdownToken]) {}
 }
 
 pub const MAX_DIAGRAM_CACHE: usize = 64;
@@ -1908,6 +1988,7 @@ fn render_code_block(
         syntax_highlights
     };
 
+    #[cfg(feature = "test-observation")]
     obs::log_code_highlights(&code_text, &highlights);
 
     let styled_text = if highlights.is_empty() {

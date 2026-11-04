@@ -1276,6 +1276,7 @@ pub fn render_editor_pane(
                                 on_click_line(vis_idx, rel_col, window, cx);
                             });
 
+                        #[cfg(feature = "test-observation")]
                         crate::views::preview::obs::log_editor_tokens(phys_idx, &tokens);
 
                         let styled_row = if is_active_subline {
