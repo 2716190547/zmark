@@ -516,7 +516,7 @@ pub fn hit_test_char_offset_in_block(
             block_text,
             f32::from(local_x),
             f32::from(local_y),
-            "ui-sans-serif, system-ui",
+            crate::platform::UI_FONT,
             base_font_size,
             1.75,
             Some(f32::from(block_bounds.size.width)),
@@ -841,7 +841,7 @@ pub fn render_preview_pane_with_callbacks(
                 .border_1()
                 .border_color(theme.border)
                 .text_size(px(10.))
-                .font_family("ui-sans-serif, system-ui")
+                .font_family(crate::platform::UI_FONT)
                 .text_color(theme.text_muted)
                 .id("preview_syntax_failure_badge")
                 .debug_selector(|| "preview_syntax_failure_badge".into())
@@ -941,7 +941,7 @@ fn render_block_element(
                 TextRegionInfo {
                     block_ix,
                     text: content.plain_text(),
-                    font_name: "ui-sans-serif, system-ui",
+                    font_name: crate::platform::UI_FONT,
                     font_size,
                     line_height_factor: 1.75,
                     padding_left: 0.0,
@@ -984,7 +984,7 @@ fn render_block_element(
                 TextRegionInfo {
                     block_ix,
                     text: content.plain_text(),
-                    font_name: "ui-sans-serif, system-ui",
+                    font_name: crate::platform::UI_FONT,
                     font_size: base_font_size,
                     line_height_factor: 1.75,
                     padding_left: 0.0,
@@ -1125,7 +1125,7 @@ fn render_block_element(
                         TextRegionInfo {
                             block_ix,
                             text: text.clone(),
-                            font_name: "ui-sans-serif, system-ui",
+                            font_name: crate::platform::UI_FONT,
                             font_size: base_font_size * 0.95,
                             line_height_factor: 1.75,
                             padding_left: 12.0,
@@ -1170,7 +1170,7 @@ fn render_block_element(
                             TextRegionInfo {
                                 block_ix,
                                 text: text.clone(),
-                                font_name: "ui-sans-serif, system-ui",
+                                font_name: crate::platform::UI_FONT,
                                 font_size: base_font_size * 0.95,
                                 line_height_factor: 1.75,
                                 padding_left: 12.0,
@@ -1755,7 +1755,7 @@ fn render_mermaid_diagram(
                 .child(
                     div()
                         .text_xs()
-                        .font_family("ui-monospace")
+                        .font_family(crate::platform::MONO_FONT)
                         .text_color(theme.text_muted)
                         .child(err),
                 )
@@ -1779,7 +1779,7 @@ impl Render for CodeTooltipView {
             .border_color(rgba(0x3f3f4640))
             .text_size(px(11.))
             .text_color(rgb(0xf4f4f5))
-            .font_family("ui-sans-serif, system-ui")
+            .font_family(crate::platform::UI_FONT)
             .shadow_md()
             .child(self.text.clone())
     }
@@ -1835,7 +1835,7 @@ fn render_list_element(
                 .w(px(20.))
                 .text_right()
                 .text_size(px(base_font_size))
-                .font_family("ui-monospace")
+                .font_family(crate::platform::MONO_FONT)
                 .text_color(theme.syntax_bullet)
                 .child(format!("{}.", idx + 1))
         } else {
@@ -1888,7 +1888,7 @@ fn render_list_element(
                             TextRegionInfo {
                                 block_ix,
                                 text: content_text,
-                                font_name: "ui-sans-serif, system-ui",
+                                font_name: crate::platform::UI_FONT,
                                 font_size: base_font_size,
                                 line_height_factor: 1.6,
                                 padding_left: 0.0,
@@ -2110,7 +2110,7 @@ fn render_code_block(
         .min_w(px(0.))
         .p_3()
         .text_size(px(code_font_size))
-        .font_family("ui-monospace")
+        .font_family(crate::platform::MONO_FONT)
         .line_height(relative(1.75))
         .text_color(theme.syntax_code)
         .child(styled_text);
@@ -2126,7 +2126,7 @@ fn render_code_block(
         TextRegionInfo {
             block_ix,
             text: code.to_string(),
-            font_name: "ui-monospace",
+            font_name: crate::platform::MONO_FONT,
             font_size: code_font_size,
             line_height_factor: 1.75,
             padding_left: 12.0,

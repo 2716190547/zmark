@@ -890,7 +890,7 @@ fn render_shortcut_row(
                 .rounded(px(4.))
                 .bg(theme.selection_bg())
                 .text_xs()
-                .font_family("ui-monospace, monospace")
+                .font_family(crate::platform::MONO_FONT)
                 .text_color(theme.text_primary)
                 .child(keys_str),
         )

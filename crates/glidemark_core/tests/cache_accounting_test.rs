@@ -10,8 +10,29 @@ use std::sync::Arc;
 // Counting Allocator for Cache Accounting Test
 // -----------------------------------------------------------------------------
 
-extern "C" {
-    fn malloc_size(ptr: *const std::ffi::c_void) -> usize;
+/// Platform allocation-size query, so this budget check compiles on every desktop target.
+#[cfg(target_os = "macos")]
+fn usable_size(ptr: *const std::ffi::c_void) -> usize {
+    extern "C" {
+        fn malloc_size(ptr: *const std::ffi::c_void) -> usize;
+    }
+    unsafe { malloc_size(ptr) }
+}
+
+#[cfg(target_os = "linux")]
+fn usable_size(ptr: *const std::ffi::c_void) -> usize {
+    extern "C" {
+        fn malloc_usable_size(ptr: *mut std::ffi::c_void) -> usize;
+    }
+    unsafe { malloc_usable_size(ptr as *mut _) }
+}
+
+#[cfg(target_os = "windows")]
+fn usable_size(ptr: *const std::ffi::c_void) -> usize {
+    extern "C" {
+        fn _msize(ptr: *mut std::ffi::c_void) -> usize;
+    }
+    unsafe { _msize(ptr as *mut _) }
 }
 
 struct CountingAlloc;
@@ -22,7 +43,7 @@ unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = System.alloc(layout);
         if !ptr.is_null() {
-            let sz = unsafe { malloc_size(ptr as *const _) };
+            let sz = usable_size(ptr as *const _);
             ALLOCATED.fetch_add(sz, Ordering::SeqCst);
         }
         ptr
@@ -30,17 +51,17 @@ unsafe impl GlobalAlloc for CountingAlloc {
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         if !ptr.is_null() {
-            let sz = unsafe { malloc_size(ptr as *const _) };
+            let sz = usable_size(ptr as *const _);
             ALLOCATED.fetch_sub(sz, Ordering::SeqCst);
         }
         System.dealloc(ptr, layout);
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let old_sz = if ptr.is_null() { 0 } else { unsafe { malloc_size(ptr as *const _) } };
+        let old_sz = if ptr.is_null() { 0 } else { usable_size(ptr as *const _) };
         let new_ptr = System.realloc(ptr, layout, new_size);
         if !new_ptr.is_null() {
-            let new_sz = unsafe { malloc_size(new_ptr as *const _) };
+            let new_sz = usable_size(new_ptr as *const _);
             ALLOCATED.fetch_add(new_sz, Ordering::SeqCst);
             ALLOCATED.fetch_sub(old_sz, Ordering::SeqCst);
         }

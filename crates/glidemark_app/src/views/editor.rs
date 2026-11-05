@@ -429,7 +429,7 @@ pub const EDITOR_GUTTER_MARGIN_RIGHT: f32 = 6.0;
 pub fn editor_gutter_width(text_system: &gpui::WindowTextSystem, line_count: usize, font_size: f32) -> f32 {
     let digits = line_count.max(1).to_string().len();
     let text = "8".repeat(digits);
-    let run = gpui::TextRun { len: text.len(), font: gpui::font("ui-monospace"), color: gpui::black(), background_color: None, underline: None, strikethrough: None };
+    let run = gpui::TextRun { len: text.len(), font: gpui::font(crate::platform::MONO_FONT), color: gpui::black(), background_color: None, underline: None, strikethrough: None };
     f32::from(text_system.shape_line(text.into(), gpui::px(font_size * 0.85), &[run], None).width).ceil() + 2.0
 }
 
@@ -470,7 +470,7 @@ pub fn calculate_cursor_x_offset_tokens(
         return 0.0;
     }
 
-    let font = gpui::font("ui-monospace");
+    let font = gpui::font(crate::platform::MONO_FONT);
     let font_size_px = gpui::px(font_size);
     let mut curr_char_idx = 0;
     let mut curr_x = 0.0;
@@ -558,7 +558,7 @@ pub fn calculate_click_char_col_tokens(
         return 0;
     }
 
-    let font = gpui::font("ui-monospace");
+    let font = gpui::font(crate::platform::MONO_FONT);
     let font_size_px = gpui::px(font_size);
     let mut curr_char_idx = 0;
     let mut curr_x = 0.0;
@@ -628,7 +628,7 @@ pub fn compute_char_pixel_widths(
     tokens: &[MarkdownToken],
     font_size: f32,
 ) -> Vec<f32> {
-    let font = gpui::font("ui-monospace");
+    let font = gpui::font(crate::platform::MONO_FONT);
     let font_size_px = gpui::px(font_size);
     let mut widths = Vec::new();
 
@@ -1336,7 +1336,7 @@ pub fn render_editor_pane(
                             .relative()
                             .text_size(px(font_size))
                             .line_height(relative(sanitized_lh))
-                            .font_family("ui-monospace")
+                            .font_family(crate::platform::MONO_FONT)
                             .flex()
                             .items_center()
                             .children(tokens.into_iter().map(|tok| {
@@ -1365,7 +1365,7 @@ pub fn render_editor_pane(
                                     .text_right()
                                     .text_size(px(font_size * 0.85))
                                     .line_height(relative(sanitized_lh))
-                                    .font_family("ui-monospace")
+                                    .font_family(crate::platform::MONO_FONT)
                                     .text_color(if is_active_subline { list_theme.accent } else { list_theme.text_muted.opacity(0.8) })
                                     .child(gutter_text),
                             )
@@ -1416,7 +1416,7 @@ pub fn render_editor_pane(
                             .border_1()
                             .border_color(theme.border)
                             .text_size(px(10.))
-                            .font_family("ui-sans-serif, system-ui")
+                            .font_family(crate::platform::UI_FONT)
                             .text_color(theme.text_muted)
                             .tooltip(move |_window, cx| {
                                 let t = tooltip_text.clone();
@@ -1440,7 +1440,7 @@ pub fn render_editor_pane(
                         .border_1()
                         .border_color(theme.border)
                         .text_size(px(10.))
-                        .font_family("ui-sans-serif, system-ui")
+                        .font_family(crate::platform::UI_FONT)
                         .text_color(theme.text_muted)
                         .when(is_dirty, |el| {
                             el.child(div().w(px(5.)).h(px(5.)).rounded_full().bg(theme.accent))

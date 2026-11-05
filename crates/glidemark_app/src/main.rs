@@ -6,6 +6,7 @@ mod actions;
 mod assets;
 mod editor_engine;
 mod local_images;
+mod platform;
 mod state;
 mod theme;
 mod views;

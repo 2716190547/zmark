@@ -333,7 +333,7 @@ pub fn render_lightbox(
                         .gap_2()
                         .text_xs()
                         .text_color(rgb(0xf4f4f5))
-                        .font_family("ui-sans-serif, system-ui")
+                        .font_family(crate::platform::UI_FONT)
                         .on_mouse_down(MouseButton::Left, |_event, _window, _app| {}) // Stop propagation
                         // [ - ] Zoom out
                         .child(
@@ -461,7 +461,7 @@ impl Render for HudTooltipView {
             .border_color(rgba(0x3f3f4640))
             .text_size(px(11.))
             .text_color(rgb(0xf4f4f5))
-            .font_family("ui-sans-serif, system-ui")
+            .font_family(crate::platform::UI_FONT)
             .shadow_md()
             .child(self.text.clone())
     }

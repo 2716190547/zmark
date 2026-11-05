@@ -1858,7 +1858,7 @@ impl WorkspaceView {
         let header_pl = px(calculate_title_header_padding(is_macos, is_fullscreen, drawer_open, view_mode, viewport_w, col_w, self.editor_text_start_offset(window)));
 
         // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
-        let header_pr = if !is_macos { px(138.) } else { px(12.) };
+        let header_pr = px(crate::platform::TRAILING_WINDOW_CONTROL_INSET);
 
         let active_key = self.state.active.clone();
         let (title_text, tooltip_text) = if active_key.is_some() {
@@ -3592,7 +3592,7 @@ impl Render for TooltipView {
             .border_color(rgba(0x3f3f4640))
             .text_size(px(11.))
             .text_color(rgb(0xf4f4f5))
-            .font_family("ui-sans-serif, system-ui")
+            .font_family(crate::platform::UI_FONT)
             .shadow_md()
             .child(self.text.clone())
     }
@@ -3679,7 +3679,7 @@ pub fn adaptive_header_padding(is_macos: bool, is_fullscreen: bool, drawer_open:
     } else if is_fullscreen {
         12.0
     } else {
-        76.0
+        crate::platform::LEADING_WINDOW_CONTROL_INSET
     }
 }
 
