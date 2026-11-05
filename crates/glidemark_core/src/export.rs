@@ -147,7 +147,7 @@ fn render_inline_group(group: &InlineGroup, out: &mut String) {
                 out.push_str(&escape_html(text));
                 out.push_str("</a>");
             }
-            InlineItem::Image { alt, url, title } => {
+            InlineItem::Image { alt, url, title, .. } => {
                 out.push_str(&format!(
                     "<img src=\"{}\" alt=\"{}\"",
                     escape_html(url),

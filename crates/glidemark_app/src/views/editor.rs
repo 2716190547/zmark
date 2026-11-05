@@ -421,10 +421,18 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
 pub const DRAWER_WIDTH: f32 = 250.0;
 pub const EDITOR_CONTAINER_PADDING_X: f32 = 16.0; // uniform_list p_4
 pub const EDITOR_ROW_PADDING_X: f32 = 4.0;        // row px_1
-pub const EDITOR_GUTTER_WIDTH: f32 = 36.0;        // gutter w(px(36.))
-pub const EDITOR_GUTTER_MARGIN_RIGHT: f32 = 12.0; // gutter mr_3
-pub const EDITOR_TEXT_START_OFFSET: f32 =
-    EDITOR_CONTAINER_PADDING_X + EDITOR_ROW_PADDING_X + EDITOR_GUTTER_WIDTH + EDITOR_GUTTER_MARGIN_RIGHT; // 68.0px
+pub const EDITOR_GUTTER_MARGIN_RIGHT: f32 = 6.0;
+
+pub fn editor_gutter_width(text_system: &gpui::WindowTextSystem, line_count: usize, font_size: f32) -> f32 {
+    let digits = line_count.max(1).to_string().len();
+    let text = "8".repeat(digits);
+    let run = gpui::TextRun { len: text.len(), font: gpui::font("ui-monospace"), color: gpui::black(), background_color: None, underline: None, strikethrough: None };
+    f32::from(text_system.shape_line(text.into(), gpui::px(font_size * 0.85), &[run], None).width).ceil() + 2.0
+}
+
+pub fn editor_text_start_offset(gutter_width: f32) -> f32 {
+    EDITOR_CONTAINER_PADDING_X + EDITOR_ROW_PADDING_X + gutter_width + EDITOR_GUTTER_MARGIN_RIGHT
+}
 
 pub fn char_index_to_byte_offset(s: &str, char_idx: usize) -> usize {
     s.char_indices()
@@ -1055,8 +1063,8 @@ pub fn calculate_click_char_col(subline_str: &str, x_offset: f32, font_size: f32
     subline_str.chars().count()
 }
 
-pub fn calculate_editor_left_offset(drawer_open: bool, _split_preview_left_offset: f32) -> f32 {
-    (if drawer_open { DRAWER_WIDTH } else { 0.0 }) + EDITOR_TEXT_START_OFFSET
+pub fn calculate_editor_left_offset(drawer_open: bool, text_start: f32) -> f32 {
+    (if drawer_open { DRAWER_WIDTH } else { 0.0 }) + text_start
 }
 
 pub fn slice_tokens_for_visual_subline(
@@ -1121,6 +1129,7 @@ pub fn render_editor_pane(
     is_dirty: bool,
     scroll_handle: &UniformListScrollHandle,
     editor_left_offset: f32,
+    gutter_width: f32,
     on_click_line: Arc<dyn Fn(usize, usize, &mut Window, &mut App)>,
     failures: &[crate::views::workspace::VisibleSyntaxFailure],
 ) -> impl IntoElement {
@@ -1319,6 +1328,7 @@ pub fn render_editor_pane(
                         };
 
                         let mut text_container = div()
+                            .debug_selector(|| format!("editor_text_{phys_idx}"))
                             .flex_1()
                             .relative()
                             .text_size(px(font_size))
@@ -1345,14 +1355,15 @@ pub fn render_editor_pane(
                         styled_row
                             .child(
                                 div()
-                                    .w(px(36.))
+                                    .debug_selector(|| format!("editor_gutter_{phys_idx}"))
+                                    .w(px(gutter_width))
                                     .flex_shrink_0()
-                                    .mr_3()
+                                    .mr(px(EDITOR_GUTTER_MARGIN_RIGHT))
                                     .text_right()
                                     .text_size(px(font_size * 0.85))
                                     .line_height(relative(sanitized_lh))
                                     .font_family("ui-monospace")
-                                    .text_color(if is_active_subline { list_theme.accent } else { list_theme.text_muted })
+                                    .text_color(if is_active_subline { list_theme.accent } else { list_theme.text_muted.opacity(0.8) })
                                     .child(gutter_text),
                             )
                             .child(text_container.into_any_element())

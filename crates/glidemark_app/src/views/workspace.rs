@@ -1,5 +1,6 @@
 use gpui::prelude::*;
 use gpui::*;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -43,13 +44,21 @@ pub struct WorkspaceView {
     pub focus_handle: FocusHandle,
     pub editor_scroll_handle: UniformListScrollHandle,
     pub preview_list: ListState,
+    pub preview_scroll_focus: FocusHandle,
+    pub preview_scroll_bounds: Option<Bounds<Pixels>>,
+    pub preview_scroll_drag: Option<(Bounds<Pixels>, usize, f32, f32, f32)>,
+    pub preview_scroll_activation_observed: bool,
+    pub preview_scroll_end_pending: bool,
+    preview_scroll_pending_seek: Option<(usize, f32)>,
+    preview_scroll_seek_generation: u64,
     pub drawer_scroll_handle: ScrollHandle,
     pub split_ratio: f32,
     pub is_resizing_split: bool,
     pub is_renaming: bool,
     pub rename_buffer: String,
     pub workspace_width: f32,
-    pub auto_save_task: Option<Task<()>>,
+    auto_save_tasks: HashMap<crate::state::DocKey, (u64, Task<()>)>,
+    next_auto_save_id: u64,
     pub parse_task: Option<Task<()>>,
     pub parse_paused: bool,
     pub drawer_closing: bool,
@@ -90,6 +99,7 @@ pub struct WorkspaceView {
     pub syntax_warm_states: std::collections::HashMap<&'static str, WarmState>,
     pub syntax_warm_task_id: u64,
     pub syntax_warm_task: Option<gpui::Task<()>>,
+    pub syntax_warm_pending: bool,
     pub syntax_invalid_positions: std::collections::HashSet<(glidemark_core::syntax::CodeKey, usize)>,
     pub current_reading_pane: Option<PaneKind>,
     pub last_reading_pane: Option<PaneKind>,
@@ -140,7 +150,7 @@ impl WorkspaceView {
             px(600.),
         );
         let search_focus = cx.focus_handle();
-        let view_search = cx.entity().clone();
+        let view_search = cx.entity().downgrade();
         let search_placeholder = state.strings.search_placeholder;
         let search_input = cx.new(|_| {
             let view = view_search.clone();
@@ -159,6 +169,13 @@ impl WorkspaceView {
         let mut view = Self {
             state,
             focus_handle: cx.focus_handle(),
+            preview_scroll_focus: cx.focus_handle().tab_stop(true),
+            preview_scroll_bounds: None,
+            preview_scroll_drag: None,
+            preview_scroll_activation_observed: false,
+            preview_scroll_end_pending: false,
+            preview_scroll_pending_seek: None,
+            preview_scroll_seek_generation: 0,
             editor_scroll_handle: UniformListScrollHandle::new(),
             preview_list,
             drawer_scroll_handle: ScrollHandle::new(),
@@ -167,7 +184,8 @@ impl WorkspaceView {
             is_renaming: false,
             rename_buffer: String::new(),
             workspace_width: 1200.0,
-            auto_save_task: None,
+            auto_save_tasks: HashMap::new(),
+            next_auto_save_id: 0,
             parse_task: None,
             parse_paused: false,
             drawer_closing: false,
@@ -214,6 +232,7 @@ impl WorkspaceView {
             },
             syntax_warm_task_id: 0,
             syntax_warm_task: None,
+            syntax_warm_pending: false,
             syntax_invalid_positions: std::collections::HashSet::new(),
             current_reading_pane: None,
             last_reading_pane: None,
@@ -244,6 +263,8 @@ impl WorkspaceView {
 
     /// Swaps in a new document: the preview list drops cached heights and starts at the top.
     pub fn reset_preview_list(&mut self) {
+        self.cancel_pending_preview_seek();
+        self.end_preview_scroll_drag();
         self.preview_selection = None;
         self.is_preview_selecting = false;
         self.preview_focused = false;
@@ -290,8 +311,12 @@ impl WorkspaceView {
         let Some((generation, url, document)) = next else { return; };
         self.local_image_task = Some(cx.spawn(async move |this, app| {
             let load_url = url.clone();
-            let mut result = app.background_executor().spawn(async move {
-                crate::local_images::load_image(&load_url, document.as_deref())
+            let (mut result, candidates) = app.background_executor().spawn(async move {
+                let result = crate::local_images::load_image(&load_url, document.as_deref());
+                let candidates = if result.is_err() && crate::local_images::is_windows_absolute_image(&load_url) {
+                    Some(crate::local_images::image_recovery_candidates(&load_url, document.as_deref()))
+                } else { None };
+                (result, candidates)
             }).await;
             // Await GPUI's own resource decode before starting another image. This
             // preserves its color channel path and validates the actual bitmap.
@@ -332,20 +357,27 @@ impl WorkspaceView {
                 let changed = {
                     let mut images = view.local_images.lock().unwrap();
                     let changed = images.complete(generation, url.clone(), result);
+                    if changed {
+                        if let (Some(candidates), Some(crate::local_images::ImageState::Failed(_))) = (candidates, images.entries.get(&url)) {
+                            images.entries.insert(url.clone(), crate::local_images::ImageState::RecoveryCandidates(candidates));
+                        }
+                    }
                     if let Some(image) = images.loading.take() {
                         let retained = matches!(images.entries.get(&url), Some(crate::local_images::ImageState::Ready(i)) if Arc::ptr_eq(i, &image));
                         if !retained { images.retired.push(image); }
                     }
                     changed || !images.retired.is_empty()
                 };
-                if changed { cx.notify(); }
+                if changed { view.end_preview_scroll_drag(); cx.notify(); }
                 view.process_local_images(cx);
             });
         }));
     }
 
     /// Re-measures the preview after an edit, keeping the current scroll position.
-    pub fn invalidate_preview_list(&self) {
+    pub fn invalidate_preview_list(&mut self) {
+        self.cancel_pending_preview_seek();
+        self.end_preview_scroll_drag();
         let count = self.state.doc.parsed.blocks.len();
         let top = self.preview_list.logical_scroll_top();
         if count != self.preview_list.item_count() {
@@ -367,7 +399,10 @@ impl WorkspaceView {
             self.parse_task = Some(cx.spawn(async move |this, app| {
                 app.background_executor().timer(delay).await;
                 let _ = this.update(app, |this, cx| {
-                    this.state.parse_now();
+                    if this.state.parse_now() {
+                        this.syntax_warm_pending = false;
+                        this.start_warm_coordination_task(cx);
+                    }
                     this.invalidate_preview_list();
                     if this.state.view_mode == ViewMode::Split {
                         this.align_preview_to_cursor();
@@ -388,6 +423,7 @@ impl WorkspaceView {
         self.search_focused = false;
         self.state.sync_from_editor();
         if self.state.parse_now() {
+            self.syntax_warm_pending = true;
             self.invalidate_preview_list();
             if self.state.view_mode == ViewMode::Split {
                 self.align_preview_to_cursor();
@@ -407,8 +443,8 @@ impl WorkspaceView {
                 *state = WarmState::Waiting;
             }
         }
-        self.start_warm_coordination_task(cx);
         self.parse_now_and_refresh();
+        self.start_warm_coordination_task(cx);
         self.process_visible_syntax_defer(cx);
         cx.notify();
     }
@@ -417,7 +453,11 @@ impl WorkspaceView {
         self.syntax_warm_task_id += 1;
         let task_id = self.syntax_warm_task_id;
         self.syntax_warm_task = Some(cx.spawn(async move |this, app| {
+            let languages = this.read_with(app, |this, _| {
+                this.state.doc.parsed.code_blocks.iter().filter_map(|block| block.key.language).collect::<std::collections::HashSet<_>>()
+            }).unwrap_or_default();
             for &lang in &glidemark_core::syntax::SUPPORTED_CANONICAL_LANGUAGES {
+                if !languages.contains(lang) { continue; }
                 let should_run = this.read_with(app, |this, _cx| {
                     if task_id != this.syntax_warm_task_id {
                         return false;
@@ -568,6 +608,8 @@ impl WorkspaceView {
 
     /// Aligns preview virtual list position to current editor cursor block.
     pub fn align_preview_to_cursor(&mut self) {
+        self.cancel_pending_preview_seek();
+        self.end_preview_scroll_drag();
         if self.state.doc.is_parse_stale() || self.state.doc.parsed.anchors.is_empty() {
             return;
         }
@@ -580,13 +622,18 @@ impl WorkspaceView {
         });
     }
 
+    fn editor_text_start_offset(&self, window: &Window) -> f32 {
+        let gutter = crate::views::editor::editor_gutter_width(window.text_system(), self.state.editor.lines.len(), self.state.preferences.font_size);
+        crate::views::editor::editor_text_start_offset(gutter)
+    }
+
     pub fn compute_editor_max_width_px(&self, window: &Window) -> f32 {
         let drawer_w = if self.state.drawer_open { px(crate::views::editor::DRAWER_WIDTH) } else { px(0.) };
         let available_w = match self.state.view_mode {
             ViewMode::Split => (window.viewport_size().width - drawer_w) * self.split_ratio,
             _ => window.viewport_size().width - drawer_w,
         };
-        (f32::from(available_w) - crate::views::editor::EDITOR_TEXT_START_OFFSET).max(100.0)
+        (f32::from(available_w) - self.editor_text_start_offset(window)).max(100.0)
     }
 
     pub fn compute_fenced_lines(&self, line_count: usize) -> Vec<bool> {
@@ -972,6 +1019,8 @@ impl WorkspaceView {
 
     /// Synchronizes editor wheel scrolling to the preview pane with 100ms echo suppression.
     pub fn handle_editor_scroll_wheel(&mut self, _event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_pending_preview_seek();
+        self.end_preview_scroll_drag();
         if self.state.view_mode != ViewMode::Split || self.state.doc.is_parse_stale() || self.state.doc.parsed.anchors.is_empty() {
             return;
         }
@@ -1014,6 +1063,12 @@ impl WorkspaceView {
 
     /// Synchronizes preview wheel scrolling to the editor pane with 100ms echo suppression.
     pub fn handle_preview_scroll_wheel(&mut self, _event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_pending_preview_seek();
+        self.end_preview_scroll_drag();
+        self.sync_preview_scroll(window, cx);
+    }
+
+    fn sync_preview_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.state.view_mode != ViewMode::Split || self.state.doc.is_parse_stale() || self.state.doc.parsed.anchors.is_empty() {
             return;
         }
@@ -1041,6 +1096,146 @@ impl WorkspaceView {
             ScrollStrategy::Top,
         );
         cx.notify();
+    }
+
+    fn end_preview_scroll_drag(&mut self) {
+        if self.preview_scroll_drag.take().is_some() {
+            self.preview_list.scrollbar_drag_ended();
+        }
+    }
+
+    fn cancel_pending_preview_seek(&mut self) {
+        self.preview_scroll_seek_generation = self.preview_scroll_seek_generation.wrapping_add(1);
+        self.preview_scroll_end_pending = false;
+        self.preview_scroll_pending_seek = None;
+    }
+
+    fn preview_scroll_to_ratio(&mut self, ratio: f32, count: usize, single_max: f32, window: &mut Window, cx: &mut Context<Self>) {
+        if count == 0 { return; }
+        let ratio = ratio.clamp(0.0, 1.0);
+        self.cancel_pending_preview_seek();
+        if count == 1 {
+            self.preview_list.scroll_to(ListOffset { item_ix: 0, offset_in_item: px(single_max * ratio) });
+        } else if ratio >= 1.0 {
+            self.preview_scroll_end_pending = true;
+            self.preview_list.scroll_to(ListOffset { item_ix: count - 1, offset_in_item: px(0.) });
+        } else {
+            let scaled = ratio * count as f32;
+            let item_ix = (scaled.floor() as usize).min(count - 1);
+            let local = scaled - item_ix as f32;
+            let item_height = self.preview_list.bounds_for_item(item_ix).map(|b| f32::from(b.size.height)).unwrap_or(0.0);
+            self.preview_list.scroll_to(ListOffset { item_ix, offset_in_item: px(local * item_height) });
+            if local > 0.0 && item_height <= 0.0 {
+                self.preview_scroll_pending_seek = Some((item_ix, local));
+            }
+        }
+        self.last_scroll_origin = None;
+        self.sync_preview_scroll(window, cx);
+        cx.notify();
+    }
+
+    fn render_preview_scrollbar(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> AnyElement {
+        let count = self.state.doc.parsed.blocks.len();
+        if self.preview_scroll_end_pending || self.preview_scroll_pending_seek.is_some() {
+            let entity = cx.entity().clone();
+            let generation = self.preview_scroll_seek_generation;
+            cx.defer(move |cx| {
+                let _ = entity.update(cx, |this, cx| {
+                    if this.preview_scroll_seek_generation != generation { return; }
+                    let count = this.state.doc.parsed.blocks.len();
+                    if count == 0 { this.cancel_pending_preview_seek(); return; }
+                    if this.preview_scroll_end_pending {
+                        if let Some(bounds) = this.preview_list.bounds_for_item(count - 1) {
+                            let viewport = this.preview_list.viewport_bounds();
+                            let delta = f32::from(bounds.bottom() - viewport.bottom());
+                            if delta > 1.0 {
+                                let mut top = this.preview_list.logical_scroll_top();
+                                top.offset_in_item += px(delta);
+                                this.preview_list.scroll_to(top);
+                            }
+                            this.preview_scroll_end_pending = false;
+                            cx.notify();
+                        }
+                    } else if let Some((item_ix, local)) = this.preview_scroll_pending_seek {
+                        if let Some(bounds) = this.preview_list.bounds_for_item(item_ix) {
+                            this.preview_list.scroll_to(ListOffset {
+                                item_ix,
+                                offset_in_item: px(local * f32::from(bounds.size.height)),
+                            });
+                            this.preview_scroll_pending_seek = None;
+                            cx.notify();
+                        }
+                    }
+                });
+            });
+        }
+        let viewport = self.preview_list.viewport_bounds();
+        let top = self.preview_list.logical_scroll_top();
+        let single_max = if count == 1 {
+            self.preview_list.bounds_for_item(0).map(|bounds| (f32::from(bounds.size.height) - f32::from(viewport.size.height)).max(0.0)).unwrap_or(0.0)
+        } else { 0.0 };
+        let all_fit = count > 0 && top.item_ix == 0 && top.offset_in_item == px(0.)
+            && self.preview_list.bounds_for_item(count - 1).is_some_and(|last| last.bottom() <= viewport.bottom());
+        let enabled = !all_fit && (count > 1 || single_max > 0.0);
+        let at_end = !all_fit && count > 0 && self.preview_list.bounds_for_item(count - 1)
+            .is_some_and(|last| last.bottom() <= viewport.bottom() + px(1.) && last.bottom() >= viewport.top());
+        let ratio = if at_end { 1.0 } else if count > 1 {
+            let local = self.preview_list.bounds_for_item(top.item_ix)
+                .map(|b| (f32::from(top.offset_in_item) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0))
+                .unwrap_or(0.0);
+            ((top.item_ix.min(count - 1) as f32 + local) / count as f32).clamp(0.0, 1.0)
+        } else if single_max > 0.0 { (f32::from(top.offset_in_item) / single_max).clamp(0.0, 1.0) }
+        else { 0.0 };
+        let height = self.preview_scroll_bounds.map(|b| f32::from(b.size.height)).unwrap_or(f32::from(viewport.size.height)).max(1.0);
+        let thumb_height = if enabled { 28.0_f32.min(height) } else { height };
+        let thumb_top = ratio * (height - thumb_height).max(0.0);
+        let bounds_view = cx.entity().clone();
+        div().id("preview_scrollbar").debug_selector(|| "preview_scrollbar".to_string())
+            .track_focus(&self.preview_scroll_focus).tab_stop(true)
+            .w(px(14.)).h_full().relative().bg(theme.surface)
+            .child(canvas(move |bounds, _, cx| {
+                bounds_view.update(cx, |this, _| this.preview_scroll_bounds = Some(bounds));
+            }, |_, _, _, _| {}).absolute().size_full())
+            .child(div().debug_selector(|| "preview_scrollbar_thumb".to_string()).absolute().left(px(4.)).top(px(thumb_top)).w(px(6.)).h(px(thumb_height))
+                .rounded_full().bg(theme.text_muted.opacity(if enabled { 0.55 } else { 0.20 })))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                window.focus(&this.preview_scroll_focus);
+                this.preview_focused = true;
+                this.is_preview_selecting = false;
+                this.preview_autoscroll_task = None;
+                let Some(bounds) = this.preview_scroll_bounds else { return; };
+                if !enabled { return; }
+                this.preview_list.scrollbar_drag_started();
+                let local_y = f32::from(event.position.y - bounds.origin.y);
+                let grab_offset = if (thumb_top..thumb_top + thumb_height).contains(&local_y) { local_y - thumb_top } else { thumb_height / 2.0 };
+                this.preview_scroll_drag = Some((bounds, count, single_max, grab_offset, thumb_height));
+                let available = (f32::from(bounds.size.height) - thumb_height).max(1.0);
+                let ratio = (local_y - grab_offset) / available;
+                this.preview_scroll_to_ratio(ratio, count, single_max, window, cx);
+            }))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.end_preview_scroll_drag(); cx.notify();
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let mods = event.keystroke.modifiers;
+                if mods.platform || mods.control || mods.alt { return; }
+                let top = this.preview_list.logical_scroll_top();
+                let current = if count > 1 {
+                    let local = this.preview_list.bounds_for_item(top.item_ix).map(|b| (f32::from(top.offset_in_item) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0)).unwrap_or(0.0);
+                    ((top.item_ix.min(count - 1) as f32 + local) / count as f32).clamp(0.0, 1.0)
+                } else if single_max > 0.0 { f32::from(top.offset_in_item) / single_max } else { 0.0 };
+                let step = if count > 1 { 1.0 / count as f32 } else if single_max > 0.0 { (40.0 / single_max).min(1.0) } else { 0.0 };
+                let next = match event.keystroke.key.as_str() {
+                    "up" | "left" => Some(current - step), "down" | "right" => Some(current + step),
+                    "pageup" => Some(current - (step * 8.0).max(0.1)), "pagedown" => Some(current + (step * 8.0).max(0.1)),
+                    "home" => Some(0.0), "end" => Some(1.0), _ => None,
+                };
+                if let Some(next) = next {
+                    this.preview_scroll_to_ratio(next, count, single_max, window, cx);
+                    cx.stop_propagation();
+                }
+            })).into_any_element()
     }
 
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
@@ -1071,9 +1266,12 @@ impl WorkspaceView {
             self.parse_now_and_refresh();
         }
         self.reset_preview_list();
+        self.syntax_warm_pending = true;
     }
 
     pub fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
+        self.cancel_pending_preview_seek();
+        self.end_preview_scroll_drag();
         if mode != ViewMode::Source && self.state.parse_is_stale() {
             self.parse_now_and_refresh();
         }
@@ -1083,6 +1281,8 @@ impl WorkspaceView {
         self.preview_autoscroll_task = None;
         self.preview_mouse_window_pos = None;
         self.state.set_view_mode(mode);
+        self.syntax_warm_pending = false;
+        self.start_warm_coordination_task(cx);
         cx.notify();
     }
 
@@ -1106,6 +1306,7 @@ impl WorkspaceView {
         _bounds: Bounds<Pixels>,
         _cx: &mut Context<Self>,
     ) {
+        self.cancel_pending_preview_seek();
         let num_blocks = self.state.doc.parsed.blocks.len();
         if num_blocks == 0 {
             self.preview_autoscroll_task = None;
@@ -1191,7 +1392,7 @@ impl WorkspaceView {
         let bounds_height = f32::from(bounds.size.height);
         if crate::views::preview::detect_edge_autoscroll(mouse_y, bounds_top, bounds_height).is_some() {
             if self.preview_autoscroll_task.is_none() {
-                let view = cx.entity().clone();
+                let view = cx.entity().downgrade();
                 self.preview_autoscroll_task = Some(cx.spawn(async move |_this, app| {
                     loop {
                         app.background_executor().timer(std::time::Duration::from_millis(16)).await;
@@ -1404,16 +1605,45 @@ impl WorkspaceView {
         if !self.state.preferences.auto_save {
             return;
         }
+        let Some(key) = self.state.active.clone() else { return; };
+        self.auto_save_tasks.remove(&key);
+        self.next_auto_save_id = self.next_auto_save_id.wrapping_add(1);
+        let task_id = self.next_auto_save_id;
         let delay_ms = self.state.preferences.auto_save_delay_ms;
-        self.auto_save_task = Some(cx.spawn(async move |this, app| {
+        let save_key = key.clone();
+        let cleanup_entity = cx.entity().downgrade();
+        let task = cx.spawn(async move |this, app| {
             app.background_executor().timer(std::time::Duration::from_millis(delay_ms)).await;
             let _ = this.update(app, |this, cx| {
-                if this.state.is_dirty() {
-                    let _ = this.state.save();
+                let dirty = this.state.open_docs.iter().any(|doc| {
+                    doc.key == save_key && doc.doc.status == glidemark_core::document::DocumentStatus::Modified
+                });
+                if dirty {
+                    let _ = this.state.save_doc(&save_key);
                     cx.notify();
                 }
+                let cleanup_key = save_key.clone();
+                let cleanup_entity = cleanup_entity.clone();
+                cx.defer(move |cx| {
+                    let _ = cleanup_entity.update(cx, |this, _| {
+                        if this.auto_save_tasks.get(&cleanup_key).is_some_and(|(id, _)| *id == task_id) {
+                            this.auto_save_tasks.remove(&cleanup_key);
+                        }
+                    });
+                });
             });
-        }));
+        });
+        self.auto_save_tasks.insert(key, (task_id, task));
+    }
+
+    fn rename_active_file(&mut self, new_name: &str, cx: &mut Context<Self>) {
+        let old_key = self.state.active.clone();
+        if self.state.rename_file(new_name).is_ok() && self.state.active != old_key {
+            if let Some(old_key) = old_key {
+                self.auto_save_tasks.remove(&old_key);
+            }
+            self.trigger_auto_save(cx);
+        }
     }
 
     pub fn trigger_save(&mut self, cx: &mut Context<Self>) {
@@ -1458,6 +1688,7 @@ impl WorkspaceView {
         let decision = self.state.request_close(key);
         match decision {
             CloseDecision::CloseImmediately => {
+                self.auto_save_tasks.remove(key);
                 self.on_document_swapped(window, cx);
                 cx.notify();
             }
@@ -1501,6 +1732,7 @@ impl WorkspaceView {
     }
 
     pub fn handle_modal_discard(&mut self, key: &crate::state::DocKey, window: &mut Window, cx: &mut Context<Self>) {
+        self.auto_save_tasks.remove(key);
         self.state.confirm_close_discard(key);
         self.on_document_swapped(Some(window), cx);
         self.after_dirty_doc_resolved(Some(window), cx);
@@ -1509,6 +1741,7 @@ impl WorkspaceView {
     pub fn handle_modal_save(&mut self, key: &crate::state::DocKey, window: &mut Window, cx: &mut Context<Self>) {
         match self.state.confirm_close_save(key) {
             Ok(true) => {
+                self.auto_save_tasks.remove(key);
                 self.on_document_swapped(Some(window), cx);
                 self.after_dirty_doc_resolved(Some(window), cx);
             }
@@ -1622,7 +1855,7 @@ impl WorkspaceView {
 
         let viewport_w = f32::from(window.viewport_size().width);
         let col_w = self.state.preferences.max_column_width;
-        let header_pl = px(calculate_title_header_padding(is_macos, is_fullscreen, drawer_open, view_mode, viewport_w, col_w));
+        let header_pl = px(calculate_title_header_padding(is_macos, is_fullscreen, drawer_open, view_mode, viewport_w, col_w, self.editor_text_start_offset(window)));
 
         // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
         let header_pr = if !is_macos { px(138.) } else { px(12.) };
@@ -1749,6 +1982,7 @@ impl WorkspaceView {
                                     .text_size(px(18.))
                                     .font_weight(FontWeight::BOLD)
                                     .line_height(px(24.))
+                                    .debug_selector(|| "editor_document_title".into())
                                     .text_color(if active_key.is_some() { theme.text_primary } else { theme.text_muted })
                                     .truncate()
                                     .child(title_text)
@@ -2074,6 +2308,16 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.syntax_warm_pending {
+            self.syntax_warm_pending = false;
+            self.start_warm_coordination_task(cx);
+        }
+        if !self.preview_scroll_activation_observed {
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() { this.end_preview_scroll_drag(); cx.notify(); }
+            }).detach();
+            self.preview_scroll_activation_observed = true;
+        }
         {
             let mut images = self.local_images.lock().unwrap();
             images.begin_frame(self.state.active.clone(), self.state.doc.path.clone());
@@ -2203,6 +2447,8 @@ impl Render for WorkspaceView {
         let view_heading = cx.entity().clone();
         let on_select_heading = Arc::new(move |block_idx: usize, _window: &mut Window, cx: &mut App| {
             view_heading.update(cx, |this, cx| {
+                this.cancel_pending_preview_seek();
+                this.end_preview_scroll_drag();
                 this.preview_list.scroll_to(ListOffset {
                     item_ix: block_idx,
                     offset_in_item: px(0.),
@@ -2360,7 +2606,12 @@ impl Render for WorkspaceView {
                     cx.notify();
                 }
             }))
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                if let Some((bounds, count, single_max, grab_offset, thumb)) = this.preview_scroll_drag {
+                    let available = (f32::from(bounds.size.height) - thumb).max(1.0);
+                    let ratio = (f32::from(event.position.y - bounds.origin.y) - grab_offset) / available;
+                    this.preview_scroll_to_ratio(ratio, count, single_max, window, cx);
+                }
                 if this.is_resizing_split {
                     let w = this.workspace_width;
                     let x = f32::from(event.position.x);
@@ -2376,6 +2627,7 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _window, cx| {
+                this.end_preview_scroll_drag();
                 if this.is_resizing_split {
                     this.is_resizing_split = false;
                 }
@@ -2500,9 +2752,9 @@ impl Render for WorkspaceView {
                 if this.is_renaming {
                     match event.keystroke.key.as_str() {
                         "enter" => {
-                            let new_name = this.rename_buffer.trim();
+                            let new_name = this.rename_buffer.trim().to_owned();
                             if !new_name.is_empty() {
-                                let _ = this.state.rename_file(new_name);
+                                this.rename_active_file(&new_name, cx);
                             }
                             this.is_renaming = false;
                             cx.notify();
@@ -2541,6 +2793,12 @@ impl Render for WorkspaceView {
 
                 let key = event.keystroke.key.as_str();
                 let mods = event.keystroke.modifiers;
+                if key.eq_ignore_ascii_case("tab") && this.preview_focused {
+                    if this.preview_scroll_focus.is_focused(window) { window.focus(&this.focus_handle); }
+                    else { window.focus(&this.preview_scroll_focus); }
+                    return;
+                }
+                if this.preview_scroll_focus.is_focused(window) && !mods.platform { return; }
 
                 if mods.platform {
                     match key {
@@ -2999,11 +3257,68 @@ impl Render for WorkspaceView {
                                     });
                                 });
 
+                                let recovery_view = cx.entity().clone();
+                                let recovery_doc = self.state.active.clone();
+                                let recovery_revision = self.state.editor.revision;
+                                let on_image_recovery: crate::views::preview::OnImageRecoveryCallback = Arc::new(move |range, url, candidate, _window, app| {
+                                    let doc = recovery_doc.clone();
+                                    let view = recovery_view.clone();
+                                    view.update(app, |this, cx| {
+                                        if this.state.active != doc || this.state.editor.revision != recovery_revision || this.state.doc.is_parse_stale() {
+                                            this.error_banner = Some("文档已变化，请刷新预览后重试图片修复".into());
+                                            cx.notify();
+                                            return;
+                                        }
+                                        let document = this.state.doc.path.clone();
+                                        cx.spawn(async move |view, app| {
+                                            let check_url = url.clone();
+                                            let check_candidate = candidate.clone();
+                                            let valid = app.background_executor().spawn(async move {
+                                                crate::local_images::validate_image_recovery(&check_url, document.as_deref(), &check_candidate)
+                                            }).await;
+                                            let _ = view.update(app, |this, cx| {
+                                                if !valid || this.state.active != doc || this.state.editor.revision != recovery_revision || this.state.doc.is_parse_stale() {
+                                                    this.error_banner = Some("图片候选或文档已变化，请刷新预览后重试".into());
+                                                    cx.notify();
+                                                    return;
+                                                }
+                                                let source = this.state.editor.to_text();
+                                                let Some(target) = glidemark_core::ast::image_source_target_range(&source, range, &url) else {
+                                                    this.error_banner = Some("无法安全定位这处图片路径，请手动修复".into());
+                                                    cx.notify();
+                                                    return;
+                                                };
+                                                let Some(replacement) = crate::local_images::recovered_image_reference(&candidate.relative, &url) else {
+                                                    this.error_banner = Some("图片路径无法安全转换，请手动修复".into());
+                                                    cx.notify();
+                                                    return;
+                                                };
+                                                let expected = &source[target.clone()];
+                                                if !this.state.editor.replace_source_range(target, expected, &replacement) {
+                                                    this.error_banner = Some("图片路径无法撤销地修改（文档可能超过 8 MiB），请手动修复".into());
+                                                    cx.notify();
+                                                    return;
+                                                }
+                                                this.preview_selection = None;
+                                                this.is_preview_selecting = false;
+                                                this.preview_autoscroll_task = None;
+                                                this.preview_mouse_window_pos = None;
+                                                this.error_banner = None;
+                                                this.state.sync_from_editor();
+                                                this.schedule_parse(cx);
+                                                this.trigger_auto_save(cx);
+                                                cx.notify();
+                                            });
+                                        }).detach();
+                                    });
+                                });
+
                                 let preview_callbacks = crate::views::preview::PreviewCallbacks {
                                     on_copy: Some(on_copy.clone()),
                                     on_open_lightbox: Some(on_open_lightbox.clone()),
                                     on_selection_change: Some(on_selection_change),
                                     on_autoscroll: Some(on_autoscroll),
+                                    on_image_recovery: Some(on_image_recovery),
                                 };
 
                                 div()
@@ -3040,7 +3355,9 @@ impl Render for WorkspaceView {
                                             )
                                             .into_any_element()
                                     } else {
-                                        let editor_left_offset = crate::views::editor::calculate_editor_left_offset(self.state.drawer_open, 0.0);
+                                        let text_start = self.editor_text_start_offset(window);
+                                        let gutter_width = text_start - crate::views::editor::EDITOR_CONTAINER_PADDING_X - crate::views::editor::EDITOR_ROW_PADDING_X - crate::views::editor::EDITOR_GUTTER_MARGIN_RIGHT;
+                                        let editor_left_offset = crate::views::editor::calculate_editor_left_offset(self.state.drawer_open, text_start);
                                         match view_mode {
                                             ViewMode::Source => {
                                                 let view_bounds = cx.entity().clone();
@@ -3078,6 +3395,7 @@ impl Render for WorkspaceView {
                                                         is_dirty,
                                                         &self.editor_scroll_handle,
                                                         editor_left_offset,
+                                                        gutter_width,
                                                         on_click_line.clone(),
                                                         &editor_failures,
                                                     ))
@@ -3085,8 +3403,10 @@ impl Render for WorkspaceView {
                                             }
                                             ViewMode::Preview => {
                                                 let view_bounds = cx.entity().clone();
-                                                div()
-                                                    .size_full()
+                                                div().size_full().flex()
+                                                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| this.handle_preview_scroll_wheel(event, window, cx)))
+                                                    .child(div()
+                                                    .flex_1().h_full().relative()
                                                     .min_w(px(0.))
                                                     .child(
                                                         canvas(
@@ -3116,7 +3436,7 @@ impl Render for WorkspaceView {
                                                         self.syntax_cache.clone(),
                                                         &preview_failures,
                                                     self.local_images.clone(),
-                                                    ))
+                                                    ))).child(self.render_preview_scrollbar(theme, cx))
                                                     .into_any_element()
                                             }
                                             ViewMode::Split => div()
@@ -3168,6 +3488,7 @@ impl Render for WorkspaceView {
                                                             is_dirty,
                                                             &self.editor_scroll_handle,
                                                             editor_left_offset,
+                                                            gutter_width,
                                                             on_click_line,
                                                             &editor_failures,
                                                         ))
@@ -3216,8 +3537,8 @@ impl Render for WorkspaceView {
                                                         }))
                                                         .child({
                                                             let view_bounds = cx.entity().clone();
-                                                            div()
-                                                                .size_full()
+                                                            div().size_full().flex().child(div()
+                                                                .flex_1().h_full().relative()
                                                                 .min_w(px(0.))
                                                                 .child(
                                                                     canvas(
@@ -3246,7 +3567,7 @@ impl Render for WorkspaceView {
                                                                     self.syntax_cache.clone(),
                                                                     &preview_failures,
                                                                     self.local_images.clone(),
-                                                                ))
+                                                                ))).child(self.render_preview_scrollbar(theme, cx))
                                                         }),
                                                 )
                                                 .into_any_element(),
@@ -3376,7 +3697,7 @@ pub fn adaptive_header_padding(is_macos: bool, is_fullscreen: bool, drawer_open:
 
 /// Computes the exact title left padding according to Phase H specification:
 /// - Collapsed drawer: maintains traffic light clearance (76px normal on macOS)
-/// - Source / Split mode: aligns title with editor text start (EDITOR_TEXT_START_OFFSET = 68.0px)
+/// - Source / Split mode: aligns title with the measured editor text start
 /// - Preview mode: aligns title with centered reading column
 pub fn calculate_title_header_padding(
     is_macos: bool,
@@ -3385,13 +3706,14 @@ pub fn calculate_title_header_padding(
     view_mode: ViewMode,
     viewport_width: f32,
     max_column_width: f32,
+    editor_text_start: f32,
 ) -> f32 {
     if !drawer_open {
         adaptive_header_padding(is_macos, is_fullscreen, false)
     } else {
         match view_mode {
             ViewMode::Source | ViewMode::Split => {
-                crate::views::editor::EDITOR_TEXT_START_OFFSET - 8.0
+                editor_text_start - 8.0
             }
             ViewMode::Preview => {
                 let drawer_w = crate::views::editor::DRAWER_WIDTH;

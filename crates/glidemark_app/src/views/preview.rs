@@ -10,6 +10,7 @@ use crate::theme::ThemeColors;
 pub type OnCopyCallback = Arc<dyn Fn(String, u64, &mut Window, &mut App) + Send + Sync>;
 pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewSelectionCallback = Arc<dyn Fn(Option<PreviewSelection>, bool, &mut Window, &mut App) + Send + Sync>;
+pub type OnImageRecoveryCallback = Arc<dyn Fn(std::ops::Range<usize>, String, crate::local_images::RecoveryCandidate, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewAutoscrollCallback = Arc<dyn Fn(f32, &mut Window, &mut App) + Send + Sync>;
 
 #[derive(Clone, Default)]
@@ -18,6 +19,7 @@ pub struct PreviewCallbacks {
     pub on_open_lightbox: Option<OnOpenLightboxCallback>,
     pub on_selection_change: Option<OnPreviewSelectionCallback>,
     pub on_autoscroll: Option<OnPreviewAutoscrollCallback>,
+    pub on_image_recovery: Option<OnImageRecoveryCallback>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
@@ -720,6 +722,7 @@ pub fn render_preview_pane_with_callbacks(
                     copied_code_hash,
                     item_callbacks.on_copy.as_ref(),
                     item_callbacks.on_open_lightbox.as_ref(),
+                    item_callbacks.on_image_recovery.as_ref(),
                     selected_char_range,
                     ix,
                     item_regions.clone(),
@@ -883,6 +886,7 @@ fn render_block_element(
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<&OnCopyCallback>,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
+    on_image_recovery: Option<&OnImageRecoveryCallback>,
     selected_char_range: Option<std::ops::Range<usize>>,
     block_ix: usize,
     regions: Arc<RegionsRegistry>,
@@ -930,7 +934,7 @@ fn render_block_element(
                 })
             });
 
-            el = el.child(render_styled_inlines(content, theme, font_size, el_range, images));
+            el = el.child(render_styled_inlines(content, theme, font_size, el_range, images, on_image_recovery));
 
             with_text_probe(
                 el,
@@ -973,7 +977,7 @@ fn render_block_element(
                 .text_size(px(base_font_size))
                 .line_height(relative(1.75))
                 .text_color(theme.text_primary)
-                .child(render_styled_inlines(content, theme, base_font_size, el_range, images));
+                .child(render_styled_inlines(content, theme, base_font_size, el_range, images, on_image_recovery));
 
             with_text_probe(
                 el,
@@ -1044,6 +1048,7 @@ fn render_block_element(
                     copied_code_hash,
                     on_copy,
                     on_open_lightbox,
+                    on_image_recovery,
                     selected_char_range.clone(),
                     block_ix,
                     regions.clone(),
@@ -1079,6 +1084,7 @@ fn render_block_element(
             copied_code_hash,
             on_copy,
             on_open_lightbox,
+            on_image_recovery,
             selected_char_range,
             block_ix,
             regions,
@@ -1115,7 +1121,7 @@ fn render_block_element(
                             .font_weight(FontWeight::BOLD)
                             .text_size(px(base_font_size * 0.95))
                             .text_color(theme.text_primary)
-                            .child(render_styled_inlines(h, theme, base_font_size * 0.95, cell_range, images)),
+                            .child(render_styled_inlines(h, theme, base_font_size * 0.95, cell_range, images, on_image_recovery)),
                         TextRegionInfo {
                             block_ix,
                             text: text.clone(),
@@ -1160,7 +1166,7 @@ fn render_block_element(
                                 .p_3()
                                 .text_size(px(base_font_size * 0.95))
                                 .text_color(theme.text_primary)
-                                .child(render_styled_inlines(cell, theme, base_font_size * 0.95, cell_range, images)),
+                                .child(render_styled_inlines(cell, theme, base_font_size * 0.95, cell_range, images, on_image_recovery)),
                             TextRegionInfo {
                                 block_ix,
                                 text: text.clone(),
@@ -1230,6 +1236,7 @@ fn render_styled_inlines(
     font_size: f32,
     selected_char_range: Option<std::ops::Range<usize>>,
     images: &crate::local_images::SharedImages,
+    on_image_recovery: Option<&OnImageRecoveryCallback>,
 ) -> AnyElement {
     if !group.0.iter().any(|item| matches!(item, InlineItem::Image { .. })) {
         return render_styled_text_only(group, theme, font_size, selected_char_range).into_any_element();
@@ -1246,7 +1253,7 @@ fn render_styled_inlines(
             });
             offset += len;
             match item {
-                InlineItem::Image { alt, url, .. } => {
+                InlineItem::Image { alt, url, source_range, .. } => {
                     let state = images.lock().unwrap().request(url);
                     match state {
                         crate::local_images::ImageState::Ready(image) => {
@@ -1262,6 +1269,30 @@ fn render_styled_inlines(
                                 .w_full().min_w(px(0.))
                                 .tooltip(move |_, cx| cx.new(|_| CodeTooltipView { text: description.clone() }).into())
                                 .child(element).into_any_element()
+                        }
+                        crate::local_images::ImageState::RecoveryCandidates(candidates) => {
+                            let mut status = div().w_full().min_w(px(0.)).p_3().rounded_md().border_1()
+                                .border_color(theme.border).text_color(theme.text_muted)
+                                .child(format!("{alt} · Windows 图片路径无法直接使用 · {url}"));
+                            if candidates.is_empty() || source_range.is_none() || on_image_recovery.is_none() {
+                                status = status.child("请手动修复图片路径");
+                            } else {
+                                for candidate in candidates {
+                                    let callback = on_image_recovery.unwrap().clone();
+                                    let range = source_range.clone().unwrap();
+                                    let reference = url.clone();
+                                    let label = candidate.relative.to_string_lossy().into_owned();
+                                    status = status.child(div().id(SharedString::from(format!("recover_image:{}:{label}", range.start)))
+                                        .debug_selector(|| format!("recover_image:{}:{label}", range.start))
+                                        .cursor_pointer().text_color(theme.accent)
+                                        .child(format!("使用 {label}"))
+                                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                            cx.stop_propagation();
+                                            callback(range.clone(), reference.clone(), candidate.clone(), window, cx);
+                                        }));
+                                }
+                            }
+                            status.into_any_element()
                         }
                         state => {
                             let reason = match state {
@@ -1764,6 +1795,7 @@ fn render_list_element(
     copied_code_hash: Option<(u64, std::time::Instant)>,
     on_copy: Option<&OnCopyCallback>,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
+    on_image_recovery: Option<&OnImageRecoveryCallback>,
     selected_char_range: Option<std::ops::Range<usize>>,
     block_ix: usize,
     regions: Arc<RegionsRegistry>,
@@ -1852,7 +1884,7 @@ fn render_list_element(
                                 .text_size(px(base_font_size))
                                 .line_height(relative(1.6))
                                 .text_color(theme.text_primary)
-                                .child(render_styled_inlines(content, theme, base_font_size, child_range, images)),
+                                .child(render_styled_inlines(content, theme, base_font_size, child_range, images, on_image_recovery)),
                             TextRegionInfo {
                                 block_ix,
                                 text: content_text,
@@ -1879,6 +1911,7 @@ fn render_list_element(
                         copied_code_hash,
                         on_copy,
                         on_open_lightbox,
+                        on_image_recovery,
                         selected_char_range.clone(),
                         block_ix,
                         regions.clone(),
@@ -1908,6 +1941,7 @@ fn render_list_element(
                         copied_code_hash,
                         on_copy,
                         on_open_lightbox,
+                        on_image_recovery,
                         selected_char_range.clone(),
                         block_ix,
                         regions.clone(),
@@ -1926,6 +1960,7 @@ fn render_list_element(
                         copied_code_hash,
                         on_copy,
                         on_open_lightbox,
+                        on_image_recovery,
                         selected_char_range.clone(),
                         block_ix,
                         regions.clone(),
@@ -2068,7 +2103,7 @@ fn render_code_block(
         StyledText::new(code_text).with_highlights(highlights)
     };
 
-    let code_font_size = base_font_size * 0.85;
+    let code_font_size = base_font_size;
     let mut content = div()
         .id(SharedString::from(format!("code_content_scroll_{}", hash)))
         .w_full()
@@ -2076,7 +2111,7 @@ fn render_code_block(
         .p_3()
         .text_size(px(code_font_size))
         .font_family("ui-monospace")
-        .line_height(relative(1.5))
+        .line_height(relative(1.75))
         .text_color(theme.syntax_code)
         .child(styled_text);
 
@@ -2093,7 +2128,7 @@ fn render_code_block(
             text: code.to_string(),
             font_name: "ui-monospace",
             font_size: code_font_size,
-            line_height_factor: 1.5,
+            line_height_factor: 1.75,
             padding_left: 12.0,
             padding_top: 12.0,
             padding_right: 12.0,

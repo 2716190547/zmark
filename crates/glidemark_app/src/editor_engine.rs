@@ -354,6 +354,36 @@ impl EditorEngine {
         self.redo_bytes = 0;
     }
 
+    /// Replace one verified, single-line source range as one undoable edit.
+    pub fn replace_source_range(&mut self, range: std::ops::Range<usize>, expected: &str, replacement: &str) -> bool {
+        let source = self.to_text();
+        if range.start > range.end || source.get(range.clone()) != Some(expected)
+            || expected.contains('\n') || replacement.contains('\n')
+        {
+            return false;
+        }
+        let Some(new_len) = source.len().checked_sub(range.len()).and_then(|n| n.checked_add(replacement.len())) else { return false; };
+        if source.len() > MAX_UNDO_BYTES || new_len > MAX_UNDO_BYTES { return false; }
+        let prefix = &source[..range.start];
+        let line = prefix.bytes().filter(|&b| b == b'\n').count();
+        let start_col = prefix.rsplit('\n').next().unwrap_or("").chars().count();
+        let old_end = start_col + expected.chars().count();
+        let new_end = start_col + replacement.chars().count();
+        let cursor_col = if self.cursor_line == line {
+            if self.cursor_col < start_col { self.cursor_col }
+            else if self.cursor_col < old_end { new_end }
+            else { self.cursor_col - old_end + new_end }
+        } else { self.cursor_col };
+        let mut updated = source;
+        updated.replace_range(range, replacement);
+        self.push_snapshot();
+        self.lines = Arc::new(split_lines(&updated));
+        self.cursor_col = cursor_col;
+        self.clamp_cursor();
+        self.revision += 1;
+        true
+    }
+
     pub fn insert_text(&mut self, text: &str) {
         if text.is_empty() {
             return;

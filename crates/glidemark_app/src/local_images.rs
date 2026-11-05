@@ -174,6 +174,7 @@ pub enum ImageState {
     Waiting,
     Ready(Arc<LocalImage>),
     Failed(String),
+    RecoveryCandidates(Vec<RecoveryCandidate>),
 }
 
 pub type SharedImages = Arc<Mutex<LocalImages>>;
@@ -264,4 +265,83 @@ impl LocalImages {
         self.entries.insert(url, state);
         true
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryCandidate {
+    pub relative: PathBuf,
+    pub canonical: PathBuf,
+    pub size: u64,
+    pub modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    pub device: u64,
+    #[cfg(unix)]
+    pub inode: u64,
+}
+
+pub fn is_windows_absolute_image(url: &str) -> bool {
+    let b = url.as_bytes();
+    b.len() >= 4 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
+}
+
+/// Search only the document directory and its direct, non-symlink assets folder.
+pub fn image_recovery_candidates(url: &str, document: Option<&Path>) -> Vec<RecoveryCandidate> {
+    if !is_windows_absolute_image(url) { return Vec::new(); }
+    let path = url.split('#').next().unwrap_or("");
+    if path.contains('?') { return Vec::new(); }
+    let Some(raw_name) = path.rsplit(['\\', '/']).next().filter(|n| !n.is_empty() && *n != "." && *n != "..") else { return Vec::new(); };
+    let Ok(name) = percent_encoding::percent_decode_str(raw_name).decode_utf8() else { return Vec::new(); };
+    let name = name.as_ref();
+    if name.contains(['/', '\\', '\0']) || name == "." || name == ".." { return Vec::new(); }
+    let Some(base) = document.and_then(Path::parent).and_then(|p| p.canonicalize().ok()) else { return Vec::new(); };
+    let mut found = Vec::new();
+    for rel_dir in [Path::new(""), Path::new("assets")] {
+        let dir = base.join(rel_dir);
+        let Ok(dir_meta) = std::fs::symlink_metadata(&dir) else { continue; };
+        if dir_meta.file_type().is_symlink() || !dir_meta.is_dir() { continue; }
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue; };
+        for entry in entries.flatten() {
+            if entry.file_name() != std::ffi::OsStr::new(name) { continue; }
+            let Ok(meta) = std::fs::symlink_metadata(entry.path()) else { continue; };
+            if meta.file_type().is_symlink() || !meta.is_file() { continue; }
+            let Ok(canonical) = entry.path().canonicalize() else { continue; };
+            if canonical.parent() != Some(dir.as_path()) { continue; }
+            #[cfg(unix)]
+            use std::os::unix::fs::MetadataExt;
+            found.push(RecoveryCandidate {
+                relative: rel_dir.join(name), canonical, size: meta.len(), modified: meta.modified().ok(),
+                #[cfg(unix)] device: meta.dev(),
+                #[cfg(unix)] inode: meta.ino(),
+            });
+        }
+    }
+    found
+}
+
+pub fn validate_image_recovery(url: &str, document: Option<&Path>, expected: &RecoveryCandidate) -> bool {
+    image_recovery_candidates(url, document).iter().any(|candidate| candidate == expected)
+}
+
+pub fn markdown_relative_image_path(path: &Path) -> Option<String> {
+    use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+    const ENCODE: &AsciiSet = &CONTROLS.add(b' ').add(b'#').add(b'?').add(b'%').add(b'&').add(b'(').add(b')').add(b'<').add(b'>').add(b'\\');
+    if path.is_absolute() { return None; }
+    let mut parts = Vec::new();
+    for component in path.components() {
+        let std::path::Component::Normal(part) = component else { return None; };
+        parts.push(utf8_percent_encode(part.to_str()?, ENCODE).to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// Preserve a URI fragment while escaping characters that Markdown may reinterpret.
+pub fn recovered_image_reference(path: &Path, original_url: &str) -> Option<String> {
+    use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+    const FRAGMENT_ENCODE: &AsciiSet = &CONTROLS.add(b' ').add(b'&').add(b'(').add(b')').add(b'<').add(b'>').add(b'\\');
+    let mut result = markdown_relative_image_path(path)?;
+    if let Some((_, fragment)) = original_url.split_once('#') {
+        result.push('#');
+        result.push_str(&utf8_percent_encode(fragment, FRAGMENT_ENCODE).to_string());
+    }
+    Some(result)
 }

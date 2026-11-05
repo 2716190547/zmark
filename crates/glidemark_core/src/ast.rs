@@ -45,6 +45,8 @@ pub enum InlineItem {
         alt: String,
         url: String,
         title: Option<String>,
+        #[serde(default)]
+        source_range: Option<std::ops::Range<usize>>,
     },
 }
 
@@ -816,12 +818,12 @@ where
         _ if is_inline_start(&ev) => {
             let mut inlines = InlineGroup::new();
             let mut end_offset = range.end;
-            handle_inline_event(ev, iter, &mut inlines);
+            handle_inline_event(ev, range.clone(), iter, &mut inlines);
             while let Some((sub_ev, _)) = iter.peek() {
                 if is_inline_start(sub_ev) {
                     let (next_ev, next_r) = iter.next().unwrap();
                     end_offset = next_r.end;
-                    handle_inline_event(next_ev, iter, &mut inlines);
+                    handle_inline_event(next_ev, next_r, iter, &mut inlines);
                 } else {
                     break;
                 }
@@ -849,6 +851,7 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 
 fn handle_inline_event<'a, I>(
     ev: Event<'a>,
+    source_range: std::ops::Range<usize>,
     iter: &mut std::iter::Peekable<I>,
     inlines: &mut InlineGroup,
 ) -> bool
@@ -901,6 +904,7 @@ where
                 alt,
                 url: dest_url.into_string(),
                 title,
+                source_range: Some(source_range),
             });
             true
         }
@@ -926,8 +930,8 @@ where
         if is_end(&ev) {
             return (inlines, Some(range));
         }
-        last_range = Some(range);
-        handle_inline_event(ev, iter, &mut inlines);
+        last_range = Some(range.clone());
+        handle_inline_event(ev, range, iter, &mut inlines);
     }
 
     (inlines, last_range)
@@ -1264,4 +1268,51 @@ mod tests {
         assert_eq!(cb8.lines[1].prefix_len, 4);
         assert_eq!(cb8.lines[1].content_len, 3); // "bar"
     }
+}
+
+/// Locate only the destination of an inline image, after verifying the parser's
+/// occurrence and decoded destination. Reference-style and ambiguous syntax
+/// deliberately return None so the caller never guesses a source edit.
+pub fn image_source_target_range(source: &str, occurrence: std::ops::Range<usize>, expected_url: &str) -> Option<std::ops::Range<usize>> {
+    let raw = source.get(occurrence.clone())?;
+    let (dest_url, event_range) = Parser::new_ext(raw, Options::all()).into_offset_iter().find_map(|(event, range)| {
+        if let Event::Start(Tag::Image { dest_url, .. }) = event { Some((dest_url, range)) } else { None }
+    })?;
+    if event_range != (0..raw.len()) || dest_url.as_ref() != expected_url { return None; }
+    let bytes = raw.as_bytes();
+    if !bytes.starts_with(b"![") { return None; }
+    let mut i = 2;
+    let mut depth = 1usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if i + 1 < bytes.len() && bytes[i + 1].is_ascii_punctuation() => i += 2,
+            b'[' => { depth += 1; i += 1; },
+            b']' => { depth -= 1; i += 1; if depth == 0 { break; } },
+            _ => i += 1,
+        }
+    }
+    if depth != 0 || bytes.get(i) != Some(&b'(') { return None; }
+    i += 1;
+    while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace() && *b != b'\n' && *b != b'\r') { i += 1; }
+    let angle = bytes.get(i) == Some(&b'<');
+    if angle { i += 1; }
+    let start = i;
+    let mut parens = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if i + 1 < bytes.len() && bytes[i + 1].is_ascii_punctuation() => i += 2,
+            b'>' if angle => break,
+            b'\n' | b'\r' => return None,
+            b'(' if !angle => { parens += 1; i += 1; },
+            b')' if !angle && parens == 0 => break,
+            b')' if !angle => { parens -= 1; i += 1; },
+            b if !angle && b.is_ascii_whitespace() && parens == 0 => break,
+            _ => i += 1,
+        }
+    }
+    if i == start || i >= bytes.len() || parens != 0 { return None; }
+    if angle && bytes[i] != b'>' { return None; }
+    let absolute = occurrence.start.checked_add(start)?..occurrence.start.checked_add(i)?;
+    source.get(absolute.clone())?;
+    Some(absolute)
 }

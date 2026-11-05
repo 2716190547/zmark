@@ -306,8 +306,7 @@ async fn red_table_second_column(cx: &mut TestAppContext) {
 }
 
 // ---------------------------------------------------------------------------
-// RED 6: fenced code — rendered ui-monospace 0.85x with 1.5 line height, while the
-// mapping uses the sans base size and 1.75 line height, so the line drifts.
+// RED 6: fenced code — hit testing must follow the rendered monospace line geometry.
 // The real line height is *measured* from two code blocks of different length.
 // ---------------------------------------------------------------------------
 fn code_block(lines: usize) -> String {
@@ -330,6 +329,7 @@ async fn red_code_block_line_drift(cx: &mut TestAppContext) {
     let big = bounds_of(&code_block(30).replace("```rust\n", "").replace("```\n", ""));
     println!("B1 code heights: small={:?} big={:?}", small, big);
     let line_h = (big.3 - small.3) / 10.0;
+    assert!((line_h - 16.0 * 1.75).abs() < 1.0, "Code line height must match body: {line_h}");
     let pad = (small.3 - 20.0 * line_h) / 2.0;
 
     h.set_doc(cx, &code_block(30));

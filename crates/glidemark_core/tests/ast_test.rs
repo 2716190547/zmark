@@ -128,6 +128,7 @@ fn test_parse_links_and_images() {
                 alt: "Logo".into(),
                 url: "./assets/logo.png".into(),
                 title: None,
+                source_range: Some(source.find("![Logo]").unwrap()..source.find("![Logo]").unwrap() + "![Logo](./assets/logo.png)".len()),
             });
         }
         _ => panic!("Expected Paragraph with Image"),
@@ -212,4 +213,25 @@ fn test_parse_nested_lists_and_inline_styles() {
         }
         _ => panic!("Expected List"),
     }
+}
+
+#[test]
+fn image_source_ranges_identify_one_occurrence_and_reject_references() {
+    use glidemark_core::ast::image_source_target_range;
+    let source = "前 ![D:别名](D:\\目录\\img\\(x\\).png \"D: title\") 后\r\n![x](D:\\img.png) ![x](D:\\img.png)\n\n![alt][id]\n\n[id]: D:\\dir\\img.png\n";
+    let mut found = Vec::new();
+    for (event, range) in pulldown_cmark::Parser::new(source).into_offset_iter() {
+        if let pulldown_cmark::Event::Start(pulldown_cmark::Tag::Image { dest_url, .. }) = event {
+            found.push((range, dest_url.to_string()));
+        }
+    }
+    assert_eq!(found.len(), 4);
+    let first = image_source_target_range(source, found[0].0.clone(), &found[0].1).unwrap();
+    assert_eq!(&source[first], "D:\\目录\\img\\(x\\).png");
+    let a = image_source_target_range(source, found[1].0.clone(), &found[1].1).unwrap();
+    let b = image_source_target_range(source, found[2].0.clone(), &found[2].1).unwrap();
+    assert_ne!(a, b);
+    assert_eq!(&source[a], &source[b]);
+    assert!(image_source_target_range(source, found[3].0.clone(), &found[3].1).is_none());
+    assert!(image_source_target_range(source, found[0].0.clone(), "D:stale").is_none());
 }

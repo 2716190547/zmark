@@ -8,7 +8,8 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "test-observation")]
 use std::sync::atomic::{AtomicU64, AtomicUsize};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::HashSet;
 use std::time::Instant;
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 
@@ -190,9 +191,6 @@ pub const MAX_LINE_UNICODE_SCALARS: usize = 1000;
 /// Soft timeout budget for code block parsing (50 ms).
 pub const PARSE_SOFT_BUDGET_MS: u64 = 50;
 
-/// Maximum number of code blocks retained in the shared syntax cache.
-pub const MAX_CACHE_ENTRIES: usize = 32;
-
 /// Maximum total memory retained in the shared syntax cache (4 MiB).
 pub const MAX_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
@@ -244,29 +242,37 @@ pub fn validate_language_warm(canonical_lang: &'static str) -> bool {
     let Some(sample) = get_representative_warm_sample(canonical_lang) else {
         return false;
     };
+    if !ensure_language_compiled(canonical_lang) { return false; }
     match parse_code_spans_bounded(sample, Some(canonical_lang), None) {
         ParseResult::Ready(spans) => spans.iter().any(|s| s.role != SyntaxRole::Plain),
         _ => false,
     }
 }
 
+static WARMED_LANGUAGES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+
+/// Compiles only the requested language's regexes once, outside the per-block parse budget.
+fn ensure_language_compiled(canonical_lang: &'static str) -> bool {
+    let Some(sample) = get_representative_warm_sample(canonical_lang) else { return false; };
+    let warmed = WARMED_LANGUAGES.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut warmed = warmed.lock().unwrap_or_else(|error| error.into_inner());
+    if warmed.contains(canonical_lang) { return true; }
+    let syntax_set = init_syntax_set();
+    let Some(syntax) = syntax_set.find_syntax_by_name(canonical_lang) else { return false; };
+    let mut parse_state = ParseState::new(syntax);
+    for line in sample.split_inclusive('\n') {
+        if parse_state.parse_line(line, syntax_set).is_err() { return false; }
+    }
+    warmed.insert(canonical_lang);
+    true
+}
+
 /// Initializes `SYNTAX_SET` with syntect defaults and returns a static reference.
 pub fn init_syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(|| {
-        let ss = SyntaxSet::load_defaults_newlines();
-        // Pre-compile regexes for canonical syntaxes during initialization so parsing
-        // code blocks never incurs one-time onig compilation against their parse budget.
-        for name in &SUPPORTED_CANONICAL_LANGUAGES {
-            if let Some(sample) = get_representative_warm_sample(name) {
-                if let Some(syntax) = ss.find_syntax_by_name(name) {
-                    let mut state = ParseState::new(syntax);
-                    for line in sample.split_inclusive('\n') {
-                        let _ = state.parse_line(line, &ss);
-                    }
-                }
-            }
-        }
-        ss
+        // Regexes compile lazily when a document actually uses a syntax. The
+        // workspace warms those languages in the background before highlighting.
+        SyntaxSet::load_defaults_newlines()
     })
 }
 
@@ -544,6 +550,7 @@ pub fn parse_code_spans_bounded(
         None => return ParseResult::UnsupportedLanguage,
     };
 
+    if !ensure_language_compiled(canonical) { return ParseResult::InitFailed; }
     let ss = init_syntax_set();
     let syntax = match find_syntax_for_canonical(canonical) {
         Some(s) => s,

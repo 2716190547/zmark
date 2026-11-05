@@ -342,13 +342,13 @@ fn test_cjk_emoji_click_char_col_and_drawer_offset() {
     let font_size = 14.0;
 
     // 1. Drawer offset contract:
-    // When drawer is open: 250px drawer + 68px editor gutter/padding = 318px
-    assert_eq!(calculate_editor_left_offset(true, 0.0), 318.0);
-    // When drawer is collapsed: 68px
-    assert_eq!(calculate_editor_left_offset(false, 0.0), 68.0);
-    // Split mode invariant: editor is on the left, so split offset does not shift editor origin
-    assert_eq!(calculate_editor_left_offset(true, 400.0), 318.0);
-    assert_eq!(calculate_editor_left_offset(false, 400.0), 68.0);
+    // When drawer is open: 250px drawer + 54px measured gutter/padding = 304px
+    assert_eq!(calculate_editor_left_offset(true, 54.0), 304.0);
+    // When drawer is collapsed: measured 54px
+    assert_eq!(calculate_editor_left_offset(false, 54.0), 54.0);
+    // Wider line numbers change the text origin in both layouts
+    assert_eq!(calculate_editor_left_offset(true, 72.0), 322.0);
+    assert_eq!(calculate_editor_left_offset(false, 72.0), 72.0);
 
     // 2. ASCII click hit test:
     let ascii_str = "abcdef";

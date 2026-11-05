@@ -1439,6 +1439,19 @@ impl AppState {
         Ok(())
     }
 
+    pub fn save_doc(&mut self, key: &DocKey) -> Result<(), std::io::Error> {
+        if self.active.as_ref() == Some(key) {
+            return self.save();
+        }
+        let Some(pos) = self.open_docs.iter().position(|doc| &doc.key == key) else {
+            return Ok(());
+        };
+        let mut doc = self.open_docs[pos].doc.clone();
+        doc.save()?;
+        self.open_docs[pos].doc = doc;
+        Ok(())
+    }
+
     pub fn save_doc_as(&mut self, key: &DocKey, path: PathBuf) -> Result<(), std::io::Error> {
         self.sync_from_editor();
         let new_key = DocKey::Path(path.clone());
