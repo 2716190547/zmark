@@ -187,7 +187,7 @@ impl ThemeColors {
                 syntax_string: rgb(0xe5c07b).into(),
                 syntax_number: rgb(0xf39c6b).into(),
                 syntax_comment: rgb(0xa8a29e).into(),
-                syntax_heading: rgb(0x58a6ff).into(),
+                syntax_heading: rgb(0xd98a5f).into(), // Warm rust heading marker (#d98A5F, CR 6.01:1)
                 syntax_inline_code: rgb(0xf3f1ed).into(),
                 syntax_link: rgb(0x58a6ff).into(),
                 syntax_bullet: rgb(0x58a6ff).into(),
@@ -212,7 +212,7 @@ impl ThemeColors {
                 syntax_string: rgb(0x8a6b12).into(),
                 syntax_number: rgb(0x995b2b).into(),
                 syntax_comment: rgb(0x676d65).into(),
-                syntax_heading: rgb(0x0969da).into(),
+                syntax_heading: rgb(0xa4502c).into(), // Warm rust heading marker (#A4502C, CR 5.07:1)
                 syntax_inline_code: rgb(0x1f2328).into(),
                 syntax_link: rgb(0x0969da).into(),
                 syntax_bullet: rgb(0x0969da).into(),

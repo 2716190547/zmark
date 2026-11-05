@@ -85,7 +85,7 @@ fn test_eight_palettes_six_syntax_tokens_matrix() {
     assert_eq!(def_light.syntax_string, rgb(0x8a6b12).into(), "default light syntax_string");
     assert_eq!(def_light.syntax_number, rgb(0x995b2b).into(), "default light syntax_number");
     assert_eq!(def_light.syntax_comment, rgb(0x676d65).into(), "default light syntax_comment");
-    assert_eq!(def_light.syntax_heading, rgb(0x0969da).into(), "default light syntax_heading");
+    assert_eq!(def_light.syntax_heading, rgb(0xa4502c).into(), "default light syntax_heading");
     assert_eq!(def_light.syntax_inline_code, rgb(0x1f2328).into(), "default light syntax_inline_code");
     assert_eq!(def_light.syntax_link, rgb(0x0969da).into(), "default light syntax_link");
 
@@ -96,7 +96,7 @@ fn test_eight_palettes_six_syntax_tokens_matrix() {
     assert_eq!(def_dark.syntax_string, rgb(0xe5c07b).into(), "default dark syntax_string");
     assert_eq!(def_dark.syntax_number, rgb(0xf39c6b).into(), "default dark syntax_number");
     assert_eq!(def_dark.syntax_comment, rgb(0xa8a29e).into(), "default dark syntax_comment");
-    assert_eq!(def_dark.syntax_heading, rgb(0x58a6ff).into(), "default dark syntax_heading");
+    assert_eq!(def_dark.syntax_heading, rgb(0xd98a5f).into(), "default dark syntax_heading");
     assert_eq!(def_dark.syntax_inline_code, rgb(0xf3f1ed).into(), "default dark syntax_inline_code");
     assert_eq!(def_dark.syntax_link, rgb(0x58a6ff).into(), "default dark syntax_link");
 

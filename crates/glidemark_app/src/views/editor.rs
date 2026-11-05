@@ -370,8 +370,11 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
         MarkdownTokenKind::Comment => {
             el = el.text_color(theme.syntax_comment);
         }
-        MarkdownTokenKind::HeadingPrefix | MarkdownTokenKind::HeadingText => {
+        MarkdownTokenKind::HeadingPrefix => {
             el = el.text_color(theme.syntax_heading).font_weight(FontWeight::BOLD);
+        }
+        MarkdownTokenKind::HeadingText => {
+            el = el.text_color(theme.text_primary).font_weight(FontWeight::BOLD);
         }
         MarkdownTokenKind::BlockquotePrefix | MarkdownTokenKind::BlockquoteText => {
             el = el.text_color(theme.text_muted);

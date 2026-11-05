@@ -1875,7 +1875,9 @@ impl WorkspaceView {
 
         div()
             .id("canvas_integrated_header")
-            .h(px(46.))
+            // 38px matches the drawer header so both icon rows share one vertical
+            // center (19px), which is where the native traffic lights sit.
+            .h(px(38.))
             .py(px(4.))
             .w_full()
             .pl(header_pl)
@@ -2050,20 +2052,6 @@ impl WorkspaceView {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child({
-                                let is_dirty = self.state.is_dirty();
-                                let save_icon_color = topbar_save_button_color(is_dirty, theme);
-                                render_icon_button(
-                                    "btn_save",
-                                    format!("{} (⌘S)", strings.save_file),
-                                    false,
-                                    theme,
-                                    render_save_icon(save_icon_color),
-                                    cx.listener(|this, _, _window, cx| {
-                                        this.trigger_save(cx);
-                                    }),
-                                )
-                            })
                             .child(render_icon_button(
                                 "btn_export",
                                 format!("{} (⇧⌘E)", strings.export_html),
@@ -3730,16 +3718,6 @@ pub fn calculate_title_header_padding(
 /// Consistently aligns with the 16px content margin across Source, Split, and Preview.
 pub const CANVAS_TITLE_LEFT_MARGIN: f32 = 16.0;
 
-/// Resolves the icon color for the topbar save button (ADR 0036):
-/// Returns `theme.accent` when document is dirty, `theme.text_muted` when clean.
-pub fn topbar_save_button_color(is_dirty: bool, theme: &crate::theme::ThemeColors) -> Hsla {
-    if is_dirty {
-        theme.accent
-    } else {
-        theme.text_muted
-    }
-}
-
 /// Calculates preview pane scroll offset (in pixels, scaled up to 100px per item)
 /// incorporating the fractional subline progress within a wrapped physical line.
 pub fn calculate_subline_scroll_offset(inner_progress: f32, subline_idx: usize, total_sublines: usize) -> f32 {
@@ -3819,10 +3797,6 @@ fn render_preview_mode_icon(color: Hsla) -> impl IntoElement {
 
 fn render_export_icon(color: Hsla) -> impl IntoElement {
     svg().path("icons/download.svg").size(px(16.)).text_color(color)
-}
-
-fn render_save_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/save.svg").size(px(16.)).text_color(color)
 }
 
 fn render_settings_icon(color: Hsla) -> impl IntoElement {
