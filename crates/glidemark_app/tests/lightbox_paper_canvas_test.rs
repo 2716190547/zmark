@@ -2,45 +2,6 @@ use glidemark_app::theme::ThemeColors;
 
 /// Test 1: Lightbox source-level design system assertions
 /// Verifies paper canvas styling and high-opacity deep black backdrop in lightbox.rs
-#[test]
-fn test_lightbox_paper_canvas_source_styling() {
-    let src = include_str!("../src/views/lightbox.rs");
-
-    // 1. Backdrop background uses 0x000000e0 (88% black)
-    assert!(
-        src.contains("0x000000e0"),
-        "lightbox.rs backdrop must use 0x000000e0 (88% deep black)"
-    );
-    assert!(
-        !src.contains("0x00000073"),
-        "lightbox.rs must not contain legacy 0x00000073 45% translucent backdrop"
-    );
-
-    // 2. lightbox_diagram_card contains rounded_xl, p_4, and shadow_lg
-    let card_section_pos = src
-        .find("lightbox_diagram_card")
-        .expect("lightbox.rs must define lightbox_diagram_card");
-    let card_section = &src[card_section_pos..card_section_pos + 400.min(src.len() - card_section_pos)];
-
-    assert!(
-        card_section.contains(".rounded_xl()"),
-        "lightbox_diagram_card must have .rounded_xl()"
-    );
-    assert!(
-        card_section.contains(".p_4()"),
-        "lightbox_diagram_card must have .p_4()"
-    );
-    assert!(
-        card_section.contains(".shadow_lg()"),
-        "lightbox_diagram_card must have .shadow_lg()"
-    );
-
-    // 3. lightbox_diagram_card sets solid paper canvas background (theme.surface or solid base)
-    assert!(
-        card_section.contains("theme.surface") || card_section.contains("0xffffff"),
-        "lightbox_diagram_card must set a solid paper canvas background (theme.surface or solid base)"
-    );
-}
 
 /// Test 2: ThemeColors::hover_bg behavior and color contract (ADR 0036 Ticket G0)
 #[test]

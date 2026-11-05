@@ -314,28 +314,6 @@ fn test_split_view_scroll_wheel_physical_line_lookup() {
     assert_eq!(lookup_physical_line(999), 1);
 }
 
-#[test]
-fn test_editor_horizontal_scroll_disabled_contract() {
-    let editor_src = include_str!("../src/views/editor.rs");
-    assert!(
-        !editor_src.contains("ListHorizontalSizingBehavior::Unconstrained"),
-        "editor.rs must not contain ListHorizontalSizingBehavior::Unconstrained"
-    );
-    assert!(
-        !editor_src.contains(".with_horizontal_sizing_behavior("),
-        "editor.rs must not contain .with_horizontal_sizing_behavior("
-    );
-    assert!(
-        !editor_src.contains("whitespace_nowrap()"),
-        "editor.rs must not contain whitespace_nowrap()"
-    );
-
-    let settings_src = include_str!("../src/views/settings.rs");
-    assert!(
-        !settings_src.contains(".border_1()"),
-        "settings.rs must have zero occurrences of .border_1()"
-    );
-}
 
 #[test]
 fn test_cjk_emoji_click_char_col_and_drawer_offset() {

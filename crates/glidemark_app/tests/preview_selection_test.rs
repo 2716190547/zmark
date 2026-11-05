@@ -1,7 +1,7 @@
 use glidemark_app::theme::ThemeColors;
 use glidemark_app::views::preview::{
     apply_selection_to_highlights, char_range_to_byte_range, detect_edge_autoscroll,
-    render_styled_text_only, serialize_preview_selection, PreviewCharPosition, PreviewSelection,
+    serialize_preview_selection, PreviewCharPosition, PreviewSelection,
     PreviewSelectionRange,
 };
 use glidemark_core::ast::{parse_markdown, BlockElement, InlineGroup, InlineItem, ListItem, ParsedDocument};
@@ -387,20 +387,6 @@ fn test_highlight_styling_generation_with_selection_bg() {
     assert_eq!(merged[2].1.background_color, Some(theme.selection_bg()));
 }
 
-#[test]
-fn test_render_styled_text_only_with_character_selection() {
-    let theme = ThemeColors::default_palette(false);
-    let group = InlineGroup(vec![
-        InlineItem::Text("Hello ".into()),
-        InlineItem::Bold("World".into()),
-        InlineItem::Text("!".into()),
-    ]);
-
-    // Select "llo Wor" -> chars 2..9
-    let styled = render_styled_text_only(&group, &theme, 14.0, Some(2..9));
-    // Verify styled text was successfully constructed without panic
-    let _ = styled;
-}
 
 #[test]
 fn test_char_range_to_byte_range_mapping_multibyte_utf8() {

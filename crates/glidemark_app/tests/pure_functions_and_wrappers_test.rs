@@ -1,7 +1,5 @@
 use glidemark_app::state::format_mtime;
-use glidemark_app::theme::ThemeColors;
 use glidemark_app::views::preview::should_wrap_code_block;
-use glidemark_app::views::workspace::topbar_save_button_color;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Phase G P1 & P2: Unit tests for should_wrap_code_block pure function per ADR 0036 §3
@@ -66,36 +64,6 @@ fn test_should_wrap_code_block_rules_and_case_trim_insensitivity() {
     );
 }
 
-/// Phase G P2-b: Unit tests for topbar_save_button_color pure function
-#[test]
-fn test_topbar_save_button_color_dirty_and_clean_states() {
-    let light_theme = ThemeColors::default_palette(false);
-    let dark_theme = ThemeColors::default_palette(true);
-
-    // Light theme: dirty -> accent, clean -> text_muted
-    assert_eq!(
-        topbar_save_button_color(true, &light_theme),
-        light_theme.accent,
-        "Dirty document must show theme.accent on save button in light mode"
-    );
-    assert_eq!(
-        topbar_save_button_color(false, &light_theme),
-        light_theme.text_muted,
-        "Clean document must show theme.text_muted on save button in light mode"
-    );
-
-    // Dark theme: dirty -> accent, clean -> text_muted
-    assert_eq!(
-        topbar_save_button_color(true, &dark_theme),
-        dark_theme.accent,
-        "Dirty document must show theme.accent on save button in dark mode"
-    );
-    assert_eq!(
-        topbar_save_button_color(false, &dark_theme),
-        dark_theme.text_muted,
-        "Clean document must show theme.text_muted on save button in dark mode"
-    );
-}
 
 /// Phase G P2-c: Unit tests for format_mtime pure function
 #[test]

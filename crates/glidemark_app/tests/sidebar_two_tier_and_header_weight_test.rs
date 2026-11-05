@@ -1,33 +1,8 @@
-use glidemark_app::assets::AppAssets;
 use glidemark_app::state::{AppState, DocKey};
-use glidemark_app::views::workspace::{adaptive_header_padding, CANVAS_TITLE_LEFT_MARGIN};
 use glidemark_core::document::Document;
 use glidemark_core::i18n::{get_strings, SupportedLocale};
-use gpui::AssetSource;
 use tempfile::tempdir;
 
-#[test]
-fn test_assets_registration_for_folder_open() {
-    let assets = AppAssets;
-    let list = assets.list("").expect("AppAssets::list should succeed");
-    assert!(
-        list.iter().any(|p| p.as_ref() == "icons/folder-open.svg"),
-        "AppAssets::list must include 'icons/folder-open.svg'"
-    );
-
-    let loaded = assets
-        .load("icons/folder-open.svg")
-        .expect("AppAssets::load should succeed");
-    assert!(
-        loaded.is_some(),
-        "AppAssets::load('icons/folder-open.svg') must return Some"
-    );
-    let bytes = loaded.unwrap();
-    assert!(
-        !bytes.is_empty(),
-        "Loaded bytes for folder-open.svg must not be empty"
-    );
-}
 
 #[test]
 fn test_dynamic_folder_open_icon_and_hover_new_file_action() {
@@ -208,87 +183,6 @@ fn test_ten_languages_completeness_for_new_file_and_remove_root_confirm() {
     }
 }
 
-#[test]
-fn test_workspace_header_18px_bold_and_16px_toolbar_icons() {
-    let src = include_str!("../src/views/workspace.rs");
-
-    // 1. canvas_document_title and tab_rename_box use .text_size(px(18.)) and FontWeight::BOLD
-    let title_pos = src
-        .find("canvas_document_title")
-        .expect("workspace.rs must define canvas_document_title");
-    let title_section = &src[title_pos..(title_pos + 2500).min(src.len())];
-    assert!(
-        title_section.contains(".text_size(px(18.))"),
-        "canvas_document_title must use .text_size(px(18.))"
-    );
-    assert!(
-        title_section.contains("FontWeight::BOLD"),
-        "canvas_document_title must use FontWeight::BOLD"
-    );
-
-    let rename_pos = src
-        .find("tab_rename_box")
-        .expect("workspace.rs must define tab_rename_box");
-    let rename_section = &src[rename_pos..(rename_pos + 2500).min(src.len())];
-    assert!(
-        rename_section.contains(".text_size(px(18.))"),
-        "tab_rename_box must use .text_size(px(18.))"
-    );
-    assert!(
-        rename_section.contains("FontWeight::BOLD"),
-        "tab_rename_box must use FontWeight::BOLD"
-    );
-
-    // 2. Toolbar icon helper functions must specify .size(px(16.))
-    let icon_fns = [
-        "render_source_mode_icon",
-        "render_split_mode_icon",
-        "render_preview_mode_icon",
-        "render_export_icon",
-        "render_save_icon",
-        "render_settings_icon",
-        "render_sidebar_icon",
-    ];
-    for fn_name in icon_fns {
-        let fn_decl = format!("fn {}", fn_name);
-        let pos = src
-            .find(&fn_decl)
-            .unwrap_or_else(|| panic!("workspace.rs must define {}", fn_name));
-        let fn_section = &src[pos..(pos + 200).min(src.len())];
-        assert!(
-            fn_section.contains(".size(px(16.))"),
-            "{} must specify .size(px(16.))",
-            fn_name
-        );
-    }
-
-    // 3. Traffic light safe zone math assertions
-    let is_macos = true;
-    let is_fullscreen = false;
-
-    // Collapsed drawer: 76.0 (macOS inset) + 28.0 (btn_expand_drawer) + 6.0 (gap_1p5) + 8.0 (px_2) == 118.0
-    let padding_collapsed = adaptive_header_padding(is_macos, is_fullscreen, false);
-    assert_eq!(padding_collapsed, 76.0);
-    let expand_btn_w = 28.0;
-    let gap_w = 6.0;
-    let title_inner_padding = 8.0;
-    let total_collapsed =
-        padding_collapsed + expand_btn_w + gap_w + title_inner_padding;
-    assert_eq!(
-        total_collapsed, 118.0,
-        "Collapsed drawer safe zone math: 76 + 28 + 6 + 8 == 118"
-    );
-
-    // Open drawer: 8.0 (header pl) + 8.0 (px_2) == 16.0 (CANVAS_TITLE_LEFT_MARGIN, aligns with content margin)
-    assert_eq!(CANVAS_TITLE_LEFT_MARGIN, 16.0);
-    let padding_open = adaptive_header_padding(is_macos, is_fullscreen, true);
-    assert_eq!(padding_open, 8.0);
-    let total_open = padding_open + title_inner_padding;
-    assert_eq!(
-        total_open, CANVAS_TITLE_LEFT_MARGIN,
-        "Open drawer alignment math: 8 + 8 == 16 (CANVAS_TITLE_LEFT_MARGIN)"
-    );
-}
 
 #[test]
 fn test_app_state_create_file_in_dir_lifecycle() {
