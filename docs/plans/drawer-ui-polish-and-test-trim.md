@@ -64,6 +64,21 @@
 - 搜索、折叠、新建、选择、关闭、右键移除根及重名消歧行为不变。
 - 只删除批准的 9 项低价值测试；功能保护不减少，最终交付门槛不被削弱。
 
+
+## v2 追加（2026-11-05 第二轮样式反馈）
+
+用户第二轮截图指出三项，已按选择实施：
+
+1. **头部与红绿灯错位**：真因是画布头部 46px（图标中心 23px）而红绿灯中心 18.75px；侧栏展开时用 38px 侧栏头部才接近对齐。改为画布头部 46px → 38px，两个头部共用 19px 中心；实测红绿灯 18.75px、图标 19.0px，差 0.25px。未移动系统红绿灯位置。
+2. **标题颜色突兀**：编辑器单独使用 `HeadingPrefix`（暖锈色 `syntax_heading`）与 `HeadingText`（`text_primary` 加粗）。`syntax_heading` 默认暖石明/暗由 `#0969da`/`#58a6ff` 改为 `#a4502c`/`#d98a5f`（对比度 5.07:1 / 6.01:1），其余 7 套配色保留各自方案。
+3. **保存按钮标红且无用**：移除顶栏保存按钮（自动保存与 `Cmd+S` 保留），删除 `topbar_save_button_color` 与 `render_save_icon`。
+
+### 跨平台最小地基
+
+`crates/glidemark_app/src/platform.rs` 集中 `UI_FONT`/`MONO_FONT`（macOS/Windows/Linux 各自字体栈）、`LEADING_WINDOW_CONTROL_INSET`、`TRAILING_WINDOW_CONTROL_INSET`；替换 25 处硬编码 macOS 字体名与头部内联常量。`cache_accounting_test` 改为按目标平台使用 `malloc_size` / `malloc_usable_size` / `_msize`。
+
+仍未做（后续适配时处理）：macOS 打包脚本 `scripts/bundle_macos.sh`、工具提示与菜单里的 `⌘` 字面量（i18n 20 处）、Windows/Linux 窗口控制区实测、gpui 目标平台构建验证。
+
 ## 独立规划审查
 
 用户于 2026-11-05 明确指示“以前的模式不用了，直接开发即可”，覆盖原审查关口；本计划不宣称已取得独立审查签字。
