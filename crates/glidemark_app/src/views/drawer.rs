@@ -511,6 +511,7 @@ impl Render for SearchInput {
             .flex()
             .flex_1()
             .items_center()
+            .text_size(px(13.))
             .track_focus(&focus_handle)
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -650,7 +651,7 @@ impl Element for SearchInputElement {
         let style = window.text_style();
 
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), hsla(0., 0., 0., 0.35))
+            (input.placeholder.clone(), style.color.opacity(0.45))
         } else {
             (content, style.color)
         };
@@ -704,8 +705,8 @@ impl Element for SearchInputElement {
                 None,
                 Some(fill(
                     Bounds::new(
-                        point(bounds.left() + cursor_pos, bounds.top()),
-                        size(px(2.), bounds.bottom() - bounds.top()),
+                        point(bounds.left() + cursor_pos, bounds.top() + px(3.)),
+                        size(px(1.5), bounds.bottom() - bounds.top() - px(6.)),
                     ),
                     gpui::blue(),
                 )),
@@ -865,11 +866,11 @@ pub fn render_drawer_with_search(
         .id("drawer_search_container")
         .w_full()
         .h(px(28.))
-        .px_2()
+        .px(px(10.))
         .rounded(px(6.))
         .border_1()
-        .border_color(theme.border)
-        .bg(theme.surface)
+        .border_color(theme.text_primary.opacity(0.10))
+        .bg(theme.text_primary.opacity(0.035))
         .flex()
         .items_center()
         .justify_between()
@@ -887,8 +888,9 @@ pub fn render_drawer_with_search(
     let search_left = div()
         .flex()
         .items_center()
-        .gap_1p5()
+        .gap_2()
         .min_w(px(0.))
+        .text_color(theme.text_primary)
         .flex_1()
         .child(
             svg()
@@ -909,7 +911,7 @@ pub fn render_drawer_with_search(
                 .min_w(px(0.))
                 .flex_1()
                 .truncate()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .font_weight(FontWeight::NORMAL)
                 .text_color(if is_searching {
                     theme.text_primary
@@ -930,16 +932,17 @@ pub fn render_drawer_with_search(
         let on_clear = search.on_clear_search.clone();
         let clear_btn = div()
             .id("btn_clear_search")
-            .w(px(16.))
-            .h(px(16.))
-            .rounded(px(3.))
+            .w(px(20.))
+            .h(px(20.))
+            .rounded_full()
+            .flex_shrink_0()
             .flex()
             .items_center()
             .justify_center()
             .cursor_pointer()
             .text_size(px(12.))
             .text_color(theme.text_muted)
-            .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
+            .hover(|s| s.bg(theme.text_primary.opacity(0.08)).text_color(theme.text_primary))
             .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
                 cx.stop_propagation();
                 if let Some(ref cb) = on_clear {
@@ -1225,7 +1228,7 @@ pub fn render_drawer_with_search(
                                     .items_center()
                                     .justify_between()
                                     .text_size(px(13.))
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .hover(|s| s.bg(theme.hover_bg()))
                                     .tooltip(move |_window, cx| {
                                         let t = root_path_str.clone();
@@ -1259,8 +1262,17 @@ pub fn render_drawer_with_search(
                                 let left_part = div()
                                     .flex()
                                     .items_center()
-                                    .gap_1p5()
+                                    .gap_1()
                                     .min_w(px(0.))
+                                    .child(
+                                        svg()
+                                            .path("icons/chevron-right.svg")
+                                            .size(px(10.))
+                                            .text_color(theme.text_muted)
+                                            .with_transformation(Transformation::rotate(radians(
+                                                if is_expanded { std::f32::consts::FRAC_PI_2 } else { 0.0 },
+                                            ))),
+                                    )
                                     .child(
                                         svg()
                                             .path(folder_icon)
@@ -1272,7 +1284,7 @@ pub fn render_drawer_with_search(
                                             .min_w(px(0.))
                                             .truncate()
                                             .text_size(px(13.))
-                                            .font_weight(FontWeight::MEDIUM)
+                                            .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(if is_missing { theme.text_muted } else { theme.text_primary })
                                             .child(root_name),
                                     )
@@ -1648,8 +1660,17 @@ fn render_file_tree_nodes(
             let left_part = div()
                 .flex()
                 .items_center()
-                .gap_1p5()
+                .gap_1()
                 .min_w(px(0.))
+                .child(
+                    svg()
+                        .path("icons/chevron-right.svg")
+                        .size(px(10.))
+                        .text_color(theme.text_muted)
+                        .with_transformation(Transformation::rotate(radians(
+                            if is_expanded { std::f32::consts::FRAC_PI_2 } else { 0.0 },
+                        ))),
+                )
                 .child(
                     svg()
                         .path(folder_icon)
@@ -1757,10 +1778,10 @@ fn render_file_tree_nodes(
                 .group("drawer_file_row")
                 .w_full()
                 .h(px(44.))
-                .pl(px(depth_indent + 8.0))
+                .pl(px(depth_indent + 22.0))
                 .pr_1p5()
                 .py_1()
-                .rounded(px(6.))
+                .rounded(px(5.))
                 .cursor_pointer()
                 .flex()
                 .items_center()
