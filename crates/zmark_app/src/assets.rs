@@ -4,6 +4,7 @@ use std::borrow::Cow;
 pub struct AppAssets;
 
 const ASSETS: &[(&str, &[u8])] = &[
+    ("brand/logo.png", include_bytes!("../assets/brand/logo.png")),
     ("icons/panel-left.svg", include_bytes!("../assets/icons/panel-left.svg")),
     ("icons/folder.svg", include_bytes!("../assets/icons/folder.svg")),
     ("icons/folder-open.svg", include_bytes!("../assets/icons/folder-open.svg")),
@@ -51,6 +52,8 @@ mod tests {
         let assets = AppAssets;
         let list = assets.list("").expect("should list assets");
         assert!(list.iter().any(|p| p.as_ref() == "icons/x.svg"));
+        let logo = assets.load("brand/logo.png").expect("logo should load");
+        assert!(logo.is_some_and(|bytes| !bytes.is_empty()));
 
         for path in &list {
             let loaded = assets.load(path.as_ref()).expect("load should succeed");

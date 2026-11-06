@@ -1,3 +1,6 @@
+/// Single source of truth for the version shown in the About tab and bundle.
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod actions;
 pub mod assets;
 pub mod editor_engine;

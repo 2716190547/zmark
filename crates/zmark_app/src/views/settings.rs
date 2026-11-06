@@ -817,26 +817,38 @@ fn render_about_tab(
         .child(
             div()
                 .flex()
-                .flex_col()
-                .gap_1()
+                .items_center()
+                .gap_3()
                 .child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.text_primary)
-                        .child("ZMark"),
+                    img("brand/logo.png")
+                        .w(px(72.))
+                        .h(px(72.))
+                        .flex_shrink_0(),
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child("GPU-Accelerated Markdown Editor & Reader · Rust + GPUI"),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.accent)
-                        .child("Version 0.1.0"),
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_base()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.text_primary)
+                                .child("ZMark"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child("GPU-Accelerated Markdown Editor & Reader · Rust + GPUI"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.accent)
+                                .child(format!("Version {}", crate::APP_VERSION)),
+                        ),
                 ),
         )
         .child(
