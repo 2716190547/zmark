@@ -390,3 +390,125 @@ async fn later_wheel_cancels_deferred_end_seek(cx: &mut TestAppContext) {
         )
     });
 }
+
+#[gpui::test]
+async fn thumb_follows_pointer_outside_window_and_releases(cx: &mut TestAppContext) {
+    let text = (0..100).map(|n| format!("## {n}\n\n{}\n\n", "long text ".repeat((n % 20) + 1))).collect::<String>();
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(text);
+        let mut state = AppState::new_isolated(doc);
+        state.set_view_mode(ViewMode::Preview);
+        WorkspaceView::new(state, cx)
+    });
+    cx.update(|window, cx| { view.update(cx, |ws, cx| { ws.parse_now_and_refresh(); cx.notify(); }); let _ = window.draw(cx); });
+    cx.run_until_parked();
+    cx.update(|window, cx| { let _ = window.draw(cx); });
+    let track = cx.debug_bounds("preview_scrollbar").unwrap();
+    let thumb = cx.debug_bounds("preview_scrollbar_thumb").unwrap();
+    let start = thumb.center();
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.update(|window, cx| { let _ = window.draw(cx); });
+    let outside = Point { x: px(-30.), y: track.origin.y + track.size.height * 0.5 };
+    cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| { let _ = window.draw(cx); });
+    let actual = cx.debug_bounds("preview_scrollbar_thumb").unwrap().center().y;
+    assert!((f32::from(actual - outside.y)).abs() <= 2., "thumb {actual:?}, pointer {:?}", outside.y);
+    cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+    cx.update(|_, cx| assert!(view.read(cx).preview_scroll_drag.is_none()));
+    cx.update(|window, cx| { let _ = window.draw(cx); });
+    let released = cx.debug_bounds("preview_scrollbar_thumb").unwrap().center().y;
+    assert!((f32::from(released - outside.y)).abs() <= 2., "release moved thumb to {released:?}, pointer {:?}", outside.y);
+}
+
+#[gpui::test]
+async fn sample_wheel_does_not_jump_thumb_to_bottom(cx: &mut TestAppContext) {
+    let text = include_str!("../src/main.rs").split("let sample_text = r#\"").nth(1).unwrap().split("\"#;").next().unwrap().to_owned();
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(text);
+        let mut state = AppState::new_isolated(doc);
+        state.set_view_mode(ViewMode::Split);
+        WorkspaceView::new(state, cx)
+    });
+    cx.update(|window, cx| { view.update(cx, |ws, cx| { ws.parse_now_and_refresh(); cx.notify(); }); let _ = window.draw(cx); });
+    cx.run_until_parked();
+    cx.update(|window, cx| { let _ = window.draw(cx); });
+    let track = cx.debug_bounds("preview_scrollbar").unwrap();
+    let wheel_at = Point { x: track.origin.x - px(40.), y: track.center().y };
+    let mut previous = f32::from(cx.debug_bounds("preview_scrollbar_thumb").unwrap().origin.y);
+    for _ in 0..30 {
+        cx.simulate_event(ScrollWheelEvent { position: wheel_at, delta: ScrollDelta::Pixels(gpui::point(px(0.), px(-12.))), modifiers: Modifiers::none(), touch_phase: TouchPhase::Moved });
+        cx.update(|window, cx| { let _ = window.draw(cx); });
+        cx.run_until_parked();
+        cx.update(|window, cx| { let _ = window.draw(cx); });
+        let y = f32::from(cx.debug_bounds("preview_scrollbar_thumb").unwrap().origin.y);
+        assert!(y >= previous - 2. && y - previous < 100., "thumb jumped {previous} -> {y}");
+        previous = y;
+    }
+}
+
+#[gpui::test]
+async fn unmeasured_end_drag_release_keeps_thumb_position(cx: &mut TestAppContext) {
+    let text = (0..500).map(|n| format!("## Heading {n}\n\nA paragraph.\n\n")).collect::<String>();
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut doc = Document::new_scratch(); doc.update_buffer(text);
+        let mut state = AppState::new_isolated(doc); state.set_view_mode(ViewMode::Preview);
+        WorkspaceView::new(state, cx)
+    });
+    cx.update(|window, cx| { view.update(cx, |ws, cx| { ws.parse_now_and_refresh(); cx.notify(); }); let _ = window.draw(cx); });
+    cx.run_until_parked(); cx.update(|window, cx| { let _ = window.draw(cx); });
+    let track = cx.debug_bounds("preview_scrollbar").unwrap();
+    let thumb = cx.debug_bounds("preview_scrollbar_thumb").unwrap();
+    let start = thumb.center();
+    let target = Point { x: start.x, y: track.origin.y + (track.size.height - thumb.size.height) * 0.97 + thumb.size.height * 0.5 };
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.update(|window, cx| { let _ = window.draw(cx); });
+    cx.simulate_mouse_move(target, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::none());
+    for _ in 0..3 {
+        cx.run_until_parked(); cx.update(|window, cx| { let _ = window.draw(cx); });
+        let y = cx.debug_bounds("preview_scrollbar_thumb").unwrap().center().y;
+        assert!((f32::from(y - target.y)).abs() <= 2., "release moved thumb from {:?} to {y:?}", target.y);
+    }
+    cx.update(|_, cx| assert!(view.read(cx).preview_scroll_drag.is_none()));
+}
+
+#[gpui::test]
+async fn split_resize_cancels_drag_in_unmeasured_document(cx: &mut TestAppContext) {
+    let text = (0..500).map(|n| format!("## Heading {n}\n\nParagraph with some words.\n\n")).collect::<String>();
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut doc = Document::new_scratch(); doc.update_buffer(text);
+        let mut state = AppState::new_isolated(doc); state.set_view_mode(ViewMode::Split);
+        WorkspaceView::new(state, cx)
+    });
+    cx.update(|window, cx| { view.update(cx, |ws, cx| { ws.parse_now_and_refresh(); cx.notify(); }); let _ = window.draw(cx); });
+    cx.run_until_parked(); cx.update(|window, cx| { let _ = window.draw(cx); });
+    let thumb = cx.debug_bounds("preview_scrollbar_thumb").unwrap();
+    cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::none());
+    cx.update(|_, cx| assert!(view.read(cx).preview_scroll_drag.is_some()));
+    cx.update(|window, cx| { view.update(cx, |ws, cx| { ws.split_ratio = 0.7; cx.notify(); }); let _ = window.draw(cx); });
+    cx.run_until_parked(); cx.update(|window, cx| { let _ = window.draw(cx); });
+    cx.update(|_, cx| assert!(view.read(cx).preview_scroll_drag.is_none(), "viewport resize ends drag"));
+}
+
+#[gpui::test]
+async fn repeated_arrow_keys_advance_without_intermediate_draw(cx: &mut TestAppContext) {
+    let text = (0..40).map(|n| format!("## Heading {n}\n\n{}\n\n", "Words ".repeat(20))).collect::<String>();
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut doc = Document::new_scratch(); doc.update_buffer(text);
+        let mut state = AppState::new_isolated(doc); state.set_view_mode(ViewMode::Preview);
+        WorkspaceView::new(state, cx)
+    });
+    cx.update(|window, cx| { view.update(cx, |ws, cx| { ws.parse_now_and_refresh(); cx.notify(); }); let _ = window.draw(cx); });
+    cx.run_until_parked(); cx.update(|window, cx| { let _ = window.draw(cx); });
+    let thumb = cx.debug_bounds("preview_scrollbar_thumb").unwrap();
+    cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(thumb.center(), MouseButton::Left, Modifiers::none());
+    cx.update(|window, cx| { let _ = window.draw(cx); });
+    cx.simulate_keystrokes("down down down");
+    cx.run_until_parked(); cx.update(|window, cx| { let _ = window.draw(cx); });
+    let moved = cx.update(|_, cx| { let ws = view.read(cx); let top = ws.preview_list.logical_scroll_top(); (top.item_ix, f32::from(top.offset_in_item)) });
+    assert!(moved.0 > 0 || moved.1 > 70., "repeated keys should accumulate: {moved:?}");
+}
