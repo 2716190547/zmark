@@ -459,7 +459,7 @@ fn shape_single_line(
 }
 
 fn evaluate_matching_line(
-    old: &CachedLineEntry,
+    old: CachedLineEntry,
     i: usize,
     line: &str,
     is_fenced: bool,
@@ -469,11 +469,11 @@ fn evaluate_matching_line(
     text_system: &gpui::WindowTextSystem,
 ) -> (CachedLineEntry, bool) {
     if !width_changed {
-        (old.clone(), true)
+        (old, true)
     } else if old.natural_width_px <= max_width_px {
         (
             CachedLineEntry {
-                text: line.to_string(),
+                text: old.text,
                 is_fenced,
                 spans: vec![LineVisualSpan {
                     char_start: 0,
@@ -525,12 +525,12 @@ impl DocumentLayoutCache {
         let mut new_entries = Vec::with_capacity(lines.len());
 
         if !font_changed && old_entries.len() == lines.len() {
-            for (i, (line, &is_fenced)) in lines
+            for (i, ((line, &is_fenced), old)) in lines
                 .iter()
                 .zip(fenced_lines.iter())
+                .zip(old_entries.into_iter())
                 .enumerate()
             {
-                let old = &old_entries[i];
                 if old.is_fenced == is_fenced && old.text == *line {
                     let (entry, is_reused) = evaluate_matching_line(
                         old,
@@ -581,7 +581,9 @@ impl DocumentLayoutCache {
                 suffix += 1;
             }
 
-            for (i, old) in old_entries[..prefix].iter().enumerate() {
+            let old_len = old_entries.len();
+            let mut old_iter = old_entries.into_iter();
+            for (i, old) in old_iter.by_ref().take(prefix).enumerate() {
                 let (entry, is_reused) = evaluate_matching_line(
                     old,
                     i,
@@ -613,8 +615,7 @@ impl DocumentLayoutCache {
                 shaped_count += 1;
             }
 
-            let old_suffix_start = old_entries.len() - suffix;
-            for (offset, old) in old_entries[old_suffix_start..].iter().enumerate() {
+            for (offset, old) in old_iter.skip(old_len - prefix - suffix).enumerate() {
                 let i = middle_end + offset;
                 let (entry, is_reused) = evaluate_matching_line(
                     old,

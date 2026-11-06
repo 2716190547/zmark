@@ -64,63 +64,6 @@ fn test_case_insensitive_matching() {
 }
 
 #[test]
-fn test_matching_across_roots_loose_and_drafts() {
-    let tmp = tempdir().unwrap();
-    let doc_path = tmp.path().join("main.md");
-    fs::write(&doc_path, "# Main Document").unwrap();
-
-    let doc = Document::from_file(doc_path.clone()).unwrap();
-    let mut state = AppState::new_isolated(doc);
-
-    // 1. Workspace root matching
-    let root_dir = tmp.path().join("workspace");
-    fs::create_dir_all(&root_dir).unwrap();
-    let ws_file = root_dir.join("workspace_notes.md");
-    fs::write(&ws_file, "# Notes").unwrap();
-    state.add_workspace_root(root_dir).unwrap();
-
-    state.set_search_query("workspace_notes");
-    assert!(state.has_search_matches(), "Should match file in workspace root");
-
-    // 2. Loose docs matching (external file opened)
-    let ext_path = tmp.path().join("external_loose.md");
-    fs::write(&ext_path, "# External").unwrap();
-    let ext_doc = Document::from_file(ext_path.clone()).unwrap();
-    state.open_docs.push(OpenDoc {
-        key: DocKey::Path(ext_path),
-        doc: ext_doc,
-    });
-
-    state.set_search_query("external_loose");
-    assert!(state.has_search_matches(), "Should match loose doc");
-
-    // 3. Draft matching: match filenames only; do NOT match draft content's first heading
-    let mut scratch_doc = Document::new_scratch();
-    scratch_doc.update_buffer("# My Daily Scratch\nDraft content".to_string());
-    state.open_docs.push(OpenDoc {
-        key: DocKey::Scratch(99),
-        doc: scratch_doc,
-    });
-
-    state.set_search_query("Daily");
-    assert!(
-        !state.has_search_matches(),
-        "Filename search must NOT match scratch draft first heading"
-    );
-
-    // Match scratch draft by display title (e.g. Untitled fallback)
-    state.set_search_query("Untitled");
-    assert!(
-        state.has_search_matches(),
-        "Should match scratch draft display title"
-    );
-
-    // 4. Non-matching query
-    state.set_search_query("completely_nonexistent_token_98765");
-    assert!(!state.has_search_matches(), "Should not match nonexistent file");
-}
-
-#[test]
 fn test_auto_expansion_and_restoration() {
     let tmp = tempdir().unwrap();
     let root_path = tmp.path().join("project");

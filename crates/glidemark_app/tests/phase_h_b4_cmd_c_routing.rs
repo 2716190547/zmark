@@ -64,7 +64,7 @@ impl Harness {
     fn preview_copy_text(&self, cx: &mut VisualTestContext) -> String {
         cx.update(|_w, cx| {
             let ws = self.view.read(cx);
-            serialize_preview_selection(&ws.state.doc.parsed, ws.preview_selection.unwrap())
+            serialize_preview_selection(&ws.state.doc().parsed, ws.preview_selection.unwrap())
         })
     }
 }

@@ -29,7 +29,7 @@ impl Harness {
                 ws.state.editor.reset_text(md);
                 ws.parse_now_and_refresh();
                 ws.preview_selection = None;
-                ws.preview_list.reset(ws.state.doc.parsed.blocks.len());
+                ws.preview_list.reset(ws.state.doc().parsed.blocks.len());
                 obs::reset();
                 cx.notify();
             });
@@ -55,7 +55,7 @@ impl Harness {
     }
 
     fn flat_text(&self, cx: &mut VisualTestContext, block_ix: usize) -> String {
-        cx.update(|_w, cx| self.view.read(cx).state.doc.parsed.blocks[block_ix].to_plain_text())
+        cx.update(|_w, cx| self.view.read(cx).state.doc().parsed.blocks[block_ix].to_plain_text())
     }
 }
 
@@ -169,7 +169,7 @@ async fn control_scrolled_paragraph(cx: &mut TestAppContext) {
         h.view
             .read(cx)
             .state
-            .doc
+            .doc()
             .parsed
             .blocks
             .iter()

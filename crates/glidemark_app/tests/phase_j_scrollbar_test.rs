@@ -64,7 +64,7 @@ async fn real_drag_reaches_end_and_keyboard_does_not_edit(cx: &mut TestAppContex
     );
     cx.update(|_, cx| {
         let ws = view.read(cx);
-        let count = ws.state.doc.parsed.blocks.len();
+        let count = ws.state.doc().parsed.blocks.len();
         assert!(
             ws.preview_list.logical_scroll_top().item_ix >= count - 20,
             "drag must reach the final viewport"
@@ -102,7 +102,7 @@ async fn real_drag_reaches_end_and_keyboard_does_not_edit(cx: &mut TestAppContex
         let ws = view.read(cx);
         assert_eq!(ws.state.editor.to_text(), before);
         assert!(
-            ws.preview_list.logical_scroll_top().item_ix >= ws.state.doc.parsed.blocks.len() - 20
+            ws.preview_list.logical_scroll_top().item_ix >= ws.state.doc().parsed.blocks.len() - 20
         );
     });
 }
@@ -149,7 +149,7 @@ async fn one_tall_block_scrolls_and_window_deactivation_ends_drag(cx: &mut TestA
     });
     cx.update(|_, cx| {
         let ws = view.read(cx);
-        assert_eq!(ws.state.doc.parsed.blocks.len(), 1);
+        assert_eq!(ws.state.doc().parsed.blocks.len(), 1);
         assert!(ws.preview_list.logical_scroll_top().offset_in_item > px(100.));
         assert!(ws.preview_scroll_drag.is_some());
     });
@@ -306,7 +306,7 @@ async fn dragging_into_final_tall_block_can_reach_its_middle(cx: &mut TestAppCon
 
     let (last_top, last_bounds) = cx.update(|_, cx| {
         let ws = view.read(cx);
-        assert_eq!(ws.state.doc.parsed.blocks.len(), 2);
+        assert_eq!(ws.state.doc().parsed.blocks.len(), 2);
         (
             ws.preview_list.logical_scroll_top(),
             ws.preview_list.bounds_for_item(1).unwrap(),
@@ -362,7 +362,7 @@ async fn later_wheel_cancels_deferred_end_seek(cx: &mut TestAppContext) {
         };
         view.update(cx, |ws, _| {
             ws.preview_list.scroll_to(gpui::ListOffset {
-                item_ix: ws.state.doc.parsed.blocks.len() - 1,
+                item_ix: ws.state.doc().parsed.blocks.len() - 1,
                 offset_in_item: px(0.),
             });
             ws.preview_scroll_end_pending = true;

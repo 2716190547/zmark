@@ -51,7 +51,7 @@ async fn tall_image_block_is_capped(cx: &mut TestAppContext) {
         cx.run_until_parked();
     }
 
-    let count = cx.update(|_, cx| view.read(cx).state.doc.parsed.blocks.len());
+    let count = cx.update(|_, cx| view.read(cx).state.doc().parsed.blocks.len());
     assert!(count >= 4, "expected heading + 2 images + paragraphs, got {count}");
 
     let mut image_heights = Vec::new();
