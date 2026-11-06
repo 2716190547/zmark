@@ -109,6 +109,31 @@ Enjoy writing and reading with pure speed!
                 this.install_window_activation_observer(window, cx);
             });
 
+            zmark_app::frame_probe::start(window, view.entity_id());
+            if std::env::var("ZMARK_FRAME_PROBE").is_ok() {
+                // Drive the mode-switch animations while the probe records.
+                let probe_view = view.clone();
+                cx.spawn(async move |app| {
+                    let modes = [
+                        zmark_app::state::ViewMode::Split,
+                        zmark_app::state::ViewMode::Preview,
+                        zmark_app::state::ViewMode::Source,
+                        zmark_app::state::ViewMode::Split,
+                        zmark_app::state::ViewMode::Preview,
+                        zmark_app::state::ViewMode::Source,
+                    ];
+                    for mode in modes {
+                        app.background_executor()
+                            .timer(std::time::Duration::from_millis(300))
+                            .await;
+                        let _ = probe_view.update(app, |workspace, cx| {
+                            workspace.set_view_mode(mode, cx);
+                        });
+                    }
+                })
+                .detach();
+            }
+
             view
         })
         .unwrap();

@@ -68,6 +68,12 @@ pub struct WorkspaceView {
     /// (display file name, absolute path) shown after a successful HTML export.
     pub export_notice: Option<(String, PathBuf)>,
     export_notice_generation: u64,
+    export_notice_closing: bool,
+    update_banner_closing: bool,
+    was_dirty: bool,
+    dirty_pulse_generation: u64,
+    export_press_generation: u64,
+    settings_press_generation: u64,
     pub update_config: UpdateConfig,
     pub update_status: UpdateStatus,
     pub prepared_update: Option<PreparedUpdate>,
@@ -222,6 +228,12 @@ impl WorkspaceView {
             error_banner: None,
             export_notice: None,
             export_notice_generation: 0,
+            export_notice_closing: false,
+            update_banner_closing: false,
+            was_dirty: false,
+            dirty_pulse_generation: 0,
+            export_press_generation: 0,
+            settings_press_generation: 0,
             update_config,
             update_status: UpdateStatus::Idle,
             prepared_update: None,
@@ -2122,6 +2134,7 @@ impl WorkspaceView {
             .unwrap_or_default()
             .to_string();
         self.export_notice = Some((name, path));
+        self.export_notice_closing = false;
         cx.notify();
         let view = cx.entity().downgrade();
         cx.spawn(async move |_this, app| {
@@ -2130,7 +2143,36 @@ impl WorkspaceView {
                 .await;
             let _ = view.update(app, |this, cx| {
                 if this.export_notice_generation == generation {
+                    this.begin_export_notice_exit(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Plays the 120ms exit animation before unmounting the export notice.
+    fn begin_export_notice_exit(&mut self, cx: &mut Context<Self>) {
+        if self.export_notice.is_none() || self.export_notice_closing {
+            return;
+        }
+        if self.state.preferences.reduce_motion {
+            self.export_notice = None;
+            self.export_notice_closing = false;
+            cx.notify();
+            return;
+        }
+        self.export_notice_closing = true;
+        cx.notify();
+        let generation = self.export_notice_generation;
+        let view = cx.entity().downgrade();
+        cx.spawn(async move |_this, app| {
+            app.background_executor()
+                .timer(std::time::Duration::from_millis(120))
+                .await;
+            let _ = view.update(app, |this, cx| {
+                if this.export_notice_generation == generation {
                     this.export_notice = None;
+                    this.export_notice_closing = false;
                     cx.notify();
                 }
             });
@@ -2359,6 +2401,7 @@ impl WorkspaceView {
             Ok(Some(prepared)) => {
                 self.update_status = UpdateStatus::Downloaded(prepared.version.clone());
                 self.prepared_update = Some(prepared);
+                self.update_banner_closing = false;
             }
             Ok(None) => {
                 self.update_status = if manual {
@@ -2381,8 +2424,32 @@ impl WorkspaceView {
 
     /// Hides the update banner for the rest of this session.
     pub fn dismiss_update_banner(&mut self, version: &str, cx: &mut Context<Self>) {
-        self.update_banner_dismissed = Some(version.to_string());
+        if self.update_banner_closing {
+            return;
+        }
+        if self.state.preferences.reduce_motion {
+            self.update_banner_dismissed = Some(version.to_string());
+            self.update_banner_closing = false;
+            cx.notify();
+            return;
+        }
+        self.update_banner_closing = true;
         cx.notify();
+        let version = version.to_string();
+        let view = cx.entity().downgrade();
+        cx.spawn(async move |_this, app| {
+            app.background_executor()
+                .timer(std::time::Duration::from_millis(120))
+                .await;
+            let _ = view.update(app, |this, cx| {
+                if this.update_status == UpdateStatus::Downloaded(version.clone()) {
+                    this.update_banner_dismissed = Some(version);
+                    this.update_banner_closing = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Starts the restart flow. Dirty documents go through the existing close
@@ -2500,6 +2567,9 @@ impl WorkspaceView {
         window: &Window,
         theme: &crate::theme::ThemeColors,
         is_fullscreen: bool,
+        is_dirty: bool,
+        dirty_generation: u64,
+        reduce_motion: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_macos = cfg!(target_os = "macos");
@@ -2667,6 +2737,19 @@ impl WorkspaceView {
                                     .truncate()
                                     .child(title_text),
                             )
+                            .when(is_dirty, |el| {
+                                el.child(crate::views::motion::animated(
+                                    div()
+                                        .size(px(6.))
+                                        .rounded_full()
+                                        .bg(theme.accent)
+                                        .flex_shrink_0(),
+                                    reduce_motion,
+                                    format!("dirty_pulse_{dirty_generation}"),
+                                    200,
+                                    |el, delta| el.opacity(0.4 + 0.6 * delta),
+                                ))
+                            })
                             .into_any_element()
                     }),
             )
@@ -2698,6 +2781,7 @@ impl WorkspaceView {
                                 "btn_mode_source",
                                 format!("{} (⌘1)", strings.source_mode),
                                 view_mode == ViewMode::Source,
+                                reduce_motion,
                                 theme,
                                 render_source_mode_icon(
                                     mode_tab_colors(view_mode == ViewMode::Source, theme).1,
@@ -2710,6 +2794,7 @@ impl WorkspaceView {
                                 "btn_mode_split",
                                 format!("{} (⌘2)", strings.split_mode),
                                 view_mode == ViewMode::Split,
+                                reduce_motion,
                                 theme,
                                 render_split_mode_icon(
                                     mode_tab_colors(view_mode == ViewMode::Split, theme).1,
@@ -2722,6 +2807,7 @@ impl WorkspaceView {
                                 "btn_mode_preview",
                                 format!("{} (⌘3)", strings.preview_mode),
                                 view_mode == ViewMode::Preview,
+                                reduce_motion,
                                 theme,
                                 render_preview_mode_icon(
                                     mode_tab_colors(view_mode == ViewMode::Preview, theme).1,
@@ -2736,23 +2822,29 @@ impl WorkspaceView {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(render_icon_button(
+                            .child(render_animated_icon_button(
                                 "btn_export",
                                 format!("{} (⇧⌘E)", strings.export_html),
-                                false,
                                 theme,
                                 render_export_icon(theme.text_muted),
+                                reduce_motion,
+                                self.export_press_generation,
                                 cx.listener(|this, _, window, cx| {
+                                    this.export_press_generation =
+                                        this.export_press_generation.wrapping_add(1);
                                     this.trigger_export_html(window, cx);
                                 }),
                             ))
-                            .child(render_icon_button(
+                            .child(render_animated_icon_button(
                                 "btn_settings",
                                 format!("{} (⌘,)", strings.settings),
-                                false,
                                 theme,
                                 render_settings_icon(theme.text_muted),
+                                reduce_motion,
+                                self.settings_press_generation,
                                 cx.listener(|this, _, _window, cx| {
+                                    this.settings_press_generation =
+                                        this.settings_press_generation.wrapping_add(1);
                                     this.open_settings_window(cx);
                                 }),
                             )),
@@ -3140,6 +3232,17 @@ impl Render for WorkspaceView {
             });
         }
 
+        let is_dirty = self.state.is_dirty();
+        (self.dirty_pulse_generation, self.was_dirty) = crate::views::motion::advance_dirty_generation(
+            self.was_dirty,
+            is_dirty,
+            self.dirty_pulse_generation,
+        );
+        let dirty_generation = self.dirty_pulse_generation;
+        let reduce_motion = self.state.preferences.reduce_motion;
+        let export_notice_closing = self.export_notice_closing;
+        let update_banner_closing = self.update_banner_closing;
+        let export_notice_generation = self.export_notice_generation;
         let theme = &self.state.theme;
         let strings = self.state.strings;
         let export_view = cx.entity().downgrade();
@@ -3152,7 +3255,6 @@ impl Render for WorkspaceView {
             _ => None,
         };
         let view_mode = self.state.view_mode;
-        let is_dirty = self.state.is_dirty();
         let has_conflict = self.state.has_conflict();
         let parse_paused = self.parse_paused;
 
@@ -3834,7 +3936,15 @@ impl Render for WorkspaceView {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .child(self.render_canvas_header(window, theme, is_fullscreen, cx))
+                    .child(self.render_canvas_header(
+                        window,
+                        theme,
+                        is_fullscreen,
+                        is_dirty,
+                        dirty_generation,
+                        reduce_motion,
+                        cx,
+                    ))
                     // Error Feedback Banner
                     .when_some(self.error_banner.clone(), |el, err_msg| {
                         el.child(
@@ -3893,7 +4003,7 @@ impl Render for WorkspaceView {
                     .when_some(self.export_notice.clone(), |el, (name, path)| {
                         let reveal_path = path.clone();
                         let close_view = export_view.clone();
-                        el.child(
+                        el.child(crate::views::motion::animated(
                             div()
                                 .id("export_success_banner")
                                 .h(px(32.))
@@ -3960,20 +4070,26 @@ impl Render for WorkspaceView {
                                                     MouseButton::Left,
                                                     move |_, _, cx| {
                                                         let _ = close_view.update(cx, |this, cx| {
-                                                            this.export_notice = None;
-                                                            cx.notify();
+                                                            this.begin_export_notice_exit(cx);
                                                         });
                                                     },
                                                 )
                                                 .child("×"),
                                         ),
                                 ),
-                        )
+                            reduce_motion,
+                            format!("export_banner_{export_notice_generation}_{export_notice_closing}"),
+                            160,
+                            move |el, delta| {
+                                let value = if export_notice_closing { 1.0 - delta } else { delta };
+                                el.h(px(32. * value)).opacity(value).overflow_hidden()
+                            },
+                        ))
                     })
                     // Downloaded update: restart now or defer this session.
                     .when_some(update_banner, |el, version| {
                         let later_version = version.clone();
-                        el.child(
+                        el.child(crate::views::motion::animated(
                             div()
                                 .id("update_ready_banner")
                                 .debug_selector(|| "update_ready_banner".to_string())
@@ -4049,7 +4165,14 @@ impl Render for WorkspaceView {
                                                 .child(strings.later),
                                         ),
                                 ),
-                        )
+                            reduce_motion,
+                            format!("update_banner_{version}_{update_banner_closing}"),
+                            160,
+                            move |el, delta| {
+                                let value = if update_banner_closing { 1.0 - delta } else { delta };
+                                el.h(px(36. * value)).opacity(value).overflow_hidden()
+                            },
+                        ))
                     })
                     // Conflict Warning Banner
                     .when(has_conflict, |el| {
@@ -4400,6 +4523,7 @@ impl Render for WorkspaceView {
                                                         self.syntax_cache.clone(),
                                                         &preview_failures,
                                                     self.local_images.clone(),
+                                                    reduce_motion,
                                                     ))).child(self.render_preview_scrollbar(theme, cx))
                                                     .into_any_element()
                                             }
@@ -4529,6 +4653,7 @@ impl Render for WorkspaceView {
                                                                     self.syntax_cache.clone(),
                                                                     &preview_failures,
                                                                     self.local_images.clone(),
+                                                    reduce_motion,
                                                                 ))).child(self.render_preview_scrollbar(theme, cx))
                                                         }),
                                                 )
@@ -4765,10 +4890,33 @@ pub fn mode_tab_colors(
     }
 }
 
+fn render_animated_icon_button<F>(
+    id: &'static str,
+    tooltip_text: impl Into<String>,
+    theme: &crate::theme::ThemeColors,
+    icon: impl IntoElement + 'static,
+    reduce_motion: bool,
+    press_generation: u64,
+    handler: F,
+) -> AnyElement
+where
+    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+{
+    let button = render_icon_button(id, tooltip_text, false, theme, icon, handler);
+    crate::views::motion::animated(
+        div().child(button),
+        reduce_motion,
+        format!("press_{id}_{press_generation}"),
+        90,
+        |el, delta| el.opacity(0.6 + 0.4 * delta),
+    )
+}
+
 fn render_mode_icon_tab<F>(
-    id: impl Into<ElementId>,
+    tab_id: &'static str,
     tooltip_text: impl Into<String>,
     active: bool,
+    reduce_motion: bool,
     theme: &crate::theme::ThemeColors,
     icon: impl IntoElement + 'static,
     handler: F,
@@ -4779,7 +4927,9 @@ where
     let text = tooltip_text.into();
     let (bg_color, text_color) = mode_tab_colors(active, theme);
     let base = div()
-        .id(id)
+        .id(tab_id)
+        .relative()
+        .overflow_hidden()
         .tooltip(move |_window, cx| {
             let t = text.clone();
             cx.new(|_| TooltipView { text: t }).into()
@@ -4794,7 +4944,24 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        base.bg(bg_color).text_color(text_color).child(icon)
+        let underline = crate::views::motion::animated(
+            div()
+                .absolute()
+                .bottom(px(2.))
+                .left(px(8.))
+                .w(px(12.))
+                .h(px(2.))
+                .rounded_full()
+                .bg(theme.accent),
+            reduce_motion,
+            format!("mode_indicator_{tab_id}"),
+            140,
+            |el, delta| el.opacity(delta),
+        );
+        base.bg(bg_color)
+            .text_color(text_color)
+            .child(icon)
+            .child(underline)
     } else {
         base.text_color(text_color)
             .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))

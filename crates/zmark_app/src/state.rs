@@ -579,6 +579,11 @@ impl AppState {
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
+    pub fn set_reduce_motion(&mut self, enabled: bool) {
+        self.preferences.reduce_motion = enabled;
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
     pub fn set_tab_size(&mut self, tab_size: usize) {
         self.preferences.tab_size = tab_size;
         let _ = self.preferences.save_to_path(&self.preferences_path);

@@ -4,6 +4,7 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod actions;
 pub mod assets;
 pub mod editor_engine;
+pub mod frame_probe;
 pub mod local_images;
 pub mod platform;
 pub mod state;

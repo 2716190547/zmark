@@ -81,6 +81,9 @@ pub struct Preferences {
     pub auto_save_delay_ms: u64,
     #[serde(default = "default_true")]
     pub auto_save_on_blur: bool,
+    /// Skip interface transitions, pulses and other decorative motion.
+    #[serde(default)]
+    pub reduce_motion: bool,
     #[serde(default)]
     pub workspace_roots: Vec<PathBuf>,
 }
@@ -99,6 +102,7 @@ impl Default for Preferences {
             auto_save: true,
             auto_save_delay_ms: 1000,
             auto_save_on_blur: true,
+            reduce_motion: false,
             workspace_roots: Vec::new(),
         }
     }
@@ -200,6 +204,20 @@ mod tests {
         assert_eq!(Preferences::sanitize_line_height(1.29), 1.6);
         assert_eq!(Preferences::sanitize_line_height(1.71), 1.6);
         assert_eq!(Preferences::sanitize_line_height(f32::NAN), 1.6);
+    }
+
+    #[test]
+    fn reduce_motion_defaults_off_and_round_trips() {
+        let default = Preferences::default();
+        assert!(!default.reduce_motion);
+        let serialized = toml::to_string(&default).unwrap();
+        let parsed: Preferences = toml::from_str(&serialized).unwrap();
+        assert!(!parsed.reduce_motion);
+
+        let mut enabled = default;
+        enabled.reduce_motion = true;
+        let parsed: Preferences = toml::from_str(&toml::to_string(&enabled).unwrap()).unwrap();
+        assert!(parsed.reduce_motion);
     }
 
     #[test]

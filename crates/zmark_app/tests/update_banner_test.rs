@@ -19,6 +19,7 @@ async fn downloaded_update_shows_and_dismisses_the_restart_banner(cx: &mut TestA
 
     cx.update(|window, cx| {
         view.update(cx, |workspace, cx| {
+            workspace.state.preferences.reduce_motion = true;
             workspace.update_status = UpdateStatus::Downloaded("9.9.9".to_string());
             cx.notify();
         });

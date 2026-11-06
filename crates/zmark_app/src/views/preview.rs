@@ -45,6 +45,7 @@ pub fn render_preview_pane_with_callbacks(
     syntax_cache: Arc<std::sync::Mutex<zmark_core::syntax::SyntaxCache>>,
     failures: &[crate::syntax::VisibleSyntaxFailure],
     images: crate::local_images::SharedImages,
+    reduce_motion: bool,
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
@@ -126,6 +127,7 @@ pub fn render_preview_pane_with_callbacks(
                 &item_parsed.code_blocks,
                 &flat,
                 "0",
+                reduce_motion,
             ));
 
         let mut item = div()
@@ -307,6 +309,7 @@ fn render_block_element(
     code_blocks: &[zmark_core::ast::ParsedCodeBlock],
     flat: &zmark_core::ast::FlattenResult,
     path: &str,
+    reduce_motion: bool,
 ) -> AnyElement {
     match block {
         BlockElement::Heading { level, content } => {
@@ -444,6 +447,7 @@ fn render_block_element(
                     regions,
                     &syntax_cache,
                     code_blocks.iter().find(|b| b.child_path == occurrence_path),
+                    reduce_motion,
                 )
             }
         }
@@ -469,6 +473,7 @@ fn render_block_element(
                     code_blocks,
                     flat,
                     &child_path,
+                    reduce_motion,
                 ));
             }
 
@@ -505,6 +510,7 @@ fn render_block_element(
             code_blocks,
             flat,
             path,
+            reduce_motion,
         ),
         BlockElement::Table { headers, rows } => {
             let mut cur_offset = 0;
@@ -1222,6 +1228,7 @@ fn render_list_element(
     code_blocks: &[zmark_core::ast::ParsedCodeBlock],
     flat: &zmark_core::ast::FlattenResult,
     path: &str,
+    reduce_motion: bool,
 ) -> AnyElement {
     let mut item_elements = Vec::with_capacity(items.len());
 
@@ -1338,6 +1345,7 @@ fn render_list_element(
                         code_blocks,
                         flat,
                         &child_path,
+                    reduce_motion,
                     );
                     first_child_el = Some(
                         div()
@@ -1368,6 +1376,7 @@ fn render_list_element(
                         code_blocks,
                         flat,
                         &child_path,
+                    reduce_motion,
                     )
                 } else {
                     render_block_element(
@@ -1387,6 +1396,7 @@ fn render_list_element(
                         code_blocks,
                         flat,
                         &child_path,
+                    reduce_motion,
                     )
                 };
                 subsequent_child_els.push(
@@ -1463,6 +1473,7 @@ fn render_code_block(
     regions: Arc<RegionsRegistry>,
     syntax_cache: &Arc<std::sync::Mutex<zmark_core::syntax::SyntaxCache>>,
     occurrence: Option<&zmark_core::ast::ParsedCodeBlock>,
+    reduce_motion: bool,
 ) -> AnyElement {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     code.as_ref().hash(&mut hasher);
@@ -1599,8 +1610,8 @@ fn render_code_block(
                 cb(code_to_copy.clone(), hash, window, cx);
             }
         })
-        .child(
-            svg()
+        .child({
+            let icon = svg()
                 .path(if is_copied {
                     "icons/check.svg"
                 } else {
@@ -1611,8 +1622,26 @@ fn render_code_block(
                     theme.accent
                 } else {
                     theme.selection_text()
-                }),
-        );
+                });
+            if is_copied {
+                let occurrence_line = occurrence
+                    .map(|block| block.fence_open_line)
+                    .unwrap_or(block_ix);
+                let copy_instant = copied_code_hash
+                    .filter(|(copied_hash, _)| *copied_hash == hash)
+                    .map(|(_, instant)| format!("{instant:?}"))
+                    .unwrap_or_default();
+                crate::views::motion::animated(
+                    div().child(icon),
+                    reduce_motion,
+                    format!("copy_check_{hash}_{occurrence_line}_{copy_instant}"),
+                    120,
+                    |el, delta| el.opacity(delta),
+                )
+            } else {
+                icon.into_any_element()
+            }
+        });
 
     div()
         .id(SharedString::from(format!("code_block_{}", hash)))

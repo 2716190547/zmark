@@ -196,6 +196,21 @@ impl Render for SettingsWindowView {
             });
         });
 
+        let view_rm = cx.entity().clone();
+        let on_toggle_reduce_motion = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
+            view_rm.update(cx, |this, cx| {
+                this.preferences.reduce_motion = enabled;
+                let _ = this.preferences.save();
+                if let Some(ws) = this.workspace.upgrade() {
+                    ws.update(cx, |ws, cx| {
+                        ws.state.set_reduce_motion(enabled);
+                        cx.notify();
+                    });
+                }
+                cx.notify();
+            });
+        });
+
         let view_ts = cx.entity().clone();
         let on_set_tab_size = Arc::new(move |size: usize, _window: &mut Window, cx: &mut App| {
             view_ts.update(cx, |this, cx| {
@@ -303,10 +318,12 @@ impl Render for SettingsWindowView {
                             current_mode,
                             &current_palette,
                             effective_dark,
+                            self.preferences.reduce_motion,
                             &theme,
                             strings,
                             on_set_mode,
                             on_set_palette,
+                            on_toggle_reduce_motion,
                         )
                         .into_any_element(),
                         SettingsTab::EditorSave => render_editor_save_tab(
@@ -424,10 +441,12 @@ fn render_appearance_tab(
     current_mode: ThemeMode,
     current_palette: &str,
     effective_dark: bool,
+    reduce_motion: bool,
     theme: &ThemeColors,
     strings: &'static I18nStrings,
     on_set_mode: Arc<dyn Fn(ThemeMode, &mut Window, &mut App)>,
     on_set_palette: Arc<dyn Fn(&'static str, &mut Window, &mut App)>,
+    on_toggle_reduce_motion: Arc<dyn Fn(bool, &mut Window, &mut App)>,
 ) -> impl IntoElement {
     let m1 = on_set_mode.clone();
     let m2 = on_set_mode.clone();
@@ -552,6 +571,36 @@ fn render_appearance_tab(
                                 }))
                         })),
                 ),
+        )
+        .child(
+            div()
+                .w_full()
+                .py_2()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.text_primary)
+                                .child(strings.reduce_motion_label),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(strings.reduce_motion_desc),
+                        ),
+                )
+                .child(render_ios_toggle(reduce_motion, theme, move |_, window, cx| {
+                    on_toggle_reduce_motion(!reduce_motion, window, cx);
+                })),
         )
 }
 
