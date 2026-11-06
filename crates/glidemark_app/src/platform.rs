@@ -27,11 +27,31 @@ pub const LEADING_WINDOW_CONTROL_INSET: f32 = 76.0;
 
 /// Reserved space for native window controls: macOS draws traffic lights itself,
 /// Windows/Linux need room for the OS-drawn minimise/maximise/close buttons.
-pub const TRAILING_WINDOW_CONTROL_INSET: f32 = if cfg!(target_os = "macos") { 12.0 } else { 138.0 };
+pub const TRAILING_WINDOW_CONTROL_INSET: f32 = if cfg!(target_os = "macos") {
+    12.0
+} else {
+    138.0
+};
+
+/// Whether the app gaining activation requires ordering the main window front.
+///
+/// Only the inactive → active transition does work; repeated active callbacks
+/// (for example while the window is already frontmost) must stay no-ops.
+pub fn should_front_window(was_active: bool, is_active: bool) -> bool {
+    is_active && !was_active
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_transition_fronts_only_when_entering_active() {
+        assert!(should_front_window(false, true));
+        assert!(!should_front_window(true, true));
+        assert!(!should_front_window(true, false));
+        assert!(!should_front_window(false, false));
+    }
 
     #[test]
     fn font_stacks_and_chrome_follow_platform() {

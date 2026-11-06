@@ -99,9 +99,11 @@ Enjoy writing and reading with pure speed!
 
             let view_close = view.clone();
             window.on_window_should_close(cx, move |window, cx| {
-                view_close.update(cx, |this, cx| {
-                    this.on_window_should_close(Some(window), cx)
-                })
+                view_close.update(cx, |this, cx| this.on_window_should_close(Some(window), cx))
+            });
+
+            view.update(cx, |this, cx| {
+                this.install_window_activation_observer(window, cx);
             });
 
             view

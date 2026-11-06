@@ -40,12 +40,29 @@ async fn editor_overscroll_never_sends_preview_back_to_start(cx: &mut TestAppCon
         x: bounds.origin.x + bounds.size.width * 0.25,
         y: bounds.center().y,
     };
-    let count = cx.update(|_, cx| view.read(cx).state.doc().parsed.blocks.len());
+    let (count, editor_max) = cx.update(|_, cx| {
+        let ws = view.read(cx);
+        let max = f32::from(
+            ws.editor_scroll_handle
+                .0
+                .borrow()
+                .base_handle
+                .max_offset()
+                .height,
+        )
+        .max(0.0);
+        (ws.state.doc().parsed.blocks.len(), max)
+    });
+    let max_steps = ((editor_max / 500.0).ceil() as usize + 40).min(400);
 
     let mut prev_item = 0usize;
     let mut min_after_end = usize::MAX;
     let mut saw_end = false;
-    for _ in 0..400 {
+    let mut overscroll_steps = 0usize;
+    // Scroll until the preview reaches the last tenth, then keep wheeling for a
+    // fixed 40 events so the end-of-document echo path is still exercised. The
+    // old fixed 400 iterations spent most of their time long past the end.
+    for _ in 0..max_steps {
         let wheel = ScrollWheelEvent {
             position: wheel_at,
             delta: ScrollDelta::Pixels(point(px(0.), px(-500.))),
@@ -68,8 +85,12 @@ async fn editor_overscroll_never_sends_preview_back_to_start(cx: &mut TestAppCon
         if item >= count * 9 / 10 {
             saw_end = true;
             min_after_end = min_after_end.min(item);
+            overscroll_steps += 1;
         }
         prev_item = item;
+        if saw_end && overscroll_steps >= 40 {
+            break;
+        }
     }
 
     assert!(saw_end, "scrolling the editor must reach the document end");
@@ -138,7 +159,10 @@ async fn in_block_offset_uses_measured_block_height(cx: &mut TestAppContext) {
         }
     }
 
-    assert!(offsets.len() > 5, "expected several measured in-block offsets");
+    assert!(
+        offsets.len() > 5,
+        "expected several measured in-block offsets"
+    );
     assert!(
         offsets
             .iter()
@@ -148,9 +172,9 @@ async fn in_block_offset_uses_measured_block_height(cx: &mut TestAppContext) {
     // A fixed 100px scale can only ever land on multiples of 25 (0/25/50/75/100).
     // Proportional offsets derived from real heights do not.
     assert!(
-        offsets.iter().any(|(_, offset, height)| {
-            *height > 40.0 && (*offset % 25.0).abs() > 0.01
-        }),
+        offsets
+            .iter()
+            .any(|(_, offset, height)| { *height > 40.0 && (*offset % 25.0).abs() > 0.01 }),
         "in-block offsets must come from the measured block height: {offsets:?}"
     );
 }

@@ -61,6 +61,8 @@ pub struct WorkspaceView {
     pub last_scroll_origin: Option<(ScrollOrigin, std::time::Instant)>,
     pub lightbox: LightboxState,
     pub window_handle: Option<AnyWindowHandle>,
+    window_activation_subscription: Option<Subscription>,
+    window_was_active: bool,
     pub error_banner: Option<String>,
     pub search_focused: bool,
     pub preview_focused: bool,
@@ -86,7 +88,8 @@ pub struct WorkspaceView {
     pub syntax_request_counter: u64,
     pub syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
     pub syntax_attempts: std::collections::HashMap<glidemark_core::syntax::CodeKey, (u8, u8)>,
-    pub syntax_block_states: std::collections::HashMap<glidemark_core::syntax::CodeKey, SyntaxBlockState>,
+    pub syntax_block_states:
+        std::collections::HashMap<glidemark_core::syntax::CodeKey, SyntaxBlockState>,
     pub syntax_defer_armed: bool,
     pub last_visible_syntax_keys: std::collections::HashSet<glidemark_core::syntax::CodeKey>,
     pub source_code_blocks: Arc<Vec<glidemark_core::ast::ParsedCodeBlock>>,
@@ -95,7 +98,8 @@ pub struct WorkspaceView {
     pub syntax_warm_task_id: u64,
     pub syntax_warm_task: Option<gpui::Task<()>>,
     pub syntax_warm_pending: bool,
-    pub syntax_invalid_positions: std::collections::HashSet<(glidemark_core::syntax::CodeKey, usize)>,
+    pub syntax_invalid_positions:
+        std::collections::HashSet<(glidemark_core::syntax::CodeKey, usize)>,
     pub current_reading_pane: Option<PaneKind>,
     pub last_reading_pane: Option<PaneKind>,
     pub current_ordered_candidates: Vec<glidemark_core::syntax::CodeKey>,
@@ -115,9 +119,14 @@ pub enum SyntaxBlockState {
 }
 
 impl SyntaxBlockState {
-    pub fn localized_reason<'a>(&self, strings: &'a glidemark_core::i18n::I18nStrings) -> Option<&'a str> {
+    pub fn localized_reason<'a>(
+        &self,
+        strings: &'a glidemark_core::i18n::I18nStrings,
+    ) -> Option<&'a str> {
         match self {
-            SyntaxBlockState::Ready | SyntaxBlockState::UnsupportedLanguage | SyntaxBlockState::WaitingWarm => None,
+            SyntaxBlockState::Ready
+            | SyntaxBlockState::UnsupportedLanguage
+            | SyntaxBlockState::WaitingWarm => None,
             SyntaxBlockState::BudgetExceeded => Some(strings.syntax_budget_exceeded),
             SyntaxBlockState::ResourceConstrained => Some(strings.syntax_resource_constrained),
             SyntaxBlockState::HardLimit => Some(strings.syntax_hard_limit),
@@ -155,7 +164,8 @@ impl WorkspaceView {
                         let _ = view.update(app, |workspace, cx| {
                             workspace.update_search_query(&q, cx);
                         });
-                    }).detach();
+                    })
+                    .detach();
                 })
         });
         let mut view = Self {
@@ -189,6 +199,8 @@ impl WorkspaceView {
             last_scroll_origin: None,
             lightbox: LightboxState::new(),
             window_handle: None,
+            window_activation_subscription: None,
+            window_was_active: false,
             error_banner: None,
             search_focused: false,
             preview_focused: false,
@@ -206,13 +218,17 @@ impl WorkspaceView {
             cached_visual_font_bits: 0,
             cached_visual_lines: Arc::new(Vec::new()),
             rendered_regions: Arc::new(std::sync::Mutex::new(Vec::new())),
-            local_images: Arc::new(std::sync::Mutex::new(crate::local_images::LocalImages::default())),
+            local_images: Arc::new(std::sync::Mutex::new(
+                crate::local_images::LocalImages::default(),
+            )),
             local_image_task: None,
             syntax_active_task: None,
             syntax_pending_request: None,
             syntax_cancel_flag: Arc::new(AtomicBool::new(false)),
             syntax_request_counter: 0,
-            syntax_cache: Arc::new(std::sync::Mutex::new(glidemark_core::syntax::SyntaxCache::new())),
+            syntax_cache: Arc::new(std::sync::Mutex::new(
+                glidemark_core::syntax::SyntaxCache::new(),
+            )),
             syntax_attempts: std::collections::HashMap::new(),
             syntax_block_states: std::collections::HashMap::new(),
             syntax_defer_armed: false,
@@ -239,9 +255,13 @@ impl WorkspaceView {
         cx.on_release(|view, cx| {
             let mut images = view.local_images.lock().unwrap();
             for (_, state) in std::mem::take(&mut images.entries) {
-                if let crate::local_images::ImageState::Ready(image) = state { images.retired.push(image); }
+                if let crate::local_images::ImageState::Ready(image) = state {
+                    images.retired.push(image);
+                }
             }
-            if let Some(image) = images.loading.take() { images.retired.push(image); }
+            if let Some(image) = images.loading.take() {
+                images.retired.push(image);
+            }
             for image in images.retired.drain(..) {
                 let path = image.snapshot.path().to_path_buf();
                 if let Some(handle) = view.window_handle {
@@ -249,9 +269,12 @@ impl WorkspaceView {
                         crate::views::lightbox::release_lightbox_image(&path, window, cx);
                     });
                 }
-                cx.remove_asset::<gpui::ImgResourceLoader>(&gpui::Resource::Path(Arc::from(path.as_path())));
+                cx.remove_asset::<gpui::ImgResourceLoader>(&gpui::Resource::Path(Arc::from(
+                    path.as_path(),
+                )));
             }
-        }).detach();
+        })
+        .detach();
         view.start_warm_coordination_task(cx);
 
         view
@@ -266,7 +289,8 @@ impl WorkspaceView {
         self.preview_focused = false;
         self.preview_autoscroll_task = None;
         self.preview_mouse_window_pos = None;
-        self.preview_list.reset(self.state.doc().parsed.blocks.len());
+        self.preview_list
+            .reset(self.state.doc().parsed.blocks.len());
         self.last_preview_sync_offset = 0.0;
         self.rendered_regions.lock().unwrap().clear();
         self.syntax_cache.lock().unwrap().clear();
@@ -283,15 +307,17 @@ impl WorkspaceView {
         self.state.set_search_query(query);
         if let Some(job) = self.state.prepare_search_job() {
             cx.spawn(async move |this, app| {
-                let result = app.background_executor().spawn(async move {
-                    job.execute()
-                }).await;
+                let result = app
+                    .background_executor()
+                    .spawn(async move { job.execute() })
+                    .await;
                 let _ = this.update(app, |view, cx| {
                     if view.state.apply_search_result(result) {
                         cx.notify();
                     }
                 });
-            }).detach();
+            })
+            .detach();
         }
         cx.notify();
     }
@@ -300,12 +326,27 @@ impl WorkspaceView {
         let next = {
             let mut images = self.local_images.lock().unwrap();
             images.evict_hidden();
-            if !images.retired.is_empty() { cx.notify(); return; }
-            if self.local_image_task.is_some() { return; }
-            images.wanted.iter().find(|url| matches!(images.entries.get(*url), Some(crate::local_images::ImageState::Waiting)))
+            if !images.retired.is_empty() {
+                cx.notify();
+                return;
+            }
+            if self.local_image_task.is_some() {
+                return;
+            }
+            images
+                .wanted
+                .iter()
+                .find(|url| {
+                    matches!(
+                        images.entries.get(*url),
+                        Some(crate::local_images::ImageState::Waiting)
+                    )
+                })
                 .map(|url| (images.generation, url.clone(), images.document.clone()))
         };
-        let Some((generation, url, document)) = next else { return; };
+        let Some((generation, url, document)) = next else {
+            return;
+        };
         self.local_image_task = Some(cx.spawn(async move |this, app| {
             let load_url = url.clone();
             let (mut result, candidates) = app.background_executor().spawn(async move {
@@ -425,7 +466,8 @@ impl WorkspaceView {
     pub fn reset_syntax_attempts_and_refresh(&mut self, cx: &mut Context<Self>) {
         self.local_images.lock().unwrap().refresh();
         self.syntax_attempts.clear();
-        self.syntax_block_states.retain(|_, s| matches!(s, SyntaxBlockState::Ready));
+        self.syntax_block_states
+            .retain(|_, s| matches!(s, SyntaxBlockState::Ready));
         self.last_visible_syntax_keys.clear();
         self.current_ordered_candidates.clear();
         for state in self.syntax_warm_states.values_mut() {
@@ -443,47 +485,66 @@ impl WorkspaceView {
         self.syntax_warm_task_id += 1;
         let task_id = self.syntax_warm_task_id;
         self.syntax_warm_task = Some(cx.spawn(async move |this, app| {
-            let languages = this.read_with(app, |this, _| {
-                this.state.doc().parsed.code_blocks.iter().filter_map(|block| block.key.language).collect::<std::collections::HashSet<_>>()
-            }).unwrap_or_default();
+            let languages = this
+                .read_with(app, |this, _| {
+                    this.state
+                        .doc()
+                        .parsed
+                        .code_blocks
+                        .iter()
+                        .filter_map(|block| block.key.language)
+                        .collect::<std::collections::HashSet<_>>()
+                })
+                .unwrap_or_default();
             for &lang in &glidemark_core::syntax::SUPPORTED_CANONICAL_LANGUAGES {
-                if !languages.contains(lang) { continue; }
-                let should_run = this.read_with(app, |this, _cx| {
-                    if task_id != this.syntax_warm_task_id {
-                        return false;
-                    }
-                    this.syntax_warm_states.get(lang).copied() != Some(WarmState::Ready)
-                }).unwrap_or(false);
+                if !languages.contains(lang) {
+                    continue;
+                }
+                let should_run = this
+                    .read_with(app, |this, _cx| {
+                        if task_id != this.syntax_warm_task_id {
+                            return false;
+                        }
+                        this.syntax_warm_states.get(lang).copied() != Some(WarmState::Ready)
+                    })
+                    .unwrap_or(false);
 
                 if !should_run {
                     continue;
                 }
 
-                let ok = app.background_executor().spawn(async move {
-                    glidemark_core::syntax::validate_language_warm(lang)
-                }).await;
+                let ok = app
+                    .background_executor()
+                    .spawn(async move { glidemark_core::syntax::validate_language_warm(lang) })
+                    .await;
 
                 let success = if ok {
                     true
                 } else {
-                    app.background_executor().spawn(async move {
-                        glidemark_core::syntax::validate_language_warm(lang)
-                    }).await
+                    app.background_executor()
+                        .spawn(async move { glidemark_core::syntax::validate_language_warm(lang) })
+                        .await
                 };
 
-                let new_state = if success { WarmState::Ready } else { WarmState::InitFailed };
+                let new_state = if success {
+                    WarmState::Ready
+                } else {
+                    WarmState::InitFailed
+                };
 
-                let cont = this.update(app, |this, cx| {
-                    if task_id == this.syntax_warm_task_id {
-                        this.syntax_warm_states.insert(lang, new_state);
-                        this.last_visible_syntax_keys.clear();
-                        this.process_visible_syntax_defer(cx);
-                        cx.notify();
-                        true
-                    } else {
-                        false
-                    }
-                }).unwrap_or(false);
+                let cont = this
+                    .update(app, |this, cx| {
+                        if task_id == this.syntax_warm_task_id {
+                            this.syntax_warm_states.insert(lang, new_state);
+                            this.last_visible_syntax_keys.clear();
+                            this.process_visible_syntax_defer(cx);
+                            cx.notify();
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or(false);
 
                 if !cont {
                     break;
@@ -511,23 +572,42 @@ impl WorkspaceView {
             if let Some(spans) = cache.get(key) {
                 if cache.insert(key.clone(), spans, &retained) {
                     retained.insert(key.clone());
-                    self.syntax_block_states.insert(key.clone(), SyntaxBlockState::Ready);
+                    self.syntax_block_states
+                        .insert(key.clone(), SyntaxBlockState::Ready);
                 } else {
-                    self.syntax_block_states.insert(key.clone(), SyntaxBlockState::ResourceConstrained);
+                    self.syntax_block_states
+                        .insert(key.clone(), SyntaxBlockState::ResourceConstrained);
                 }
             }
         }
     }
 
-    fn failure_for_occurrence(&self, key: &glidemark_core::syntax::CodeKey, open_line: usize, is_valid: bool) -> Option<VisibleSyntaxFailure> {
-        let state = if !is_valid || self.syntax_invalid_positions.contains(&(key.clone(), open_line)) {
+    fn failure_for_occurrence(
+        &self,
+        key: &glidemark_core::syntax::CodeKey,
+        open_line: usize,
+        is_valid: bool,
+    ) -> Option<VisibleSyntaxFailure> {
+        let state = if !is_valid
+            || self
+                .syntax_invalid_positions
+                .contains(&(key.clone(), open_line))
+        {
             SyntaxBlockState::MappingInvalid
-        } else if key.language.is_some_and(|lang| self.syntax_warm_states.get(lang) == Some(&WarmState::InitFailed)) {
+        } else if key
+            .language
+            .is_some_and(|lang| self.syntax_warm_states.get(lang) == Some(&WarmState::InitFailed))
+        {
             SyntaxBlockState::InitFailed
         } else {
             *self.syntax_block_states.get(key)?
         };
-        state.localized_reason(self.state.strings).map(|reason| VisibleSyntaxFailure { source_line: open_line + 1, reason })
+        state
+            .localized_reason(self.state.strings)
+            .map(|reason| VisibleSyntaxFailure {
+                source_line: open_line + 1,
+                reason,
+            })
     }
 
     pub fn collect_visible_editor_failures(&self) -> Vec<VisibleSyntaxFailure> {
@@ -541,26 +621,39 @@ impl WorkspaceView {
         if f32::from(editor_bounds.size.height) <= 0.0 {
             return failures;
         }
-        let offset_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
+        let offset_y =
+            (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
         let row_h = crate::views::editor::calculate_line_row_height(
             self.state.preferences.font_size,
-            glidemark_core::config::Preferences::sanitize_line_height(self.state.preferences.line_height),
+            glidemark_core::config::Preferences::sanitize_line_height(
+                self.state.preferences.line_height,
+            ),
         );
         let start_vis = (offset_y / row_h).floor().max(0.0) as usize;
         let visible_h = f32::from(editor_bounds.size.height);
         let visible_line_count = (visible_h / row_h).ceil().max(1.0) as usize;
         let end_vis = start_vis + visible_line_count + 1;
 
-        let start_phys = self.cached_visual_lines.get(start_vis).map(|vl| vl.physical_line_idx).unwrap_or(0);
-        let end_phys = self.cached_visual_lines.get(end_vis.min(self.cached_visual_lines.len().saturating_sub(1))).map(|vl| vl.physical_line_idx).unwrap_or(usize::MAX);
+        let start_phys = self
+            .cached_visual_lines
+            .get(start_vis)
+            .map(|vl| vl.physical_line_idx)
+            .unwrap_or(0);
+        let end_phys = self
+            .cached_visual_lines
+            .get(end_vis.min(self.cached_visual_lines.len().saturating_sub(1)))
+            .map(|vl| vl.physical_line_idx)
+            .unwrap_or(usize::MAX);
 
         for b in self.source_code_blocks.iter() {
             let b_start = b.fence_open_line;
-            let b_end = b.fence_close_line.unwrap_or_else(|| {
-                b.lines.last().map(|l| l.source_line_idx).unwrap_or(b_start)
-            });
+            let b_end = b
+                .fence_close_line
+                .unwrap_or_else(|| b.lines.last().map(|l| l.source_line_idx).unwrap_or(b_start));
             if b_start <= end_phys && b_end >= start_phys && !b.key.payload.is_empty() {
-                if let Some(failure) = self.failure_for_occurrence(&b.key, b.fence_open_line, b.is_valid) {
+                if let Some(failure) =
+                    self.failure_for_occurrence(&b.key, b.fence_open_line, b.is_valid)
+                {
                     failures.push(failure);
                 }
             }
@@ -580,13 +673,21 @@ impl WorkspaceView {
         let mut seen = std::collections::HashSet::new();
         for r in regions.iter() {
             if let (Some(key), Some(open_line)) = (&r.content_key, r.fence_open_line) {
-                if !key.payload.is_empty() && preview_bounds.intersects(&r.bounds)
+                if !key.payload.is_empty()
+                    && preview_bounds.intersects(&r.bounds)
                     && seen.insert((key.clone(), open_line))
                 {
-                    if let Some(block) = self.state.doc().parsed.code_blocks.iter()
+                    if let Some(block) = self
+                        .state
+                        .doc()
+                        .parsed
+                        .code_blocks
+                        .iter()
                         .find(|b| b.key == *key && b.fence_open_line == open_line)
                     {
-                        if let Some(failure) = self.failure_for_occurrence(key, open_line, block.is_valid) {
+                        if let Some(failure) =
+                            self.failure_for_occurrence(key, open_line, block.is_valid)
+                        {
                             failures.push(failure);
                         }
                     }
@@ -604,20 +705,31 @@ impl WorkspaceView {
             return;
         }
         let cursor_line = self.state.editor.cursor().0 + 1;
-        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
+        let map =
+            glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
         let (block_index, inner_progress) = map.source_line_to_preview_progress(cursor_line);
-        self.preview_list
-            .set_scroll_offset(self.preview_list.offset_for_block(block_index, inner_progress));
+        self.preview_list.set_scroll_offset(
+            self.preview_list
+                .offset_for_block(block_index, inner_progress),
+        );
         self.last_preview_sync_offset = self.preview_list.offset();
     }
 
     fn editor_text_start_offset(&self, window: &Window) -> f32 {
-        let gutter = crate::views::editor::editor_gutter_width(window.text_system(), self.state.editor.lines.len(), self.state.preferences.font_size);
+        let gutter = crate::views::editor::editor_gutter_width(
+            window.text_system(),
+            self.state.editor.lines.len(),
+            self.state.preferences.font_size,
+        );
         crate::views::editor::editor_text_start_offset(gutter)
     }
 
     pub fn compute_editor_max_width_px(&self, window: &Window) -> f32 {
-        let drawer_w = if self.state.drawer_open { px(crate::views::editor::DRAWER_WIDTH) } else { px(0.) };
+        let drawer_w = if self.state.drawer_open {
+            px(crate::views::editor::DRAWER_WIDTH)
+        } else {
+            px(0.)
+        };
         let available_w = match self.state.view_mode {
             ViewMode::Split => (window.viewport_size().width - drawer_w) * self.split_ratio,
             _ => window.viewport_size().width - drawer_w,
@@ -630,7 +742,11 @@ impl WorkspaceView {
         for block in self.source_code_blocks.iter() {
             let start = block.fence_open_line;
             let end = block.fence_close_line.unwrap_or_else(|| {
-                block.lines.last().map(|l| l.source_line_idx).unwrap_or(start)
+                block
+                    .lines
+                    .last()
+                    .map(|l| l.source_line_idx)
+                    .unwrap_or(start)
             });
             for i in start..=end.min(line_count.saturating_sub(1)) {
                 mask[i] = true;
@@ -639,7 +755,10 @@ impl WorkspaceView {
         mask
     }
 
-    pub fn compute_visual_lines(&mut self, window: &Window) -> Arc<Vec<crate::editor_engine::VisualLine>> {
+    pub fn compute_visual_lines(
+        &mut self,
+        window: &Window,
+    ) -> Arc<Vec<crate::editor_engine::VisualLine>> {
         let max_width_px = self.compute_editor_max_width_px(window);
         let font_size = self.state.preferences.font_size;
         let rev = self.state.editor.revision;
@@ -647,7 +766,8 @@ impl WorkspaceView {
         let font_bits = font_size.to_bits();
 
         let ast_blocks_changed = !self.state.doc().is_parse_stale()
-            && (self.source_code_blocks_rev != rev || *self.source_code_blocks != self.state.doc().parsed.code_blocks);
+            && (self.source_code_blocks_rev != rev
+                || *self.source_code_blocks != self.state.doc().parsed.code_blocks);
 
         if !self.cached_visual_lines.is_empty()
             && self.cached_visual_rev == rev
@@ -665,7 +785,8 @@ impl WorkspaceView {
                 self.syntax_invalid_positions.clear();
                 for b in self.state.doc().parsed.code_blocks.iter() {
                     if !b.is_valid {
-                        self.syntax_invalid_positions.insert((b.key.clone(), b.fence_open_line));
+                        self.syntax_invalid_positions
+                            .insert((b.key.clone(), b.fence_open_line));
                     }
                 }
             }
@@ -702,19 +823,30 @@ impl WorkspaceView {
         // 1. Preview candidates from rendered preview regions that intersect preview content bounds
         if matches!(self.state.view_mode, ViewMode::Preview | ViewMode::Split) {
             if let Some(preview_bounds) = self.preview_content_bounds {
-                let preview_center_y = f32::from(preview_bounds.origin.y + preview_bounds.size.height * 0.5);
+                let preview_center_y =
+                    f32::from(preview_bounds.origin.y + preview_bounds.size.height * 0.5);
                 let regions = self.rendered_regions.lock().unwrap();
                 for r in regions.iter() {
                     if let Some(ref key) = r.content_key {
                         if !key.payload.is_empty() && preview_bounds.intersects(&r.bounds) {
-                            let Some(block) = self.state.doc().parsed.code_blocks.iter().find(|b|
-                                Some(b.fence_open_line) == r.fence_open_line && b.key == *key) else { continue; };
+                            let Some(block) =
+                                self.state.doc().parsed.code_blocks.iter().find(|b| {
+                                    Some(b.fence_open_line) == r.fence_open_line && b.key == *key
+                                })
+                            else {
+                                continue;
+                            };
                             let doc_line = block.fence_open_line;
-                            if !block.is_valid || self.syntax_invalid_positions.contains(&(key.clone(), doc_line)) {
+                            if !block.is_valid
+                                || self
+                                    .syntax_invalid_positions
+                                    .contains(&(key.clone(), doc_line))
+                            {
                                 continue;
                             }
 
-                            let region_mid_y = f32::from(r.bounds.origin.y + r.bounds.size.height * 0.5);
+                            let region_mid_y =
+                                f32::from(r.bounds.origin.y + r.bounds.size.height * 0.5);
                             let dist = (region_mid_y - preview_center_y).abs();
                             candidates.push(CandidateItem {
                                 key: key.clone(),
@@ -732,10 +864,14 @@ impl WorkspaceView {
         if matches!(self.state.view_mode, ViewMode::Source | ViewMode::Split) {
             if let Some(editor_bounds) = self.editor_content_bounds {
                 if f32::from(editor_bounds.size.height) > 0.0 {
-                    let offset_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
+                    let offset_y =
+                        (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y))
+                            .max(0.0);
                     let row_h = crate::views::editor::calculate_line_row_height(
                         self.state.preferences.font_size,
-                        glidemark_core::config::Preferences::sanitize_line_height(self.state.preferences.line_height),
+                        glidemark_core::config::Preferences::sanitize_line_height(
+                            self.state.preferences.line_height,
+                        ),
                     );
                     let visible_h = f32::from(editor_bounds.size.height);
                     let viewport_center_y = offset_y + visible_h * 0.5;
@@ -743,8 +879,16 @@ impl WorkspaceView {
                     let visible_line_count = (visible_h / row_h).ceil().max(1.0) as usize;
                     let end_vis = start_vis + visible_line_count + 1;
 
-                    let start_phys = self.cached_visual_lines.get(start_vis).map(|vl| vl.physical_line_idx).unwrap_or(0);
-                    let end_phys = self.cached_visual_lines.get(end_vis.min(self.cached_visual_lines.len().saturating_sub(1))).map(|vl| vl.physical_line_idx).unwrap_or(usize::MAX);
+                    let start_phys = self
+                        .cached_visual_lines
+                        .get(start_vis)
+                        .map(|vl| vl.physical_line_idx)
+                        .unwrap_or(0);
+                    let end_phys = self
+                        .cached_visual_lines
+                        .get(end_vis.min(self.cached_visual_lines.len().saturating_sub(1)))
+                        .map(|vl| vl.physical_line_idx)
+                        .unwrap_or(usize::MAX);
 
                     for b in self.source_code_blocks.iter() {
                         let b_start = b.fence_open_line;
@@ -752,7 +896,10 @@ impl WorkspaceView {
                             b.lines.last().map(|l| l.source_line_idx).unwrap_or(b_start)
                         });
                         if b_start <= end_phys && b_end >= start_phys && !b.key.payload.is_empty() {
-                            if self.syntax_invalid_positions.contains(&(b.key.clone(), b.fence_open_line)) {
+                            if self
+                                .syntax_invalid_positions
+                                .contains(&(b.key.clone(), b.fence_open_line))
+                            {
                                 continue;
                             }
                             let block_mid_line = (b_start + b_end) as f32 * 0.5;
@@ -802,7 +949,8 @@ impl WorkspaceView {
 
         let order_changed = ordered_visible_keys != self.current_ordered_candidates
             || self.current_reading_pane != self.last_evaluated_reading_pane;
-        let current_keys_set: std::collections::HashSet<_> = ordered_visible_keys.iter().cloned().collect();
+        let current_keys_set: std::collections::HashSet<_> =
+            ordered_visible_keys.iter().cloned().collect();
 
         if !order_changed && current_keys_set == self.last_visible_syntax_keys {
             return;
@@ -821,11 +969,13 @@ impl WorkspaceView {
                 if let Some(state) = self.syntax_warm_states.get(lang) {
                     match state {
                         WarmState::Waiting => {
-                            self.syntax_block_states.insert(key.clone(), SyntaxBlockState::WaitingWarm);
+                            self.syntax_block_states
+                                .insert(key.clone(), SyntaxBlockState::WaitingWarm);
                             continue;
                         }
                         WarmState::InitFailed => {
-                            self.syntax_block_states.insert(key.clone(), SyntaxBlockState::InitFailed);
+                            self.syntax_block_states
+                                .insert(key.clone(), SyntaxBlockState::InitFailed);
                             continue;
                         }
                         WarmState::Ready => {}
@@ -894,21 +1044,27 @@ impl WorkspaceView {
         let blocks = request.blocks.clone();
 
         self.syntax_active_task = Some(cx.spawn(async move |this, app| {
-            let parsed_results = app.background_executor().spawn(async move {
-                let mut results: Vec<(glidemark_core::syntax::CodeKey, glidemark_core::syntax::ParseResult)> = Vec::with_capacity(blocks.len());
-                for key in blocks {
-                    if cancel.load(Ordering::Relaxed) {
-                        break;
+            let parsed_results = app
+                .background_executor()
+                .spawn(async move {
+                    let mut results: Vec<(
+                        glidemark_core::syntax::CodeKey,
+                        glidemark_core::syntax::ParseResult,
+                    )> = Vec::with_capacity(blocks.len());
+                    for key in blocks {
+                        if cancel.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let res = glidemark_core::syntax::parse_code_spans_bounded(
+                            &key.payload,
+                            key.language,
+                            Some(&cancel),
+                        );
+                        results.push((key, res));
                     }
-                    let res = glidemark_core::syntax::parse_code_spans_bounded(
-                        &key.payload,
-                        key.language,
-                        Some(&cancel),
-                    );
-                    results.push((key, res));
-                }
-                results
-            }).await;
+                    results
+                })
+                .await;
 
             let _ = this.update(app, |this, cx| {
                 this.syntax_active_task = None;
@@ -931,28 +1087,34 @@ impl WorkspaceView {
                                 new_ready.insert(key, spans);
                             }
                             glidemark_core::syntax::ParseResult::BudgetExceeded => {
-                                let (_gen, count) = this.syntax_attempts.entry(key.clone()).or_insert((0, 1));
+                                let (_gen, count) =
+                                    this.syntax_attempts.entry(key.clone()).or_insert((0, 1));
                                 if *count < 2 {
                                     *count += 1;
                                     retry_blocks.push(key);
                                 } else {
-                                    this.syntax_block_states.insert(key, SyntaxBlockState::BudgetExceeded);
+                                    this.syntax_block_states
+                                        .insert(key, SyntaxBlockState::BudgetExceeded);
                                 }
                             }
                             glidemark_core::syntax::ParseResult::Cancelled => {}
                             glidemark_core::syntax::ParseResult::HardLimit => {
-                                this.syntax_block_states.insert(key, SyntaxBlockState::HardLimit);
+                                this.syntax_block_states
+                                    .insert(key, SyntaxBlockState::HardLimit);
                             }
                             glidemark_core::syntax::ParseResult::UnsupportedLanguage => {
-                                this.syntax_block_states.insert(key, SyntaxBlockState::UnsupportedLanguage);
+                                this.syntax_block_states
+                                    .insert(key, SyntaxBlockState::UnsupportedLanguage);
                             }
                             glidemark_core::syntax::ParseResult::InitFailed => {
-                                this.syntax_block_states.insert(key, SyntaxBlockState::InitFailed);
+                                this.syntax_block_states
+                                    .insert(key, SyntaxBlockState::InitFailed);
                             }
                         }
                     }
 
-                    let snapshot_matches = request.ordered_candidates == this.current_ordered_candidates
+                    let snapshot_matches = request.ordered_candidates
+                        == this.current_ordered_candidates
                         && request.reading_pane == this.current_reading_pane;
 
                     let eval_order = if snapshot_matches {
@@ -968,16 +1130,24 @@ impl WorkspaceView {
                         if let Some(spans) = new_ready.remove(candidate) {
                             if cache.insert(candidate.clone(), spans, &retained) {
                                 retained.insert(candidate.clone());
-                                this.syntax_block_states.insert(candidate.clone(), SyntaxBlockState::Ready);
+                                this.syntax_block_states
+                                    .insert(candidate.clone(), SyntaxBlockState::Ready);
                             } else {
-                                this.syntax_block_states.insert(candidate.clone(), SyntaxBlockState::ResourceConstrained);
+                                this.syntax_block_states.insert(
+                                    candidate.clone(),
+                                    SyntaxBlockState::ResourceConstrained,
+                                );
                             }
                         } else if let Some(spans) = cache.get(candidate) {
                             if cache.insert(candidate.clone(), spans, &retained) {
                                 retained.insert(candidate.clone());
-                                this.syntax_block_states.insert(candidate.clone(), SyntaxBlockState::Ready);
+                                this.syntax_block_states
+                                    .insert(candidate.clone(), SyntaxBlockState::Ready);
                             } else {
-                                this.syntax_block_states.insert(candidate.clone(), SyntaxBlockState::ResourceConstrained);
+                                this.syntax_block_states.insert(
+                                    candidate.clone(),
+                                    SyntaxBlockState::ResourceConstrained,
+                                );
                             }
                         }
                     }
@@ -1008,88 +1178,204 @@ impl WorkspaceView {
     }
 
     /// Synchronizes editor wheel scrolling to the preview pane with 100ms echo suppression.
-    pub fn handle_editor_scroll_wheel(&mut self, _event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// The wheel event is projected to where GPUI's native scroll is about to put
+    /// the editor, instead of reading the pre-event offset. Events that cannot
+    /// move the editor (already at the top/bottom) no longer drag the preview.
+    pub fn handle_editor_scroll_wheel(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
-        if self.state.view_mode != ViewMode::Split || self.state.doc().is_parse_stale() || self.state.doc().parsed.anchors.is_empty() {
+        if self.state.view_mode != ViewMode::Split
+            || self.state.doc().is_parse_stale()
+            || self.state.doc().parsed.anchors.is_empty()
+        {
             return;
         }
         let now = std::time::Instant::now();
         if let Some((origin, time)) = self.last_scroll_origin {
-            if origin == ScrollOrigin::Preview && now.duration_since(time) < std::time::Duration::from_millis(100) {
+            if origin == ScrollOrigin::Preview
+                && now.duration_since(time) < std::time::Duration::from_millis(100)
+            {
                 return;
             }
         }
+        let wheel_dy = f32::from(event.delta.pixel_delta(window.line_height()).y);
+        if wheel_dy == 0.0 {
+            return;
+        }
+        let (current_y, max_y) = {
+            let handle = self.editor_scroll_handle.0.borrow();
+            (
+                (-f32::from(handle.base_handle.offset().y)).max(0.0),
+                f32::from(handle.base_handle.max_offset().height).max(0.0),
+            )
+        };
+        // GPUI applies `scroll_offset.y += delta_y`; content offset is its negation.
+        let projected_y = projected_scroll_offset(current_y, wheel_dy, max_y);
+        if (projected_y - current_y).abs() <= 0.5 {
+            // The editor cannot move in this direction; leave the preview alone.
+            return;
+        }
         self.last_scroll_origin = Some((ScrollOrigin::Editor, now));
 
-        let visual_lines = self.compute_visual_lines(window);
-        let scroll_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
-        let row_h = crate::views::editor::calculate_line_row_height(
-            self.state.preferences.font_size,
-            self.state.preferences.line_height,
-        ).max(1.0);
-        let top_vis_index = ((scroll_y / row_h).floor() as usize)
-            .min(visual_lines.len().saturating_sub(1));
-        let vl_opt = visual_lines.get(top_vis_index);
-        let phys_line_idx = vl_opt.map(|vl| vl.physical_line_idx).unwrap_or(0);
-        let phys_line = phys_line_idx + 1;
-        let subline_idx = vl_opt.map(|vl| vl.subline_idx).unwrap_or(0);
-        let total_sublines = visual_lines
-            .iter()
-            .filter(|vl| vl.physical_line_idx == phys_line_idx)
-            .count()
-            .max(1);
-
-        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
-        let (block_index, inner_progress) = map.source_line_to_preview_progress(phys_line);
-        let fraction = calculate_subline_scroll_fraction(inner_progress, subline_idx, total_sublines);
-        // Size-table offsets work for blocks that have never been rendered, so the
-        // preview no longer clamps back into the measured region at the document end.
-        self.preview_list
-            .set_scroll_offset(self.preview_list.offset_for_block(block_index, fraction));
+        let target = if projected_y <= 0.5 {
+            0.0
+        } else if projected_y >= max_y - 0.5 {
+            self.preview_list.max_scroll()
+        } else {
+            let visual_lines = self.compute_visual_lines(window);
+            let row_h = crate::views::editor::calculate_line_row_height(
+                self.state.preferences.font_size,
+                self.state.preferences.line_height,
+            )
+            .max(1.0);
+            let top_vis_index =
+                ((projected_y / row_h).floor() as usize).min(visual_lines.len().saturating_sub(1));
+            let vl_opt = visual_lines.get(top_vis_index);
+            let phys_line_idx = vl_opt.map(|vl| vl.physical_line_idx).unwrap_or(0);
+            let phys_line = phys_line_idx + 1;
+            let subline_idx = vl_opt.map(|vl| vl.subline_idx).unwrap_or(0);
+            let total_sublines = visual_lines
+                .iter()
+                .filter(|vl| vl.physical_line_idx == phys_line_idx)
+                .count()
+                .max(1);
+            let map =
+                glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
+            let (block_index, inner_progress) = map.source_line_to_preview_progress(phys_line);
+            let fraction =
+                calculate_subline_scroll_fraction(inner_progress, subline_idx, total_sublines);
+            self.preview_list.offset_for_block(block_index, fraction)
+        };
+        // A down-gesture must never move the preview up (and vice versa), even
+        // when estimated block heights make the mapped target overshoot.
+        let current_preview = self.preview_list.offset();
+        let target = if wheel_dy < 0.0 {
+            target.max(current_preview)
+        } else {
+            target.min(current_preview)
+        };
+        self.preview_list.set_scroll_offset(target);
         self.last_preview_sync_offset = self.preview_list.offset();
         cx.notify();
     }
 
     /// Synchronizes preview wheel scrolling to the editor pane with 100ms echo suppression.
-    pub fn handle_preview_scroll_wheel(&mut self, _event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn handle_preview_scroll_wheel(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
-        self.sync_preview_scroll(window, cx);
-        self.last_preview_sync_offset = self.preview_list.offset();
-    }
-
-    fn sync_preview_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.state.view_mode != ViewMode::Split || self.state.doc().is_parse_stale() || self.state.doc().parsed.anchors.is_empty() {
+        if self.state.view_mode != ViewMode::Split
+            || self.state.doc().is_parse_stale()
+            || self.state.doc().parsed.anchors.is_empty()
+        {
             return;
         }
         let now = std::time::Instant::now();
         if let Some((origin, time)) = self.last_scroll_origin {
-            if origin == ScrollOrigin::Editor && now.duration_since(time) < std::time::Duration::from_millis(100) {
+            if origin == ScrollOrigin::Editor
+                && now.duration_since(time) < std::time::Duration::from_millis(100)
+            {
+                return;
+            }
+        }
+        let wheel_dy = f32::from(event.delta.pixel_delta(window.line_height()).y);
+        if wheel_dy == 0.0 {
+            return;
+        }
+        let current = self.preview_list.offset();
+        let max = self.preview_list.max_scroll();
+        let projected = projected_scroll_offset(current, wheel_dy, max);
+        if (projected - current).abs() <= 0.5 {
+            // Preview already at its limit: do not scroll the editor either.
+            return;
+        }
+        self.last_scroll_origin = Some((ScrollOrigin::Preview, now));
+        self.scroll_editor_to_preview_offset(projected, Some(wheel_dy < 0.0), window);
+        self.last_preview_sync_offset = projected;
+        cx.notify();
+    }
+
+    fn sync_preview_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.view_mode != ViewMode::Split
+            || self.state.doc().is_parse_stale()
+            || self.state.doc().parsed.anchors.is_empty()
+        {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if let Some((origin, time)) = self.last_scroll_origin {
+            if origin == ScrollOrigin::Editor
+                && now.duration_since(time) < std::time::Duration::from_millis(100)
+            {
                 return;
             }
         }
         self.last_scroll_origin = Some((ScrollOrigin::Preview, now));
-
-        let preview_offset = self.preview_list.offset();
-        let (block_ix, progress) = self
-            .preview_list
-            .block_progress_at_offset(preview_offset);
-        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
-        let target_line = map.preview_to_source_line(block_ix, progress);
-        let phys_line_idx = target_line.saturating_sub(1);
-
-        let visual_lines = self.compute_visual_lines(window);
-        let target_vis_idx = visual_lines
-            .iter()
-            .position(|vl| vl.physical_line_idx == phys_line_idx)
-            .unwrap_or_else(|| visual_lines.len().saturating_sub(1));
-
-        self.editor_scroll_handle.scroll_to_item_strict(
-            target_vis_idx,
-            ScrollStrategy::Top,
-        );
+        let offset = self.preview_list.offset();
+        self.scroll_editor_to_preview_offset(offset, None, window);
         cx.notify();
+    }
+
+    /// Aligns the editor top to a preview content offset. `direction` is
+    /// `Some(true)` for a down-gesture, `Some(false)` for up, `None` for a
+    /// programmatic alignment that may move either way.
+    fn scroll_editor_to_preview_offset(
+        &mut self,
+        offset: f32,
+        direction: Option<bool>,
+        window: &mut Window,
+    ) {
+        let max = self.preview_list.max_scroll();
+        let visual_lines = self.compute_visual_lines(window);
+        if visual_lines.is_empty() {
+            return;
+        }
+        let target_vis_idx = if offset <= 0.5 || max <= 0.5 {
+            0
+        } else if offset >= max - 0.5 {
+            visual_lines.len().saturating_sub(1)
+        } else {
+            let (block_ix, progress) = self.preview_list.block_progress_at_offset(offset);
+            let map =
+                glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
+            let target_line = map.preview_to_source_line(block_ix, progress);
+            let phys_line_idx = target_line.saturating_sub(1);
+            visual_lines
+                .iter()
+                .position(|vl| vl.physical_line_idx == phys_line_idx)
+                .unwrap_or_else(|| visual_lines.len().saturating_sub(1))
+        };
+        let target_vis_idx = match direction {
+            Some(forward) => {
+                let current_y =
+                    (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y))
+                        .max(0.0);
+                let row_h = crate::views::editor::calculate_line_row_height(
+                    self.state.preferences.font_size,
+                    self.state.preferences.line_height,
+                )
+                .max(1.0);
+                let current_vis = (current_y / row_h).floor() as usize;
+                if forward {
+                    target_vis_idx.max(current_vis)
+                } else {
+                    target_vis_idx.min(current_vis)
+                }
+            }
+            None => target_vis_idx,
+        };
+        self.editor_scroll_handle
+            .scroll_to_item_strict(target_vis_idx, ScrollStrategy::Top);
     }
 
     fn end_preview_scroll_drag(&mut self) {
@@ -1126,7 +1412,11 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    fn render_preview_scrollbar(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> AnyElement {
+    fn render_preview_scrollbar(
+        &self,
+        theme: &crate::theme::ThemeColors,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let max_scroll = self.preview_list.max_scroll();
         let enabled = max_scroll > 0.5;
         let ratio = self.preview_list.scroll_ratio();
@@ -1134,7 +1424,11 @@ impl WorkspaceView {
             .preview_scroll_bounds
             .unwrap_or_else(|| self.preview_list.viewport_bounds());
         let height = f32::from(track.size.height).max(1.0);
-        let thumb_height = if enabled { 28.0_f32.min(height) } else { height };
+        let thumb_height = if enabled {
+            28.0_f32.min(height)
+        } else {
+            height
+        };
         let thumb_top = ratio * (height - thumb_height).max(0.0);
         let bounds_view = cx.entity().clone();
         let drag_view = cx.weak_entity();
@@ -1152,10 +1446,7 @@ impl WorkspaceView {
                 canvas(
                     move |bounds, _window, cx| {
                         bounds_view.update(cx, |this, cx| {
-                            if this
-                                .preview_scroll_bounds
-                                .is_some_and(|old| old != bounds)
-                            {
+                            if this.preview_scroll_bounds.is_some_and(|old| old != bounds) {
                                 this.cancel_pending_preview_seek();
                                 this.end_preview_scroll_drag();
                             }
@@ -1179,12 +1470,14 @@ impl WorkspaceView {
                                 return;
                             }
                             let _ = drag_view.update(cx, |this, cx| {
-                                if let Some((bounds, grab_offset, thumb)) = this.preview_scroll_drag {
+                                if let Some((bounds, grab_offset, thumb)) = this.preview_scroll_drag
+                                {
                                     if event.pressed_button != Some(MouseButton::Left) {
                                         this.release_preview_scroll_drag();
                                         cx.notify();
                                     } else {
-                                        let available = (f32::from(bounds.size.height) - thumb).max(1.0);
+                                        let available =
+                                            (f32::from(bounds.size.height) - thumb).max(1.0);
                                         let ratio = (f32::from(event.position.y - bounds.origin.y)
                                             - grab_offset)
                                             / available;
@@ -1194,7 +1487,8 @@ impl WorkspaceView {
                             });
                         });
                         window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                            if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                            if phase == DispatchPhase::Capture && event.button == MouseButton::Left
+                            {
                                 let _ = release_view.update(cx, |this, cx| {
                                     if this.preview_scroll_drag.is_some() {
                                         this.release_preview_scroll_drag();
@@ -1219,36 +1513,45 @@ impl WorkspaceView {
                     .rounded_full()
                     .bg(theme.text_muted.opacity(if enabled { 0.55 } else { 0.20 })),
             )
-            .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                cx.stop_propagation();
-                window.focus(&this.preview_scroll_focus);
-                this.preview_focused = true;
-                this.is_preview_selecting = false;
-                this.preview_autoscroll_task = None;
-                let Some(bounds) = this.preview_scroll_bounds else { return; };
-                if !(this.preview_list.max_scroll() > 0.5) {
-                    return;
-                }
-                this.preview_list.scrollbar_drag_started();
-                // Recompute from the live ratio: measured heights may have moved
-                // the thumb since this element was built.
-                let local_thumb_top = this.preview_list.scroll_ratio()
-                    * (f32::from(bounds.size.height) - thumb_height).max(0.0);
-                let local_y = f32::from(event.position.y - bounds.origin.y);
-                let grab_offset = if (local_thumb_top..local_thumb_top + thumb_height).contains(&local_y) {
-                    local_y - local_thumb_top
-                } else {
-                    thumb_height / 2.0
-                };
-                this.preview_scroll_drag = Some((bounds, grab_offset, thumb_height));
-                let available = (f32::from(bounds.size.height) - thumb_height).max(1.0);
-                let ratio = (local_y - grab_offset) / available;
-                this.preview_scroll_to_ratio(ratio, window, cx);
-            }))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                this.release_preview_scroll_drag();
-                cx.notify();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    window.focus(&this.preview_scroll_focus);
+                    this.preview_focused = true;
+                    this.is_preview_selecting = false;
+                    this.preview_autoscroll_task = None;
+                    let Some(bounds) = this.preview_scroll_bounds else {
+                        return;
+                    };
+                    if !(this.preview_list.max_scroll() > 0.5) {
+                        return;
+                    }
+                    this.preview_list.scrollbar_drag_started();
+                    // Recompute from the live ratio: measured heights may have moved
+                    // the thumb since this element was built.
+                    let local_thumb_top = this.preview_list.scroll_ratio()
+                        * (f32::from(bounds.size.height) - thumb_height).max(0.0);
+                    let local_y = f32::from(event.position.y - bounds.origin.y);
+                    let grab_offset =
+                        if (local_thumb_top..local_thumb_top + thumb_height).contains(&local_y) {
+                            local_y - local_thumb_top
+                        } else {
+                            thumb_height / 2.0
+                        };
+                    this.preview_scroll_drag = Some((bounds, grab_offset, thumb_height));
+                    let available = (f32::from(bounds.size.height) - thumb_height).max(1.0);
+                    let ratio = (local_y - grab_offset) / available;
+                    this.preview_scroll_to_ratio(ratio, window, cx);
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.release_preview_scroll_drag();
+                    cx.notify();
+                }),
+            )
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 let mods = event.keystroke.modifiers;
                 if mods.platform || mods.control || mods.alt {
@@ -1287,10 +1590,14 @@ impl WorkspaceView {
                 crate::views::lightbox::release_lightbox_image(&exclusive_path, window, cx);
             } else if let Some(handle) = self.window_handle {
                 let p_clone = exclusive_path.clone();
-                if handle.update(cx, |_view, window, cx| {
-                    crate::views::lightbox::release_lightbox_image(&p_clone, window, cx);
-                }).is_err() {
-                    let resource = gpui::Resource::Path(std::sync::Arc::from(exclusive_path.as_path()));
+                if handle
+                    .update(cx, |_view, window, cx| {
+                        crate::views::lightbox::release_lightbox_image(&p_clone, window, cx);
+                    })
+                    .is_err()
+                {
+                    let resource =
+                        gpui::Resource::Path(std::sync::Arc::from(exclusive_path.as_path()));
                     cx.remove_asset::<gpui::ImgResourceLoader>(&resource);
                 }
             } else {
@@ -1350,7 +1657,8 @@ impl WorkspaceView {
         }
 
         if velocity > 0.0 {
-            let max_rendered = self.rendered_regions
+            let max_rendered = self
+                .rendered_regions
                 .lock()
                 .unwrap()
                 .iter()
@@ -1392,8 +1700,15 @@ impl WorkspaceView {
 
         if let Some(sel) = self.preview_selection {
             let reg = self.rendered_regions.lock().unwrap();
-            if let Some(head) = crate::views::preview::hit_test_point_across_all_regions(&reg, None, mouse_pos, &self.state.doc().parsed.blocks) {
-                self.preview_selection = Some(crate::views::preview::PreviewSelection::new(sel.anchor, head));
+            if let Some(head) = crate::views::preview::hit_test_point_across_all_regions(
+                &reg,
+                None,
+                mouse_pos,
+                &self.state.doc().parsed.blocks,
+            ) {
+                self.preview_selection = Some(crate::views::preview::PreviewSelection::new(
+                    sel.anchor, head,
+                ));
             }
         }
     }
@@ -1413,14 +1728,19 @@ impl WorkspaceView {
         let mouse_y = f32::from(mouse_pos.y);
         let bounds_top = f32::from(bounds.top());
         let bounds_height = f32::from(bounds.size.height);
-        if crate::views::preview::detect_edge_autoscroll(mouse_y, bounds_top, bounds_height).is_some() {
+        if crate::views::preview::detect_edge_autoscroll(mouse_y, bounds_top, bounds_height)
+            .is_some()
+        {
             if self.preview_autoscroll_task.is_none() {
                 let view = cx.entity().downgrade();
-                self.preview_autoscroll_task = Some(cx.spawn(async move |_this, app| {
-                    loop {
-                        app.background_executor().timer(std::time::Duration::from_millis(16)).await;
-                        let keep_going = view.update(app, |this, cx| {
-                            if !this.is_preview_selecting || this.preview_autoscroll_task.is_none() {
+                self.preview_autoscroll_task = Some(cx.spawn(async move |_this, app| loop {
+                    app.background_executor()
+                        .timer(std::time::Duration::from_millis(16))
+                        .await;
+                    let keep_going = view
+                        .update(app, |this, cx| {
+                            if !this.is_preview_selecting || this.preview_autoscroll_task.is_none()
+                            {
                                 this.preview_autoscroll_task = None;
                                 return false;
                             }
@@ -1435,7 +1755,11 @@ impl WorkspaceView {
                             let mouse_y = f32::from(mouse_pos.y);
                             let bounds_top = f32::from(bounds.top());
                             let bounds_height = f32::from(bounds.size.height);
-                            let Some(vel) = crate::views::preview::detect_edge_autoscroll(mouse_y, bounds_top, bounds_height) else {
+                            let Some(vel) = crate::views::preview::detect_edge_autoscroll(
+                                mouse_y,
+                                bounds_top,
+                                bounds_height,
+                            ) else {
                                 this.preview_autoscroll_task = None;
                                 return false;
                             };
@@ -1445,10 +1769,10 @@ impl WorkspaceView {
                             }
                             cx.notify();
                             true
-                        }).unwrap_or(false);
-                        if !keep_going {
-                            break;
-                        }
+                        })
+                        .unwrap_or(false);
+                    if !keep_going {
+                        break;
                     }
                 }));
             }
@@ -1501,7 +1825,9 @@ impl WorkspaceView {
         let actual_svg_path = resolve_lightbox_svg_path(&svg_path, code_hash, is_dark);
 
         let cached_path = {
-            let mut cache = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE.lock().unwrap();
+            let mut cache = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE
+                .lock()
+                .unwrap();
             cache.get(&(code_hash, is_dark, scale_bucket))
         };
 
@@ -1510,10 +1836,14 @@ impl WorkspaceView {
         } else {
             if let Ok(orig_svg) = std::fs::read_to_string(&actual_svg_path) {
                 let (orig_w, orig_h) = glidemark_core::mermaid::extract_svg_dimensions(&orig_svg);
-                let (target_w, target_h) =
-                    glidemark_core::mermaid::calculate_hidpi_dimensions(orig_w, orig_h, scale_factor);
-                let hidpi_svg =
-                    glidemark_core::mermaid::apply_texture_pixel_budget(&orig_svg, target_w, target_h);
+                let (target_w, target_h) = glidemark_core::mermaid::calculate_hidpi_dimensions(
+                    orig_w,
+                    orig_h,
+                    scale_factor,
+                );
+                let hidpi_svg = glidemark_core::mermaid::apply_texture_pixel_budget(
+                    &orig_svg, target_w, target_h,
+                );
                 let cache_dir = std::env::temp_dir().join("glidemark").join("mermaid_hidpi");
                 let filename = format!(
                     "{:016x}_{}_{}_v2.svg",
@@ -1528,7 +1858,9 @@ impl WorkspaceView {
                     && out_path.is_file()
                 {
                     {
-                        let mut cache = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE.lock().unwrap();
+                        let mut cache = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE
+                            .lock()
+                            .unwrap();
                         cache.insert((code_hash, is_dark, scale_bucket), out_path.clone());
                     }
                     Some(out_path)
@@ -1541,7 +1873,10 @@ impl WorkspaceView {
         };
 
         if let Some(hidpi_path) = hidpi_path {
-            if let Some(evicted) = self.lightbox.open_hidpi(actual_svg_path, hidpi_path, code_hash) {
+            if let Some(evicted) = self
+                .lightbox
+                .open_hidpi(actual_svg_path, hidpi_path, code_hash)
+            {
                 crate::views::lightbox::release_lightbox_image(&evicted, window, cx);
             }
         } else {
@@ -1613,7 +1948,9 @@ impl WorkspaceView {
                     ..Default::default()
                 },
                 |_window, cx| {
-                    cx.new(|cx| SettingsWindowView::new(ws, current_tab, preferences, theme, strings, cx))
+                    cx.new(|cx| {
+                        SettingsWindowView::new(ws, current_tab, preferences, theme, strings, cx)
+                    })
                 },
             );
             if let Ok(h) = handle {
@@ -1628,7 +1965,9 @@ impl WorkspaceView {
         if !self.state.preferences.auto_save {
             return;
         }
-        let Some(key) = self.state.active.clone() else { return; };
+        let Some(key) = self.state.active.clone() else {
+            return;
+        };
         self.auto_save_tasks.remove(&key);
         self.next_auto_save_id = self.next_auto_save_id.wrapping_add(1);
         let task_id = self.next_auto_save_id;
@@ -1636,10 +1975,13 @@ impl WorkspaceView {
         let save_key = key.clone();
         let cleanup_entity = cx.entity().downgrade();
         let task = cx.spawn(async move |this, app| {
-            app.background_executor().timer(std::time::Duration::from_millis(delay_ms)).await;
+            app.background_executor()
+                .timer(std::time::Duration::from_millis(delay_ms))
+                .await;
             let _ = this.update(app, |this, cx| {
                 let dirty = this.state.open_docs.iter().any(|doc| {
-                    doc.key == save_key && doc.doc.status == glidemark_core::document::DocumentStatus::Modified
+                    doc.key == save_key
+                        && doc.doc.status == glidemark_core::document::DocumentStatus::Modified
                 });
                 if dirty {
                     let _ = this.state.save_doc(&save_key);
@@ -1649,7 +1991,11 @@ impl WorkspaceView {
                 let cleanup_entity = cleanup_entity.clone();
                 cx.defer(move |cx| {
                     let _ = cleanup_entity.update(cx, |this, _| {
-                        if this.auto_save_tasks.get(&cleanup_key).is_some_and(|(id, _)| *id == task_id) {
+                        if this
+                            .auto_save_tasks
+                            .get(&cleanup_key)
+                            .is_some_and(|(id, _)| *id == task_id)
+                        {
                             this.auto_save_tasks.remove(&cleanup_key);
                         }
                     });
@@ -1683,9 +2029,7 @@ impl WorkspaceView {
                 .workspace_roots
                 .first()
                 .map(|r| r.path.clone())
-                .unwrap_or_else(|| {
-                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                });
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
             let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
             cx.spawn(async move |this, app| {
                 if let Ok(Ok(Some(path))) = rx.await {
@@ -1754,14 +2098,24 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    pub fn handle_modal_discard(&mut self, key: &crate::state::DocKey, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn handle_modal_discard(
+        &mut self,
+        key: &crate::state::DocKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.auto_save_tasks.remove(key);
         self.state.confirm_close_discard(key);
         self.on_document_swapped(Some(window), cx);
         self.after_dirty_doc_resolved(Some(window), cx);
     }
 
-    pub fn handle_modal_save(&mut self, key: &crate::state::DocKey, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn handle_modal_save(
+        &mut self,
+        key: &crate::state::DocKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match self.state.confirm_close_save(key) {
             Ok(true) => {
                 self.auto_save_tasks.remove(key);
@@ -1778,7 +2132,11 @@ impl WorkspaceView {
         }
     }
 
-    pub fn prompt_save_as_and_close(&mut self, close_key: crate::state::DocKey, cx: &mut Context<Self>) {
+    pub fn prompt_save_as_and_close(
+        &mut self,
+        close_key: crate::state::DocKey,
+        cx: &mut Context<Self>,
+    ) {
         let was_quitting = self.state.is_quitting;
         self.state.pending_close = None;
         cx.notify();
@@ -1788,9 +2146,7 @@ impl WorkspaceView {
             .workspace_roots
             .first()
             .map(|r| r.path.clone())
-            .unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-            });
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
 
         cx.spawn(async move |this, app| {
@@ -1806,7 +2162,10 @@ impl WorkspaceView {
                         Err(e) => {
                             eprintln!("Save As failed: {}", e);
                             this.state.is_quitting = was_quitting;
-                            let title = this.state.doc().display_name_with_fallback(this.state.strings.untitled_file);
+                            let title = this
+                                .state
+                                .doc()
+                                .display_name_with_fallback(this.state.strings.untitled_file);
                             this.state.pending_close = Some(crate::state::PendingClose {
                                 key: close_key,
                                 title,
@@ -1827,7 +2186,11 @@ impl WorkspaceView {
         .detach();
     }
 
-    pub fn after_dirty_doc_resolved(&mut self, mut window_opt: Option<&mut Window>, cx: &mut Context<Self>) {
+    pub fn after_dirty_doc_resolved(
+        &mut self,
+        mut window_opt: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
         if self.state.is_quitting {
             if let Some(next_dirty) = self.state.next_dirty_doc_key() {
                 self.state.request_close(&next_dirty);
@@ -1849,11 +2212,39 @@ impl WorkspaceView {
         }
     }
 
-    pub fn on_window_should_close(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) -> bool {
+    pub fn on_window_should_close(
+        &mut self,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let allow = self.state.handle_window_should_close();
         self.on_document_swapped(window, cx);
         cx.notify();
         allow
+    }
+
+    /// Re-fronts the main window when macOS activates the app (Dock click).
+    ///
+    /// GPUI's macOS reopen callback only runs when no window is visible, so an
+    /// app whose window is behind another app or on another Space gets no
+    /// application-level handling. Ordering the existing window front on the
+    /// inactive → active transition covers both cases and is idempotent when
+    /// the window is already frontmost.
+    pub fn install_window_activation_observer(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let subscription = cx.observe_window_activation(window, |this, window, _cx| {
+            let active = window.is_window_active();
+            if cfg!(target_os = "macos")
+                && crate::platform::should_front_window(this.window_was_active, active)
+            {
+                window.activate_window();
+            }
+            this.window_was_active = active;
+        });
+        self.window_activation_subscription = Some(subscription);
     }
 
     pub fn trigger_draft(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
@@ -1878,14 +2269,25 @@ impl WorkspaceView {
 
         let viewport_w = f32::from(window.viewport_size().width);
         let col_w = self.state.preferences.max_column_width;
-        let header_pl = px(calculate_title_header_padding(is_macos, is_fullscreen, drawer_open, view_mode, viewport_w, col_w, self.editor_text_start_offset(window)));
+        let header_pl = px(calculate_title_header_padding(
+            is_macos,
+            is_fullscreen,
+            drawer_open,
+            view_mode,
+            viewport_w,
+            col_w,
+            self.editor_text_start_offset(window),
+        ));
 
         // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
         let header_pr = px(crate::platform::TRAILING_WINDOW_CONTROL_INSET);
 
         let active_key = self.state.active.clone();
         let (title_text, tooltip_text) = if active_key.is_some() {
-            let title = self.state.doc().display_name_with_fallback(strings.untitled_file);
+            let title = self
+                .state
+                .doc()
+                .display_name_with_fallback(strings.untitled_file);
             let tooltip = if let Some(path) = &self.state.doc().path {
                 path.to_string_lossy().to_string()
             } else {
@@ -1893,7 +2295,10 @@ impl WorkspaceView {
             };
             (title, tooltip)
         } else {
-            (strings.no_document_open.to_string(), strings.no_document_open.to_string())
+            (
+                strings.no_document_open.to_string(),
+                strings.no_document_open.to_string(),
+            )
         };
 
         div()
@@ -1961,7 +2366,8 @@ impl WorkspaceView {
                                     .bg(theme.accent)
                                     .with_animation(
                                         "rename_cursor_blink",
-                                        Animation::new(std::time::Duration::from_millis(600)).repeat(),
+                                        Animation::new(std::time::Duration::from_millis(600))
+                                            .repeat(),
                                         |el, delta| el.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
                                     ),
                             )
@@ -1982,38 +2388,45 @@ impl WorkspaceView {
                                 let t = tooltip.clone();
                                 cx.new(|_| TooltipView { text: t }).into()
                             })
-                            .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                if event.click_count == 2 && this.state.active.is_some() {
-                                    if this.state.doc().path.is_some() {
-                                        let name = this
-                                            .state
-                                            .doc()
-                                            .path
-                                            .as_ref()
-                                            .and_then(|p| p.file_name())
-                                            .and_then(|n| n.to_str())
-                                            .unwrap_or("Untitled.md");
-                                        this.rename_buffer = name.to_string();
-                                        this.is_renaming = true;
-                                        window.focus(&this.focus_handle);
-                                        cx.notify();
-                                    } else {
-                                        this.trigger_save(cx);
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                    if event.click_count == 2 && this.state.active.is_some() {
+                                        if this.state.doc().path.is_some() {
+                                            let name = this
+                                                .state
+                                                .doc()
+                                                .path
+                                                .as_ref()
+                                                .and_then(|p| p.file_name())
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("Untitled.md");
+                                            this.rename_buffer = name.to_string();
+                                            this.is_renaming = true;
+                                            window.focus(&this.focus_handle);
+                                            cx.notify();
+                                        } else {
+                                            this.trigger_save(cx);
+                                        }
                                     }
-                                }
-                            }))
+                                }),
+                            )
                             .child(
                                 div()
                                     .text_size(px(18.))
                                     .font_weight(FontWeight::BOLD)
                                     .line_height(px(24.))
                                     .debug_selector(|| "editor_document_title".into())
-                                    .text_color(if active_key.is_some() { theme.text_primary } else { theme.text_muted })
+                                    .text_color(if active_key.is_some() {
+                                        theme.text_primary
+                                    } else {
+                                        theme.text_muted
+                                    })
                                     .truncate()
-                                    .child(title_text)
+                                    .child(title_text),
                             )
                             .into_any_element()
-                    })
+                    }),
             )
             // Draggable Window Control Area in center between title and action tools
             .child(
@@ -2025,7 +2438,7 @@ impl WorkspaceView {
                     .window_control_area(WindowControlArea::Drag)
                     .on_mouse_down(MouseButton::Left, |_e, window, _| {
                         window.start_window_move();
-                    })
+                    }),
             )
             // Right Group: Flat View Mode Switcher + Action Buttons (Save, Export, Settings)
             .child(
@@ -2044,7 +2457,9 @@ impl WorkspaceView {
                                 format!("{} (⌘1)", strings.source_mode),
                                 view_mode == ViewMode::Source,
                                 theme,
-                                render_source_mode_icon(mode_tab_colors(view_mode == ViewMode::Source, theme).1),
+                                render_source_mode_icon(
+                                    mode_tab_colors(view_mode == ViewMode::Source, theme).1,
+                                ),
                                 cx.listener(|this, _, _window, cx| {
                                     this.set_view_mode(ViewMode::Source, cx);
                                 }),
@@ -2054,7 +2469,9 @@ impl WorkspaceView {
                                 format!("{} (⌘2)", strings.split_mode),
                                 view_mode == ViewMode::Split,
                                 theme,
-                                render_split_mode_icon(mode_tab_colors(view_mode == ViewMode::Split, theme).1),
+                                render_split_mode_icon(
+                                    mode_tab_colors(view_mode == ViewMode::Split, theme).1,
+                                ),
                                 cx.listener(|this, _, _window, cx| {
                                     this.set_view_mode(ViewMode::Split, cx);
                                 }),
@@ -2064,11 +2481,13 @@ impl WorkspaceView {
                                 format!("{} (⌘3)", strings.preview_mode),
                                 view_mode == ViewMode::Preview,
                                 theme,
-                                render_preview_mode_icon(mode_tab_colors(view_mode == ViewMode::Preview, theme).1),
+                                render_preview_mode_icon(
+                                    mode_tab_colors(view_mode == ViewMode::Preview, theme).1,
+                                ),
                                 cx.listener(|this, _, _window, cx| {
                                     this.set_view_mode(ViewMode::Preview, cx);
                                 }),
-                            ))
+                            )),
                     )
                     .child(
                         div()
@@ -2098,12 +2517,16 @@ impl WorkspaceView {
                                 cx.listener(|this, _, _window, cx| {
                                     this.open_settings_window(cx);
                                 }),
-                            ))
-                    )
+                            )),
+                    ),
             )
     }
 
-    fn render_remove_root_modal(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_remove_root_modal(
+        &self,
+        theme: &crate::theme::ThemeColors,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let strings = self.state.strings;
         let root_name = self
             .state
@@ -2172,9 +2595,12 @@ impl WorkspaceView {
                                     .text_xs()
                                     .text_color(theme.text_primary)
                                     .hover(|s| s.bg(theme.bg))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-                                        this.handle_cancel_remove_root(cx);
-                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.handle_cancel_remove_root(cx);
+                                        }),
+                                    )
                                     .child(format!("{} (Esc)", strings.modal_cancel)),
                             )
                             // Confirm button
@@ -2190,22 +2616,33 @@ impl WorkspaceView {
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(0xef4444))
                                     .hover(|s| s.bg(rgba(0xef444433)))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-                                        this.handle_confirm_remove_root(cx);
-                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.handle_confirm_remove_root(cx);
+                                        }),
+                                    )
                                     .child(strings.remove_root_confirm),
                             ),
                     ),
             )
     }
 
-    fn render_close_modal(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_close_modal(
+        &self,
+        theme: &crate::theme::ThemeColors,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let strings = self.state.strings;
-        let pending = self.state.pending_close.clone().unwrap_or(crate::state::PendingClose {
-            key: crate::state::DocKey::Scratch(0),
-            title: String::new(),
-            has_path: false,
-        });
+        let pending = self
+            .state
+            .pending_close
+            .clone()
+            .unwrap_or(crate::state::PendingClose {
+                key: crate::state::DocKey::Scratch(0),
+                title: String::new(),
+                has_path: false,
+            });
         let title = pending.title.clone();
         let key_discard = pending.key.clone();
         let key_save = pending.key.clone();
@@ -2271,9 +2708,12 @@ impl WorkspaceView {
                                     .text_xs()
                                     .text_color(theme.text_primary)
                                     .hover(|s| s.bg(theme.bg))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-                                        this.handle_modal_cancel(cx);
-                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.handle_modal_cancel(cx);
+                                        }),
+                                    )
                                     .child(format!("{} (Esc)", strings.modal_cancel)),
                             )
                             // Discard button
@@ -2289,9 +2729,12 @@ impl WorkspaceView {
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(0xef4444))
                                     .hover(|s| s.bg(rgba(0xef444433)))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
-                                        this.handle_modal_discard(&key_discard, window, cx);
-                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.handle_modal_discard(&key_discard, window, cx);
+                                        }),
+                                    )
                                     .child(format!("{} (D)", strings.modal_discard)),
                             )
                             // Save button
@@ -2307,9 +2750,12 @@ impl WorkspaceView {
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(0xffffff))
                                     .hover(|s| s.opacity(0.9))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
-                                        this.handle_modal_save(&key_save, window, cx);
-                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.handle_modal_save(&key_save, window, cx);
+                                        }),
+                                    )
                                     .child(format!("{} (S)", strings.modal_save)),
                             ),
                     ),
@@ -2325,8 +2771,12 @@ impl Render for WorkspaceView {
         }
         if !self.preview_scroll_activation_observed {
             cx.observe_window_activation(window, |this, window, cx| {
-                if !window.is_window_active() { this.end_preview_scroll_drag(); cx.notify(); }
-            }).detach();
+                if !window.is_window_active() {
+                    this.end_preview_scroll_drag();
+                    cx.notify();
+                }
+            })
+            .detach();
             self.preview_scroll_activation_observed = true;
         }
         {
@@ -2354,38 +2804,35 @@ impl Render for WorkspaceView {
         let font_size = self.state.preferences.font_size;
         let line_height = self.state.preferences.line_height;
         let max_width = self.state.preferences.max_column_width;
-        let recent_scroll = matches!(
-            self.last_scroll_origin,
-            Some((_, time)) if time.elapsed() < std::time::Duration::from_millis(200)
-        );
-        let measured_changed = self.preview_list.apply_measured(
-            self.preview_drag_ratio,
-            self.preview_drag_ratio.is_some() || recent_scroll,
-        );
-        let layout_changed = self.preview_list.ensure_layout(
-            &parsed,
-            max_width,
-            font_size,
-            line_height,
-            rem,
-        );
+        let measured_changed = self.preview_list.apply_measured(self.preview_drag_ratio);
+        let layout_changed =
+            self.preview_list
+                .ensure_layout(&parsed, max_width, font_size, line_height, rem);
         let (visible_range, range_changed) = self.preview_list.visible_range(32.0);
+        // Measurement/layout rewrites are programmatic: record the new offset so
+        // the reconciliation below cannot mistake them for user scrolling and
+        // echo them into the editor.
+        if measured_changed || layout_changed {
+            self.last_preview_sync_offset = self.preview_list.offset();
+        }
         if measured_changed || layout_changed || range_changed {
             cx.notify();
         }
         let preview_offset = self.preview_list.offset();
         if (preview_offset - self.last_preview_sync_offset).abs() > 0.5 {
-            let recent_editor = matches!(
+            let recent_preview = matches!(
                 self.last_scroll_origin,
-                Some((ScrollOrigin::Editor, time))
+                Some((ScrollOrigin::Preview, time))
                     if time.elapsed() < std::time::Duration::from_millis(100)
             );
-            if recent_editor {
-                self.last_preview_sync_offset = preview_offset;
-            } else if self.state.view_mode == ViewMode::Split
+            if recent_preview
+                && self.state.view_mode == ViewMode::Split
                 && !self.state.doc().is_parse_stale()
                 && !parsed.anchors.is_empty()
             {
+                // Native preview scrolling still needs one post-scroll echo; it is
+                // bounded to preview-origin gestures so editor-origin and
+                // measurement-driven offsets never move the editor.
                 self.sync_preview_scroll(window, cx);
                 self.last_preview_sync_offset = self.preview_list.offset();
             } else {
@@ -2399,7 +2846,9 @@ impl Render for WorkspaceView {
             && self.lightbox.is_dark.is_some()
             && self.lightbox.is_dark != Some(current_is_dark)
         {
-            if let (Some(code_hash), Some(svg_path)) = (self.lightbox.code_hash, self.lightbox.svg_path.clone()) {
+            if let (Some(code_hash), Some(svg_path)) =
+                (self.lightbox.code_hash, self.lightbox.svg_path.clone())
+            {
                 let scale_factor = window.scale_factor();
                 let saved_zoom = self.lightbox.zoom;
                 let saved_pan_x = self.lightbox.pan_x;
@@ -2413,7 +2862,11 @@ impl Render for WorkspaceView {
 
         let is_focused = self.focus_handle.is_focused(window);
         if is_focused {
-            let pane = if self.preview_focused { PaneKind::Preview } else { PaneKind::Source };
+            let pane = if self.preview_focused {
+                PaneKind::Preview
+            } else {
+                PaneKind::Source
+            };
             self.current_reading_pane = Some(pane);
             self.last_reading_pane = Some(pane);
         } else {
@@ -2431,7 +2884,9 @@ impl Render for WorkspaceView {
 
         let visual_lines = self.compute_visual_lines(window);
         if !self.state.doc().is_parse_stale() {
-            if self.source_code_blocks_rev != self.state.editor.revision || self.source_code_blocks.is_empty() {
+            if self.source_code_blocks_rev != self.state.editor.revision
+                || self.source_code_blocks.is_empty()
+            {
                 self.source_code_blocks = Arc::new(self.state.doc().parsed.code_blocks.clone());
                 self.source_code_blocks_rev = self.state.editor.revision;
             }
@@ -2455,37 +2910,45 @@ impl Render for WorkspaceView {
         let parse_paused = self.parse_paused;
 
         let view_click = cx.entity().clone();
-        let on_click_line = Arc::new(move |vis_idx: usize, vis_col: usize, window: &mut Window, cx: &mut App| {
-            view_click.update(cx, |this, cx| {
-                this.on_editor_click_line(vis_idx, vis_col, window);
-                cx.notify();
-            });
-        });
+        let on_click_line = Arc::new(
+            move |vis_idx: usize, vis_col: usize, window: &mut Window, cx: &mut App| {
+                view_click.update(cx, |this, cx| {
+                    this.on_editor_click_line(vis_idx, vis_col, window);
+                    cx.notify();
+                });
+            },
+        );
 
         let view_drawer = cx.entity().clone();
-        let on_select_file = Arc::new(move |path: &std::path::PathBuf, window: &mut Window, cx: &mut App| {
-            view_drawer.update(cx, |this, cx| {
-                let _ = this.state.load_file(path.clone());
-                this.on_document_swapped(Some(window), cx);
-                cx.notify();
-            });
-        });
+        let on_select_file = Arc::new(
+            move |path: &std::path::PathBuf, window: &mut Window, cx: &mut App| {
+                view_drawer.update(cx, |this, cx| {
+                    let _ = this.state.load_file(path.clone());
+                    this.on_document_swapped(Some(window), cx);
+                    cx.notify();
+                });
+            },
+        );
 
         let view_doc_switch = cx.entity().clone();
-        let on_select_doc = Arc::new(move |key: &crate::state::DocKey, window: &mut Window, cx: &mut App| {
-            view_doc_switch.update(cx, |this, cx| {
-                this.state.switch_document(key);
-                this.on_document_swapped(Some(window), cx);
-                cx.notify();
-            });
-        });
+        let on_select_doc = Arc::new(
+            move |key: &crate::state::DocKey, window: &mut Window, cx: &mut App| {
+                view_doc_switch.update(cx, |this, cx| {
+                    this.state.switch_document(key);
+                    this.on_document_swapped(Some(window), cx);
+                    cx.notify();
+                });
+            },
+        );
 
         let view_doc_close = cx.entity().clone();
-        let on_close_doc = Arc::new(move |key: &crate::state::DocKey, window: &mut Window, cx: &mut App| {
-            view_doc_close.update(cx, |this, cx| {
-                this.trigger_close_doc(key, Some(window), cx);
-            });
-        });
+        let on_close_doc = Arc::new(
+            move |key: &crate::state::DocKey, window: &mut Window, cx: &mut App| {
+                view_doc_close.update(cx, |this, cx| {
+                    this.trigger_close_doc(key, Some(window), cx);
+                });
+            },
+        );
 
         let view_draft = cx.entity().clone();
         let on_new_draft = Arc::new(move |window: &mut Window, cx: &mut App| {
@@ -2495,26 +2958,29 @@ impl Render for WorkspaceView {
         });
 
         let view_tab = cx.entity().clone();
-        let on_select_tab = Arc::new(move |tab: crate::state::DrawerTab, _window: &mut Window, cx: &mut App| {
-            view_tab.update(cx, |this, cx| {
-                this.state.set_drawer_tab(tab);
-                cx.notify();
-            });
-        });
+        let on_select_tab = Arc::new(
+            move |tab: crate::state::DrawerTab, _window: &mut Window, cx: &mut App| {
+                view_tab.update(cx, |this, cx| {
+                    this.state.set_drawer_tab(tab);
+                    cx.notify();
+                });
+            },
+        );
 
         let view_heading = cx.entity().clone();
-        let on_select_heading = Arc::new(move |block_idx: usize, window: &mut Window, cx: &mut App| {
-            view_heading.update(cx, |this, cx| {
-                this.cancel_pending_preview_seek();
-                this.end_preview_scroll_drag();
-                this.preview_list
-                    .set_scroll_offset(this.preview_list.offset_for_block(block_idx, 0.0));
-                this.last_scroll_origin = None;
-                this.sync_preview_scroll(window, cx);
-                this.last_preview_sync_offset = this.preview_list.offset();
-                cx.notify();
+        let on_select_heading =
+            Arc::new(move |block_idx: usize, window: &mut Window, cx: &mut App| {
+                view_heading.update(cx, |this, cx| {
+                    this.cancel_pending_preview_seek();
+                    this.end_preview_scroll_drag();
+                    this.preview_list
+                        .set_scroll_offset(this.preview_list.offset_for_block(block_idx, 0.0));
+                    this.last_scroll_origin = None;
+                    this.sync_preview_scroll(window, cx);
+                    this.last_preview_sync_offset = this.preview_list.offset();
+                    cx.notify();
+                });
             });
-        });
 
         let view_folder = cx.entity().clone();
         let on_open_folder = Arc::new(move |_window: &mut Window, cx: &mut App| {
@@ -2547,16 +3013,32 @@ impl Render for WorkspaceView {
                                                 strings.error_root_already_exists.to_string()
                                             }
                                             crate::state::RootAddError::NestedInExisting(p) => {
-                                                format!("{}: {}", strings.error_root_nested, p.display())
+                                                format!(
+                                                    "{}: {}",
+                                                    strings.error_root_nested,
+                                                    p.display()
+                                                )
                                             }
                                             crate::state::RootAddError::ContainsExisting(p) => {
-                                                format!("{}: {}", strings.error_root_parent, p.display())
+                                                format!(
+                                                    "{}: {}",
+                                                    strings.error_root_parent,
+                                                    p.display()
+                                                )
                                             }
                                             crate::state::RootAddError::SaveFailed(err) => {
                                                 format!("{}: {}", strings.error_save_failed, err)
                                             }
-                                            crate::state::RootAddError::CanonicalizeFailed(p, err) => {
-                                                format!("{}: {}: {}", strings.error_canonicalize_failed, p.display(), err)
+                                            crate::state::RootAddError::CanonicalizeFailed(
+                                                p,
+                                                err,
+                                            ) => {
+                                                format!(
+                                                    "{}: {}: {}",
+                                                    strings.error_canonicalize_failed,
+                                                    p.display(),
+                                                    err
+                                                )
                                             }
                                         };
                                         this.error_banner = Some(msg.clone());
@@ -2580,35 +3062,41 @@ impl Render for WorkspaceView {
         });
 
         let view_toggle_root = cx.entity().clone();
-        let on_toggle_root = Arc::new(move |root_idx: usize, _window: &mut Window, cx: &mut App| {
-            view_toggle_root.update(cx, |this, cx| {
-                if root_idx < this.state.workspace_roots.len() {
-                    let path = this.state.workspace_roots[root_idx].path.clone();
-                    this.state.toggle_root_folder(root_idx, &path);
-                    cx.notify();
-                }
+        let on_toggle_root =
+            Arc::new(move |root_idx: usize, _window: &mut Window, cx: &mut App| {
+                view_toggle_root.update(cx, |this, cx| {
+                    if root_idx < this.state.workspace_roots.len() {
+                        let path = this.state.workspace_roots[root_idx].path.clone();
+                        this.state.toggle_root_folder(root_idx, &path);
+                        cx.notify();
+                    }
+                });
             });
-        });
 
         let view_remove_root = cx.entity().clone();
-        let on_remove_root = Arc::new(move |root_idx: usize, _window: &mut Window, cx: &mut App| {
-            view_remove_root.update(cx, |this, cx| {
-                this.state.request_remove_workspace_root(root_idx);
-                cx.notify();
+        let on_remove_root =
+            Arc::new(move |root_idx: usize, _window: &mut Window, cx: &mut App| {
+                view_remove_root.update(cx, |this, cx| {
+                    this.state.request_remove_workspace_root(root_idx);
+                    cx.notify();
+                });
             });
-        });
 
         let view_refresh_root = cx.entity().clone();
-        let on_refresh_root = Arc::new(move |root_idx: usize, _window: &mut Window, cx: &mut App| {
-            view_refresh_root.update(cx, |this, cx| {
-                this.state.refresh_root(root_idx);
-                cx.notify();
+        let on_refresh_root =
+            Arc::new(move |root_idx: usize, _window: &mut Window, cx: &mut App| {
+                view_refresh_root.update(cx, |this, cx| {
+                    this.state.refresh_root(root_idx);
+                    cx.notify();
+                });
             });
-        });
 
         let view_tree = cx.entity().clone();
         let on_toggle_folder = Arc::new(
-            move |root_idx: usize, path: &std::path::PathBuf, _window: &mut Window, cx: &mut App| {
+            move |root_idx: usize,
+                  path: &std::path::PathBuf,
+                  _window: &mut Window,
+                  cx: &mut App| {
                 view_tree.update(cx, |this, cx| {
                     this.state.toggle_root_folder(root_idx, path);
                     cx.notify();
@@ -2617,29 +3105,34 @@ impl Render for WorkspaceView {
         );
 
         let view_new_file = cx.entity().clone();
-        let on_new_file_in_dir = Arc::new(move |dir: &std::path::PathBuf, window: &mut Window, cx: &mut App| {
-            view_new_file.update(cx, |this, cx| {
-                match this.state.create_file_in_dir(dir) {
-                    Ok(_) => {
-                        this.on_document_swapped(Some(window), cx);
+        let on_new_file_in_dir = Arc::new(
+            move |dir: &std::path::PathBuf, window: &mut Window, cx: &mut App| {
+                view_new_file.update(cx, |this, cx| {
+                    match this.state.create_file_in_dir(dir) {
+                        Ok(_) => {
+                            this.on_document_swapped(Some(window), cx);
+                        }
+                        Err(e) => {
+                            this.state
+                                .set_error(format!("Failed to create file: {}", e));
+                        }
                     }
-                    Err(e) => {
-                        this.state.set_error(format!("Failed to create file: {}", e));
-                    }
-                }
-                cx.notify();
-            });
-        });
+                    cx.notify();
+                });
+            },
+        );
 
         let loose_docs = self.state.loose_docs();
 
         let view_lb = cx.entity().clone();
-        let on_open_lightbox = Arc::new(move |svg_path: std::path::PathBuf, hash: u64, window: &mut Window, cx: &mut App| {
-            view_lb.update(cx, |this, cx| {
-                this.open_lightbox(svg_path, hash, window, cx);
-                cx.notify();
-            });
-        });
+        let on_open_lightbox = Arc::new(
+            move |svg_path: std::path::PathBuf, hash: u64, window: &mut Window, cx: &mut App| {
+                view_lb.update(cx, |this, cx| {
+                    this.open_lightbox(svg_path, hash, window, cx);
+                    cx.notify();
+                });
+            },
+        );
 
         let show_drawer = self.state.drawer_open || self.drawer_closing;
         let is_drawer_closing = self.drawer_closing;
@@ -3703,11 +4196,9 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        base.bg(theme.selection_bg())
-            .child(icon)
+        base.bg(theme.selection_bg()).child(icon)
     } else {
-        base.hover(|s| s.bg(theme.hover_bg()))
-            .child(icon)
+        base.hover(|s| s.bg(theme.hover_bg())).child(icon)
     }
 }
 
@@ -3776,9 +4267,7 @@ pub fn calculate_title_header_padding(
         adaptive_header_padding(is_macos, is_fullscreen, false)
     } else {
         match view_mode {
-            ViewMode::Source | ViewMode::Split => {
-                editor_text_start - 8.0
-            }
+            ViewMode::Source | ViewMode::Split => editor_text_start - 8.0,
             ViewMode::Preview => {
                 let drawer_w = crate::views::editor::DRAWER_WIDTH;
                 let available_w = (viewport_width - drawer_w).max(0.0);
@@ -3794,9 +4283,32 @@ pub fn calculate_title_header_padding(
 /// Consistently aligns with the 16px content margin across Source, Split, and Preview.
 pub const CANVAS_TITLE_LEFT_MARGIN: f32 = 16.0;
 
+/// Predicts GPUI's content offset after a wheel delta, before native scrolling runs.
+fn projected_scroll_offset(current: f32, wheel_delta_y: f32, max: f32) -> f32 {
+    (current - wheel_delta_y).clamp(0.0, max.max(0.0))
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::projected_scroll_offset;
+
+    #[test]
+    fn wheel_projection_matches_scroll_direction_and_clamps_at_edges() {
+        assert_eq!(projected_scroll_offset(50.0, -20.0, 100.0), 70.0);
+        assert_eq!(projected_scroll_offset(50.0, 20.0, 100.0), 30.0);
+        assert_eq!(projected_scroll_offset(0.0, 20.0, 100.0), 0.0);
+        assert_eq!(projected_scroll_offset(100.0, -20.0, 100.0), 100.0);
+        assert_eq!(projected_scroll_offset(50.0, 0.0, 100.0), 50.0);
+    }
+}
+
 /// Fraction (0..1) of the target preview block to scroll to, combining the progress
 /// inside the source line with the position of a wrapped sub-line.
-pub fn calculate_subline_scroll_fraction(inner_progress: f32, subline_idx: usize, total_sublines: usize) -> f32 {
+pub fn calculate_subline_scroll_fraction(
+    inner_progress: f32,
+    subline_idx: usize,
+    total_sublines: usize,
+) -> f32 {
     let total = total_sublines.max(1);
     let subline_fraction = (subline_idx as f32) / (total as f32);
     (inner_progress + subline_fraction).clamp(0.0, 1.0)
@@ -3807,7 +4319,10 @@ pub fn calculate_subline_scroll_fraction(inner_progress: f32, subline_idx: usize
 /// Active tabs receive `theme.selection_bg()` and `theme.selection_text()`
 /// strictly distinct from `theme.surface`.
 /// Inactive tabs receive transparent background and `theme.text_muted`.
-pub fn mode_tab_colors(active: bool, theme: &crate::theme::ThemeColors) -> (gpui::Hsla, gpui::Hsla) {
+pub fn mode_tab_colors(
+    active: bool,
+    theme: &crate::theme::ThemeColors,
+) -> (gpui::Hsla, gpui::Hsla) {
     if active {
         (theme.selection_bg(), theme.selection_text())
     } else {
@@ -3844,9 +4359,7 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        base.bg(bg_color)
-            .text_color(text_color)
-            .child(icon)
+        base.bg(bg_color).text_color(text_color).child(icon)
     } else {
         base.text_color(text_color)
             .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
@@ -3856,7 +4369,10 @@ where
 
 // Standard Lucide SVG icons rendered natively by GPUI
 fn render_sidebar_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/panel-left.svg").size(px(16.)).text_color(color)
+    svg()
+        .path("icons/panel-left.svg")
+        .size(px(16.))
+        .text_color(color)
 }
 
 fn render_source_mode_icon(color: Hsla) -> impl IntoElement {
@@ -3864,17 +4380,29 @@ fn render_source_mode_icon(color: Hsla) -> impl IntoElement {
 }
 
 fn render_split_mode_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/columns-2.svg").size(px(16.)).text_color(color)
+    svg()
+        .path("icons/columns-2.svg")
+        .size(px(16.))
+        .text_color(color)
 }
 
 fn render_preview_mode_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/book-open.svg").size(px(16.)).text_color(color)
+    svg()
+        .path("icons/book-open.svg")
+        .size(px(16.))
+        .text_color(color)
 }
 
 fn render_export_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/download.svg").size(px(16.)).text_color(color)
+    svg()
+        .path("icons/download.svg")
+        .size(px(16.))
+        .text_color(color)
 }
 
 fn render_settings_icon(color: Hsla) -> impl IntoElement {
-    svg().path("icons/settings.svg").size(px(16.)).text_color(color)
+    svg()
+        .path("icons/settings.svg")
+        .size(px(16.))
+        .text_color(color)
 }

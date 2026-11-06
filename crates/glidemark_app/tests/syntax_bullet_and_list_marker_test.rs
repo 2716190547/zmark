@@ -245,13 +245,18 @@ fn test_preview_task_list_checkbox_uses_syntax_bullet() {
         .find("if let Some(checked) = item.checked")
         .expect("task list checkbox branch must exist in preview.rs");
     let task_item_section = &preview_src[task_item_pos..task_item_pos + 600];
+    // Ignore rustfmt line wrapping while retaining the checked-state color assertion.
+    let normalized = task_item_section
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
 
     assert!(
         task_item_section.contains(".border_color(theme.syntax_bullet)"),
         "Task item checkbox border must use theme.syntax_bullet"
     );
     assert!(
-        task_item_section.contains("theme.syntax_bullet } else { theme.bg }"),
+        normalized.contains("theme.syntax_bullet } else { theme.bg }"),
         "Task item checkbox background must use theme.syntax_bullet when checked"
     );
     assert!(

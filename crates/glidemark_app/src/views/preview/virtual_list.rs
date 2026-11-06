@@ -7,8 +7,8 @@
 //! and derives every scroll position from prefix sums instead of measured-only
 //! offsets. It is intentionally local: no new GPUI version or dependency.
 
-use gpui::{Bounds, ListOffset, Pixels, Point, ScrollHandle, Size, point, px, size};
-use glidemark_core::ast::{BlockElement, ParsedDocument, flatten_block};
+use glidemark_core::ast::{flatten_block, BlockElement, ParsedDocument};
+use gpui::{point, px, size, Bounds, ListOffset, Pixels, Point, ScrollHandle, Size};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 const DEFAULT_ITEM_HEIGHT: f32 = 40.0;
@@ -93,14 +93,17 @@ impl PreviewScrollState {
 
     pub fn set_scroll_offset(&mut self, desired: f32) {
         let clamped = desired.clamp(0.0, self.max_scroll());
-        self.scroll
-            .set_offset(point(px(0.), px(-clamped)));
+        self.scroll.set_offset(point(px(0.), px(-clamped)));
         self.logical_override = None;
     }
 
     pub fn scroll_ratio(&self) -> f32 {
         let max = self.max_scroll();
-        if max <= 0.5 { 0.0 } else { (self.offset() / max).clamp(0.0, 1.0) }
+        if max <= 0.5 {
+            0.0
+        } else {
+            (self.offset() / max).clamp(0.0, 1.0)
+        }
     }
 
     /// Returns the visible block range and whether it changed since last frame.
@@ -115,11 +118,17 @@ impl PreviewScrollState {
             // registers off-screen text bounds and breaks real hit-test controls.
             let start_y = offset.max(0.0);
             let end_y = offset + viewport_h + overdraw;
-            let mut start = self.origins.partition_point(|&o| o <= start_y).saturating_sub(1);
+            let mut start = self
+                .origins
+                .partition_point(|&o| o <= start_y)
+                .saturating_sub(1);
             if start < self.sizes.len() && self.origins[start] + self.sizes[start] <= start_y {
                 start += 1;
             }
-            let end = self.origins.partition_point(|&o| o < end_y).min(self.sizes.len());
+            let end = self
+                .origins
+                .partition_point(|&o| o < end_y)
+                .min(self.sizes.len());
             start.min(end)..end
         };
         let changed = range != self.last_range;
@@ -173,13 +182,10 @@ impl PreviewScrollState {
             return false;
         }
         let old_offset = self.offset();
+        let old_max = self.max_scroll();
+        let was_at_end = old_max > 0.5 && old_offset >= old_max - 1.0;
         // Anchor against the old origins, before replacing the size table.
-        let anchor_delta = if self.sizes.is_empty() || old_offset < self.padding_top {
-            None
-        } else {
-            let ix = self.origins.partition_point(|&o| o <= old_offset).saturating_sub(1);
-            Some((ix, old_offset - self.origins[ix]))
-        };
+        let anchor_delta = self.top_anchor(old_offset);
         let ptr = Arc::as_ptr(parsed) as usize;
         let ast_changed = ptr != self.last_parsed_ptr || self.measured.len() != parsed.blocks.len();
         if ast_changed {
@@ -196,9 +202,13 @@ impl PreviewScrollState {
             .collect();
         self.recompute();
         self.layout_key = key;
-        let new_offset = match anchor_delta {
-            None => old_offset,
-            Some((ix, delta)) => self.origins.get(ix).copied().unwrap_or(0.0) + delta,
+        let new_offset = if was_at_end {
+            self.max_scroll()
+        } else {
+            match anchor_delta {
+                None => old_offset,
+                Some((ix, delta)) => self.origins.get(ix).copied().unwrap_or(0.0) + delta,
+            }
         };
         self.set_scroll_offset(new_offset);
         true
@@ -206,19 +216,25 @@ impl PreviewScrollState {
 
     /// Apply real prepaint heights collected during the previous frame.
     /// Returns true when the table changed and another frame is needed.
-    pub fn apply_measured(&mut self, drag_ratio: Option<f32>, preserve_ratio: bool) -> bool {
+    ///
+    /// Measurement only refines the size table. It must never move the text the
+    /// user is reading:
+    /// - a scrollbar drag is pointer-owned, so its ratio wins;
+    /// - a viewport pinned to the document end stays pinned to the new end;
+    /// - otherwise the block under the viewport top keeps its pixel offset.
+    ///
+    /// Ratio-preserving (`old_offset / old_max * new_max`) was removed: it makes
+    /// every measured height change slide the whole viewport, which is the
+    /// repeated jump seen when the preview is at the end of a document whose
+    /// trailing blocks have not been measured yet.
+    pub fn apply_measured(&mut self, drag_ratio: Option<f32>) -> bool {
         let measured = std::mem::take(&mut *self.pending.borrow_mut());
         if measured.is_empty() {
             return false;
         }
         let old_offset = self.offset();
         let old_max = self.max_scroll();
-        let anchor_delta = if self.sizes.is_empty() || old_offset < self.padding_top {
-            None
-        } else {
-            let ix = self.origins.partition_point(|&o| o <= old_offset).saturating_sub(1);
-            Some((ix, old_offset - self.origins[ix]))
-        };
+        let anchor_delta = self.top_anchor(old_offset);
         let mut changed = false;
         for (ix, height) in measured {
             if let Some(slot) = self.sizes.get_mut(ix) {
@@ -237,13 +253,11 @@ impl PreviewScrollState {
             return false;
         }
         self.recompute();
-        // During a gesture keep the thumb ratio stable; otherwise keep the
-        // content-space anchor so newly measured images push later blocks down.
         let new_offset = match drag_ratio {
             Some(ratio) => ratio.clamp(0.0, 1.0) * self.max_scroll(),
-            None if preserve_ratio && old_max > 0.5 => {
-                (old_offset / old_max).clamp(0.0, 1.0) * self.max_scroll()
-            }
+            // `old_max > 0.5` keeps a short document that only just became
+            // scrollable from jumping to its new bottom while at the top.
+            None if old_max > 0.5 && old_offset >= old_max - 1.0 => self.max_scroll(),
             None => match anchor_delta {
                 None => old_offset,
                 Some((ix, delta)) => self.origins.get(ix).copied().unwrap_or(0.0) + delta,
@@ -251,6 +265,18 @@ impl PreviewScrollState {
         };
         self.set_scroll_offset(new_offset);
         true
+    }
+
+    /// Block under the viewport top plus the pixel distance into it.
+    fn top_anchor(&self, offset: f32) -> Option<(usize, f32)> {
+        if self.sizes.is_empty() || offset < self.padding_top {
+            return None;
+        }
+        let ix = self
+            .origins
+            .partition_point(|&o| o <= offset)
+            .saturating_sub(1);
+        Some((ix, offset - self.origins[ix]))
     }
 
     fn recompute(&mut self) {
@@ -263,7 +289,6 @@ impl PreviewScrollState {
         }
         self.total = y + self.padding_bottom;
     }
-
 
     // ---- `ListState`-shaped compatibility methods used by behaviour tests ----
 
@@ -381,7 +406,12 @@ fn estimate_sizes(
             let text_h = text_lines * lh;
             let h = match block {
                 BlockElement::Heading { level, .. } => {
-                    let mult = match level { 1 => 1.8, 2 => 1.45, 3 => 1.25, _ => 1.1 };
+                    let mult = match level {
+                        1 => 1.8,
+                        2 => 1.45,
+                        3 => 1.25,
+                        _ => 1.1,
+                    };
                     // Deliberately below real prepaint height; measured bounds grow it.
                     font_size * mult * 1.75 + rem * 0.75
                 }
@@ -394,22 +424,104 @@ fn estimate_sizes(
                     }
                 }
                 BlockElement::BlockQuote(children) => {
-                    children.iter().map(|c| estimate_block(c, &lh, &chars_per_line, rem, font_size)).sum::<f32>()
+                    children
+                        .iter()
+                        .map(|c| estimate_block(c, &lh, &chars_per_line, rem, font_size))
+                        .sum::<f32>()
                         + rem * 1.5
                         + (children.len().saturating_sub(1)) as f32 * rem * 0.5
                 }
-                BlockElement::List { items, .. } => {
-                    items.iter().map(|item| {
-                        item.body.iter().map(|c| estimate_block(c, &lh, &chars_per_line, rem, font_size)).sum::<f32>()
-                            + lh + rem * 0.5
-                    }).sum::<f32>()
-                }
+                BlockElement::List { items, .. } => items
+                    .iter()
+                    .map(|item| {
+                        item.body
+                            .iter()
+                            .map(|c| estimate_block(c, &lh, &chars_per_line, rem, font_size))
+                            .sum::<f32>()
+                            + lh
+                            + rem * 0.5
+                    })
+                    .sum::<f32>(),
                 BlockElement::Table { rows, .. } => (rows.len() + 1) as f32 * (lh + rem * 0.75),
                 BlockElement::Rule => rem * 2.0 + 1.0,
             };
             (h + item_pad).max(DEFAULT_ITEM_HEIGHT)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measurement_keeps_the_block_under_the_top_anchored() {
+        let mut state = PreviewScrollState::new();
+        state.reset(10);
+        // reset(): ten 40px items, 24px padding. Offset 150 sits 6px into block 3.
+        state.set_scroll_offset(150.0);
+        let before = state.top_anchor(state.offset()).unwrap();
+        let before_range = state.visible_range(32.0).0;
+        assert_eq!(before.0, 3);
+        // Block 0 grows above the viewport. Ratio preservation would keep the
+        // ratio 150/old_max and move the top block; content anchoring must not.
+        state.measurement_sink().borrow_mut().push((0, 120.0));
+        assert!(state.apply_measured(None));
+        let after = state.top_anchor(state.offset()).unwrap();
+        assert_eq!(after.0, 3, "top block changed: {before:?} -> {after:?}");
+        assert!(
+            (after.1 - before.1).abs() < 0.01,
+            "top block moved inside the viewport: {before:?} -> {after:?}"
+        );
+        assert_eq!(state.visible_range(32.0).0, before_range);
+    }
+
+    #[test]
+    fn bottom_pinned_viewport_stays_at_the_new_end() {
+        let mut state = PreviewScrollState::new();
+        state.reset(6);
+        state.set_scroll_offset(state.max_scroll());
+        for height in [10.0, 120.0] {
+            // Both shrinking and growing a block above the viewport must keep
+            // a bottom-pinned viewport at the recalculated end.
+            state.measurement_sink().borrow_mut().push((0, height));
+            assert!(state.apply_measured(None));
+            assert!(
+                (state.offset() - state.max_scroll()).abs() < 0.01,
+                "bottom-pinned viewport left the end: {} vs {}",
+                state.offset(),
+                state.max_scroll()
+            );
+        }
+    }
+
+    #[test]
+    fn layout_rebuild_keeps_a_bottom_pinned_viewport_at_the_new_end() {
+        let source = (0..12)
+            .map(|index| format!("## Heading {index}\n\nParagraph with enough words to occupy several lines.\n\n"))
+            .collect::<String>();
+        let parsed = Arc::new(glidemark_core::ast::parse_markdown(&source));
+        let mut state = PreviewScrollState::new();
+        assert!(state.ensure_layout(&parsed, 900.0, 14.0, 1.5, 16.0));
+        state.set_scroll_offset(state.max_scroll());
+        assert!(state.ensure_layout(&parsed, 700.0, 14.0, 1.5, 16.0));
+        assert!(
+            (state.offset() - state.max_scroll()).abs() < 0.01,
+            "layout rebuild moved the bottom-pinned viewport: {} vs {}",
+            state.offset(),
+            state.max_scroll()
+        );
+    }
+
+    #[test]
+    fn drag_ratio_still_owns_the_offset_during_measurement() {
+        let mut state = PreviewScrollState::new();
+        state.reset(10);
+        state.set_scroll_offset(150.0);
+        state.measurement_sink().borrow_mut().push((0, 120.0));
+        assert!(state.apply_measured(Some(0.5)));
+        assert!((state.scroll_ratio() - 0.5).abs() < 0.02);
+    }
 }
 
 fn estimate_block(
@@ -423,21 +535,38 @@ fn estimate_block(
     let text_h = wrapped_lines(flat.text.chars().count(), *chars_per_line) * *lh;
     match block {
         BlockElement::Heading { level, .. } => {
-            let mult = match level { 1 => 1.8, 2 => 1.45, 3 => 1.25, _ => 1.1 };
+            let mult = match level {
+                1 => 1.8,
+                2 => 1.45,
+                3 => 1.25,
+                _ => 1.1,
+            };
             font_size * mult * 1.75 + rem * 0.75
         }
         BlockElement::FencedCode { lang, code } => {
-            if lang.as_deref() == Some("mermaid") { 360.0 }
-            else { code.lines().count().max(1) as f32 * *lh + rem * 1.5 }
+            if lang.as_deref() == Some("mermaid") {
+                360.0
+            } else {
+                code.lines().count().max(1) as f32 * *lh + rem * 1.5
+            }
         }
         BlockElement::BlockQuote(children) => {
-            children.iter().map(|c| estimate_block(c, lh, chars_per_line, rem, font_size)).sum::<f32>() + rem
+            children
+                .iter()
+                .map(|c| estimate_block(c, lh, chars_per_line, rem, font_size))
+                .sum::<f32>()
+                + rem
         }
-        BlockElement::List { items, .. } => {
-            items.iter().map(|item| {
-                item.body.iter().map(|c| estimate_block(c, lh, chars_per_line, rem, font_size)).sum::<f32>() + *lh
-            }).sum::<f32>()
-        }
+        BlockElement::List { items, .. } => items
+            .iter()
+            .map(|item| {
+                item.body
+                    .iter()
+                    .map(|c| estimate_block(c, lh, chars_per_line, rem, font_size))
+                    .sum::<f32>()
+                    + *lh
+            })
+            .sum::<f32>(),
         BlockElement::Table { rows, .. } => (rows.len() + 1) as f32 * (*lh + rem * 0.75),
         BlockElement::Paragraph(_) => text_h,
         BlockElement::Rule => rem * 2.0,

@@ -23,7 +23,11 @@ async fn test_search_input_simulate_keystrokes_pipeline(cx: &mut TestAppContext)
     cx.simulate_keystrokes("a b x");
     cx.update(|_window, cx| {
         let input = view.read(cx);
-        assert_eq!(input.content.as_ref(), "abx", "Typing 'a b x' via simulate_keystrokes must produce 'abx'");
+        assert_eq!(
+            input.content.as_ref(),
+            "abx",
+            "Typing 'a b x' via simulate_keystrokes must produce 'abx'"
+        );
         assert_eq!(input.selected_range, 3..3);
     });
 
@@ -31,15 +35,27 @@ async fn test_search_input_simulate_keystrokes_pipeline(cx: &mut TestAppContext)
     cx.simulate_keystrokes("left left z");
     cx.update(|_window, cx| {
         let input = view.read(cx);
-        assert_eq!(input.content.as_ref(), "azbx", "Typing 'left left z' must produce 'azbx'");
-        assert_eq!(input.selected_range, 2..2, "Cursor must be immediately after 'z' at index 2");
+        assert_eq!(
+            input.content.as_ref(),
+            "azbx",
+            "Typing 'left left z' must produce 'azbx'"
+        );
+        assert_eq!(
+            input.selected_range,
+            2..2,
+            "Cursor must be immediately after 'z' at index 2"
+        );
     });
 
     // 3. Shift+left select and type 'q' -> "aqbx", cursor at 2..2
     cx.simulate_keystrokes("shift-left q");
     cx.update(|_window, cx| {
         let input = view.read(cx);
-        assert_eq!(input.content.as_ref(), "aqbx", "Shift-left selection replaced by 'q' must produce 'aqbx'");
+        assert_eq!(
+            input.content.as_ref(),
+            "aqbx",
+            "Shift-left selection replaced by 'q' must produce 'aqbx'"
+        );
         assert_eq!(input.selected_range, 2..2);
     });
 
@@ -47,7 +63,11 @@ async fn test_search_input_simulate_keystrokes_pipeline(cx: &mut TestAppContext)
     cx.simulate_keystrokes("cmd-a r");
     cx.update(|_window, cx| {
         let input = view.read(cx);
-        assert_eq!(input.content.as_ref(), "r", "Cmd-a select all followed by 'r' must produce 'r'");
+        assert_eq!(
+            input.content.as_ref(),
+            "r",
+            "Cmd-a select all followed by 'r' must produce 'r'"
+        );
         assert_eq!(input.selected_range, 1..1);
     });
 }
@@ -80,7 +100,11 @@ async fn test_search_to_editor_focus_transition_and_typing(cx: &mut TestAppConte
     cx.update(|_window, cx| {
         let ws = view.read(cx);
         let si = ws.search_input.as_ref().unwrap().read(cx);
-        assert_eq!(si.content.as_ref(), "foo", "Search input must receive 'foo'");
+        assert_eq!(
+            si.content.as_ref(),
+            "foo",
+            "Search input must receive 'foo'"
+        );
     });
 
     // 3. Click editor line to transfer focus
@@ -94,8 +118,14 @@ async fn test_search_to_editor_focus_transition_and_typing(cx: &mut TestAppConte
     // Verify search_focused was cleared and workspace.focus_handle is focused
     cx.update(|window, cx| {
         let ws = view.read(cx);
-        assert!(!ws.search_focused, "Clicking editor must clear search_focused");
-        assert!(ws.focus_handle.is_focused(window), "Workspace focus_handle must be focused");
+        assert!(
+            !ws.search_focused,
+            "Clicking editor must clear search_focused"
+        );
+        assert!(
+            ws.focus_handle.is_focused(window),
+            "Workspace focus_handle must be focused"
+        );
     });
 
     // 4. Type 'q' in editor
@@ -106,7 +136,10 @@ async fn test_search_to_editor_focus_transition_and_typing(cx: &mut TestAppConte
         let si = ws.search_input.as_ref().unwrap().read(cx);
         assert_eq!(si.content.as_ref(), "foo", "Search input must remain 'foo'");
         // Editor line must contain 'q'
-        assert!(ws.state.editor.lines[0].starts_with('q'), "Editor line 0 must start with inserted 'q'");
+        assert!(
+            ws.state.editor.lines[0].starts_with('q'),
+            "Editor line 0 must start with inserted 'q'"
+        );
     });
 }
 
@@ -117,18 +150,29 @@ async fn test_preview_scroll_reverse_mapping_with_soft_wrap(cx: &mut TestAppCont
         // Construct line 0 with enough text to wrap into multiple visual lines at ~300px
         let long_line_0 = "First physical line that is intentionally made very long with multiple repeated words so that it wraps into at least three visual lines in a narrow container.";
         let line_1 = "# Second Physical Heading";
-        doc.update_buffer(format!("{}\n\n{}", long_line_0, line_1));
+        // Keep the document taller than the preview viewport so the wheel
+        // handler has a real scroll range to move within.
+        let filler = "Filler paragraph with enough words to extend the document beyond the preview viewport. ".repeat(80);
+        doc.update_buffer(format!("{}\n\n{}\n\n{}", long_line_0, line_1, filler));
         let mut state = AppState::new(doc);
         state.set_view_mode(ViewMode::Split);
         WorkspaceView::new(state, cx)
     });
     cx.run_until_parked();
 
+    // Parse, then draw once so the preview size table has real origins before
+    // the block offset is set (scroll_to cannot leave the top padding otherwise).
     cx.update(|window, cx| {
         view.update(cx, |workspace, cx| {
-            // Force parse and refresh anchors
             workspace.parse_now_and_refresh();
+            cx.notify();
+        });
+        let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
 
+    cx.update(|window, cx| {
+        view.update(cx, |workspace, cx| {
             // Set narrow width to force soft wrapping
             workspace.workspace_width = 400.0;
             let vis_lines = workspace.compute_visual_lines(window);
@@ -148,10 +192,15 @@ async fn test_preview_scroll_reverse_mapping_with_soft_wrap(cx: &mut TestAppCont
                 offset_in_item: px(0.0),
             });
 
-            // Trigger handle_preview_scroll_wheel
+            // Trigger handle_preview_scroll_wheel. A real (non-zero) delta is
+            // required now that zero-delta events are no-ops; 1px down stays
+            // inside block 1 and remains within the scroll range.
             let dummy_event = ScrollWheelEvent {
                 position: Point::default(),
-                delta: ScrollDelta::Pixels(Point::default()),
+                delta: ScrollDelta::Pixels(Point {
+                    x: px(0.),
+                    y: px(-1.),
+                }),
                 modifiers: gpui::Modifiers::none(),
                 touch_phase: gpui::TouchPhase::Moved,
             };
@@ -177,7 +226,10 @@ async fn test_500_line_layout_cache_performance(cx: &mut TestAppContext) {
         let mut doc = Document::new_scratch();
         let mut lines = Vec::with_capacity(500);
         for i in 0..500 {
-            lines.push(format!("Line {} of medium document with typical prose and words", i + 1));
+            lines.push(format!(
+                "Line {} of medium document with typical prose and words",
+                i + 1
+            ));
         }
         doc.update_buffer(lines.join("\n"));
         let state = AppState::new(doc);
@@ -189,15 +241,25 @@ async fn test_500_line_layout_cache_performance(cx: &mut TestAppContext) {
         view.update(cx, |workspace, _cx| {
             workspace.cached_visual_rev = usize::MAX;
             workspace.cached_visual_lines = std::sync::Arc::new(Vec::new());
-            workspace.document_layout_cache = glidemark_app::views::editor::DocumentLayoutCache::new();
+            workspace.document_layout_cache =
+                glidemark_app::views::editor::DocumentLayoutCache::new();
 
             let t0 = Instant::now();
             let _ = workspace.compute_visual_lines(window);
             let init_500_duration = t0.elapsed();
-            println!("[PERF] Initial 500-line full layout duration: {:?}", init_500_duration);
+            println!(
+                "[PERF] Initial 500-line full layout duration: {:?}",
+                init_500_duration
+            );
 
-            assert_eq!(workspace.document_layout_cache.metrics.shaped_lines_count, 500);
-            assert_eq!(workspace.document_layout_cache.metrics.reused_lines_count, 0);
+            assert_eq!(
+                workspace.document_layout_cache.metrics.shaped_lines_count,
+                500
+            );
+            assert_eq!(
+                workspace.document_layout_cache.metrics.reused_lines_count,
+                0
+            );
 
             // Single char edit
             workspace.state.editor.set_cursor(250, 0);
@@ -206,10 +268,19 @@ async fn test_500_line_layout_cache_performance(cx: &mut TestAppContext) {
             let t1 = Instant::now();
             let _ = workspace.compute_visual_lines(window);
             let edit_500_duration = t1.elapsed();
-            println!("[PERF] Incremental 500-line single-char edit duration: {:?}", edit_500_duration);
+            println!(
+                "[PERF] Incremental 500-line single-char edit duration: {:?}",
+                edit_500_duration
+            );
 
-            assert_eq!(workspace.document_layout_cache.metrics.shaped_lines_count, 1);
-            assert_eq!(workspace.document_layout_cache.metrics.reused_lines_count, 499);
+            assert_eq!(
+                workspace.document_layout_cache.metrics.shaped_lines_count,
+                1
+            );
+            assert_eq!(
+                workspace.document_layout_cache.metrics.reused_lines_count,
+                499
+            );
         });
     });
 }
@@ -221,7 +292,10 @@ async fn test_layout_cache_incremental_performance_and_fence_propagation(cx: &mu
         // Generate a 2000-line markdown document
         let mut lines = Vec::with_capacity(2000);
         for i in 0..2000 {
-            lines.push(format!("Line {} of sample document with some normal markdown text", i + 1));
+            lines.push(format!(
+                "Line {} of sample document with some normal markdown text",
+                i + 1
+            ));
         }
         doc.update_buffer(lines.join("\n"));
         let state = AppState::new(doc);
