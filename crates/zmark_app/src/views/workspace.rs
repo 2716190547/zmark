@@ -3886,6 +3886,7 @@ impl Render for WorkspaceView {
                                         on_clear_search: Some(on_clear_search),
                                         on_focus_search: Some(on_focus_search),
                                         search_input: self.search_input.clone(),
+                                        focused: self.search_focused,
                                     };
                                     crate::views::drawer::render_drawer_with_search(
                                         is_fullscreen,
@@ -4480,6 +4481,7 @@ impl Render for WorkspaceView {
                                                         self.state.preferences.font_size,
                                                         self.state.preferences.line_height,
                                                         is_dirty,
+                                                        self.state.preferences.show_line_numbers,
                                                         &self.editor_scroll_handle,
                                                         editor_left_offset,
                                                         gutter_width,
@@ -4574,6 +4576,7 @@ impl Render for WorkspaceView {
                                                             self.state.preferences.font_size,
                                                             self.state.preferences.line_height,
                                                             is_dirty,
+                                                            self.state.preferences.show_line_numbers,
                                                             &self.editor_scroll_handle,
                                                             editor_left_offset,
                                                             gutter_width,

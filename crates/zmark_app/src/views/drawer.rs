@@ -20,6 +20,7 @@ pub struct DrawerSearchParams {
     pub on_clear_search: Option<Arc<dyn Fn(&mut Window, &mut App)>>,
     pub on_focus_search: Option<Arc<dyn Fn(&mut Window, &mut App)>>,
     pub search_input: Option<Entity<SearchInput>>,
+    pub focused: bool,
 }
 
 #[allow(dead_code)]
@@ -114,12 +115,17 @@ pub fn render_drawer_with_search(
 
     let mut search_row = div()
         .id("drawer_search_container")
+        .debug_selector(|| "drawer_search_container".to_string())
         .w_full()
         .h(px(28.))
-        .px(px(10.))
-        .rounded(px(6.))
-        .bg(theme.bg)
-        .hover(|s| s.bg(theme.hover_bg()))
+        .px(px(8.))
+        .rounded_full()
+        .bg(theme.text_primary.opacity(0.04))
+        .hover(|s| s.bg(theme.text_primary.opacity(0.06)))
+        .when(search.focused, |s| {
+            s.border(px(1.))
+                .border_color(theme.text_primary.opacity(0.08))
+        })
         .flex()
         .items_center()
         .justify_between()

@@ -584,6 +584,11 @@ impl AppState {
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
+    pub fn set_show_line_numbers(&mut self, enabled: bool) {
+        self.preferences.show_line_numbers = enabled;
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
     pub fn set_tab_size(&mut self, tab_size: usize) {
         self.preferences.tab_size = tab_size;
         let _ = self.preferences.save_to_path(&self.preferences_path);

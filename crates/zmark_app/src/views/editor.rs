@@ -84,15 +84,20 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
 }
 
 pub const DRAWER_WIDTH: f32 = 250.0;
-pub const EDITOR_CONTAINER_PADDING_X: f32 = 16.0; // uniform_list p_4
+pub const EDITOR_CONTAINER_PADDING_X: f32 = 28.0; // 32px total with the row inset
 pub const EDITOR_ROW_PADDING_X: f32 = 4.0;        // row px_1
-pub const EDITOR_GUTTER_MARGIN_RIGHT: f32 = 6.0;
+pub const EDITOR_GUTTER_MARGIN_RIGHT: f32 = 8.0;
 
 pub fn editor_gutter_width(text_system: &gpui::WindowTextSystem, line_count: usize, font_size: f32) -> f32 {
     let digits = line_count.max(1).to_string().len();
     let text = "8".repeat(digits);
     let run = gpui::TextRun { len: text.len(), font: gpui::font(crate::platform::MONO_FONT), color: gpui::black(), background_color: None, underline: None, strikethrough: None };
     f32::from(text_system.shape_line(text.into(), gpui::px(font_size * 0.85), &[run], None).width).ceil() + 2.0
+}
+
+/// Whether a visual line should render its gutter number.
+pub fn gutter_visible(is_first_visual_line: bool, show_line_numbers: bool) -> bool {
+    show_line_numbers && is_first_visual_line
 }
 
 pub fn editor_text_start_offset(gutter_width: f32) -> f32 {
@@ -793,6 +798,7 @@ pub fn render_editor_pane(
     font_size: f32,
     line_height: f32,
     _is_dirty: bool,
+    show_line_numbers: bool,
     scroll_handle: &UniformListScrollHandle,
     editor_left_offset: f32,
     gutter_width: f32,
@@ -868,7 +874,10 @@ pub fn render_editor_pane(
                                 || is_last_subline_of_phys_line);
                         let rel_cursor_col = cursor_col.saturating_sub(vl.map(|v| v.char_start).unwrap_or(0));
 
-                        let show_line_num = vl.map(|v| v.is_first).unwrap_or(true);
+                        let show_line_num = gutter_visible(
+                            vl.map(|v| v.is_first).unwrap_or(true),
+                            show_line_numbers,
+                        );
                         let gutter_text = if show_line_num {
                             format!("{}", phys_idx + 1)
                         } else {
@@ -1035,7 +1044,11 @@ pub fn render_editor_pane(
                                     .text_size(px(font_size * 0.85))
                                     .line_height(relative(sanitized_lh))
                                     .font_family(crate::platform::MONO_FONT)
-                                    .text_color(if is_active_subline { list_theme.accent } else { list_theme.text_muted.opacity(0.8) })
+                                    .text_color(if is_active_subline {
+                                        list_theme.accent
+                                    } else {
+                                        list_theme.text_muted.opacity(0.55)
+                                    })
                                     .child(gutter_text),
                             )
                             .child(text_container.into_any_element())
@@ -1128,3 +1141,16 @@ pub fn render_editor_pane(
 
 
 
+
+#[cfg(test)]
+mod gutter_tests {
+    use super::gutter_visible;
+
+    #[test]
+    fn line_numbers_follow_the_preference_and_first_subline() {
+        assert!(gutter_visible(true, true));
+        assert!(!gutter_visible(false, true));
+        assert!(!gutter_visible(true, false));
+        assert!(!gutter_visible(false, false));
+    }
+}

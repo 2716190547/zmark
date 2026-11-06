@@ -196,6 +196,21 @@ impl Render for SettingsWindowView {
             });
         });
 
+        let view_ln = cx.entity().clone();
+        let on_toggle_line_numbers = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
+            view_ln.update(cx, |this, cx| {
+                this.preferences.show_line_numbers = enabled;
+                let _ = this.preferences.save();
+                if let Some(ws) = this.workspace.upgrade() {
+                    ws.update(cx, |ws, cx| {
+                        ws.state.set_show_line_numbers(enabled);
+                        cx.notify();
+                    });
+                }
+                cx.notify();
+            });
+        });
+
         let view_rm = cx.entity().clone();
         let on_toggle_reduce_motion = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
             view_rm.update(cx, |this, cx| {
@@ -329,12 +344,14 @@ impl Render for SettingsWindowView {
                         SettingsTab::EditorSave => render_editor_save_tab(
                             auto_save,
                             auto_save_on_blur,
+                            self.preferences.show_line_numbers,
                             tab_size,
                             line_height,
                             &theme,
                             strings,
                             on_toggle_auto_save,
                             on_toggle_auto_save_on_blur,
+                            on_toggle_line_numbers,
                             on_set_tab_size,
                             on_set_line_height,
                         )
@@ -607,17 +624,20 @@ fn render_appearance_tab(
 fn render_editor_save_tab(
     auto_save: bool,
     auto_save_on_blur: bool,
+    show_line_numbers: bool,
     tab_size: usize,
     line_height: f32,
     theme: &ThemeColors,
     strings: &I18nStrings,
     on_toggle_auto_save: Arc<dyn Fn(bool, &mut Window, &mut App)>,
     on_toggle_auto_save_on_blur: Arc<dyn Fn(bool, &mut Window, &mut App)>,
+    on_toggle_line_numbers: Arc<dyn Fn(bool, &mut Window, &mut App)>,
     on_set_tab_size: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_set_line_height: Arc<dyn Fn(f32, &mut Window, &mut App)>,
 ) -> impl IntoElement {
     let t_as = on_toggle_auto_save;
     let t_asb = on_toggle_auto_save_on_blur;
+    let t_ln = on_toggle_line_numbers;
     let t_ts2 = on_set_tab_size.clone();
     let t_ts4 = on_set_tab_size;
 
@@ -676,6 +696,36 @@ fn render_editor_save_tab(
                         )
                         .child(render_ios_toggle(auto_save_on_blur, theme, move |_, window, cx| {
                             t_asb(!auto_save_on_blur, window, cx);
+                        })),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .py_2()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text_primary)
+                                        .child(strings.show_line_numbers_label),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.text_muted)
+                                        .child(strings.show_line_numbers_desc),
+                                ),
+                        )
+                        .child(render_ios_toggle(show_line_numbers, theme, move |_, window, cx| {
+                            t_ln(!show_line_numbers, window, cx);
                         })),
                 ),
         )
