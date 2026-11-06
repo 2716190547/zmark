@@ -1,6 +1,6 @@
-# GlideMark 领域词汇模型 (Domain Glossary)
+# ZMark 领域词汇模型 (Domain Glossary)
 
-GlideMark 是一款基于 **Rust + GPUI** 的高性能、侧栏驱动的多文件夹 Markdown 阅读与编辑器。
+ZMark 是一款基于 **Rust + GPUI** 的高性能、侧栏驱动的多文件夹 Markdown 阅读与编辑器。
 本文档定义统一的业务与架构术语，消灭交流歧义与冗余实现噪音。
 
 ---

@@ -1,6 +1,6 @@
-# GlideMark
+# ZMark
 
-> **GlideMark** 是一款由 **Rust + GPUI** 强力驱动的、侧栏驱动的 GPU 原生极速 Markdown 阅读与编辑器。以现代、纯粹、克制的极简设计语言与暖石纸张质感，提供行云流水般的书写与排版阅读体验。
+> **ZMark**（formerly GlideMark）是一款由 **Rust + GPUI** 强力驱动的、侧栏驱动的 GPU 原生极速 Markdown 阅读与编辑器。以现代、纯粹、克制的极简设计语言与暖石纸张质感，提供行云流水般的书写与排版阅读体验。
 
 ---
 
@@ -19,7 +19,7 @@
   - 支持直接将 `.md` 文件拖拽进窗口瞬间载入。
   - 双击当前文档标题直接内联原地重命名磁盘文件；草稿双击或 `Cmd+S` 进入另存为。
 - **离线独立 HTML 导出**：一键生成自包含完整排版与图表样式的单文件 HTML，脱机即阅。
-- **macOS 原生独立应用**：标准 App Bundle（`/Applications/GlideMark.app`），配备 Apple Icon Composer 编译的标准 `Assets.car` 原生图标。
+- **macOS 原生独立应用**：标准 App Bundle（`/Applications/ZMark.app`），配备 Apple Icon Composer 编译的标准 `Assets.car` 原生图标。
 
 ---
 
@@ -67,7 +67,7 @@
 ### 常用命令
 ```bash
 # 启动本地开发热运行
-cargo run -p glidemark_app
+cargo run -p zmark_app
 
 # 运行自动化测试套件
 cargo test --workspace

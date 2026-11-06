@@ -1,0 +1,13 @@
+# path-prefix<TAB>content-regex
+# Test fixtures are not product identity; crate imports are checked by rustc.
+crates/zmark_app/tests/
+crates/zmark_core/tests/
+# One-line rename provenance note.
+README.md	formerly GlideMark
+# Config migration compatibility.
+crates/zmark_core/src/config.rs	glidemark|GlideMark
+# Legacy executable env var intentionally still read for one release.
+scripts/bench_memory.sh	GLIDEMARK_BIN
+# Old bundle cleanup paths.
+scripts/bundle_macos.sh	GlideMark
+crates/zmark_app/src/updater.rs	GlideMark

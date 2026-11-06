@@ -2089,33 +2089,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "glidemark_app"
-version = "0.1.0"
-dependencies = [
- "glidemark_core",
- "gpui",
- "image",
- "percent-encoding",
- "tempfile",
- "usvg",
-]
-
-[[package]]
-name = "glidemark_core"
-version = "0.1.0"
-dependencies = [
- "dirs 6.0.0",
- "notify",
- "pulldown-cmark",
- "rusty-mermaid",
- "serde",
- "syntect",
- "tempfile",
- "thiserror 2.0.21",
- "toml 0.8.23",
-]
-
-[[package]]
 name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7482,6 +7455,33 @@ name = "zlib-rs"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
+
+[[package]]
+name = "zmark_app"
+version = "0.2.0"
+dependencies = [
+ "gpui",
+ "image",
+ "percent-encoding",
+ "tempfile",
+ "usvg",
+ "zmark_core",
+]
+
+[[package]]
+name = "zmark_core"
+version = "0.2.0"
+dependencies = [
+ "dirs 6.0.0",
+ "notify",
+ "pulldown-cmark",
+ "rusty-mermaid",
+ "serde",
+ "syntect",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml 0.8.23",
+]
 
 [[package]]
 name = "zmij"

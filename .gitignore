@@ -2,4 +2,4 @@
 **/*.rs.bk
 Cargo.lock
 .DS_Store
-crates/glidemark_app/assets/helpers/glidemark_mermaid
+crates/zmark_app/assets/helpers/zmark_mermaid

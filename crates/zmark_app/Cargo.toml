@@ -1,0 +1,46 @@
+[package]
+name = "zmark_app"
+version = "0.2.0"
+edition = "2021"
+
+[features]
+test-observation = ["zmark_core/test-observation"]
+
+[dependencies]
+zmark_core = { path = "../zmark_core" }
+gpui = "0.2.2"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+usvg = "0.45.1"
+percent-encoding = "2.3"
+tempfile = "3.17"
+
+[dev-dependencies]
+gpui = { version = "0.2.2", features = ["test-support", "runtime_shaders"] }
+
+[[test]]
+name = "phase_h_b1_real_geometry"
+path = "tests/phase_h_b1_real_geometry.rs"
+required-features = ["test-observation"]
+
+[[test]]
+name = "phase_h_b2_highlight_matches_copy"
+path = "tests/phase_h_b2_highlight_matches_copy.rs"
+required-features = ["test-observation"]
+
+[[test]]
+name = "phase_h_b3_autoscroll_real_events"
+path = "tests/phase_h_b3_autoscroll_real_events.rs"
+
+[[test]]
+name = "phase_h_b4_cmd_c_routing"
+path = "tests/phase_h_b4_cmd_c_routing.rs"
+
+[[test]]
+name = "phase_i_syntax_and_warm_palette_test"
+path = "tests/phase_i_syntax_and_warm_palette_test.rs"
+required-features = ["test-observation"]
+
+[[test]]
+name = "rework4_stage_a_workspace_test"
+path = "tests/rework4_stage_a_workspace_test.rs"
+required-features = ["test-observation"]

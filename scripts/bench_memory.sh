@@ -3,14 +3,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${GLIDEMARK_BIN:-$ROOT/target/release/glidemark_app}"
+BIN="${ZMARK_BIN:-${GLIDEMARK_BIN:-$ROOT/target/release/zmark_app}}"
 SETTLE_SECONDS="${SETTLE_SECONDS:-6}"
 SAMPLE_COUNT="${SAMPLE_COUNT:-8}"
 SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-0.5}"
 
 if [[ ! -x "$BIN" ]]; then
   echo "Building release binary..."
-  cargo build --release -p glidemark_app --manifest-path "$ROOT/Cargo.toml"
+  cargo build --release -p zmark_app --manifest-path "$ROOT/Cargo.toml"
 fi
 
 TMP_DIR="$(mktemp -d)"
@@ -75,7 +75,7 @@ measure() {
   awk -v label="$label" -v kb="$max_kb" 'BEGIN { printf "%-18s %7.1f MB\n", label, kb / 1024 }'
 }
 
-echo "GlideMark idle RSS (release, peak of $SAMPLE_COUNT samples)"
+echo "ZMark idle RSS (release, peak of $SAMPLE_COUNT samples)"
 echo "-----------------------------------------------------------"
 measure "default" 
 measure "1.5MB document" "$LARGE_DOC"
