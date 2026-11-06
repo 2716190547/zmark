@@ -870,7 +870,8 @@ impl WorkspaceView {
 
         if missing_blocks.is_empty() {
             self.reevaluate_admission(&ordered_visible_keys);
-            self.invalidate_preview_list();
+            // Only repaint: no new syntax work means the block layout is unchanged, and
+            // re-splicing the virtual list on every wheel tick flickered and reset heights.
             cx.notify();
             return;
         }
@@ -1039,7 +1040,8 @@ impl WorkspaceView {
             self.state.preferences.font_size,
             self.state.preferences.line_height,
         ).max(1.0);
-        let top_vis_index = (scroll_y / row_h).floor() as usize;
+        let top_vis_index = ((scroll_y / row_h).floor() as usize)
+            .min(visual_lines.len().saturating_sub(1));
         let vl_opt = visual_lines.get(top_vis_index);
         let phys_line_idx = vl_opt.map(|vl| vl.physical_line_idx).unwrap_or(0);
         let phys_line = phys_line_idx + 1;
@@ -1052,7 +1054,15 @@ impl WorkspaceView {
 
         let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc.parsed.anchors.clone());
         let (block_index, inner_progress) = map.source_line_to_preview_progress(phys_line);
-        let offset_px = calculate_subline_scroll_offset(inner_progress, subline_idx, total_sublines);
+        // Scale the in-block progress by the block's measured height. The old fixed
+        // 100px scale made the preview crawl inside tall blocks (laggy, "not following").
+        let fraction = calculate_subline_scroll_fraction(inner_progress, subline_idx, total_sublines);
+        let block_height = self
+            .preview_list
+            .bounds_for_item(block_index)
+            .map(|bounds| f32::from(bounds.size.height))
+            .unwrap_or(0.0);
+        let offset_px = fraction * block_height;
 
         self.preview_list.scroll_to(ListOffset {
             item_ix: block_index,
@@ -1080,9 +1090,22 @@ impl WorkspaceView {
         }
         self.last_scroll_origin = Some((ScrollOrigin::Preview, now));
 
-        let top_block = self.preview_list.logical_scroll_top().item_ix;
+        let top = self.preview_list.logical_scroll_top();
+        let top_block = top.item_ix;
+        // Carry the in-block progress across, otherwise the editor only moves when the
+        // preview crosses a whole block ("not following" inside tall blocks).
+        let block_height = self
+            .preview_list
+            .bounds_for_item(top_block)
+            .map(|bounds| f32::from(bounds.size.height))
+            .unwrap_or(0.0);
+        let progress = if block_height > 1.0 {
+            (f32::from(top.offset_in_item) / block_height).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc.parsed.anchors.clone());
-        let target_line = map.preview_to_source_line(top_block, 0.0);
+        let target_line = map.preview_to_source_line(top_block, progress);
         let phys_line_idx = target_line.saturating_sub(1);
 
         let visual_lines = self.compute_visual_lines(window);
@@ -3718,12 +3741,12 @@ pub fn calculate_title_header_padding(
 /// Consistently aligns with the 16px content margin across Source, Split, and Preview.
 pub const CANVAS_TITLE_LEFT_MARGIN: f32 = 16.0;
 
-/// Calculates preview pane scroll offset (in pixels, scaled up to 100px per item)
-/// incorporating the fractional subline progress within a wrapped physical line.
-pub fn calculate_subline_scroll_offset(inner_progress: f32, subline_idx: usize, total_sublines: usize) -> f32 {
+/// Fraction (0..1) of the target preview block to scroll to, combining the progress
+/// inside the source line with the position of a wrapped sub-line.
+pub fn calculate_subline_scroll_fraction(inner_progress: f32, subline_idx: usize, total_sublines: usize) -> f32 {
     let total = total_sublines.max(1);
     let subline_fraction = (subline_idx as f32) / (total as f32);
-    (inner_progress + subline_fraction).clamp(0.0, 1.0) * 100.0
+    (inner_progress + subline_fraction).clamp(0.0, 1.0)
 }
 
 /// Resolves background and text colors for view mode switcher tabs.

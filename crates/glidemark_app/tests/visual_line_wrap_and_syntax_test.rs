@@ -9,7 +9,7 @@ use glidemark_app::views::editor::{
     MarkdownTokenKind,
 };
 use glidemark_core::syntax::parse_code_spans;
-use glidemark_app::views::workspace::calculate_subline_scroll_offset;
+use glidemark_app::views::workspace::calculate_subline_scroll_fraction;
 
 #[test]
 fn test_visual_line_wrap_cjk_emoji_word_boundary() {
@@ -392,19 +392,18 @@ fn test_cross_visual_line_syntax_inheritance_and_subline_scroll() {
     assert_eq!(head_sub1.len(), 1);
     assert_eq!(head_sub1[0].kind, MarkdownTokenKind::HeadingText);
 
-    // 3. Subline scroll progress calculation:
+    // 3. Subline scroll fraction (0..1) is scaled by the block's measured height:
     // With inner_progress = 0.0 and total_sublines = 4:
-    assert_eq!(calculate_subline_scroll_offset(0.0, 0, 4), 0.0);
-    assert_eq!(calculate_subline_scroll_offset(0.0, 1, 4), 25.0);
-    assert_eq!(calculate_subline_scroll_offset(0.0, 2, 4), 50.0);
-    assert_eq!(calculate_subline_scroll_offset(0.0, 3, 4), 75.0);
+    assert_eq!(calculate_subline_scroll_fraction(0.0, 0, 4), 0.0);
+    assert_eq!(calculate_subline_scroll_fraction(0.0, 1, 4), 0.25);
+    assert_eq!(calculate_subline_scroll_fraction(0.0, 2, 4), 0.5);
+    assert_eq!(calculate_subline_scroll_fraction(0.0, 3, 4), 0.75);
 
     // With inner_progress = 0.3 and total_sublines = 4:
-    // (0.3 + 0.0) * 100.0 = 30.0, (0.3 + 0.25) * 100.0 = 55.0, (0.3 + 0.5) * 100.0 = 80.0
-    assert!((calculate_subline_scroll_offset(0.3, 0, 4) - 30.0).abs() < 1e-4);
-    assert!((calculate_subline_scroll_offset(0.3, 1, 4) - 55.0).abs() < 1e-4);
-    assert!((calculate_subline_scroll_offset(0.3, 2, 4) - 80.0).abs() < 1e-4);
+    assert!((calculate_subline_scroll_fraction(0.3, 0, 4) - 0.30).abs() < 1e-4);
+    assert!((calculate_subline_scroll_fraction(0.3, 1, 4) - 0.55).abs() < 1e-4);
+    assert!((calculate_subline_scroll_fraction(0.3, 2, 4) - 0.80).abs() < 1e-4);
 
-    // Clamping to 100.0:
-    assert_eq!(calculate_subline_scroll_offset(0.5, 3, 4), 100.0);
+    // Clamped to 1.0:
+    assert_eq!(calculate_subline_scroll_fraction(0.5, 3, 4), 1.0);
 }

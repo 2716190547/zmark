@@ -99,6 +99,31 @@
 
 真实应用自动化受阻：`screencapture` 可用，但 `osascript keystroke` 与 CGEvent 点击/按键无法注入（无辅助访问权限），无法在用户的 6976 行长文档上复现。修复需要具体复现条件（Split 还是 Preview、触控板惯性还是鼠标滚轮、是否发生在图片加载后），否则只能猜测。
 
+
+## v4 追加（2026-11-06 滚动同步修复与语言标签调整）
+
+用户补充了精确复现条件：**分屏模式**下滚动**左侧编辑器**到底部后继续滚动，预览滚动条乱跳、闪屏；并要求滚动平滑“跟手”、语言标签稍大但弱对比。
+
+### 根因与修复（`workspace.rs`）
+
+1. **预览跳回顶部**：`handle_editor_scroll_wheel` 用 `(scroll_y / row_h)` 求可见行下标，越界时 `visual_lines.get(idx)` 返回 `None`，随后 `unwrap_or(0)` 把 `phys_line` 变成第 1 行，预览被拉回第一块。滚轮事件在绘制前触发，而此时编辑器偏移可能已越过末端（gpui `uniform_list.rs:380` 只在绘制阶段把超界偏移夹回，说明超界偏移在事件阶段确实存在），于是每次滚轮都“跳到顶部再夹回”，表现为乱跳与闪屏。修复：下标 `min(len-1)`。
+2. **大块内不跟手**：编辑器→预览的块内偏移被硬编码为 `fraction * 100px`，与真实块高无关，长段落/代码块里预览几乎不动。修复：`calculate_subline_scroll_offset` 改为返回 0..1 比例并重命名 `calculate_subline_scroll_fraction`，调用处乘以测得的块高。
+3. **预览→编辑器方向丢进度**：`sync_preview_scroll` 用 `preview_to_source_line(top_block, 0.0)` 丢掉块内进度，滚轮在长块内不会带动编辑器。修复：按 `offset_in_item / block_height` 传入真实进度。
+4. **闪屏另一来源**：语法需求检查在没有缺失块时也调用 `invalidate_preview_list()`，每次滚轮都 `splice` 整个虚拟列表并重置项高。修复：该分支改为仅 `cx.notify()`（语法 spans 在渲染时查缓存，布局未变）。
+
+### 语言标签
+
+`text_size` 10 → 11px，`text_muted` 透明度 0.75 → 0.6，位置仍在代码块右下角。
+
+### 证据与边界
+
+新增 `crates/glidemark_app/tests/split_scroll_sync_test.rs`（2 项，约 14 秒）：
+
+- `editor_overscroll_never_sends_preview_back_to_start`：分屏、400 次滚轮把编辑器推到底部之后，预览项索引永不回退且停在文档末 10% 区间。
+- `in_block_offset_uses_measured_block_height`：块内偏移必须落在测得块高内，且不再固定为 25 的倍数。变异回 `fraction * 100` 后该项 FAILED（实测偏移 50/100 越过 44/96px 块高并命中 25 倍数）。
+
+**未覆盖**：headless 测试里 `uniform_list` 会把越界偏移夹回，因此第 1 项修复在测试中不可达，仅由上方代码路径推断；真实触控板超界仍未在真机自动复现（输入注入无辅助访问权限）。分屏滚轮实测仍待用户确认。
+
 ## 独立规划审查
 
 用户于 2026-11-05 明确指示“以前的模式不用了，直接开发即可”，覆盖原审查关口；本计划不宣称已取得独立审查签字。

@@ -2209,9 +2209,9 @@ fn render_code_block(
                     .absolute()
                     .bottom(px(6.))
                     .right(px(10.))
-                    .text_size(px(10.))
+                    .text_size(px(11.))
                     .font_family(crate::platform::MONO_FONT)
-                    .text_color(theme.text_muted.opacity(0.75))
+                    .text_color(theme.text_muted.opacity(0.6))
                     .child(label),
             )
         })
