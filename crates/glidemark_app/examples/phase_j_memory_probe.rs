@@ -35,7 +35,7 @@ fn main() {
                         eprintln!("PROBE start");
                         for step in 0..80 {
                             let _ = this.update(app, |view, cx| {
-                                let count = view.state.doc.parsed.blocks.len();
+                                let count = view.state.doc().parsed.blocks.len();
                                 if count > 0 {
                                     view.preview_list.scroll_to(ListOffset {
                                         item_ix: (step * 23) % count,

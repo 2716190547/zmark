@@ -40,7 +40,7 @@ async fn editor_overscroll_never_sends_preview_back_to_start(cx: &mut TestAppCon
         x: bounds.origin.x + bounds.size.width * 0.25,
         y: bounds.center().y,
     };
-    let count = cx.update(|_, cx| view.read(cx).state.doc.parsed.blocks.len());
+    let count = cx.update(|_, cx| view.read(cx).state.doc().parsed.blocks.len());
 
     let mut prev_item = 0usize;
     let mut min_after_end = usize::MAX;

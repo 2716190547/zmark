@@ -31,7 +31,7 @@ impl Harness {
                 ws.state.editor.reset_text(md);
                 ws.parse_now_and_refresh();
                 ws.preview_selection = None;
-                ws.preview_list.reset(ws.state.doc.parsed.blocks.len());
+                ws.preview_list.reset(ws.state.doc().parsed.blocks.len());
                 obs::reset();
                 cx.notify();
             });
@@ -41,7 +41,7 @@ impl Harness {
     }
 
     fn flat_text(&self, cx: &mut VisualTestContext, block_ix: usize) -> String {
-        cx.update(|_w, cx| self.view.read(cx).state.doc.parsed.blocks[block_ix].to_plain_text())
+        cx.update(|_w, cx| self.view.read(cx).state.doc().parsed.blocks[block_ix].to_plain_text())
     }
 
     /// Selects `range` inside `block_ix`, repaints, and returns
@@ -58,7 +58,7 @@ impl Harness {
         );
         let copied = cx.update(|_w, cx| {
             let ws = self.view.read(cx);
-            serialize_preview_selection(&ws.state.doc.parsed, sel)
+            serialize_preview_selection(&ws.state.doc().parsed, sel)
         });
         cx.update(|window, cx| {
             self.view.update(cx, |ws, cx| {

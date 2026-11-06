@@ -419,7 +419,7 @@ async fn switching_documents_warms_only_their_fenced_languages_without_edit(
 ) {
     use glidemark_app::{
         state::{AppState, ViewMode},
-        views::workspace::{WarmState, WorkspaceView},
+        syntax::WarmState, views::workspace::WorkspaceView,
     };
     use glidemark_core::document::Document;
     let dir = tempfile::tempdir().unwrap();

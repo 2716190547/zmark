@@ -230,8 +230,8 @@ fn test_workspace_root_remove_preserves_docs() {
 
     // Open file inside the workspace root
     state.open_file(file_path.clone()).unwrap();
-    assert_eq!(state.open_docs.len(), 1);
-    let open_doc_key = state.active.clone().unwrap();
+    assert_eq!(state.open_documents().len(), 1);
+    let open_doc_key = state.active_key().cloned().unwrap();
 
     // Remove the workspace root
     let removed = state.remove_workspace_root(0).unwrap();
@@ -239,10 +239,10 @@ fn test_workspace_root_remove_preserves_docs() {
     assert!(state.workspace_roots.is_empty());
 
     // CRITICAL: open_docs MUST be preserved, active key unchanged
-    assert_eq!(state.open_docs.len(), 1);
-    assert_eq!(state.active, Some(open_doc_key));
+    assert_eq!(state.open_documents().len(), 1);
+    assert_eq!(state.active_key().cloned(), Some(open_doc_key));
     assert_eq!(
-        state.open_docs[0].doc.path.as_ref(),
+        state.open_documents()[0].doc.path.as_ref(),
         Some(&file_path)
     );
     assert!(state.preferences.workspace_roots.is_empty());
@@ -956,7 +956,7 @@ fn test_remove_workspace_root_preserves_open_docs_in_loose_docs() {
     // 2. Open doc_a inside root_a
     state.open_file(file_a.clone()).unwrap();
     let doc_a_key = DocKey::Path(file_a.clone());
-    assert_eq!(state.active, Some(doc_a_key.clone()));
+    assert_eq!(state.active_key().cloned(), Some(doc_a_key.clone()));
 
     // Make doc_a dirty
     state.editor.insert_text("\nDirty edit in doc_a");
@@ -965,13 +965,13 @@ fn test_remove_workspace_root_preserves_open_docs_in_loose_docs() {
 
     // 3. Open an unnamed draft (scratch) and make it dirty
     state.focus_or_create_draft();
-    let scratch_key = state.active.clone().expect("Draft slot active");
+    let scratch_key = state.active_key().cloned().expect("Draft slot active");
     assert!(scratch_key.is_scratch());
     state.editor.insert_text("Dirty draft content");
     state.sync_from_editor();
     assert!(state.is_dirty());
 
-    assert_eq!(state.open_docs.len(), 2);
+    assert_eq!(state.open_documents().len(), 2);
     let loose_before = state.loose_docs();
     assert!(!loose_before.contains(&scratch_key));
     assert!(!loose_before.contains(&doc_a_key));
@@ -983,9 +983,9 @@ fn test_remove_workspace_root_preserves_open_docs_in_loose_docs() {
     assert!(state.workspace_roots.is_empty());
 
     // 5. Verify: open_docs still contains doc_a and scratch; dirty status intact
-    assert_eq!(state.open_docs.len(), 2);
+    assert_eq!(state.open_documents().len(), 2);
     let open_doc_a = state
-        .open_docs
+        .open_documents()
         .iter()
         .find(|d| d.key == doc_a_key)
         .expect("doc_a preserved");
@@ -993,7 +993,7 @@ fn test_remove_workspace_root_preserves_open_docs_in_loose_docs() {
     assert_eq!(open_doc_a.doc.status, DocumentStatus::Modified);
 
     let open_scratch = state
-        .open_docs
+        .open_documents()
         .iter()
         .find(|d| d.key == scratch_key)
         .expect("scratch preserved");
@@ -1042,9 +1042,9 @@ fn test_open_external_file_does_not_pollute_roots_and_enters_loose_docs() {
     let canonical_root_a = fs::canonicalize(&root_a).unwrap();
     assert_eq!(state.workspace_roots[0].path, canonical_root_a);
 
-    // 4. Verify: state.active switched to external.md
+    // 4. Verify: state.active_key().cloned() switched to external.md
     let external_key = DocKey::Path(external_file.clone());
-    assert_eq!(state.active, Some(external_key.clone()));
+    assert_eq!(state.active_key().cloned(), Some(external_key.clone()));
 
     // 5. Verify: state.loose_docs() contains external.md
     let loose = state.loose_docs();

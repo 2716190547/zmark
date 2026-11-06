@@ -26,18 +26,7 @@ pub enum PaneKind {
     Preview,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WarmState {
-    Waiting,
-    Ready,
-    InitFailed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VisibleSyntaxFailure {
-    pub source_line: usize,
-    pub reason: &'static str,
-}
+use crate::syntax::{VisibleSyntaxFailure, WarmState};
 
 pub struct WorkspaceView {
     pub state: AppState,
@@ -148,7 +137,7 @@ pub struct SyntaxBatchRequest {
 impl WorkspaceView {
     pub fn new(state: AppState, cx: &mut Context<Self>) -> Self {
         let preview_list = ListState::new(
-            state.doc.parsed.blocks.len(),
+            state.doc().parsed.blocks.len(),
             ListAlignment::Top,
             px(600.),
         );
@@ -277,7 +266,7 @@ impl WorkspaceView {
         self.preview_focused = false;
         self.preview_autoscroll_task = None;
         self.preview_mouse_window_pos = None;
-        self.preview_list.reset(self.state.doc.parsed.blocks.len());
+        self.preview_list.reset(self.state.doc().parsed.blocks.len());
         self.rendered_regions.lock().unwrap().clear();
         self.syntax_cache.lock().unwrap().clear();
         self.syntax_attempts.clear();
@@ -386,7 +375,7 @@ impl WorkspaceView {
         self.preview_measured_max = None;
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
-        let count = self.state.doc.parsed.blocks.len();
+        let count = self.state.doc().parsed.blocks.len();
         let top = self.preview_list.logical_scroll_top();
         if count != self.preview_list.item_count() {
             self.preview_list.reset(count);
@@ -399,7 +388,7 @@ impl WorkspaceView {
 
     /// Debounces a reparse based on document size; very large documents wait for an explicit refresh.
     pub fn schedule_parse(&mut self, cx: &mut Context<Self>) {
-        let debounce = parse_debounce(self.state.doc.buffer.len());
+        let debounce = parse_debounce(self.state.doc().buffer.len());
         self.parse_task = None;
         self.parse_paused = debounce.is_none();
         self.schedule_syntax_parse(cx);
@@ -462,7 +451,7 @@ impl WorkspaceView {
         let task_id = self.syntax_warm_task_id;
         self.syntax_warm_task = Some(cx.spawn(async move |this, app| {
             let languages = this.read_with(app, |this, _| {
-                this.state.doc.parsed.code_blocks.iter().filter_map(|block| block.key.language).collect::<std::collections::HashSet<_>>()
+                this.state.doc().parsed.code_blocks.iter().filter_map(|block| block.key.language).collect::<std::collections::HashSet<_>>()
             }).unwrap_or_default();
             for &lang in &glidemark_core::syntax::SUPPORTED_CANONICAL_LANGUAGES {
                 if !languages.contains(lang) { continue; }
@@ -601,7 +590,7 @@ impl WorkspaceView {
                 if !key.payload.is_empty() && preview_bounds.intersects(&r.bounds)
                     && seen.insert((key.clone(), open_line))
                 {
-                    if let Some(block) = self.state.doc.parsed.code_blocks.iter()
+                    if let Some(block) = self.state.doc().parsed.code_blocks.iter()
                         .find(|b| b.key == *key && b.fence_open_line == open_line)
                     {
                         if let Some(failure) = self.failure_for_occurrence(key, open_line, block.is_valid) {
@@ -618,11 +607,11 @@ impl WorkspaceView {
     pub fn align_preview_to_cursor(&mut self) {
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
-        if self.state.doc.is_parse_stale() || self.state.doc.parsed.anchors.is_empty() {
+        if self.state.doc().is_parse_stale() || self.state.doc().parsed.anchors.is_empty() {
             return;
         }
         let cursor_line = self.state.editor.cursor().0 + 1;
-        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc.parsed.anchors.clone());
+        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
         let (block_index, _) = map.source_line_to_preview_progress(cursor_line);
         self.preview_list.scroll_to(ListOffset {
             item_ix: block_index,
@@ -665,8 +654,8 @@ impl WorkspaceView {
         let width_bits = max_width_px.round() as u64;
         let font_bits = font_size.to_bits();
 
-        let ast_blocks_changed = !self.state.doc.is_parse_stale()
-            && (self.source_code_blocks_rev != rev || *self.source_code_blocks != self.state.doc.parsed.code_blocks);
+        let ast_blocks_changed = !self.state.doc().is_parse_stale()
+            && (self.source_code_blocks_rev != rev || *self.source_code_blocks != self.state.doc().parsed.code_blocks);
 
         if !self.cached_visual_lines.is_empty()
             && self.cached_visual_rev == rev
@@ -677,12 +666,12 @@ impl WorkspaceView {
             return self.cached_visual_lines.clone();
         }
 
-        if !self.state.doc.is_parse_stale() {
+        if !self.state.doc().is_parse_stale() {
             if ast_blocks_changed || self.source_code_blocks.is_empty() {
-                self.source_code_blocks = Arc::new(self.state.doc.parsed.code_blocks.clone());
+                self.source_code_blocks = Arc::new(self.state.doc().parsed.code_blocks.clone());
                 self.source_code_blocks_rev = rev;
                 self.syntax_invalid_positions.clear();
-                for b in self.state.doc.parsed.code_blocks.iter() {
+                for b in self.state.doc().parsed.code_blocks.iter() {
                     if !b.is_valid {
                         self.syntax_invalid_positions.insert((b.key.clone(), b.fence_open_line));
                     }
@@ -726,7 +715,7 @@ impl WorkspaceView {
                 for r in regions.iter() {
                     if let Some(ref key) = r.content_key {
                         if !key.payload.is_empty() && preview_bounds.intersects(&r.bounds) {
-                            let Some(block) = self.state.doc.parsed.code_blocks.iter().find(|b|
+                            let Some(block) = self.state.doc().parsed.code_blocks.iter().find(|b|
                                 Some(b.fence_open_line) == r.fence_open_line && b.key == *key) else { continue; };
                             let doc_line = block.fence_open_line;
                             if !block.is_valid || self.syntax_invalid_positions.contains(&(key.clone(), doc_line)) {
@@ -1030,7 +1019,7 @@ impl WorkspaceView {
     pub fn handle_editor_scroll_wheel(&mut self, _event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
-        if self.state.view_mode != ViewMode::Split || self.state.doc.is_parse_stale() || self.state.doc.parsed.anchors.is_empty() {
+        if self.state.view_mode != ViewMode::Split || self.state.doc().is_parse_stale() || self.state.doc().parsed.anchors.is_empty() {
             return;
         }
         let now = std::time::Instant::now();
@@ -1060,7 +1049,7 @@ impl WorkspaceView {
             .count()
             .max(1);
 
-        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc.parsed.anchors.clone());
+        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
         let (block_index, inner_progress) = map.source_line_to_preview_progress(phys_line);
         // Scale the in-block progress by the block's measured height. The old fixed
         // 100px scale made the preview crawl inside tall blocks (laggy, "not following").
@@ -1087,7 +1076,7 @@ impl WorkspaceView {
     }
 
     fn sync_preview_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.state.view_mode != ViewMode::Split || self.state.doc.is_parse_stale() || self.state.doc.parsed.anchors.is_empty() {
+        if self.state.view_mode != ViewMode::Split || self.state.doc().is_parse_stale() || self.state.doc().parsed.anchors.is_empty() {
             return;
         }
         let now = std::time::Instant::now();
@@ -1112,7 +1101,7 @@ impl WorkspaceView {
         } else {
             0.0
         };
-        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc.parsed.anchors.clone());
+        let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
         let target_line = map.preview_to_source_line(top_block, progress);
         let phys_line_idx = target_line.saturating_sub(1);
 
@@ -1183,14 +1172,14 @@ impl WorkspaceView {
     }
 
     fn render_preview_scrollbar(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> AnyElement {
-        let count = self.state.doc.parsed.blocks.len();
+        let count = self.state.doc().parsed.blocks.len();
         if self.preview_scroll_end_pending || self.preview_scroll_pending_seek.is_some() {
             let entity = cx.entity().clone();
             let generation = self.preview_scroll_seek_generation;
             cx.defer(move |cx| {
                 let _ = entity.update(cx, |this, cx| {
                     if this.preview_scroll_seek_generation != generation { return; }
-                    let count = this.state.doc.parsed.blocks.len();
+                    let count = this.state.doc().parsed.blocks.len();
                     if count == 0 { this.cancel_pending_preview_seek(); return; }
                     if this.preview_scroll_end_pending {
                         if let Some(bounds) = this.preview_list.bounds_for_item(count - 1) {
@@ -1269,7 +1258,7 @@ impl WorkspaceView {
                         this.end_preview_scroll_drag();
                         cx.notify();
                     }
-                    let count = this.state.doc.parsed.blocks.len();
+                    let count = this.state.doc().parsed.blocks.len();
                     let top = this.preview_list.logical_scroll_top();
                     if this.preview_measured_max.is_none() && count > 0 && count <= 128
                         && top.item_ix == 0 && top.offset_in_item == px(0.)
@@ -1378,7 +1367,7 @@ impl WorkspaceView {
                 cx.remove_asset::<gpui::ImgResourceLoader>(&resource);
             }
         }
-        if self.state.view_mode != ViewMode::Source && self.state.doc.is_parse_stale() {
+        if self.state.view_mode != ViewMode::Source && self.state.doc().is_parse_stale() {
             self.parse_now_and_refresh();
         }
         self.reset_preview_list();
@@ -1423,7 +1412,7 @@ impl WorkspaceView {
         _cx: &mut Context<Self>,
     ) {
         self.cancel_pending_preview_seek();
-        let num_blocks = self.state.doc.parsed.blocks.len();
+        let num_blocks = self.state.doc().parsed.blocks.len();
         if num_blocks == 0 {
             self.preview_autoscroll_task = None;
             return;
@@ -1486,7 +1475,7 @@ impl WorkspaceView {
 
         if let Some(sel) = self.preview_selection {
             let reg = self.rendered_regions.lock().unwrap();
-            if let Some(head) = crate::views::preview::hit_test_point_across_all_regions(&reg, None, mouse_pos, &self.state.doc.parsed.blocks) {
+            if let Some(head) = crate::views::preview::hit_test_point_across_all_regions(&reg, None, mouse_pos, &self.state.doc().parsed.blocks) {
                 self.preview_selection = Some(crate::views::preview::PreviewSelection::new(sel.anchor, head));
             }
         }
@@ -1767,7 +1756,7 @@ impl WorkspaceView {
             return;
         }
         self.parse_now_and_refresh();
-        if self.state.doc.path.is_some() {
+        if self.state.doc().path.is_some() {
             let _ = self.state.save();
             cx.notify();
         } else {
@@ -1899,7 +1888,7 @@ impl WorkspaceView {
                         Err(e) => {
                             eprintln!("Save As failed: {}", e);
                             this.state.is_quitting = was_quitting;
-                            let title = this.state.doc.display_name_with_fallback(this.state.strings.untitled_file);
+                            let title = this.state.doc().display_name_with_fallback(this.state.strings.untitled_file);
                             this.state.pending_close = Some(crate::state::PendingClose {
                                 key: close_key,
                                 title,
@@ -1978,8 +1967,8 @@ impl WorkspaceView {
 
         let active_key = self.state.active.clone();
         let (title_text, tooltip_text) = if active_key.is_some() {
-            let title = self.state.doc.display_name_with_fallback(strings.untitled_file);
-            let tooltip = if let Some(path) = &self.state.doc.path {
+            let title = self.state.doc().display_name_with_fallback(strings.untitled_file);
+            let tooltip = if let Some(path) = &self.state.doc().path {
                 path.to_string_lossy().to_string()
             } else {
                 strings.draft_unsaved_hint.to_string()
@@ -2077,10 +2066,10 @@ impl WorkspaceView {
                             })
                             .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                 if event.click_count == 2 && this.state.active.is_some() {
-                                    if this.state.doc.path.is_some() {
+                                    if this.state.doc().path.is_some() {
                                         let name = this
                                             .state
-                                            .doc
+                                            .doc()
                                             .path
                                             .as_ref()
                                             .and_then(|p| p.file_name())
@@ -2176,7 +2165,7 @@ impl WorkspaceView {
                                 render_export_icon(theme.text_muted),
                                 cx.listener(|this, _, _window, _cx| {
                                     let html = this.state.export_standalone_html();
-                                    if let Some(path) = &this.state.doc.path {
+                                    if let Some(path) = &this.state.doc().path {
                                         let out_path = path.with_extension("html");
                                         let _ = std::fs::write(&out_path, html);
                                     }
@@ -2424,7 +2413,7 @@ impl Render for WorkspaceView {
         }
         {
             let mut images = self.local_images.lock().unwrap();
-            images.begin_frame(self.state.active.clone(), self.state.doc.path.clone());
+            images.begin_frame(self.state.active.clone(), self.state.doc().path.clone());
             for image in images.retired.drain(..) {
                 crate::views::lightbox::release_lightbox_image(image.snapshot.path(), window, cx);
             }
@@ -2476,9 +2465,9 @@ impl Render for WorkspaceView {
         }
 
         let visual_lines = self.compute_visual_lines(window);
-        if !self.state.doc.is_parse_stale() {
+        if !self.state.doc().is_parse_stale() {
             if self.source_code_blocks_rev != self.state.editor.revision || self.source_code_blocks.is_empty() {
-                self.source_code_blocks = Arc::new(self.state.doc.parsed.code_blocks.clone());
+                self.source_code_blocks = Arc::new(self.state.doc().parsed.code_blocks.clone());
                 self.source_code_blocks_rev = self.state.editor.revision;
             }
         }
@@ -2777,7 +2766,7 @@ impl Render for WorkspaceView {
             }))
             .on_action(cx.listener(|this, _: &ExportHtml, _window, _cx| {
                 let html = this.state.export_standalone_html();
-                if let Some(path) = &this.state.doc.path {
+                if let Some(path) = &this.state.doc().path {
                     let out_path = path.with_extension("html");
                     let _ = std::fs::write(&out_path, html);
                 }
@@ -2973,7 +2962,7 @@ impl Render for WorkspaceView {
                             };
                             if should_copy_preview {
                                 if let Some(sel) = this.preview_selection {
-                                    let text = crate::views::preview::serialize_preview_selection(&this.state.doc.parsed, sel);
+                                    let text = crate::views::preview::serialize_preview_selection(&this.state.doc().parsed, sel);
                                     if !text.is_empty() {
                                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                                     }
@@ -3100,7 +3089,7 @@ impl Render for WorkspaceView {
                                         &loose_docs,
                                         &self.state.open_docs,
                                         self.state.active.as_ref(),
-                                        &self.state.doc.parsed.headings(),
+                                        &self.state.doc().parsed.headings(),
                                         theme,
                                         strings,
                                         &self.drawer_scroll_handle,
@@ -3231,7 +3220,7 @@ impl Render for WorkspaceView {
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     cx.listener(|this, _, _window, cx| {
-                                                        this.state.doc.resolve_conflict_keep_local();
+                                                        this.state.doc_mut().resolve_conflict_keep_local();
                                                         cx.notify();
                                                     }),
                                                 )
@@ -3248,7 +3237,7 @@ impl Render for WorkspaceView {
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     cx.listener(|this, _, window, cx| {
-                                                        if let Some(path) = &this.state.doc.path.clone() {
+                                                        if let Some(path) = &this.state.doc().path.clone() {
                                                             let _ = this.state.load_file(path.clone());
                                                             this.on_document_swapped(Some(window), cx);
                                                         }
@@ -3363,12 +3352,12 @@ impl Render for WorkspaceView {
                                     let doc = recovery_doc.clone();
                                     let view = recovery_view.clone();
                                     view.update(app, |this, cx| {
-                                        if this.state.active != doc || this.state.editor.revision != recovery_revision || this.state.doc.is_parse_stale() {
+                                        if this.state.active != doc || this.state.editor.revision != recovery_revision || this.state.doc().is_parse_stale() {
                                             this.error_banner = Some("文档已变化，请刷新预览后重试图片修复".into());
                                             cx.notify();
                                             return;
                                         }
-                                        let document = this.state.doc.path.clone();
+                                        let document = this.state.doc().path.clone();
                                         cx.spawn(async move |view, app| {
                                             let check_url = url.clone();
                                             let check_candidate = candidate.clone();
@@ -3376,7 +3365,7 @@ impl Render for WorkspaceView {
                                                 crate::local_images::validate_image_recovery(&check_url, document.as_deref(), &check_candidate)
                                             }).await;
                                             let _ = view.update(app, |this, cx| {
-                                                if !valid || this.state.active != doc || this.state.editor.revision != recovery_revision || this.state.doc.is_parse_stale() {
+                                                if !valid || this.state.active != doc || this.state.editor.revision != recovery_revision || this.state.doc().is_parse_stale() {
                                                     this.error_banner = Some("图片候选或文档已变化，请刷新预览后重试".into());
                                                     cx.notify();
                                                     return;
@@ -3485,7 +3474,7 @@ impl Render for WorkspaceView {
                                                         visual_lines.clone(),
                                                         self.syntax_cache.clone(),
                                                         self.source_code_blocks.clone(),
-                                                        !self.state.doc.is_parse_stale(),
+                                                        !self.state.doc().is_parse_stale(),
                                                         self.state.editor.cursor(),
                                                         theme,
                                                         strings,
@@ -3521,7 +3510,7 @@ impl Render for WorkspaceView {
                                                         .size_full(),
                                                     )
                                                     .child(crate::views::preview::render_preview_pane_with_callbacks(
-                                                        self.state.doc.parsed.clone(),
+                                                        self.state.doc().parsed.clone(),
                                                         theme,
                                                         strings,
                                                         self.state.preferences.max_column_width,
@@ -3578,7 +3567,7 @@ impl Render for WorkspaceView {
                                                             visual_lines.clone(),
                                                             self.syntax_cache.clone(),
                                                             self.source_code_blocks.clone(),
-                                                            !self.state.doc.is_parse_stale(),
+                                                            !self.state.doc().is_parse_stale(),
                                                             self.state.editor.cursor(),
                                                             theme,
                                                             strings,
@@ -3652,7 +3641,7 @@ impl Render for WorkspaceView {
                                                                     .size_full(),
                                                                 )
                                                                 .child(crate::views::preview::render_preview_pane_with_callbacks(
-                                                                    self.state.doc.parsed.clone(),
+                                                                    self.state.doc().parsed.clone(),
                                                                     theme,
                                                                     strings,
                                                                     self.state.preferences.max_column_width,

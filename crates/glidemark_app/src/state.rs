@@ -400,9 +400,9 @@ pub fn root_label(roots: &[WorkspaceRoot], idx: usize) -> String {
 }
 
 pub struct AppState {
-    pub doc: Document,
-    pub open_docs: Vec<OpenDoc>,
-    pub active: Option<DocKey>,
+    empty_doc: Document,
+    pub(crate) open_docs: Vec<OpenDoc>,
+    pub(crate) active: Option<DocKey>,
     pub next_scratch_id: u64,
     pub pending_close: Option<PendingClose>,
     pub pending_remove_root: Option<usize>,
@@ -438,6 +438,19 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn open_documents(&self) -> &[OpenDoc] { &self.open_docs }
+    pub fn doc(&self) -> &Document {
+        match &self.active {
+            Some(key) => &self.open_docs.iter().find(|d| &d.key == key).expect("active document missing").doc,
+            None => &self.empty_doc,
+        }
+    }
+    pub(crate) fn doc_mut(&mut self) -> &mut Document {
+        match &self.active {
+            Some(key) => &mut self.open_docs.iter_mut().find(|d| &d.key == key).expect("active document missing").doc,
+            None => &mut self.empty_doc,
+        }
+    }
     pub fn new(doc: Document) -> Self {
         let preferences = Preferences::load_or_default();
         Self::new_with_preferences_at(doc, preferences, Preferences::default_config_path())
@@ -492,7 +505,7 @@ impl AppState {
         };
         let open_docs = vec![OpenDoc {
             key: key.clone(),
-            doc: doc.clone(),
+            doc,
         }];
         let active = Some(key);
 
@@ -506,7 +519,7 @@ impl AppState {
             scan_budget: ScanBudget::default(),
             discarded_roots,
             preferences_path,
-            doc,
+            empty_doc: Document::new_scratch(),
             editor,
             view_mode: ViewMode::Split,
             drawer_open: false,
@@ -622,22 +635,16 @@ impl AppState {
             return false;
         }
         let new_text = self.editor.to_text();
-        let changed = self.doc.set_buffer(new_text);
-        if let Some(active_key) = &self.active {
-            if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == active_key) {
-                od.doc = self.doc.clone();
-            }
-        }
-        changed
+        self.doc_mut().set_buffer(new_text)
     }
 
     /// Parses the buffer now, ignoring the debounce tier.
     pub fn parse_now(&mut self) -> bool {
-        self.doc.reparse()
+        self.doc_mut().reparse()
     }
 
     pub fn parse_is_stale(&self) -> bool {
-        self.doc.is_parse_stale()
+        self.doc().is_parse_stale()
     }
 
     #[allow(dead_code)]
@@ -1138,18 +1145,18 @@ impl AppState {
         {
             self.open_docs[0] = OpenDoc {
                 key: target_key.clone(),
-                doc: new_doc.clone(),
+                doc: new_doc,
             };
         } else {
             self.open_docs.push(OpenDoc {
                 key: target_key.clone(),
-                doc: new_doc.clone(),
+                doc: new_doc,
             });
         }
 
         self.active = Some(target_key);
-        self.doc = new_doc;
-        self.editor.reset_text(&self.doc.buffer);
+        let buffer = &self.open_docs.iter().find(|d| self.active.as_ref() == Some(&d.key)).unwrap().doc.buffer;
+        self.editor.reset_text(buffer);
         if let Some(idx) = self.find_root_index_for_path(&path) {
             self.refresh_root(idx);
         }
@@ -1165,8 +1172,7 @@ impl AppState {
 
         if let Some(pos) = self.open_docs.iter().position(|d| &d.key == key) {
             self.active = Some(key.clone());
-            self.doc = self.open_docs[pos].doc.clone();
-            self.editor.reset_text(&self.doc.buffer);
+            self.editor.reset_text(&self.open_docs[pos].doc.buffer);
             if let DocKey::Path(ref p) = key {
                 self.expand_to_file(p);
             }
@@ -1189,10 +1195,9 @@ impl AppState {
 
         self.open_docs.push(OpenDoc {
             key: key.clone(),
-            doc: scratch.clone(),
+            doc: scratch,
         });
         self.active = Some(key);
-        self.doc = scratch;
         self.editor.reset_text("");
     }
 
@@ -1200,10 +1205,10 @@ impl AppState {
         let od = self.open_docs.iter().find(|d| &d.key == key)?;
         let is_active = self.active.as_ref() == Some(key);
         let is_dirty = if is_active {
-            self.doc.status == DocumentStatus::Modified
-                || self.editor.to_text() != self.doc.buffer
+            self.doc().status != DocumentStatus::Clean
+                || self.editor.to_text() != self.doc().buffer
         } else {
-            od.doc.status == DocumentStatus::Modified
+            od.doc.status != DocumentStatus::Clean
         };
 
         if is_dirty {
@@ -1250,7 +1255,7 @@ impl AppState {
             return self.active.clone();
         }
         self.open_docs.iter().find(|od| {
-            od.doc.status == DocumentStatus::Modified
+            od.doc.status != DocumentStatus::Clean
                 || (od.key.is_scratch() && !od.doc.buffer.trim().is_empty())
         }).map(|od| od.key.clone())
     }
@@ -1285,9 +1290,6 @@ impl AppState {
         if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == key) {
             if od.doc.path.is_some() {
                 od.doc.save()?;
-                if self.active.as_ref() == Some(key) {
-                    self.doc = od.doc.clone();
-                }
                 self.pending_close = None;
                 self.close_document_forced(key);
                 return Ok(true);
@@ -1311,7 +1313,7 @@ impl AppState {
         if self.active.as_ref() == Some(key) {
             if self.open_docs.is_empty() {
                 self.active = None;
-                self.doc = Document::new_scratch();
+                self.empty_doc = Document::new_scratch();
                 self.editor.reset_text("");
             } else {
                 let next_idx = if pos < self.open_docs.len() {
@@ -1320,10 +1322,8 @@ impl AppState {
                     self.open_docs.len() - 1
                 };
                 let next_key = self.open_docs[next_idx].key.clone();
-                let next_doc = self.open_docs[next_idx].doc.clone();
                 self.active = Some(next_key.clone());
-                self.doc = next_doc;
-                self.editor.reset_text(&self.doc.buffer);
+                self.editor.reset_text(&self.open_docs[next_idx].doc.buffer);
                 if let DocKey::Path(ref p) = next_key {
                     self.expand_to_file(p);
                 }
@@ -1360,7 +1360,7 @@ impl AppState {
             return Ok(());
         }
 
-        let old_path = match self.doc.path.clone() {
+        let old_path = match self.doc().path.clone() {
             Some(p) => p,
             None => {
                 return Err(std::io::Error::new(
@@ -1405,10 +1405,9 @@ impl AppState {
 
         std::fs::rename(&old_path, &new_path)?;
 
-        self.doc.path = Some(new_path.clone());
         if let Some(od) = self.open_docs.iter_mut().find(|d| d.key == old_key) {
             od.key = new_key.clone();
-            od.doc = self.doc.clone();
+            od.doc.path = Some(new_path.clone());
         }
         self.active = Some(new_key);
         let old_root_idx = self.find_root_index_for_path(&old_path);
@@ -1430,26 +1429,17 @@ impl AppState {
             return Ok(());
         }
         self.sync_from_editor();
-        self.doc.save()?;
-        if let Some(active_key) = &self.active {
-            if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == active_key) {
-                od.doc = self.doc.clone();
-            }
-        }
-        Ok(())
+        self.doc_mut().save()
     }
 
     pub fn save_doc(&mut self, key: &DocKey) -> Result<(), std::io::Error> {
         if self.active.as_ref() == Some(key) {
             return self.save();
         }
-        let Some(pos) = self.open_docs.iter().position(|doc| &doc.key == key) else {
+        let Some(doc) = self.open_docs.iter_mut().find(|doc| &doc.key == key) else {
             return Ok(());
         };
-        let mut doc = self.open_docs[pos].doc.clone();
-        doc.save()?;
-        self.open_docs[pos].doc = doc;
-        Ok(())
+        doc.doc.save()
     }
 
     pub fn save_doc_as(&mut self, key: &DocKey, path: PathBuf) -> Result<(), std::io::Error> {
@@ -1466,7 +1456,7 @@ impl AppState {
 
         // Prepare candidate document clone to attempt save atomically
         let mut candidate_doc = if self.active.as_ref() == Some(key) {
-            self.doc.clone()
+            self.doc().clone()
         } else if let Some(od) = self.open_docs.iter().find(|d| &d.key == key) {
             od.doc.clone()
         } else {
@@ -1482,12 +1472,11 @@ impl AppState {
         // Atomic commit upon save success
         if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == key) {
             od.key = new_key.clone();
-            od.doc = candidate_doc.clone();
+            od.doc = candidate_doc;
         }
 
         if self.active.as_ref() == Some(key) {
             self.active = Some(new_key);
-            self.doc = candidate_doc;
         }
 
         if let Some(idx) = self.find_root_index_for_path(&path) {
@@ -1499,27 +1488,27 @@ impl AppState {
 
     pub fn export_standalone_html(&self) -> String {
         let title = self
-            .doc
+            .doc()
             .path
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .unwrap_or(self.strings.untitled);
-        export_html(&self.doc.parsed, title)
+        export_html(&self.doc().parsed, title)
     }
 
     pub fn is_dirty(&self) -> bool {
         if self.active.is_none() {
             return false;
         }
-        self.doc.status == DocumentStatus::Modified
+        self.doc().status != DocumentStatus::Clean
     }
 
     pub fn has_conflict(&self) -> bool {
         if self.active.is_none() {
             return false;
         }
-        self.doc.status == DocumentStatus::ConflictOnDisk
+        self.doc().status == DocumentStatus::ConflictOnDisk
     }
 
     #[allow(dead_code)]
@@ -2369,4 +2358,209 @@ mod background_search_decoupling_tests {
         assert!(!applied);
         assert!(!state.search_in_progress);
     }
+}
+
+#[cfg(test)]
+mod document_store_fixture_tests {
+    use super::{AppState, DocKey, OpenDoc};
+    use glidemark_core::document::{Document, DocumentStatus};
+    use std::fs;
+    use tempfile::tempdir;
+
+#[test]
+fn test_sidebar_draft_decentralization_lifecycle() {
+    let dir = tempdir().unwrap();
+    let initial_file = dir.path().join("initial_doc.md");
+    fs::write(&initial_file, "# Initial Document\n\nExisting content.").unwrap();
+
+    let doc = Document::from_file(initial_file.clone()).unwrap();
+    let mut state = AppState::new_isolated(doc);
+
+    // 1. Initial clean state: when user has only opened a file, open_docs has no DocKey::Scratch
+    assert_eq!(
+        state.open_docs.iter().any(|d| d.key.is_scratch()),
+        false,
+        "Initial state with opened file document must contain zero Scratch documents"
+    );
+
+    // 2. Draft creation with explicit DocKey::Scratch(0)
+    let scratch_doc = Document::new_scratch();
+    let scratch_zero = DocKey::Scratch(0);
+    state.open_docs.push(OpenDoc {
+        key: scratch_zero.clone(),
+        doc: scratch_doc,
+    });
+    state.active = Some(scratch_zero.clone());
+
+    // Assert scratch item is detected
+    assert!(
+        state.open_docs.iter().any(|d| d.key.is_scratch()),
+        "Scratch item must be detected in open_docs after draft creation"
+    );
+    assert!(
+        state.open_docs.iter().any(|d| d.key == scratch_zero),
+        "DocKey::Scratch(0) must exist in open_docs"
+    );
+
+    // 3. Save as file: state.save_doc_as(&DocKey::Scratch(0), target_path)
+    let target_path = dir.path().join("promoted_draft.md");
+    state
+        .save_doc_as(&scratch_zero, target_path.clone())
+        .expect("save_doc_as should succeed for scratch document");
+
+    // Assert DocKey::Scratch(0) is completely removed from open_docs
+    assert!(
+        !state.open_docs.iter().any(|d| d.key == scratch_zero),
+        "DocKey::Scratch(0) must be completely removed from open_docs after save_doc_as"
+    );
+
+    // Target document exists with DocKey::Path
+    assert!(
+        state
+            .open_docs
+            .iter()
+            .any(|d| d.key == DocKey::Path(target_path.clone())),
+        "Target document with DocKey::Path must exist in open_docs"
+    );
+
+    // Assert draft no longer appears in draft items list
+    assert_eq!(
+        state.open_docs.iter().any(|d| d.key.is_scratch()),
+        false,
+        "No scratch documents should remain in open_docs after saving as file"
+    );
+
+    // 4. Draft closing: state.close_document_forced(&DocKey::Scratch(0))
+    // Create another draft with Scratch(0) to verify forced closure
+    state.open_docs.push(OpenDoc {
+        key: DocKey::Scratch(0),
+        doc: Document::new_scratch(),
+    });
+    assert!(state.open_docs.iter().any(|d| d.key == DocKey::Scratch(0)));
+
+    state.close_document_forced(&DocKey::Scratch(0));
+    assert!(
+        !state.open_docs.iter().any(|d| d.key == DocKey::Scratch(0)),
+        "DocKey::Scratch(0) must be removed after close_document_forced"
+    );
+    assert_eq!(
+        state.open_docs.iter().any(|d| d.key.is_scratch()),
+        false,
+        "Zero-draft state must be fully restored after closing draft"
+    );
+
+    // 5. Dynamic draft lifecycle via state.focus_or_create_draft()
+    state.focus_or_create_draft();
+    assert!(
+        state.open_docs.iter().any(|d| d.key.is_scratch()),
+        "focus_or_create_draft must instantiate a scratch document"
+    );
+    let dynamic_scratch_key = state
+        .open_docs
+        .iter()
+        .find(|d| d.key.is_scratch())
+        .map(|d| d.key.clone())
+        .expect("Dynamic scratch key must exist");
+
+    // Re-focusing does not create duplicates (singleton draft slot)
+    state.focus_or_create_draft();
+    assert_eq!(
+        state.open_docs.iter().filter(|d| d.key.is_scratch()).count(),
+        1,
+        "Focusing draft again must not spawn duplicate draft items"
+    );
+
+    // Closing the dynamic draft recovers zero-draft state
+    state.close_document_forced(&dynamic_scratch_key);
+    assert_eq!(
+        state.open_docs.iter().any(|d| d.key.is_scratch()),
+        false,
+        "Closing dynamic draft must recover zero-draft state"
+    );
+}
+
+#[test]
+fn test_matching_across_roots_loose_and_drafts() {
+    let tmp = tempdir().unwrap();
+    let doc_path = tmp.path().join("main.md");
+    fs::write(&doc_path, "# Main Document").unwrap();
+
+    let doc = Document::from_file(doc_path.clone()).unwrap();
+    let mut state = AppState::new_isolated(doc);
+
+    // 1. Workspace root matching
+    let root_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&root_dir).unwrap();
+    let ws_file = root_dir.join("workspace_notes.md");
+    fs::write(&ws_file, "# Notes").unwrap();
+    state.add_workspace_root(root_dir).unwrap();
+
+    state.set_search_query("workspace_notes");
+    assert!(state.has_search_matches(), "Should match file in workspace root");
+
+    // 2. Loose docs matching (external file opened)
+    let ext_path = tmp.path().join("external_loose.md");
+    fs::write(&ext_path, "# External").unwrap();
+    let ext_doc = Document::from_file(ext_path.clone()).unwrap();
+    state.open_docs.push(OpenDoc {
+        key: DocKey::Path(ext_path),
+        doc: ext_doc,
+    });
+
+    state.set_search_query("external_loose");
+    assert!(state.has_search_matches(), "Should match loose doc");
+
+    // 3. Draft matching: match filenames only; do NOT match draft content's first heading
+    let mut scratch_doc = Document::new_scratch();
+    scratch_doc.update_buffer("# My Daily Scratch\nDraft content".to_string());
+    state.open_docs.push(OpenDoc {
+        key: DocKey::Scratch(99),
+        doc: scratch_doc,
+    });
+
+    state.set_search_query("Daily");
+    assert!(
+        !state.has_search_matches(),
+        "Filename search must NOT match scratch draft first heading"
+    );
+
+    // Match scratch draft by display title (e.g. Untitled fallback)
+    state.set_search_query("Untitled");
+    assert!(
+        state.has_search_matches(),
+        "Should match scratch draft display title"
+    );
+
+    // 4. Non-matching query
+    state.set_search_query("completely_nonexistent_token_98765");
+    assert!(!state.has_search_matches(), "Should not match nonexistent file");
+}
+
+#[test]
+fn background_disk_conflict_survives_switching_without_losing_local_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.md");
+    let second = dir.path().join("second.md");
+    fs::write(&first, "original").unwrap();
+    fs::write(&second, "second").unwrap();
+    let mut state = AppState::new_isolated(Document::from_file(first.clone()).unwrap());
+    state.editor.insert_text(" local");
+    state.sync_from_editor();
+    let local = state.editor.to_text();
+    let key = DocKey::Path(first.clone());
+    state.open_file(second).unwrap();
+    fs::write(&first, "external change").unwrap();
+    let doc = &mut state
+        .open_docs
+        .iter_mut()
+        .find(|doc| doc.key == key)
+        .unwrap()
+        .doc;
+    doc.handle_disk_change(fs::read_to_string(&first).unwrap());
+    assert_eq!(doc.status, DocumentStatus::ConflictOnDisk);
+    state.switch_document(&key);
+    assert!(state.has_conflict());
+    assert_eq!(state.editor.to_text(), local);
+    assert_eq!(fs::read_to_string(first).unwrap(), "external change");
+}
 }

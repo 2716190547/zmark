@@ -249,7 +249,7 @@ async fn preview_elements_load_private_snapshots_and_remeasure(cx: &mut TestAppC
     assert!(cx.debug_bounds("local_image_status:missing.png").is_some());
     cx.update(|window, cx| {
         let ws = view.read(cx);
-        assert_eq!(ws.state.doc.parsed.blocks[0].to_plain_text(), "before alt after");
+        assert_eq!(ws.state.doc().parsed.blocks[0].to_plain_text(), "before alt after");
         let images = ws.local_images.lock().unwrap();
         assert!(matches!(images.entries.get("missing.png"), Some(ImageState::Failed(reason)) if reason.contains("无法读取")));
         let sources = [("中文%20图.png", 8, 4), ("vector.svg", 24, 16), ("animated.webp", 8, 4)].map(|(url, w, h)| {

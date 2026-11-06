@@ -1,9 +1,10 @@
+use glidemark_app::syntax::{VisibleSyntaxFailure, WarmState};
 use glidemark_app::state::{AppState, DocKey, ViewMode};
 use glidemark_app::theme::ThemeColors;
 use glidemark_app::views::editor::MarkdownTokenKind;
 use glidemark_app::views::preview::{apply_selection_to_highlights, obs};
 use glidemark_app::views::workspace::{
-    PaneKind, SyntaxBatchRequest, SyntaxBlockState, VisibleSyntaxFailure, WarmState, WorkspaceView,
+    PaneKind, SyntaxBatchRequest, SyntaxBlockState, WorkspaceView,
 };
 use glidemark_core::document::Document;
 use glidemark_core::syntax::{
@@ -608,7 +609,7 @@ async fn test_phase_i_stale_doc_rejection_does_not_pollute_cache(cx: &mut TestAp
 
     let (current_doc, current_rev, current_req_id) = cx.update(|_window, cx| {
         let ws = view.read(cx);
-        (ws.state.active.clone(), ws.state.editor.revision, ws.syntax_request_counter)
+        (ws.state.active_key().cloned(), ws.state.editor.revision, ws.syntax_request_counter)
     });
 
     // Positive control: valid request with matching doc, rev, and req_id enters cache
@@ -640,7 +641,7 @@ async fn test_phase_i_stale_doc_rejection_does_not_pollute_cache(cx: &mut TestAp
     // Re-read current state
     let (_current_doc, current_rev, current_req_id) = cx.update(|_window, cx| {
         let ws = view.read(cx);
-        (ws.state.active.clone(), ws.state.editor.revision, ws.syntax_request_counter)
+        (ws.state.active_key().cloned(), ws.state.editor.revision, ws.syntax_request_counter)
     });
 
     // Stale doc request: different doc_key, BUT revision and request_id match exactly (no + 1!)
@@ -700,7 +701,7 @@ async fn test_phase_i_stale_revision_rejection_does_not_pollute_cache(cx: &mut T
     let (current_doc_key, current_rev, _current_code_rev, current_req_id) = cx.update(|_window, cx| {
         let ws = view.read(cx);
         (
-            ws.state.active.clone(),
+            ws.state.active_key().cloned(),
             ws.state.editor.revision,
             ws.source_code_blocks_rev,
             ws.syntax_request_counter,
@@ -737,7 +738,7 @@ async fn test_phase_i_stale_revision_rejection_does_not_pollute_cache(cx: &mut T
     let (current_doc_key, current_rev, current_code_rev, current_req_id) = cx.update(|_window, cx| {
         let ws = view.read(cx);
         (
-            ws.state.active.clone(),
+            ws.state.active_key().cloned(),
             ws.state.editor.revision,
             ws.source_code_blocks_rev,
             ws.syntax_request_counter,
@@ -803,7 +804,7 @@ async fn test_phase_i_cancellation_does_not_enter_cache_and_not_permanent_plain(
             this.syntax_request_counter += 1;
             let req = SyntaxBatchRequest {
                 request_id: this.syntax_request_counter,
-                doc_key: this.state.active.clone(),
+                doc_key: this.state.active_key().cloned(),
                 revision: this.state.editor.revision,
                 blocks: vec![key.clone()],
                 ordered_candidates: vec![key.clone()],
@@ -833,7 +834,7 @@ async fn test_phase_i_cancellation_does_not_enter_cache_and_not_permanent_plain(
             this.syntax_request_counter += 1;
             let req = SyntaxBatchRequest {
                 request_id: this.syntax_request_counter,
-                doc_key: this.state.active.clone(),
+                doc_key: this.state.active_key().cloned(),
                 revision: this.state.editor.revision,
                 blocks: vec![key.clone()],
                 ordered_candidates: vec![key.clone()],
@@ -876,7 +877,7 @@ async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut T
     let (current_doc, current_rev, current_req_id) = cx.update(|_window, cx| {
         view.update(cx, |this, _cx| {
             this.syntax_request_counter = 10;
-            (this.state.active.clone(), this.state.editor.revision, this.syntax_request_counter)
+            (this.state.active_key().cloned(), this.state.editor.revision, this.syntax_request_counter)
         })
     });
 
@@ -909,7 +910,7 @@ async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut T
     // 2. Stale request_id check: request_id is stale (current_req_id - 1), but doc_key and revision match
     let (current_doc, current_rev, current_req_id) = cx.update(|_window, cx| {
         let ws = view.read(cx);
-        (ws.state.active.clone(), ws.state.editor.revision, ws.syntax_request_counter)
+        (ws.state.active_key().cloned(), ws.state.editor.revision, ws.syntax_request_counter)
     });
     let stale_code = "fn should_be_rejected_stale_req_id() {}";
     let stale_key = CodeKey::from_raw(Some("rust"), Arc::from(stale_code));
@@ -951,7 +952,7 @@ async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut T
             this.syntax_request_counter += 1;
             let req1 = SyntaxBatchRequest {
                 request_id: this.syntax_request_counter,
-                doc_key: this.state.active.clone(),
+                doc_key: this.state.active_key().cloned(),
                 revision: this.state.editor.revision,
                 blocks: vec![key_first.clone()],
                 ordered_candidates: vec![key_first.clone()],
@@ -964,7 +965,7 @@ async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut T
             this.syntax_request_counter += 1;
             let req2 = SyntaxBatchRequest {
                 request_id: this.syntax_request_counter,
-                doc_key: this.state.active.clone(),
+                doc_key: this.state.active_key().cloned(),
                 revision: this.state.editor.revision,
                 blocks: vec![key_second.clone()],
                 ordered_candidates: vec![key_second.clone()],
@@ -1147,7 +1148,7 @@ async fn test_phase_i_small_blocks_eviction_and_scroll_recovery(cx: &mut TestApp
             this.syntax_request_counter += 1;
             let req = SyntaxBatchRequest {
                 request_id: this.syntax_request_counter,
-                doc_key: this.state.active.clone(),
+                doc_key: this.state.active_key().cloned(),
                 revision: this.state.editor.revision,
                 blocks: vec![key0.clone()],
                 ordered_candidates: vec![key0.clone()],
@@ -1593,7 +1594,7 @@ async fn test_phase_i_preview_mapping_invalid_occurrence(cx: &mut TestAppContext
     }
     cx.update(|_, cx| {
         let ws = view.read(cx);
-        let blocks = &ws.state.doc.parsed.code_blocks;
+        let blocks = &ws.state.doc().parsed.code_blocks;
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].key, blocks[1].key);
         assert!(blocks[0].is_valid);
@@ -1640,7 +1641,7 @@ async fn test_phase_i_late_completion_after_viewport_empties(cx: &mut TestAppCon
         ws.current_ordered_candidates = vec![key.clone()];
         ws.run_syntax_batch(SyntaxBatchRequest {
             request_id: ws.syntax_request_counter,
-            doc_key: ws.state.active.clone(),
+            doc_key: ws.state.active_key().cloned(),
             revision: ws.state.editor.revision,
             blocks: vec![key.clone()],
             ordered_candidates: vec![key.clone()],

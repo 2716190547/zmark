@@ -90,7 +90,7 @@ impl Harness {
             self.view
                 .read(cx)
                 .state
-                .doc
+                .doc()
                 .parsed
                 .blocks
                 .get(block_ix)
@@ -265,7 +265,7 @@ async fn red_autoscroll_must_stop_at_document_end(cx: &mut TestAppContext) {
     let (h, cx) = open(cx, 40);
     cx.update(|_w, cx| {
         h.view.update(cx, |ws, _cx| {
-            let count = ws.state.doc.parsed.blocks.len();
+            let count = ws.state.doc().parsed.blocks.len();
             ws.preview_list.scroll_to(gpui::ListOffset {
                 item_ix: count.saturating_sub(2),
                 offset_in_item: px(0.),

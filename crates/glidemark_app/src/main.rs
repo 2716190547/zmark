@@ -2,19 +2,10 @@ use gpui::*;
 use std::env;
 use std::path::PathBuf;
 
-mod actions;
-mod assets;
-mod editor_engine;
-mod local_images;
-mod platform;
-mod state;
-mod theme;
-mod views;
-
-use actions::*;
-use assets::AppAssets;
-use state::AppState;
-use views::workspace::WorkspaceView;
+use glidemark_app::actions::*;
+use glidemark_app::assets::AppAssets;
+use glidemark_app::state::AppState;
+use glidemark_app::views::workspace::WorkspaceView;
 use glidemark_core::document::Document;
 
 fn main() {

@@ -136,7 +136,7 @@ async fn test_workspace_edit_then_draw_buffer_leads_ast(cx: &mut TestAppContext)
             ws.state.editor.insert_text("// comment\n");
             ws.state.sync_from_editor();
             ws.schedule_parse(cx);
-            assert!(ws.state.doc.is_parse_stale(), "buffer must lead AST during debounce");
+            assert!(ws.state.doc().is_parse_stale(), "buffer must lead AST during debounce");
         });
     });
 
@@ -178,7 +178,7 @@ async fn test_workspace_edit_then_draw_buffer_leads_ast(cx: &mut TestAppContext)
     );
     cx.update(|_window, cx| {
         let ws = view.read(cx);
-        assert!(!ws.state.doc.is_parse_stale(), "AST must no longer be stale");
+        assert!(!ws.state.doc().is_parse_stale(), "AST must no longer be stale");
     });
 }
 
