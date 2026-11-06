@@ -7,7 +7,7 @@ use glidemark_app::views::preview::{
 use glidemark_app::views::workspace::WorkspaceView;
 use glidemark_core::ast::parse_markdown;
 use glidemark_core::document::Document;
-use gpui::{div, px, Bounds, IntoElement, Point, Render, TestAppContext, Window};
+use gpui::{div, IntoElement, Render, TestAppContext, Window};
 use std::time::Instant;
 
 struct EmptyTestView;

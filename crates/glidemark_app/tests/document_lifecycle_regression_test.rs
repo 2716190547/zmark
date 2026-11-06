@@ -1,5 +1,5 @@
 use glidemark_app::state::{AppState, DocKey};
-use glidemark_core::document::{Document, DocumentStatus};
+use glidemark_core::document::Document;
 use std::fs;
 
 #[test]

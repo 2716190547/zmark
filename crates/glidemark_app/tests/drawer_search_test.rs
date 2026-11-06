@@ -1,4 +1,4 @@
-use glidemark_app::state::{AppState, DocKey, FileTreeNode, OpenDoc, WorkspaceRoot};
+use glidemark_app::state::{AppState, FileTreeNode, WorkspaceRoot};
 use glidemark_core::document::Document;
 use std::fs;
 use std::path::PathBuf;

@@ -8,13 +8,16 @@ use std::sync::Arc;
 use crate::theme::ThemeColors;
 
 mod selection;
+mod virtual_list;
 pub use selection::*;
+pub use virtual_list::*;
 
 pub type OnCopyCallback = Arc<dyn Fn(String, u64, &mut Window, &mut App) + Send + Sync>;
 pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewSelectionCallback = Arc<dyn Fn(Option<PreviewSelection>, bool, &mut Window, &mut App) + Send + Sync>;
 pub type OnImageRecoveryCallback = Arc<dyn Fn(std::ops::Range<usize>, String, crate::local_images::RecoveryCandidate, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewAutoscrollCallback = Arc<dyn Fn(f32, &mut Window, &mut App) + Send + Sync>;
+pub type OnPreviewWheelCallback = Arc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App) + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct PreviewCallbacks {
@@ -23,6 +26,7 @@ pub struct PreviewCallbacks {
     pub on_selection_change: Option<OnPreviewSelectionCallback>,
     pub on_autoscroll: Option<OnPreviewAutoscrollCallback>,
     pub on_image_recovery: Option<OnImageRecoveryCallback>,
+    pub on_wheel: Option<OnPreviewWheelCallback>,
 }
 
 pub fn render_preview_pane_with_callbacks(
@@ -31,7 +35,8 @@ pub fn render_preview_pane_with_callbacks(
     strings: &'static I18nStrings,
     max_column_width: f32,
     font_size: f32,
-    list_state: &ListState,
+    scroll_state: &PreviewScrollState,
+    visible_range: std::ops::Range<usize>,
     copied_code_hash: Option<(u64, std::time::Instant)>,
     callbacks: PreviewCallbacks,
     selection: Option<PreviewSelection>,
@@ -47,6 +52,12 @@ pub fn render_preview_pane_with_callbacks(
     let item_callbacks = callbacks.clone();
     let item_regions = regions.clone();
     let item_syntax_cache = syntax_cache.clone();
+    let measurement_sink = scroll_state.measurement_sink();
+    let sizes = scroll_state.sizes().to_vec();
+    let origins = scroll_state.origins().to_vec();
+    let total = scroll_state.total_height();
+    let scroll_handle = scroll_state.scroll_handle().clone();
+    let wheel_cb = callbacks.on_wheel.clone();
     regions.lock().unwrap().clear();
 
     let mut pane = div()
@@ -68,125 +79,144 @@ pub fn render_preview_pane_with_callbacks(
         });
     }
 
-    pane = pane.child(
-        list(list_state.clone(), move |ix, _window, _cx| {
-            let Some(block) = item_parsed.blocks.get(ix) else {
-                return div().into_any_element();
-            };
+    let mut content = div().relative().w_full().h(px(total));
 
-            let flat = glidemark_core::ast::flatten_block(block, "0");
-            let block_char_len = flat.text.chars().count();
-            let selected_char_range = selection.and_then(|s| s.char_range_for_block(ix, block_char_len));
+    for ix in visible_range {
+        let Some(block) = item_parsed.blocks.get(ix) else { continue; };
+        let flat = glidemark_core::ast::flatten_block(block, "0");
+        let block_char_len = flat.text.chars().count();
+        let selected_char_range = selection.and_then(|s| s.char_range_for_block(ix, block_char_len));
 
-            let block_bounds_cell = Arc::new(std::cell::Cell::new(Bounds::default()));
-            let bounds_for_canvas = block_bounds_cell.clone();
-
-            let mut block_container = div()
-                .relative()
-                .w_full()
-                .max_w(px(max_column_width))
-                .mx_auto()
-                .child(
-                    canvas(
-                        move |bounds, _window, _cx| {
-                            bounds_for_canvas.set(bounds);
-                        },
-                        |_bounds, _, _window, _cx| {},
-                    )
-                    .absolute()
-                    .size_full(),
+        let block_bounds_cell = Arc::new(std::cell::Cell::new(Bounds::default()));
+        let bounds_for_canvas = block_bounds_cell.clone();
+        let measured_cell = measurement_sink.clone();
+        let block_container = div()
+            .relative()
+            .w_full()
+            .max_w(px(max_column_width))
+            .mx_auto()
+            .child(
+                canvas(
+                    move |bounds, window, _cx| {
+                        bounds_for_canvas.set(bounds);
+                        let padding = f32::from(window.rem_size()); // pb_4
+                        measured_cell
+                            .borrow_mut()
+                            .push((ix, f32::from(bounds.size.height) + padding));
+                    },
+                    |_bounds, _, _window, _cx| {},
                 )
-                .child(render_block_element(
-                    block,
-                    &item_theme,
-                    strings,
-                    font_size,
-                    copied_code_hash,
-                    item_callbacks.on_copy.as_ref(),
-                    item_callbacks.on_open_lightbox.as_ref(),
-                    item_callbacks.on_image_recovery.as_ref(),
-                    selected_char_range,
-                    ix,
-                    item_regions.clone(),
-                    item_syntax_cache.clone(),
-                    &images,
-                    &item_parsed.code_blocks,
-                    &flat,
-                    "0",
-                ));
+                .absolute()
+                .size_full(),
+            )
+            .child(render_block_element(
+                block,
+                &item_theme,
+                strings,
+                font_size,
+                copied_code_hash,
+                item_callbacks.on_copy.as_ref(),
+                item_callbacks.on_open_lightbox.as_ref(),
+                item_callbacks.on_image_recovery.as_ref(),
+                selected_char_range,
+                ix,
+                item_regions.clone(),
+                item_syntax_cache.clone(),
+                &images,
+                &item_parsed.code_blocks,
+                &flat,
+                "0",
+            ));
 
-            if let Some(ref on_selection_change) = item_callbacks.on_selection_change {
-                let on_sel_down = on_selection_change.clone();
-                let on_sel_move = on_selection_change.clone();
-                let on_autoscroll = item_callbacks.on_autoscroll.clone();
-                let text_for_down: Arc<str> = Arc::from(flat.text.as_str());
-                let text_for_move = Arc::clone(&text_for_down);
-                let bounds_cell_down = block_bounds_cell.clone();
-                let bounds_cell_move = block_bounds_cell.clone();
-                let regions_down = item_regions.clone();
-                let regions_move = item_regions.clone();
+        let mut item = div()
+            .absolute()
+            .top(px(origins[ix]))
+            .left(px(0.))
+            .w_full()
+            .min_h(px(sizes[ix]))
+            .px_8()
+            .pb_4()
+            .child(block_container);
 
-                block_container = block_container
-                    .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
+        if let Some(ref on_selection_change) = item_callbacks.on_selection_change {
+            let on_sel_down = on_selection_change.clone();
+            let on_sel_move = on_selection_change.clone();
+            let on_autoscroll = item_callbacks.on_autoscroll.clone();
+            let text_for_down: Arc<str> = Arc::from(flat.text.as_str());
+            let text_for_move = Arc::clone(&text_for_down);
+            let bounds_cell_down = block_bounds_cell.clone();
+            let bounds_cell_move = block_bounds_cell.clone();
+            let regions_down = item_regions.clone();
+            let regions_move = item_regions.clone();
+
+            item = item
+                .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
+                    let text_system = window.text_system();
+                    let offset = {
+                        let reg = regions_down.lock().unwrap();
+                        hit_test_char_offset_in_block(
+                            text_system,
+                            &reg,
+                            ix,
+                            &text_for_down,
+                            event.position,
+                            font_size,
+                            bounds_cell_down.get(),
+                        )
+                    };
+                    let pos = PreviewCharPosition::new(ix, offset);
+                    on_sel_down(Some(PreviewSelection::new(pos, pos)), true, window, cx);
+                })
+                .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
+                    if is_selecting {
                         let text_system = window.text_system();
                         let offset = {
-                            let reg = regions_down.lock().unwrap();
+                            let reg = regions_move.lock().unwrap();
                             hit_test_char_offset_in_block(
                                 text_system,
                                 &reg,
                                 ix,
-                                &text_for_down,
+                                &text_for_move,
                                 event.position,
                                 font_size,
-                                bounds_cell_down.get(),
+                                bounds_cell_move.get(),
                             )
                         };
-                        let pos = PreviewCharPosition::new(ix, offset);
-                        on_sel_down(Some(PreviewSelection::new(pos, pos)), true, window, cx);
-                    })
-                    .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
-                        if is_selecting {
-                            let text_system = window.text_system();
-                            let offset = {
-                                let reg = regions_move.lock().unwrap();
-                                hit_test_char_offset_in_block(
-                                    text_system,
-                                    &reg,
-                                    ix,
-                                    &text_for_move,
-                                    event.position,
-                                    font_size,
-                                    bounds_cell_move.get(),
-                                )
-                            };
-                            let head = PreviewCharPosition::new(ix, offset);
-                            if let Some(sel) = selection {
-                                on_sel_move(Some(PreviewSelection::new(sel.anchor, head)), true, window, cx);
-                            }
-                            if let Some(ref auto_cb) = on_autoscroll {
-                                let mouse_y = f32::from(event.position.y);
-                                if let Some(vel) = detect_edge_autoscroll(mouse_y, 0.0, 800.0) {
-                                    auto_cb(vel, window, cx);
-                                }
+                        let head = PreviewCharPosition::new(ix, offset);
+                        if let Some(sel) = selection {
+                            on_sel_move(Some(PreviewSelection::new(sel.anchor, head)), true, window, cx);
+                        }
+                        if let Some(ref auto_cb) = on_autoscroll {
+                            let mouse_y = f32::from(event.position.y);
+                            if let Some(vel) = detect_edge_autoscroll(mouse_y, 0.0, 800.0) {
+                                auto_cb(vel, window, cx);
                             }
                         }
-                    });
-            }
+                    }
+                });
+        }
 
-            div()
-                .w_full()
-                .px_8()
-                .pb_4()
-                .child(block_container)
-                .into_any_element()
-        })
+        content = content.child(item.into_any_element());
+    }
+
+    let mut scroll_view = div()
+        .id("preview_scroll_view")
         .flex_1()
         .w_full()
         .min_w(px(0.))
         .min_h(px(0.))
-        .pt_6()
-        .pb_6(),
-    );
+        .h_full()
+        .overflow_y_scroll()
+        .track_scroll(&scroll_handle)
+        .child(content);
+
+    if let Some(cb) = wheel_cb {
+        scroll_view = scroll_view.on_scroll_wheel(move |event: &ScrollWheelEvent, window, cx| {
+            cb(event, window, cx);
+        });
+    }
+
+    pane = pane.child(scroll_view);
 
     if !failures.is_empty() {
         let first = &failures[0];

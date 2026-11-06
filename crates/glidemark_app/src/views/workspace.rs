@@ -12,6 +12,7 @@ use crate::actions::{
 use crate::state::{parse_debounce, AppState, CloseDecision, ViewMode};
 use crate::views::editor::render_editor_pane;
 use crate::views::lightbox::{render_lightbox, LightboxState};
+use crate::views::preview::PreviewScrollState;
 use crate::views::settings::SettingsWindowView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,17 +33,18 @@ pub struct WorkspaceView {
     pub state: AppState,
     pub focus_handle: FocusHandle,
     pub editor_scroll_handle: UniformListScrollHandle,
-    pub preview_list: ListState,
+    pub preview_list: PreviewScrollState,
     pub preview_scroll_focus: FocusHandle,
     pub preview_scroll_bounds: Option<Bounds<Pixels>>,
     preview_viewport_size: Option<Size<Pixels>>,
-    pub preview_scroll_drag: Option<(Bounds<Pixels>, usize, f32, f32, f32)>,
+    /// (track bounds, grab offset inside the thumb, thumb height)
+    pub preview_scroll_drag: Option<(Bounds<Pixels>, f32, f32)>,
     preview_drag_ratio: Option<f32>,
-    preview_measured_max: Option<(f32, f32, f32, f32)>,
     pub preview_scroll_activation_observed: bool,
     pub preview_scroll_end_pending: bool,
     preview_scroll_pending_seek: Option<(usize, f32)>,
     preview_scroll_seek_generation: u64,
+    last_preview_sync_offset: f32,
     pub drawer_scroll_handle: ScrollHandle,
     pub split_ratio: f32,
     pub is_resizing_split: bool,
@@ -66,6 +68,7 @@ pub struct WorkspaceView {
     pub preview_selection: Option<crate::views::preview::PreviewSelectionRange>,
     pub is_preview_selecting: bool,
     pub preview_autoscroll_task: Option<gpui::Task<()>>,
+    preview_autoscroll_accum: f32,
     pub preview_mouse_window_pos: Option<Point<Pixels>>,
     pub preview_content_bounds: Option<Bounds<Pixels>>,
     pub editor_content_bounds: Option<Bounds<Pixels>>,
@@ -136,11 +139,8 @@ pub struct SyntaxBatchRequest {
 
 impl WorkspaceView {
     pub fn new(state: AppState, cx: &mut Context<Self>) -> Self {
-        let preview_list = ListState::new(
-            state.doc().parsed.blocks.len(),
-            ListAlignment::Top,
-            px(600.),
-        );
+        let mut preview_list = PreviewScrollState::new();
+        preview_list.reset(state.doc().parsed.blocks.len());
         let search_focus = cx.focus_handle();
         let view_search = cx.entity().downgrade();
         let search_placeholder = state.strings.search_placeholder;
@@ -166,11 +166,11 @@ impl WorkspaceView {
             preview_viewport_size: None,
             preview_scroll_drag: None,
             preview_drag_ratio: None,
-            preview_measured_max: None,
             preview_scroll_activation_observed: false,
             preview_scroll_end_pending: false,
             preview_scroll_pending_seek: None,
             preview_scroll_seek_generation: 0,
+            last_preview_sync_offset: 0.0,
             editor_scroll_handle: UniformListScrollHandle::new(),
             preview_list,
             drawer_scroll_handle: ScrollHandle::new(),
@@ -196,6 +196,7 @@ impl WorkspaceView {
             preview_selection: None,
             is_preview_selecting: false,
             preview_autoscroll_task: None,
+            preview_autoscroll_accum: 0.0,
             preview_mouse_window_pos: None,
             preview_content_bounds: None,
             editor_content_bounds: None,
@@ -258,7 +259,6 @@ impl WorkspaceView {
 
     /// Swaps in a new document: the preview list drops cached heights and starts at the top.
     pub fn reset_preview_list(&mut self) {
-        self.preview_measured_max = None;
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
         self.preview_selection = None;
@@ -267,6 +267,7 @@ impl WorkspaceView {
         self.preview_autoscroll_task = None;
         self.preview_mouse_window_pos = None;
         self.preview_list.reset(self.state.doc().parsed.blocks.len());
+        self.last_preview_sync_offset = 0.0;
         self.rendered_regions.lock().unwrap().clear();
         self.syntax_cache.lock().unwrap().clear();
         self.syntax_attempts.clear();
@@ -364,7 +365,7 @@ impl WorkspaceView {
                     }
                     changed || !images.retired.is_empty()
                 };
-                if changed { view.preview_measured_max = None; view.cancel_pending_preview_seek(); view.end_preview_scroll_drag(); cx.notify(); }
+                if changed { view.preview_list.invalidate_layout(); cx.notify(); }
                 view.process_local_images(cx);
             });
         }));
@@ -372,18 +373,10 @@ impl WorkspaceView {
 
     /// Re-measures the preview after an edit, keeping the current scroll position.
     pub fn invalidate_preview_list(&mut self) {
-        self.preview_measured_max = None;
-        self.cancel_pending_preview_seek();
-        self.end_preview_scroll_drag();
-        let count = self.state.doc().parsed.blocks.len();
-        let top = self.preview_list.logical_scroll_top();
-        if count != self.preview_list.item_count() {
-            self.preview_list.reset(count);
-            self.preview_list.scroll_to(top);
-        } else {
-            self.preview_list.splice(0..count, count);
-            self.preview_list.scroll_to(top);
-        }
+        // The size table is rebuilt from the new AST on the next frame; the
+        // current pixel offset stays valid because rebuild keeps its anchor.
+        self.preview_list.invalidate_layout();
+        self.last_preview_sync_offset = self.preview_list.offset();
     }
 
     /// Debounces a reparse based on document size; very large documents wait for an explicit refresh.
@@ -612,11 +605,10 @@ impl WorkspaceView {
         }
         let cursor_line = self.state.editor.cursor().0 + 1;
         let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
-        let (block_index, _) = map.source_line_to_preview_progress(cursor_line);
-        self.preview_list.scroll_to(ListOffset {
-            item_ix: block_index,
-            offset_in_item: px(0.),
-        });
+        let (block_index, inner_progress) = map.source_line_to_preview_progress(cursor_line);
+        self.preview_list
+            .set_scroll_offset(self.preview_list.offset_for_block(block_index, inner_progress));
+        self.last_preview_sync_offset = self.preview_list.offset();
     }
 
     fn editor_text_start_offset(&self, window: &Window) -> f32 {
@@ -1031,7 +1023,6 @@ impl WorkspaceView {
         self.last_scroll_origin = Some((ScrollOrigin::Editor, now));
 
         let visual_lines = self.compute_visual_lines(window);
-
         let scroll_y = (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
         let row_h = crate::views::editor::calculate_line_row_height(
             self.state.preferences.font_size,
@@ -1051,20 +1042,12 @@ impl WorkspaceView {
 
         let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
         let (block_index, inner_progress) = map.source_line_to_preview_progress(phys_line);
-        // Scale the in-block progress by the block's measured height. The old fixed
-        // 100px scale made the preview crawl inside tall blocks (laggy, "not following").
         let fraction = calculate_subline_scroll_fraction(inner_progress, subline_idx, total_sublines);
-        let block_height = self
-            .preview_list
-            .bounds_for_item(block_index)
-            .map(|bounds| f32::from(bounds.size.height))
-            .unwrap_or(0.0);
-        let offset_px = fraction * block_height;
-
-        self.preview_list.scroll_to(ListOffset {
-            item_ix: block_index,
-            offset_in_item: px(offset_px),
-        });
+        // Size-table offsets work for blocks that have never been rendered, so the
+        // preview no longer clamps back into the measured region at the document end.
+        self.preview_list
+            .set_scroll_offset(self.preview_list.offset_for_block(block_index, fraction));
+        self.last_preview_sync_offset = self.preview_list.offset();
         cx.notify();
     }
 
@@ -1073,6 +1056,7 @@ impl WorkspaceView {
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
         self.sync_preview_scroll(window, cx);
+        self.last_preview_sync_offset = self.preview_list.offset();
     }
 
     fn sync_preview_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1087,22 +1071,12 @@ impl WorkspaceView {
         }
         self.last_scroll_origin = Some((ScrollOrigin::Preview, now));
 
-        let top = self.preview_list.logical_scroll_top();
-        let top_block = top.item_ix;
-        // Carry the in-block progress across, otherwise the editor only moves when the
-        // preview crosses a whole block ("not following" inside tall blocks).
-        let block_height = self
+        let preview_offset = self.preview_list.offset();
+        let (block_ix, progress) = self
             .preview_list
-            .bounds_for_item(top_block)
-            .map(|bounds| f32::from(bounds.size.height))
-            .unwrap_or(0.0);
-        let progress = if block_height > 1.0 {
-            (f32::from(top.offset_in_item) / block_height).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+            .block_progress_at_offset(preview_offset);
         let map = glidemark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
-        let target_line = map.preview_to_source_line(top_block, progress);
+        let target_line = map.preview_to_source_line(block_ix, progress);
         let phys_line_idx = target_line.saturating_sub(1);
 
         let visual_lines = self.compute_visual_lines(window);
@@ -1126,11 +1100,7 @@ impl WorkspaceView {
     }
 
     fn release_preview_scroll_drag(&mut self) {
-        if self.preview_scroll_drag.is_some() {
-            let ratio = self.preview_drag_ratio;
-            self.end_preview_scroll_drag();
-            self.preview_drag_ratio = ratio;
-        }
+        self.end_preview_scroll_drag();
     }
 
     fn cancel_pending_preview_seek(&mut self) {
@@ -1142,162 +1112,113 @@ impl WorkspaceView {
         self.preview_scroll_pending_seek = None;
     }
 
-    fn preview_scroll_to_ratio(&mut self, ratio: f32, count: usize, single_max: f32, window: &mut Window, cx: &mut Context<Self>) {
-        if count == 0 { return; }
+    fn preview_scroll_to_ratio(&mut self, ratio: f32, window: &mut Window, cx: &mut Context<Self>) {
         let ratio = ratio.clamp(0.0, 1.0);
         if self.preview_scroll_drag.is_some() {
             self.preview_drag_ratio = Some(ratio);
         }
         self.cancel_pending_preview_seek();
-        if let Some((max, _, _, _)) = self.preview_measured_max {
-            self.preview_list.set_offset_from_scrollbar(point(px(0.), px(-ratio * max)));
-        } else if count == 1 {
-            self.preview_list.scroll_to(ListOffset { item_ix: 0, offset_in_item: px(single_max * ratio) });
-        } else if ratio >= 1.0 {
-            self.preview_scroll_end_pending = true;
-            self.preview_list.scroll_to(ListOffset { item_ix: count - 1, offset_in_item: px(0.) });
-        } else {
-            let scaled = ratio * count as f32;
-            let item_ix = (scaled.floor() as usize).min(count - 1);
-            let local = scaled - item_ix as f32;
-            let item_height = self.preview_list.bounds_for_item(item_ix).map(|b| f32::from(b.size.height)).unwrap_or(0.0);
-            self.preview_list.scroll_to(ListOffset { item_ix, offset_in_item: px(local * item_height) });
-            if local > 0.0 && item_height <= 0.0 {
-                self.preview_scroll_pending_seek = Some((item_ix, local));
-            }
-        }
+        self.preview_list
+            .set_scroll_offset(ratio * self.preview_list.max_scroll());
         self.last_scroll_origin = None;
         self.sync_preview_scroll(window, cx);
+        self.last_preview_sync_offset = self.preview_list.offset();
         cx.notify();
     }
 
     fn render_preview_scrollbar(&self, theme: &crate::theme::ThemeColors, cx: &mut Context<Self>) -> AnyElement {
-        let count = self.state.doc().parsed.blocks.len();
-        if self.preview_scroll_end_pending || self.preview_scroll_pending_seek.is_some() {
-            let entity = cx.entity().clone();
-            let generation = self.preview_scroll_seek_generation;
-            cx.defer(move |cx| {
-                let _ = entity.update(cx, |this, cx| {
-                    if this.preview_scroll_seek_generation != generation { return; }
-                    let count = this.state.doc().parsed.blocks.len();
-                    if count == 0 { this.cancel_pending_preview_seek(); return; }
-                    if this.preview_scroll_end_pending {
-                        if let Some(bounds) = this.preview_list.bounds_for_item(count - 1) {
-                            let viewport = this.preview_list.viewport_bounds();
-                            let delta = f32::from(bounds.bottom() - viewport.bottom());
-                            if delta > 1.0 {
-                                let mut top = this.preview_list.logical_scroll_top();
-                                top.offset_in_item += px(delta);
-                                this.preview_list.scroll_to(top);
-                            }
-                            this.preview_scroll_end_pending = false;
-                            cx.notify();
-                        }
-                    } else if let Some((item_ix, local)) = this.preview_scroll_pending_seek {
-                        if let Some(bounds) = this.preview_list.bounds_for_item(item_ix) {
-                            this.preview_list.scroll_to(ListOffset {
-                                item_ix,
-                                offset_in_item: px(local * f32::from(bounds.size.height)),
-                            });
-                            this.preview_scroll_pending_seek = None;
-                            cx.notify();
-                        }
-                    }
-                });
-            });
-        }
-        let viewport = self.preview_list.viewport_bounds();
-        let top = self.preview_list.logical_scroll_top();
-        let single_max = if count == 1 {
-            self.preview_list.bounds_for_item(0).map(|bounds| (f32::from(bounds.size.height) - f32::from(viewport.size.height)).max(0.0)).unwrap_or(0.0)
-        } else { 0.0 };
-        let all_fit = if let Some((max, _, _, _)) = self.preview_measured_max { max <= 0.0 } else {
-            count > 0 && top.item_ix == 0 && top.offset_in_item == px(0.)
-                && self.preview_list.bounds_for_item(count - 1).is_some_and(|last| last.bottom() <= viewport.bottom())
-        };
-        let enabled = !all_fit && (self.preview_measured_max.is_some() || count > 1 || single_max > 0.0);
-        let at_end = !all_fit && count > 0 && self.preview_list.bounds_for_item(count - 1)
-            .is_some_and(|last| last.bottom() <= viewport.bottom() + px(1.) && last.bottom() >= viewport.top());
-        let ratio = if let Some(ratio) = self.preview_drag_ratio { ratio } else if let Some((max, _, _, _)) = self.preview_measured_max.filter(|(max, _, _, _)| *max > 0.0) {
-            (-f32::from(self.preview_list.scroll_px_offset_for_scrollbar().y) / max).clamp(0.0, 1.0)
-        } else if at_end { 1.0 } else if count > 1 {
-            let local = self.preview_list.bounds_for_item(top.item_ix)
-                .map(|b| (f32::from(top.offset_in_item) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0))
-                .unwrap_or(0.0);
-            ((top.item_ix.min(count - 1) as f32 + local) / count as f32).clamp(0.0, 1.0)
-        } else if single_max > 0.0 { (f32::from(top.offset_in_item) / single_max).clamp(0.0, 1.0) }
-        else { 0.0 };
-        let height = self.preview_scroll_bounds.map(|b| f32::from(b.size.height)).unwrap_or(f32::from(viewport.size.height)).max(1.0);
+        let max_scroll = self.preview_list.max_scroll();
+        let enabled = max_scroll > 0.5;
+        let ratio = self.preview_list.scroll_ratio();
+        let track = self
+            .preview_scroll_bounds
+            .unwrap_or_else(|| self.preview_list.viewport_bounds());
+        let height = f32::from(track.size.height).max(1.0);
         let thumb_height = if enabled { 28.0_f32.min(height) } else { height };
         let thumb_top = ratio * (height - thumb_height).max(0.0);
         let bounds_view = cx.entity().clone();
         let drag_view = cx.weak_entity();
-        div().id("preview_scrollbar").debug_selector(|| "preview_scrollbar".to_string())
-            .track_focus(&self.preview_scroll_focus).tab_stop(true)
-            .w(px(14.)).h_full().relative().bg(theme.surface)
-            .child(canvas(move |bounds, window, cx| {
-                bounds_view.update(cx, |this, cx| {
-                    if this.preview_scroll_bounds.is_some_and(|old| old != bounds) {
-                        this.cancel_pending_preview_seek();
-                        this.end_preview_scroll_drag();
-                    }
-                    this.preview_scroll_bounds = Some(bounds);
-                    let viewport = this.preview_list.viewport_bounds();
-                    if this.preview_viewport_size.is_some_and(|old| old != viewport.size) {
-                        this.cancel_pending_preview_seek();
-                        this.end_preview_scroll_drag();
-                        cx.notify();
-                    }
-                    this.preview_viewport_size = Some(viewport.size);
-                    let width = f32::from(viewport.size.width);
-                    let height = f32::from(viewport.size.height);
-                    let rem = f32::from(window.rem_size());
-                    if this.preview_measured_max.is_some_and(|(_, old_width, old_height, old_rem)| width != old_width || height != old_height || rem != old_rem) {
-                        this.preview_measured_max = None;
-                        this.cancel_pending_preview_seek();
-                        this.end_preview_scroll_drag();
-                        cx.notify();
-                    }
-                    let count = this.state.doc().parsed.blocks.len();
-                    let top = this.preview_list.logical_scroll_top();
-                    if this.preview_measured_max.is_none() && count > 0 && count <= 128
-                        && top.item_ix == 0 && top.offset_in_item == px(0.)
-                        && (0..count).all(|ix| this.preview_list.bounds_for_item(ix).is_some())
-                    {
-                        // The preview list has pt_6 and pb_6: 1.5 rem each.
-                        let last = this.preview_list.bounds_for_item(count - 1).unwrap();
-                        let max = (f32::from(last.bottom() - viewport.bottom()) + rem * 3.0).max(0.0);
-                        this.preview_measured_max = Some((max, width, height, rem));
-                        cx.notify();
-                    }
-                });
-            }, move |_, _, window, _| {
-                let release_view = drag_view.clone();
-                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Capture { return; }
-                    let _ = drag_view.update(cx, |this, cx| {
-                        if let Some((bounds, count, single_max, grab_offset, thumb)) = this.preview_scroll_drag {
-                            if event.pressed_button != Some(MouseButton::Left) {
-                                this.release_preview_scroll_drag();
-                                cx.notify();
-                            } else {
-                                let available = (f32::from(bounds.size.height) - thumb).max(1.0);
-                                let ratio = (f32::from(event.position.y - bounds.origin.y) - grab_offset) / available;
-                                this.preview_scroll_to_ratio(ratio, count, single_max, window, cx);
+
+        div()
+            .id("preview_scrollbar")
+            .debug_selector(|| "preview_scrollbar".to_string())
+            .track_focus(&self.preview_scroll_focus)
+            .tab_stop(true)
+            .w(px(14.))
+            .h_full()
+            .relative()
+            .bg(theme.surface)
+            .child(
+                canvas(
+                    move |bounds, _window, cx| {
+                        bounds_view.update(cx, |this, cx| {
+                            if this
+                                .preview_scroll_bounds
+                                .is_some_and(|old| old != bounds)
+                            {
+                                this.cancel_pending_preview_seek();
+                                this.end_preview_scroll_drag();
                             }
-                        }
-                    });
-                });
-                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
-                        let _ = release_view.update(cx, |this, cx| {
-                            if this.preview_scroll_drag.is_some() { this.release_preview_scroll_drag(); cx.notify(); }
+                            this.preview_scroll_bounds = Some(bounds);
+                            let viewport = this.preview_list.viewport_bounds();
+                            if this
+                                .preview_viewport_size
+                                .is_some_and(|old| old != viewport.size)
+                            {
+                                this.cancel_pending_preview_seek();
+                                this.end_preview_scroll_drag();
+                                cx.notify();
+                            }
+                            this.preview_viewport_size = Some(viewport.size);
                         });
-                    }
-                });
-            }).absolute().size_full())
-            .child(div().debug_selector(|| "preview_scrollbar_thumb".to_string()).absolute().left(px(4.)).top(px(thumb_top)).w(px(6.)).h(px(thumb_height))
-                .rounded_full().bg(theme.text_muted.opacity(if enabled { 0.55 } else { 0.20 })))
+                    },
+                    move |_, _, window, _| {
+                        let release_view = drag_view.clone();
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                            if phase != DispatchPhase::Capture {
+                                return;
+                            }
+                            let _ = drag_view.update(cx, |this, cx| {
+                                if let Some((bounds, grab_offset, thumb)) = this.preview_scroll_drag {
+                                    if event.pressed_button != Some(MouseButton::Left) {
+                                        this.release_preview_scroll_drag();
+                                        cx.notify();
+                                    } else {
+                                        let available = (f32::from(bounds.size.height) - thumb).max(1.0);
+                                        let ratio = (f32::from(event.position.y - bounds.origin.y)
+                                            - grab_offset)
+                                            / available;
+                                        this.preview_scroll_to_ratio(ratio, window, cx);
+                                    }
+                                }
+                            });
+                        });
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                                let _ = release_view.update(cx, |this, cx| {
+                                    if this.preview_scroll_drag.is_some() {
+                                        this.release_preview_scroll_drag();
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "preview_scrollbar_thumb".to_string())
+                    .absolute()
+                    .left(px(4.))
+                    .top(px(thumb_top))
+                    .w(px(6.))
+                    .h(px(thumb_height))
+                    .rounded_full()
+                    .bg(theme.text_muted.opacity(if enabled { 0.55 } else { 0.20 })),
+            )
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 window.focus(&this.preview_scroll_focus);
@@ -1305,42 +1226,52 @@ impl WorkspaceView {
                 this.is_preview_selecting = false;
                 this.preview_autoscroll_task = None;
                 let Some(bounds) = this.preview_scroll_bounds else { return; };
-                if !enabled { return; }
+                if !(this.preview_list.max_scroll() > 0.5) {
+                    return;
+                }
                 this.preview_list.scrollbar_drag_started();
+                // Recompute from the live ratio: measured heights may have moved
+                // the thumb since this element was built.
+                let local_thumb_top = this.preview_list.scroll_ratio()
+                    * (f32::from(bounds.size.height) - thumb_height).max(0.0);
                 let local_y = f32::from(event.position.y - bounds.origin.y);
-                let grab_offset = if (thumb_top..thumb_top + thumb_height).contains(&local_y) { local_y - thumb_top } else { thumb_height / 2.0 };
-                this.preview_scroll_drag = Some((bounds, count, single_max, grab_offset, thumb_height));
+                let grab_offset = if (local_thumb_top..local_thumb_top + thumb_height).contains(&local_y) {
+                    local_y - local_thumb_top
+                } else {
+                    thumb_height / 2.0
+                };
+                this.preview_scroll_drag = Some((bounds, grab_offset, thumb_height));
                 let available = (f32::from(bounds.size.height) - thumb_height).max(1.0);
                 let ratio = (local_y - grab_offset) / available;
-                this.preview_scroll_to_ratio(ratio, count, single_max, window, cx);
+                this.preview_scroll_to_ratio(ratio, window, cx);
             }))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                this.release_preview_scroll_drag(); cx.notify();
+                this.release_preview_scroll_drag();
+                cx.notify();
             }))
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 let mods = event.keystroke.modifiers;
-                if mods.platform || mods.control || mods.alt { return; }
-                let top = this.preview_list.logical_scroll_top();
-                let current = if let Some(ratio) = this.preview_drag_ratio { ratio }
-                else if let Some((max, _, _, _)) = this.preview_measured_max.filter(|(max, _, _, _)| *max > 0.0) {
-                    (-f32::from(this.preview_list.scroll_px_offset_for_scrollbar().y) / max).clamp(0.0, 1.0)
-                } else if count > 1 {
-                    let local = this.preview_list.bounds_for_item(top.item_ix).map(|b| (f32::from(top.offset_in_item) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0)).unwrap_or(0.0);
-                    ((top.item_ix.min(count - 1) as f32 + local) / count as f32).clamp(0.0, 1.0)
-                } else if single_max > 0.0 { f32::from(top.offset_in_item) / single_max } else { 0.0 };
-                let step = if let Some((max, _, _, _)) = this.preview_measured_max.filter(|(max, _, _, _)| *max > 0.0) {
-                    (40.0 / max).min(1.0)
-                } else if count > 1 { 1.0 / count as f32 } else if single_max > 0.0 { (40.0 / single_max).min(1.0) } else { 0.0 };
+                if mods.platform || mods.control || mods.alt {
+                    return;
+                }
+                let current = this.preview_list.scroll_ratio();
+                let max = this.preview_list.max_scroll().max(1.0);
+                let step = (40.0 / max).min(1.0);
                 let next = match event.keystroke.key.as_str() {
-                    "up" | "left" => Some(current - step), "down" | "right" => Some(current + step),
-                    "pageup" => Some(current - (step * 8.0).max(0.1)), "pagedown" => Some(current + (step * 8.0).max(0.1)),
-                    "home" => Some(0.0), "end" => Some(1.0), _ => None,
+                    "up" | "left" => Some(current - step),
+                    "down" | "right" => Some(current + step),
+                    "pageup" => Some(current - (step * 8.0).max(0.1)),
+                    "pagedown" => Some(current + (step * 8.0).max(0.1)),
+                    "home" => Some(0.0),
+                    "end" => Some(1.0),
+                    _ => None,
                 };
                 if let Some(next) = next {
-                    this.preview_scroll_to_ratio(next, count, single_max, window, cx);
+                    this.preview_scroll_to_ratio(next, window, cx);
                     cx.stop_propagation();
                 }
-            })).into_any_element()
+            }))
+            .into_any_element()
     }
 
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
@@ -1433,45 +1364,31 @@ impl WorkspaceView {
             }
         }
 
-        let old_top = self.preview_list.logical_scroll_top();
-        let mut top = old_top;
-        let new_offset = f32::from(top.offset_in_item) + velocity;
-
-        if velocity > 0.0 {
-            if top.item_ix + 1 >= num_blocks {
-                self.preview_autoscroll_task = None;
-                return;
-            }
-            let item_h = 24.0;
-            if new_offset >= item_h {
-                let advance = (new_offset / item_h).floor() as usize;
-                let target_ix = top.item_ix + advance;
-                if target_ix >= num_blocks.saturating_sub(1) {
-                    top.item_ix = num_blocks.saturating_sub(1);
-                    top.offset_in_item = px(0.0);
-                } else {
-                    top.item_ix = target_ix;
-                    top.offset_in_item = px(new_offset % item_h);
-                }
-            } else {
-                top.offset_in_item = px(new_offset);
-            }
+        // Advance one block per ~24px of edge velocity, matching the old
+        // ListState cadence while using real size-table offsets.
+        if velocity < 0.0 {
+            self.preview_autoscroll_accum = 0.0;
+            self.preview_list
+                .set_scroll_offset(self.preview_list.offset() + velocity);
         } else {
-            if new_offset < 0.0 {
-                let item_h = 24.0;
-                let retreat = ((-new_offset) / item_h).ceil() as usize;
-                if retreat >= top.item_ix {
-                    top.item_ix = 0;
-                    top.offset_in_item = px(0.0);
-                } else {
-                    top.item_ix -= retreat;
-                    top.offset_in_item = px(item_h - ((-new_offset) % item_h));
+            self.preview_autoscroll_accum += velocity;
+            let steps = (self.preview_autoscroll_accum / 24.0).floor() as usize;
+            if steps > 0 {
+                self.preview_autoscroll_accum -= steps as f32 * 24.0;
+                let offset = self.preview_list.offset();
+                let (ix, _) = self.preview_list.block_progress_at_offset(offset);
+                let target = (ix + steps).min(num_blocks.saturating_sub(1));
+                self.preview_list
+                    .set_scroll_offset(self.preview_list.offset_for_block(target, 0.0));
+                if target + 2 >= num_blocks {
+                    self.preview_autoscroll_task = None;
                 }
             } else {
-                top.offset_in_item = px(new_offset);
+                self.preview_list
+                    .set_scroll_offset(self.preview_list.offset() + velocity);
             }
         }
-        self.preview_list.scroll_to(top);
+        self.last_preview_sync_offset = self.preview_list.offset();
 
         if let Some(sel) = self.preview_selection {
             let reg = self.rendered_regions.lock().unwrap();
@@ -1484,6 +1401,7 @@ impl WorkspaceView {
     pub fn trigger_preview_autoscroll_if_needed(&mut self, cx: &mut Context<Self>) {
         if !self.is_preview_selecting {
             self.preview_autoscroll_task = None;
+            self.preview_autoscroll_accum = 0.0;
             return;
         }
         let Some(mouse_pos) = self.preview_mouse_window_pos else {
@@ -2427,6 +2345,53 @@ impl Render for WorkspaceView {
         self.state.update_appearance(is_sys_dark);
         self.workspace_width = f32::from(window.viewport_size().width);
         self.window_handle = Some(window.window_handle());
+
+        // Size-table virtual list: rebuild estimates when AST/layout inputs change,
+        // absorb real prepaint heights, then keep split panes in sync without
+        // relying on partially measured ListState offsets.
+        let parsed = self.state.doc().parsed.clone();
+        let rem = f32::from(window.rem_size());
+        let font_size = self.state.preferences.font_size;
+        let line_height = self.state.preferences.line_height;
+        let max_width = self.state.preferences.max_column_width;
+        let recent_scroll = matches!(
+            self.last_scroll_origin,
+            Some((_, time)) if time.elapsed() < std::time::Duration::from_millis(200)
+        );
+        let measured_changed = self.preview_list.apply_measured(
+            self.preview_drag_ratio,
+            self.preview_drag_ratio.is_some() || recent_scroll,
+        );
+        let layout_changed = self.preview_list.ensure_layout(
+            &parsed,
+            max_width,
+            font_size,
+            line_height,
+            rem,
+        );
+        let (visible_range, range_changed) = self.preview_list.visible_range(32.0);
+        if measured_changed || layout_changed || range_changed {
+            cx.notify();
+        }
+        let preview_offset = self.preview_list.offset();
+        if (preview_offset - self.last_preview_sync_offset).abs() > 0.5 {
+            let recent_editor = matches!(
+                self.last_scroll_origin,
+                Some((ScrollOrigin::Editor, time))
+                    if time.elapsed() < std::time::Duration::from_millis(100)
+            );
+            if recent_editor {
+                self.last_preview_sync_offset = preview_offset;
+            } else if self.state.view_mode == ViewMode::Split
+                && !self.state.doc().is_parse_stale()
+                && !parsed.anchors.is_empty()
+            {
+                self.sync_preview_scroll(window, cx);
+                self.last_preview_sync_offset = self.preview_list.offset();
+            } else {
+                self.last_preview_sync_offset = preview_offset;
+            }
+        }
         let is_fullscreen = window.is_fullscreen();
 
         let current_is_dark = self.state.theme.is_dark;
@@ -2538,14 +2503,15 @@ impl Render for WorkspaceView {
         });
 
         let view_heading = cx.entity().clone();
-        let on_select_heading = Arc::new(move |block_idx: usize, _window: &mut Window, cx: &mut App| {
+        let on_select_heading = Arc::new(move |block_idx: usize, window: &mut Window, cx: &mut App| {
             view_heading.update(cx, |this, cx| {
                 this.cancel_pending_preview_seek();
                 this.end_preview_scroll_drag();
-                this.preview_list.scroll_to(ListOffset {
-                    item_ix: block_idx,
-                    offset_in_item: px(0.),
-                });
+                this.preview_list
+                    .set_scroll_offset(this.preview_list.offset_for_block(block_idx, 0.0));
+                this.last_scroll_origin = None;
+                this.sync_preview_scroll(window, cx);
+                this.last_preview_sync_offset = this.preview_list.offset();
                 cx.notify();
             });
         });
@@ -2722,6 +2688,7 @@ impl Render for WorkspaceView {
                 if this.is_preview_selecting {
                     this.is_preview_selecting = false;
                     this.preview_autoscroll_task = None;
+                    this.preview_autoscroll_accum = 0.0;
                     this.preview_mouse_window_pos = None;
                     cx.notify();
                 }
@@ -3322,11 +3289,13 @@ impl Render for WorkspaceView {
                                         this.is_preview_selecting = is_selecting;
                                         if is_selecting {
                                             this.preview_focused = true;
+                                            this.preview_autoscroll_accum = 0.0;
                                             window.focus(&this.focus_handle);
                                             this.preview_mouse_window_pos = Some(window.mouse_position());
                                             this.trigger_preview_autoscroll_if_needed(cx);
                                         } else {
                                             this.preview_autoscroll_task = None;
+                                            this.preview_autoscroll_accum = 0.0;
                                             this.preview_mouse_window_pos = None;
                                         }
                                         cx.notify();
@@ -3401,12 +3370,21 @@ impl Render for WorkspaceView {
                                     });
                                 });
 
+                                let wheel_view = cx.entity().clone();
+                                let on_wheel: crate::views::preview::OnPreviewWheelCallback =
+                                    Arc::new(move |event, window, app| {
+                                        wheel_view.update(app, |this, cx| {
+                                            this.handle_preview_scroll_wheel(event, window, cx);
+                                        });
+                                    });
+
                                 let preview_callbacks = crate::views::preview::PreviewCallbacks {
                                     on_copy: Some(on_copy.clone()),
                                     on_open_lightbox: Some(on_open_lightbox.clone()),
                                     on_selection_change: Some(on_selection_change),
                                     on_autoscroll: Some(on_autoscroll),
                                     on_image_recovery: Some(on_image_recovery),
+                                    on_wheel: Some(on_wheel),
                                 };
 
                                 div()
@@ -3492,7 +3470,6 @@ impl Render for WorkspaceView {
                                             ViewMode::Preview => {
                                                 let view_bounds = cx.entity().clone();
                                                 div().size_full().flex()
-                                                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| this.handle_preview_scroll_wheel(event, window, cx)))
                                                     .child(div()
                                                     .flex_1().h_full().relative()
                                                     .min_w(px(0.))
@@ -3516,6 +3493,7 @@ impl Render for WorkspaceView {
                                                         self.state.preferences.max_column_width,
                                                         self.state.preferences.font_size,
                                                         &self.preview_list,
+                                                        visible_range.clone(),
                                                         copied_code_hash,
                                                         preview_callbacks.clone(),
                                                         self.preview_selection,
@@ -3620,9 +3598,6 @@ impl Render for WorkspaceView {
                                                         .flex()
                                                         .flex_col()
                                                         .overflow_hidden()
-                                                        .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
-                                                            this.handle_preview_scroll_wheel(event, window, cx);
-                                                        }))
                                                         .child({
                                                             let view_bounds = cx.entity().clone();
                                                             div().size_full().flex().child(div()
@@ -3647,6 +3622,7 @@ impl Render for WorkspaceView {
                                                                     self.state.preferences.max_column_width,
                                                                     self.state.preferences.font_size,
                                                                     &self.preview_list,
+                                                                    visible_range.clone(),
                                                                     copied_code_hash,
                                                                     preview_callbacks,
                                                                     self.preview_selection,

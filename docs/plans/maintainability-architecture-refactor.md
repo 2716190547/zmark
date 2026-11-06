@@ -229,3 +229,34 @@ R2 基线安全缺陷：独立基线快照用真实临时文件构造本地编�
 - **R4 未实施**：第 10 节的 Metal atlas 共享/释放证据仍不足，不替换 raster 图片所有权，也不放宽 64 MiB 与颜色校验。
 - **R5 部分完成**：仅把受私有字段收紧影响的测试迁入模块并新增回归；当前 52 个集成测试文件、322 个测试属性。未再删除测试，也未声称减少链接耗时；纯算法测试合并留待有同机耗时证据后单独处理。
 - 未运行真机像素/滚动验收；本次只做结构、行为、分配和打包验证。仓库工作区除本计划文档提交外保持干净；**尚未 push、尚未更新 PR**，等待用户确认是否按既有授权发布。
+
+## 12. size-table VirtualList：滚动条跟手与分屏底部跳动的根治（2026-11-06）
+
+### 社区结论与本地取舍
+
+- 联网核查 `longbridge/gpui-kit` `gpui-base 0.9.0`：`v_virtual_list` + `Scrollbar` 正是该问题的现成方案。其文档明确把「边滚边测」列为 `Scrollbar jumps / scroll position drifts`，改用预先提供 `Rc<Vec<Size>>` + 前缀和得到精确 offset。
+- 但该 crate 依赖 `gpui-pre 0.3.11`，与本项目 `gpui 0.2.2` 不兼容；直接引入等于 GPUI 大版本迁移。按计划不升级、不加依赖，只移植「尺寸表 + 前缀和 + 可见区间」这一决策。
+- 网络核查本身可用：crates.io 默认 `curl` UA 返回 403，加 UA 后 200，`cargo search` 与 GitHub raw 均 200；`w3:p9` 的 Codex CLI 沙箱配置显示 `network.enabled=false`，那是宿主沙箱，不是缺插件。
+
+### 实施
+
+- 新增 `crates/glidemark_app/src/views/preview/virtual_list.rs`：`PreviewScrollState` 持有每个 AST 块的估计高度、`origins` 前缀和、`total`、`ScrollHandle`、真实 prepaint 高度表和可见区间。保留 `ListState` 形状的窄兼容方法，使既有行为测试继续通过。
+- `render_preview_pane_with_callbacks` 不再用 `ListState`，改为按前缀和只渲染可见块，绝对定位在总高容器内，外层 `overflow_y_scroll().track_scroll()`；真实块高来自块内容 canvas，随帧写回尺寸表。
+- 滚动条改为 `ratio = offset / (total - viewport)`：拖动、轨道点击、键盘与窗口外释放都直接使用精确像素范围；不再依赖「已测量项」的 `max_offset_for_scrollbar`，也不调用 `measure_all()`。
+- 双向同步滚动改成共享尺寸表：编辑器→预览用 `offset_for_block(block, progress)`，预览→编辑器用 `block_progress_at_offset()` + `SyncScrollMap`；保留 100ms 回声抑制，底部不再把未测块 `scroll_to` 后夹回。
+- 尺寸表在手势中保持滑块比例、空闲时保持内容锚点；真实高度跨 AST 重建保留，避免图片/语法回调把预览拉回。可见区间只在视口下方 overdraw，避免把屏幕外文字区域登记进命中表。
+- 选区鼠标处理移到整块 item 容器（含 `pb_4`），修复点击落在块间空白时无 anchor。
+
+### 判别证据
+
+- 新增 `crates/glidemark_app/tests/preview_virtual_scroll_test.rs`：
+  - 180 块长短混合长文档，拖到 0.31 / 0.68 / 0.97，滑块与指针偏差 ≤2pt，状态比例与目标比例偏差 ≤0.03，且块索引持续前进；旧「边滚边测」实现会在未测区域夹回。
+  - 分屏编辑器连续 140 次滚轮到底部，预览偏移不回退，最终比例 >0.85。
+- 变异：把 `apply_measured` 强制返回 `false`（退回固定估计、不吸收真实高度），`local_images_test::preview_elements_load_private_snapshots_and_remeasure` FAILED（占位块 y 前后均为 187px）；恢复后通过。
+- 全套回归：默认 `cargo test --workspace` **331 passed / 0 failed / 0 ignored**（54 行 `test result`）；AGENTS 观测 23+5=**28/0**；Phase H 串行 8+5+4+4=**21/0**；`phase_j_scrollbar_test` **11/0**；`phase_h_b3_autoscroll_real_events` **4/0**；`local_images_test` **6/0**。
+- 打包与签名通过；磁盘 app 已替换。真机触控板、窗口外拖动的像素级手感仍需用户实测，headless 测试不能替代。
+
+### 边界
+
+- 仍是 GPUI 0.2.2、两个 crate；未引入 `gpui-kit`、Rope、事件总线或统一任务框架。
+- 未 push、未更新 PR；按用户此前选择仅本地交付。运行中的旧进程需重启后加载新二进制，未强制结束以免丢失窗口内容。

@@ -1,4 +1,4 @@
-use glidemark_app::state::{AppState, DocKey, OpenDoc, ViewMode};
+use glidemark_app::state::{AppState, ViewMode};
 use glidemark_app::theme::ThemeColors;
 use glidemark_app::views::workspace::{adaptive_header_padding, mode_tab_colors};
 use glidemark_core::document::Document;
