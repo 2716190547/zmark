@@ -1,9 +1,10 @@
+use glidemark_app::syntax::{VisibleSyntaxFailure, WarmState};
 use glidemark_app::state::{AppState, DocKey, ViewMode};
 use glidemark_app::theme::ThemeColors;
 use glidemark_app::views::editor::MarkdownTokenKind;
 use glidemark_app::views::preview::{apply_selection_to_highlights, obs};
 use glidemark_app::views::workspace::{
-    PaneKind, SyntaxBatchRequest, SyntaxBlockState, VisibleSyntaxFailure, WarmState, WorkspaceView,
+    PaneKind, SyntaxBatchRequest, SyntaxBlockState, WorkspaceView,
 };
 use glidemark_core::document::Document;
 use glidemark_core::syntax::{

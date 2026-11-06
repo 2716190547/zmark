@@ -655,7 +655,7 @@ pub fn render_preview_pane_with_callbacks(
     is_selecting: bool,
     regions: Arc<RegionsRegistry>,
     syntax_cache: Arc<std::sync::Mutex<glidemark_core::syntax::SyntaxCache>>,
-    failures: &[crate::views::workspace::VisibleSyntaxFailure],
+    failures: &[crate::syntax::VisibleSyntaxFailure],
     images: crate::local_images::SharedImages,
 ) -> impl IntoElement {
     let theme = theme.clone();
@@ -692,8 +692,7 @@ pub fn render_preview_pane_with_callbacks(
             };
 
             let flat = glidemark_core::ast::flatten_block(block, "0");
-            let block_text = flat.text.clone();
-            let block_char_len = block_text.chars().count();
+            let block_char_len = flat.text.chars().count();
             let selected_char_range = selection.and_then(|s| s.char_range_for_block(ix, block_char_len));
 
             let block_bounds_cell = Arc::new(std::cell::Cell::new(Bounds::default()));
@@ -737,8 +736,8 @@ pub fn render_preview_pane_with_callbacks(
                 let on_sel_down = on_selection_change.clone();
                 let on_sel_move = on_selection_change.clone();
                 let on_autoscroll = item_callbacks.on_autoscroll.clone();
-                let text_for_down = block_text.clone();
-                let text_for_move = block_text.clone();
+                let text_for_down: Arc<str> = Arc::from(flat.text.as_str());
+                let text_for_move = Arc::clone(&text_for_down);
                 let bounds_cell_down = block_bounds_cell.clone();
                 let bounds_cell_move = block_bounds_cell.clone();
                 let regions_down = item_regions.clone();
