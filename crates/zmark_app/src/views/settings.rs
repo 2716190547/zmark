@@ -798,7 +798,7 @@ fn render_about_tab(
     let shortcuts: [(&'static str, String); 6] = [
         ("⌘O", strings.open_file.to_string()),
         ("⌘S", strings.save_file.to_string()),
-        ("⌘E", strings.export_html.to_string()),
+        ("⇧⌘E", strings.export_html.to_string()),
         ("⌘B", strings.directory_drawer.to_string()),
         (
             "⌘1 / ⌘2 / ⌘3",

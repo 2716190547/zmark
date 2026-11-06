@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::*;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -64,6 +64,9 @@ pub struct WorkspaceView {
     window_activation_subscription: Option<Subscription>,
     window_was_active: bool,
     pub error_banner: Option<String>,
+    /// (display file name, absolute path) shown after a successful HTML export.
+    pub export_notice: Option<(String, PathBuf)>,
+    export_notice_generation: u64,
     pub search_focused: bool,
     pub preview_focused: bool,
     pub search_input: Option<Entity<crate::views::drawer::SearchInput>>,
@@ -202,6 +205,8 @@ impl WorkspaceView {
             window_activation_subscription: None,
             window_was_active: false,
             error_banner: None,
+            export_notice: None,
+            export_notice_generation: 0,
             search_focused: false,
             preview_focused: false,
             search_input: Some(search_input),
@@ -2046,6 +2051,71 @@ impl WorkspaceView {
         }
     }
 
+    /// Exports the active document to a user-chosen `.html` path.
+    ///
+    /// The old handler silently wrote next to an already-saved document and did
+    /// nothing for drafts; this always opens the native save panel, writes off
+    /// the UI thread and shows a dismissible success notice.
+    pub fn trigger_export_html(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.active.is_none() {
+            return;
+        }
+        self.parse_now_and_refresh();
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let (dir, suggested_name) = export_suggested_path(
+            self.state.doc().path.as_deref(),
+            self.state.strings.untitled_file,
+            &home,
+        );
+        let html = self.state.export_standalone_html();
+        let rx = cx.prompt_for_new_path(&dir, Some(&suggested_name));
+        cx.spawn(async move |this, app| {
+            let Ok(Ok(Some(path))) = rx.await else {
+                return;
+            };
+            let write_path = path.clone();
+            let result = app
+                .background_executor()
+                .spawn(async move { std::fs::write(&write_path, html) })
+                .await;
+            let _ = this.update(app, |this, cx| match result {
+                Ok(()) => this.show_export_notice(path, cx),
+                Err(error) => {
+                    this.error_banner = Some(format!("{}: {error}", this.state.strings.export_html));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn show_export_notice(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.export_notice_generation = self.export_notice_generation.wrapping_add(1);
+        let generation = self.export_notice_generation;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        self.export_notice = Some((name, path));
+        cx.notify();
+        let view = cx.entity().downgrade();
+        cx.spawn(async move |_this, app| {
+            app.background_executor()
+                .timer(std::time::Duration::from_secs(3))
+                .await;
+            let _ = view.update(app, |this, cx| {
+                if this.export_notice_generation == generation {
+                    this.export_notice = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn trigger_close_doc(
         &mut self,
         key: &crate::state::DocKey,
@@ -2500,12 +2570,8 @@ impl WorkspaceView {
                                 false,
                                 theme,
                                 render_export_icon(theme.text_muted),
-                                cx.listener(|this, _, _window, _cx| {
-                                    let html = this.state.export_standalone_html();
-                                    if let Some(path) = &this.state.doc().path {
-                                        let out_path = path.with_extension("html");
-                                        let _ = std::fs::write(&out_path, html);
-                                    }
+                                cx.listener(|this, _, window, cx| {
+                                    this.trigger_export_html(window, cx);
                                 }),
                             ))
                             .child(render_icon_button(
@@ -2904,6 +2970,7 @@ impl Render for WorkspaceView {
 
         let theme = &self.state.theme;
         let strings = self.state.strings;
+        let export_view = cx.entity().downgrade();
         let view_mode = self.state.view_mode;
         let is_dirty = self.state.is_dirty();
         let has_conflict = self.state.has_conflict();
@@ -3224,12 +3291,8 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(|this, _: &SaveFile, _window, cx| {
                 this.trigger_save(cx);
             }))
-            .on_action(cx.listener(|this, _: &ExportHtml, _window, _cx| {
-                let html = this.state.export_standalone_html();
-                if let Some(path) = &this.state.doc().path {
-                    let out_path = path.with_extension("html");
-                    let _ = std::fs::write(&out_path, html);
-                }
+            .on_action(cx.listener(|this, _: &ExportHtml, window, cx| {
+                this.trigger_export_html(window, cx);
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.lightbox.is_open {
@@ -3643,6 +3706,87 @@ impl Render for WorkspaceView {
                                             }),
                                         )
                                         .child("×"),
+                                ),
+                        )
+                    })
+                    // HTML export success notice (auto-dismisses after 3s)
+                    .when_some(self.export_notice.clone(), |el, (name, path)| {
+                        let reveal_path = path.clone();
+                        let close_view = export_view.clone();
+                        el.child(
+                            div()
+                                .id("export_success_banner")
+                                .h(px(32.))
+                                .px_4()
+                                .bg(rgba(0x22c55e1a))
+                                .border_b_1()
+                                .border_color(rgba(0x22c55e33))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            svg()
+                                                .path("icons/check.svg")
+                                                .size(px(14.))
+                                                .text_color(rgb(0x22c55e)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(rgb(0x16a34a))
+                                                .child(format!("{} {}", strings.export_done, name)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .id("btn_reveal_export")
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .text_color(rgb(0x16a34a))
+                                                .hover(|s| s.bg(rgba(0x22c55e22)))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    move |_, _, cx| {
+                                                        cx.reveal_path(&reveal_path);
+                                                    },
+                                                )
+                                                .child(strings.reveal_in_finder),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("btn_close_export_banner")
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .text_color(rgb(0x16a34a))
+                                                .hover(|s| s.bg(rgba(0x22c55e22)))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    move |_, _, cx| {
+                                                        let _ = close_view.update(cx, |this, cx| {
+                                                            this.export_notice = None;
+                                                            cx.notify();
+                                                        });
+                                                    },
+                                                )
+                                                .child("×"),
+                                        ),
                                 ),
                         )
                     })
@@ -4282,6 +4426,36 @@ pub fn calculate_title_header_padding(
 /// Canvas document title left margin (in pixels, ADR 0036).
 /// Consistently aligns with the 16px content margin across Source, Split, and Preview.
 pub const CANVAS_TITLE_LEFT_MARGIN: f32 = 16.0;
+
+/// Default directory and file name for the HTML export save panel.
+///
+/// Saved documents export next to themselves; drafts export to the user's home
+/// directory using the localized untitled name. Path separators are stripped so
+/// a translated name can never escape the chosen directory.
+pub fn export_suggested_path(
+    doc_path: Option<&Path>,
+    untitled_file: &str,
+    home: &Path,
+) -> (PathBuf, String) {
+    match doc_path {
+        Some(path) => {
+            let dir = path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| home.to_path_buf());
+            let stem = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or(untitled_file);
+            (dir, format!("{stem}.html"))
+        }
+        None => {
+            let stem = untitled_file.strip_suffix(".md").unwrap_or(untitled_file);
+            let stem = stem.replace(['/', '\\'], "-");
+            (home.to_path_buf(), format!("{stem}.html"))
+        }
+    }
+}
 
 /// Predicts GPUI's content offset after a wheel delta, before native scrolling runs.
 fn projected_scroll_offset(current: f32, wheel_delta_y: f32, max: f32) -> f32 {
