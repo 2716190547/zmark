@@ -2618,10 +2618,21 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                if let Some((bounds, count, single_max, grab_offset, thumb)) = this.preview_scroll_drag {
-                    let available = (f32::from(bounds.size.height) - thumb).max(1.0);
-                    let ratio = (f32::from(event.position.y - bounds.origin.y) - grab_offset) / available;
-                    this.preview_scroll_to_ratio(ratio, count, single_max, window, cx);
+                if this.preview_scroll_drag.is_some() {
+                    // The button was released while the pointer was away (outside the
+                    // window or over another app); end the drag instead of staying
+                    // latched and jumping on the next move.
+                    if event.pressed_button.is_none() {
+                        this.end_preview_scroll_drag();
+                        cx.notify();
+                    } else if let Some((bounds, count, single_max, grab_offset, thumb)) =
+                        this.preview_scroll_drag
+                    {
+                        let available = (f32::from(bounds.size.height) - thumb).max(1.0);
+                        let ratio =
+                            (f32::from(event.position.y - bounds.origin.y) - grab_offset) / available;
+                        this.preview_scroll_to_ratio(ratio, count, single_max, window, cx);
+                    }
                 }
                 if this.is_resizing_split {
                     let w = this.workspace_width;

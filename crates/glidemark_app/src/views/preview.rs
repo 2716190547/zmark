@@ -1258,12 +1258,18 @@ fn render_styled_inlines(
                     match state {
                         crate::local_images::ImageState::Ready(image) => {
                             let reference = url.clone();
+                            let ratio = image.width as f32 / image.height as f32;
+                            // Cap the displayed height by shrinking the width instead of
+                            // letterboxing: a tall image must not own a whole viewport
+                            // (it made the preview blocks huge and left big empty gaps).
+                            let max_display_width = (MAX_IMAGE_DISPLAY_HEIGHT * ratio)
+                                .min(image.width as f32);
                             let mut element = img(image.snapshot.path().to_path_buf())
-                                .w_full().max_w(px(image.width as f32))
+                                .w_full().max_w(px(max_display_width))
                                 .object_fit(ObjectFit::Contain)
                                 .debug_selector(|| format!("local_image:{url}"))
                                 .with_fallback(move || div().child(format!("图片显示失败 · {reference}")).into_any_element());
-                            element.style().aspect_ratio = Some(image.width as f32 / image.height as f32);
+                            element.style().aspect_ratio = Some(ratio);
                             let description = if alt.is_empty() { url.clone() } else { format!("{alt} · {url}") };
                             div().id(SharedString::from(format!("local_image_container:{url}")))
                                 .w_full().min_w(px(0.))
@@ -2018,6 +2024,9 @@ fn render_list_element(
 /// - `None`, `""`, `"text"` (case and whitespace-insensitive) return `false` (retain horizontal scroll for ASCII trees).
 /// - Note: Mermaid diagrams do not enter this function as they are rendered
 ///   as interactive diagram widgets with pan/zoom lightbox capabilities.
+/// Upper bound for a single inline image's displayed height, in points.
+pub const MAX_IMAGE_DISPLAY_HEIGHT: f32 = 400.0;
+
 pub fn should_wrap_code_block(lang: Option<&str>) -> bool {
     match lang {
         None => false,
