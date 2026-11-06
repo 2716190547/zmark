@@ -67,11 +67,11 @@ fn test_h3_selection_tokens_and_status_labels() {
     // 2. Verify status bar labels in i18n
     let zh_cn = get_strings(SupportedLocale::ZhCn);
     assert_eq!(zh_cn.status_line, "行");
-    assert_eq!(zh_cn.status_col, "列");
+    assert_eq!(zh_cn.status_chars, "字");
 
     let en = get_strings(SupportedLocale::En);
     assert_eq!(en.status_line, "Ln");
-    assert_eq!(en.status_col, "Col");
+    assert_eq!(en.status_chars, "chars");
 }
 
 #[gpui::test]

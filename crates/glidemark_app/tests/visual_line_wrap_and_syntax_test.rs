@@ -224,7 +224,7 @@ fn test_fenced_code_context_and_syntax_highlighting() {
     assert!(has_comment, "Should tokenize '// comment }}' as Comment");
 
     // 3. Test 8 theme palettes have distinct syntax colors:
-    // syntax_keyword, syntax_string, syntax_comment, syntax_heading, syntax_inline_code, syntax_link
+    // syntax_keyword, syntax_string, syntax_comment, syntax_inline_code, syntax_link
     assert_eq!(ALL_PALETTES.len(), 8);
     for palette in ALL_PALETTES {
         for is_dark in [false, true] {
@@ -233,7 +233,6 @@ fn test_fenced_code_context_and_syntax_highlighting() {
             assert!(theme.syntax_keyword.a > 0.0);
             assert!(theme.syntax_string.a > 0.0);
             assert!(theme.syntax_comment.a > 0.0);
-            assert!(theme.syntax_heading.a > 0.0);
             assert!(theme.syntax_inline_code.a > 0.0);
             assert!(theme.syntax_link.a > 0.0);
 

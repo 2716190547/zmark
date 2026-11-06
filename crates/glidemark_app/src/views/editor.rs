@@ -371,7 +371,9 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
             el = el.text_color(theme.syntax_comment);
         }
         MarkdownTokenKind::HeadingPrefix => {
-            el = el.text_color(theme.syntax_heading).font_weight(FontWeight::BOLD);
+            // The marker is structure, not emphasis: keep it quiet so the heading
+            // text itself carries the weight.
+            el = el.text_color(theme.text_muted).font_weight(FontWeight::NORMAL);
         }
         MarkdownTokenKind::HeadingText => {
             el = el.text_color(theme.text_primary).font_weight(FontWeight::BOLD);
@@ -1129,7 +1131,7 @@ pub fn render_editor_pane(
     strings: &'static glidemark_core::i18n::I18nStrings,
     font_size: f32,
     line_height: f32,
-    is_dirty: bool,
+    _is_dirty: bool,
     scroll_handle: &UniformListScrollHandle,
     editor_left_offset: f32,
     gutter_width: f32,
@@ -1138,6 +1140,12 @@ pub fn render_editor_pane(
 ) -> impl IntoElement {
     let line_count = visual_lines.len().max(1);
     let (cursor_line, cursor_col) = cursor;
+    // Buffer character count including line breaks, shown in the status pill.
+    let char_count: usize = lines
+        .iter()
+        .map(|line| line.chars().count())
+        .sum::<usize>()
+        + lines.len().saturating_sub(1);
     let theme = theme.clone();
     let list_theme = theme.clone();
     let sanitized_lh = glidemark_core::config::Preferences::sanitize_line_height(line_height);
@@ -1442,10 +1450,13 @@ pub fn render_editor_pane(
                         .text_size(px(10.))
                         .font_family(crate::platform::UI_FONT)
                         .text_color(theme.text_muted)
-                        .when(is_dirty, |el| {
-                            el.child(div().w(px(5.)).h(px(5.)).rounded_full().bg(theme.accent))
-                        })
-                        .child(format!("{} {}, {} {}", strings.status_line, cursor_line + 1, strings.status_col, cursor_col + 1)),
+                        .child(format!(
+                            "{} {}  ·  {} {}",
+                            strings.status_line,
+                            cursor_line + 1,
+                            char_count,
+                            strings.status_chars
+                        )),
                 ),
         )
 }

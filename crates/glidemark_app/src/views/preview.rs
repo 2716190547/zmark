@@ -2104,6 +2104,11 @@ fn render_code_block(
     };
 
     let code_font_size = base_font_size;
+    // Short fence language shown in the block's lower-right corner, e.g. "rust".
+    let lang_label: Option<String> = lang
+        .and_then(|l| l.split(|c: char| c.is_whitespace() || c == ',').next())
+        .map(|l| l.trim().to_lowercase())
+        .filter(|l| !l.is_empty() && l != "text");
     let mut content = div()
         .id(SharedString::from(format!("code_content_scroll_{}", hash)))
         .w_full()
@@ -2198,5 +2203,17 @@ fn render_code_block(
         .bg(theme.code_bg)
         .child(content)
         .child(copy_btn)
+        .when_some(lang_label, |el, label| {
+            el.child(
+                div()
+                    .absolute()
+                    .bottom(px(6.))
+                    .right(px(10.))
+                    .text_size(px(10.))
+                    .font_family(crate::platform::MONO_FONT)
+                    .text_color(theme.text_muted.opacity(0.75))
+                    .child(label),
+            )
+        })
         .into_any_element()
 }

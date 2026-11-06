@@ -700,6 +700,10 @@ impl Element for SearchInputElement {
             .shape_line(display_text, font_size, &runs, None);
 
         let cursor_pos = line.x_for_index(cursor.min(line.len));
+        // Caret and selection derive from the themed text colour so no palette falls
+        // back to the system blue.
+        let caret_color = style.color.opacity(0.85);
+        let selection_color = style.color.opacity(0.12);
         let (selection, cursor_quad) = if selected_range.is_empty() {
             (
                 None,
@@ -708,7 +712,7 @@ impl Element for SearchInputElement {
                         point(bounds.left() + cursor_pos, bounds.top() + px(3.)),
                         size(px(1.5), bounds.bottom() - bounds.top() - px(6.)),
                     ),
-                    gpui::blue(),
+                    caret_color,
                 )),
             )
         } else {
@@ -724,7 +728,7 @@ impl Element for SearchInputElement {
                             bounds.bottom(),
                         ),
                     ),
-                    rgba(0x3311ff30),
+                    selection_color,
                 )),
                 None,
             )

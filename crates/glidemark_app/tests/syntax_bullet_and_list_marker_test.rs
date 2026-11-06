@@ -41,8 +41,8 @@ fn test_eight_palettes_syntax_bullet_matrix() {
             );
 
             let expected_hex = match (palette.id, is_dark) {
-                ("default", false) => 0x0969da,
-                ("default", true) => 0x58a6ff,
+                ("default", false) => 0x96603c,
+                ("default", true) => 0xc08a5e,
                 ("claude", false) => 0xd97706,
                 ("claude", true) => 0xfbbf24,
                 ("macos", false) => 0x007aff,

@@ -61,7 +61,7 @@ fn test_all_10_locales_have_complete_translations() {
         assert!(!t.lightbox_fit_window.is_empty(), "lightbox_fit_window missing in {}", tag);
         assert!(!t.lightbox_close.is_empty(), "lightbox_close missing in {}", tag);
         assert!(!t.status_line.is_empty(), "status_line missing in {}", tag);
-        assert!(!t.status_col.is_empty(), "status_col missing in {}", tag);
+        assert!(!t.status_chars.is_empty(), "status_chars missing in {}", tag);
         assert!(!t.search_placeholder.is_empty(), "search_placeholder missing in {}", tag);
         assert!(!t.search_no_results.is_empty(), "search_no_results missing in {}", tag);
         assert!(!t.search_scanning.is_empty(), "search_scanning missing in {}", tag);
@@ -104,7 +104,7 @@ fn test_simplified_chinese_content() {
     assert_eq!(t.lightbox_fit_window, "适应窗口");
     assert_eq!(t.lightbox_close, "关闭灯箱");
     assert_eq!(t.status_line, "行");
-    assert_eq!(t.status_col, "列");
+    assert_eq!(t.status_chars, "字");
     assert_eq!(t.search_placeholder, "搜索文件...");
     assert_eq!(t.search_no_results, "无匹配文件");
     assert_eq!(t.search_scanning, "正在搜索...");
