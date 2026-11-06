@@ -16,7 +16,8 @@ pub const UPDATE_FEED_URL: &str =
 
 /// Ed25519 public key of the release signing key. Filled by the release setup;
 /// an empty key makes every verification fail closed.
-pub const UPDATE_PUBLIC_KEY_HEX: &str = "";
+pub const UPDATE_PUBLIC_KEY_HEX: &str =
+    "d2b3380214d08522d78227e369da57c19f6746ec96135cae65ae85e42053dda5";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseManifest {
@@ -202,6 +203,11 @@ impl UpdateConfig {
     pub fn production() -> Self {
         let mut config = Self::disabled();
         config.public_key_hex = UPDATE_PUBLIC_KEY_HEX.to_string();
+        // Local end-to-end testing hook. Signature verification is unchanged,
+        // so a forged feed still fails; only the location can be overridden.
+        if let Ok(feed) = std::env::var("ZMARK_UPDATE_FEED") {
+            config.feed_url = feed;
+        }
         match classify_target_bundle(&std::env::current_exe().unwrap_or_default()) {
             None => {
                 config.disabled_reason =
