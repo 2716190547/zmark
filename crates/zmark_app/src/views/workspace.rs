@@ -12,6 +12,7 @@ use crate::actions::{
 use crate::state::{parse_debounce, AppState, CloseDecision, ViewMode};
 use crate::views::editor::render_editor_pane;
 use crate::views::lightbox::{render_lightbox, LightboxState};
+use crate::updater::{PreparedUpdate, UpdateConfig, UpdateStatus};
 use crate::views::preview::PreviewScrollState;
 use crate::views::settings::SettingsWindowView;
 
@@ -67,6 +68,12 @@ pub struct WorkspaceView {
     /// (display file name, absolute path) shown after a successful HTML export.
     pub export_notice: Option<(String, PathBuf)>,
     export_notice_generation: u64,
+    pub update_config: UpdateConfig,
+    pub update_status: UpdateStatus,
+    pub prepared_update: Option<PreparedUpdate>,
+    update_checking: bool,
+    update_banner_dismissed: Option<String>,
+    pending_restart: bool,
     pub search_focused: bool,
     pub preview_focused: bool,
     pub search_input: Option<Entity<crate::views::drawer::SearchInput>>,
@@ -151,6 +158,14 @@ pub struct SyntaxBatchRequest {
 
 impl WorkspaceView {
     pub fn new(state: AppState, cx: &mut Context<Self>) -> Self {
+        Self::new_with_update_config(state, UpdateConfig::disabled(), cx)
+    }
+
+    pub fn new_with_update_config(
+        state: AppState,
+        update_config: UpdateConfig,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut preview_list = PreviewScrollState::new();
         preview_list.reset(state.doc().parsed.blocks.len());
         let search_focus = cx.focus_handle();
@@ -207,6 +222,12 @@ impl WorkspaceView {
             error_banner: None,
             export_notice: None,
             export_notice_generation: 0,
+            update_config,
+            update_status: UpdateStatus::Idle,
+            prepared_update: None,
+            update_checking: false,
+            update_banner_dismissed: None,
+            pending_restart: false,
             search_focused: false,
             preview_focused: false,
             search_input: Some(search_input),
@@ -281,6 +302,7 @@ impl WorkspaceView {
         })
         .detach();
         view.start_warm_coordination_task(cx);
+        view.init_update_service(cx);
 
         view
     }
@@ -2144,6 +2166,7 @@ impl WorkspaceView {
 
     pub fn handle_modal_cancel(&mut self, cx: &mut Context<Self>) {
         self.state.cancel_close();
+        self.pending_restart = false;
         cx.notify();
     }
 
@@ -2256,6 +2279,150 @@ impl WorkspaceView {
         .detach();
     }
 
+    fn init_update_service(&mut self, cx: &mut Context<Self>) {
+        if !self.update_config.enabled {
+            return;
+        }
+        let staged_path = self
+            .update_config
+            .staged_path
+            .clone()
+            .unwrap_or_else(crate::updater::staged_state_path);
+        if let Some(prepared) = crate::updater::read_staged_state(&staged_path) {
+            if crate::updater::is_newer(&self.update_config.current_version, &prepared.version) {
+                self.update_status = UpdateStatus::Downloaded(prepared.version.clone());
+                self.prepared_update = Some(prepared);
+            } else {
+                let _ = std::fs::remove_file(&staged_path);
+            }
+        }
+        self.check_for_updates(cx, false);
+        cx.spawn(async move |this, app| loop {
+            app.background_executor()
+                .timer(std::time::Duration::from_secs(24 * 60 * 60))
+                .await;
+            if this
+                .update(app, |this, cx| this.check_for_updates(cx, false))
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    /// Checks the signed feed. Automatic checks stay quiet on network errors;
+    /// manual checks (About tab) report the failure.
+    pub fn check_for_updates(&mut self, cx: &mut Context<Self>, manual: bool) {
+        if let Some(prepared) = &self.prepared_update {
+            self.update_status = UpdateStatus::Downloaded(prepared.version.clone());
+            cx.notify();
+            return;
+        }
+        if !self.update_config.enabled {
+            if manual {
+                let reason = self
+                    .update_config
+                    .disabled_reason
+                    .clone()
+                    .unwrap_or_else(|| self.state.strings.update_disabled.to_string());
+                self.update_status = UpdateStatus::Error(reason);
+                cx.notify();
+            }
+            return;
+        }
+        if self.update_checking {
+            return;
+        }
+        self.update_checking = true;
+        self.update_status = UpdateStatus::Checking;
+        cx.notify();
+        let config = self.update_config.clone();
+        cx.spawn(async move |this, app| {
+            let result = app
+                .background_executor()
+                .spawn(async move { crate::updater::run_check(&config) })
+                .await;
+            let _ = this.update(app, |this, cx| this.apply_update_result(result, manual, cx));
+        })
+        .detach();
+    }
+
+    fn apply_update_result(
+        &mut self,
+        result: Result<Option<PreparedUpdate>, crate::updater::UpdateError>,
+        manual: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_checking = false;
+        match result {
+            Ok(Some(prepared)) => {
+                self.update_status = UpdateStatus::Downloaded(prepared.version.clone());
+                self.prepared_update = Some(prepared);
+            }
+            Ok(None) => {
+                self.update_status = if manual {
+                    UpdateStatus::Latest
+                } else {
+                    UpdateStatus::Idle
+                };
+            }
+            Err(error) => {
+                if manual {
+                    self.update_status = UpdateStatus::Error(error.to_string());
+                } else {
+                    eprintln!("zmark update check failed: {error}");
+                    self.update_status = UpdateStatus::Idle;
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Hides the update banner for the rest of this session.
+    pub fn dismiss_update_banner(&mut self, version: &str, cx: &mut Context<Self>) {
+        self.update_banner_dismissed = Some(version.to_string());
+        cx.notify();
+    }
+
+    /// Starts the restart flow. Dirty documents go through the existing close
+    /// prompt; the actual swap happens only after they are all resolved.
+    pub fn restart_for_update(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        if self.prepared_update.is_none() {
+            return;
+        }
+        self.pending_restart = true;
+        if self.on_window_should_close(window, cx) {
+            self.install_prepared_update(cx);
+        }
+    }
+
+    fn install_prepared_update(&mut self, cx: &mut Context<Self>) {
+        let Some(prepared) = self.prepared_update.take() else {
+            return;
+        };
+        let Some(target) = self.update_config.target_bundle.clone() else {
+            self.prepared_update = Some(prepared);
+            self.update_status = UpdateStatus::Error("no target bundle configured".into());
+            cx.notify();
+            return;
+        };
+        match crate::updater::spawn_install_helper(&prepared, &target) {
+            Ok(()) => {
+                self.update_status = UpdateStatus::Installing;
+                self.pending_restart = false;
+                cx.quit();
+            }
+            Err(error) => {
+                self.prepared_update = Some(prepared);
+                self.update_status = UpdateStatus::Error(error.to_string());
+                self.error_banner =
+                    Some(format!("{}: {error}", self.state.strings.update_failed));
+                cx.notify();
+            }
+        }
+    }
+
     pub fn after_dirty_doc_resolved(
         &mut self,
         mut window_opt: Option<&mut Window>,
@@ -2267,8 +2434,13 @@ impl WorkspaceView {
                 self.on_document_swapped(window_opt.as_deref_mut(), cx);
                 cx.notify();
             } else {
-                // All dirty documents resolved! Close window per ADR 0031.
+                // All dirty documents resolved! Close window per ADR 0031,
+                // unless a downloaded update is waiting for this moment.
                 self.state.is_quitting = false;
+                if self.pending_restart {
+                    self.install_prepared_update(cx);
+                    return;
+                }
                 if let Some(window) = window_opt.as_deref_mut() {
                     window.remove_window();
                 } else if let Some(h) = self.window_handle {
@@ -2971,6 +3143,14 @@ impl Render for WorkspaceView {
         let theme = &self.state.theme;
         let strings = self.state.strings;
         let export_view = cx.entity().downgrade();
+        let update_banner = match &self.update_status {
+            UpdateStatus::Downloaded(version)
+                if self.update_banner_dismissed.as_deref() != Some(version.as_str()) =>
+            {
+                Some(version.clone())
+            }
+            _ => None,
+        };
         let view_mode = self.state.view_mode;
         let is_dirty = self.state.is_dirty();
         let has_conflict = self.state.has_conflict();
@@ -3786,6 +3966,87 @@ impl Render for WorkspaceView {
                                                     },
                                                 )
                                                 .child("×"),
+                                        ),
+                                ),
+                        )
+                    })
+                    // Downloaded update: restart now or defer this session.
+                    .when_some(update_banner, |el, version| {
+                        let later_version = version.clone();
+                        el.child(
+                            div()
+                                .id("update_ready_banner")
+                                .debug_selector(|| "update_ready_banner".to_string())
+                                .h(px(36.))
+                                .px_4()
+                                .bg(rgba(0x3b82f61a))
+                                .border_b_1()
+                                .border_color(rgba(0x3b82f633))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            svg()
+                                                .path("icons/download.svg")
+                                                .size(px(14.))
+                                                .text_color(rgb(0x3b82f6)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(rgb(0x2563eb))
+                                                .child(format!("{} v{}", strings.update_ready, version)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .id("btn_restart_update")
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .text_color(rgb(0x2563eb))
+                                                .hover(|s| s.bg(rgba(0x3b82f622)))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, window, cx| {
+                                                        this.restart_for_update(Some(window), cx);
+                                                    }),
+                                                )
+                                                .child(strings.restart_update),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("btn_later_update")
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .text_color(rgb(0x2563eb))
+                                                .hover(|s| s.bg(rgba(0x3b82f622)))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |this, _, _, cx| {
+                                                        this.dismiss_update_banner(
+                                                            &later_version,
+                                                            cx,
+                                                        );
+                                                    }),
+                                                )
+                                                .child(strings.later),
                                         ),
                                 ),
                         )

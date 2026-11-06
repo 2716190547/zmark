@@ -6,6 +6,7 @@ use zmark_core::i18n::{I18nStrings, SupportedLocale};
 
 use crate::state::SettingsTab;
 use crate::theme::{ThemeColors, ALL_PALETTES};
+use crate::updater::UpdateStatus;
 use crate::views::workspace::WorkspaceView;
 
 pub struct SettingsWindowView {
@@ -14,6 +15,9 @@ pub struct SettingsWindowView {
     pub preferences: Preferences,
     pub theme: ThemeColors,
     pub strings: &'static I18nStrings,
+    pub update_status: UpdateStatus,
+    pub update_enabled: bool,
+    pub update_reason: Option<String>,
 }
 
 impl SettingsWindowView {
@@ -31,16 +35,33 @@ impl SettingsWindowView {
                 this.preferences = ws_ref.state.preferences.clone();
                 this.theme = ws_ref.state.theme.clone();
                 this.strings = ws_ref.state.strings;
+                this.update_status = ws_ref.update_status.clone();
+                this.update_enabled = ws_ref.update_config.enabled;
+                this.update_reason = ws_ref.update_config.disabled_reason.clone();
                 cx.notify();
             })
             .detach();
         }
+        let (update_status, update_enabled, update_reason) = workspace
+            .upgrade()
+            .map(|ws| {
+                let ws = ws.read(cx);
+                (
+                    ws.update_status.clone(),
+                    ws.update_config.enabled,
+                    ws.update_config.disabled_reason.clone(),
+                )
+            })
+            .unwrap_or((UpdateStatus::Idle, false, None));
         Self {
             workspace,
             current_tab,
             preferences,
             theme,
             strings,
+            update_status,
+            update_enabled,
+            update_reason,
         }
     }
 }
@@ -69,6 +90,15 @@ impl Render for SettingsWindowView {
         let line_height = self.preferences.line_height;
         let theme = self.theme.clone();
         let strings = self.strings;
+        let update_status = self.update_status.clone();
+        let update_enabled = self.update_enabled;
+        let update_reason = self.update_reason.clone();
+        let workspace_for_update = self.workspace.clone();
+        let on_check_update = move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+            if let Some(ws) = workspace_for_update.upgrade() {
+                ws.update(cx, |ws, cx| ws.check_for_updates(cx, true));
+            }
+        };
 
         let view_tab = cx.entity().clone();
         let on_set_tab = Arc::new(move |tab: SettingsTab, _window: &mut Window, cx: &mut App| {
@@ -302,6 +332,10 @@ impl Render for SettingsWindowView {
                         SettingsTab::About => render_about_tab(
                             &theme,
                             strings,
+                            &update_status,
+                            update_enabled,
+                            update_reason.as_deref(),
+                            on_check_update,
                         )
                         .into_any_element(),
                     }),
@@ -794,7 +828,29 @@ fn render_language_tab(
 fn render_about_tab(
     theme: &ThemeColors,
     strings: &I18nStrings,
+    update_status: &UpdateStatus,
+    update_enabled: bool,
+    update_reason: Option<&str>,
+    on_check_update: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let update_text = match update_status {
+        UpdateStatus::Checking => strings.update_checking.to_string(),
+        UpdateStatus::Latest => strings.up_to_date.to_string(),
+        UpdateStatus::Error(error) => format!("{}: {error}", strings.update_failed),
+        UpdateStatus::Downloaded(version) => {
+            format!("{} v{version}", strings.update_ready)
+        }
+        UpdateStatus::Installing => strings.update_checking.to_string(),
+        UpdateStatus::Idle => {
+            if update_enabled {
+                String::new()
+            } else {
+                update_reason
+                    .unwrap_or(strings.update_disabled)
+                    .to_string()
+            }
+        }
+    };
     let shortcuts: [(&'static str, String); 6] = [
         ("⌘O", strings.open_file.to_string()),
         ("⌘S", strings.save_file.to_string()),
@@ -871,6 +927,44 @@ fn render_about_tab(
                         .children(shortcuts.into_iter().map(|(keys, desc)| {
                             render_shortcut_row(keys, desc, theme)
                         })),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.text_muted)
+                        .child("Updates"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("btn_check_updates")
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .bg(theme.accent)
+                                .text_color(rgb(0xffffff))
+                                .cursor_pointer()
+                                .text_xs()
+                                .on_mouse_down(MouseButton::Left, on_check_update)
+                                .child(strings.check_updates),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(update_text),
+                        ),
                 ),
         )
 }

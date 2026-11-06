@@ -13,6 +13,9 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 usvg = "0.45.1"
 percent-encoding = "2.3"
 tempfile = "3.17"
+ring = "0.17"
+serde_json = "1.0"
+hex = "0.4"
 
 [dev-dependencies]
 gpui = { version = "0.2.2", features = ["test-support", "runtime_shaders"] }

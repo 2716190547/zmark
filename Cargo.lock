@@ -7461,8 +7461,11 @@ name = "zmark_app"
 version = "0.2.0"
 dependencies = [
  "gpui",
+ "hex",
  "image",
  "percent-encoding",
+ "ring",
+ "serde_json",
  "tempfile",
  "usvg",
  "zmark_core",

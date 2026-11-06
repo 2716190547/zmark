@@ -9,4 +9,5 @@ pub mod platform;
 pub mod state;
 pub mod syntax;
 pub mod theme;
+pub mod updater;
 pub mod views;

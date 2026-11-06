@@ -94,7 +94,10 @@ Enjoy writing and reading with pure speed!
 
         cx.open_window(window_options, |window, cx| {
             let state = AppState::new(doc);
-            let view = cx.new(|cx| WorkspaceView::new(state, cx));
+            let update_config = zmark_app::updater::UpdateConfig::production();
+            let view = cx.new(|cx| {
+                WorkspaceView::new_with_update_config(state, update_config, cx)
+            });
             window.focus(&view.read(cx).focus_handle);
 
             let view_close = view.clone();
