@@ -292,6 +292,16 @@ pub fn render_preview_pane_with_callbacks(
     pane
 }
 
+/// Top/bottom margins for heading levels (top ≈ 2–3× bottom).
+pub fn heading_spacing(level: u8) -> (f32, f32) {
+    match level {
+        1 => (32.0, 12.0),
+        2 => (24.0, 8.0),
+        3 => (18.0, 6.0),
+        _ => (12.0, 4.0),
+    }
+}
+
 fn render_block_element(
     block: &BlockElement,
     theme: &ThemeColors,
@@ -319,6 +329,7 @@ fn render_block_element(
                 3 => (1.25, false),
                 _ => (1.1, false),
             };
+            let (pt, pb) = heading_spacing(*level);
 
             let font_size = base_font_size * size_mult;
             let mut el = div()
@@ -327,11 +338,11 @@ fn render_block_element(
                 .text_size(px(font_size))
                 .font_weight(FontWeight::BOLD)
                 .text_color(theme.text_primary)
-                .pt_3()
-                .pb_1();
+                .pt(px(pt))
+                .pb(px(pb));
 
             if border_bottom {
-                el = el.border_b_1().border_color(theme.border);
+                el = el.border_b_1().border_color(theme.heading_rule());
             }
 
             let seg = flat.segments.iter().find(|s| s.child_path == path);
@@ -360,7 +371,7 @@ fn render_block_element(
                     font_size,
                     line_height_factor: 1.75,
                     padding_left: 0.0,
-                    padding_top: 12.0,
+                    padding_top: pt,
                     padding_right: 0.0,
                     flat_char_offset,
                     content_key: None,
@@ -480,11 +491,14 @@ fn render_block_element(
             div()
                 .w_full()
                 .min_w(px(0.))
-                .border_l_4()
-                .border_color(theme.accent)
-                .bg(theme.surface)
-                .p_3()
+                .border_l(px(3.))
+                .border_color(theme.blockquote_border())
+                .bg(theme.blockquote_bg())
+                .pl(px(14.))
+                .pr(px(12.))
+                .py(px(10.))
                 .rounded_r_md()
+                .opacity(0.88)
                 .flex()
                 .flex_col()
                 .gap_2()
@@ -536,7 +550,7 @@ fn render_block_element(
                             .flex_1()
                             .min_w(px(120.))
                             .p_3()
-                            .font_weight(FontWeight::BOLD)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_size(px(base_font_size * 0.95))
                             .text_color(theme.text_primary)
                             .child(render_styled_inlines(h, theme, base_font_size * 0.95, cell_range, images, on_image_recovery)),
@@ -605,7 +619,7 @@ fn render_block_element(
                 row_cells.push(
                     div()
                         .border_b_1()
-                        .border_color(theme.border)
+                        .border_color(theme.table_row_border())
                         .flex()
                         .children(cells),
                 );
@@ -623,15 +637,15 @@ fn render_block_element(
                         .min_w(px(520.))
                         .rounded_md()
                         .border_1()
-                        .border_color(theme.border)
+                        .border_color(theme.table_border())
                         .overflow_hidden()
                         .flex()
                         .flex_col()
                         .child(
                             div()
-                                .bg(theme.bg)
+                                .bg(theme.table_header_bg())
                                 .border_b_1()
-                                .border_color(theme.border)
+                                .border_color(theme.table_border())
                                 .flex()
                                 .children(header_cells),
                         )
@@ -1666,4 +1680,18 @@ fn render_code_block(
             )
         })
         .into_any_element()
+}
+
+#[cfg(test)]
+mod typography_tests {
+    use super::heading_spacing;
+
+    #[test]
+    fn heading_spacing_follows_the_reading_scale() {
+        assert_eq!(heading_spacing(1), (32.0, 12.0));
+        assert_eq!(heading_spacing(2), (24.0, 8.0));
+        assert_eq!(heading_spacing(3), (18.0, 6.0));
+        assert_eq!(heading_spacing(4), (12.0, 4.0));
+        assert_eq!(heading_spacing(6), (12.0, 4.0));
+    }
 }
