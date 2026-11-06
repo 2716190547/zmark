@@ -82,4 +82,4 @@ cargo test --workspace
 
 - 架构决策记录权威总索引：[`docs/adr/README.md`](docs/adr/README.md)（收录有效 ADR 与作废去向映射）
 - 统一领域模型词汇表：[`GLOSSARY.md`](GLOSSARY.md)（定义核心业务概念与避免叫法）
-- 执行窗口约定：[`AGENTS.md`](AGENTS.md)（分支、测试、子代理并行与交付门槛）
+- 执行窗口约定：[`AGENTS.md`](AGENTS.md)（分支、测试与交付门槛）
