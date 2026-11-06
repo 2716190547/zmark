@@ -7,13 +7,15 @@ use tempfile::tempdir;
 fn test_default_preferences() {
     let pref = Preferences::default();
     assert_eq!(pref.font_size, 16.0);
-    assert_eq!(pref.max_column_width, 820.0);
+    assert_eq!(pref.max_column_width, 760.0);
     assert_eq!(pref.theme, ThemeMode::Auto);
     assert_eq!(pref.palette, "default");
     assert_eq!(pref.locale, SupportedLocale::Auto);
     assert!(pref.auto_save);
     assert_eq!(pref.auto_save_delay_ms, 1000);
     assert!(pref.auto_save_on_blur);
+    assert!(pref.show_line_numbers);
+    assert_eq!(pref.config_version, zmark_core::config::CURRENT_CONFIG_VERSION);
     assert!(pref.workspace_roots.is_empty());
 }
 

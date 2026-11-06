@@ -90,6 +90,31 @@ impl ThemeColors {
         self.text_primary.opacity(0.04)
     }
 
+    /// Neutral structural colors for reading blocks.
+    pub fn blockquote_border(&self) -> Hsla {
+        self.text_primary.opacity(0.15)
+    }
+
+    pub fn blockquote_bg(&self) -> Hsla {
+        self.text_primary.opacity(0.02)
+    }
+
+    pub fn table_header_bg(&self) -> Hsla {
+        self.text_primary.opacity(0.02)
+    }
+
+    pub fn table_border(&self) -> Hsla {
+        self.text_primary.opacity(0.08)
+    }
+
+    pub fn table_row_border(&self) -> Hsla {
+        self.text_primary.opacity(0.06)
+    }
+
+    pub fn heading_rule(&self) -> Hsla {
+        self.text_primary.opacity(0.08)
+    }
+
     /// Adaptive selection text color: primary foreground
     pub fn selection_text(&self) -> Hsla {
         self.text_primary
@@ -181,15 +206,15 @@ impl ThemeColors {
                 code_bg: rgb(0x282623).into(),
                 conflict_bg: rgb(0x382218).into(),
                 conflict_border: rgb(0x5e3322).into(),
-                syntax_keyword: rgb(0xd2a8ff).into(),
+                syntax_keyword: rgb(0xe28c8c).into(),
                 syntax_attribute: rgb(0x9bb7d4).into(),
-                syntax_string: rgb(0xe5c07b).into(),
-                syntax_number: rgb(0xf39c6b).into(),
-                syntax_comment: rgb(0xa8a29e).into(),
+                syntax_string: rgb(0xa8c79a).into(),
+                syntax_number: rgb(0xe0b080).into(),
+                syntax_comment: rgb(0x949494).into(),
                 syntax_inline_code: rgb(0xf3f1ed).into(),
-                syntax_link: rgb(0xc89a6b).into(), // Warm ochre link (#C89A6B, CR 6.43:1)
-                syntax_bullet: rgb(0xc08a5e).into(), // Warm ochre bullet (#C08A5E, CR 5.46:1)
-                syntax_code: rgb(0xcfc458).into(), // Miaoyan olive gold dark (#cfc458, CR >= 4.5:1)
+                syntax_link: rgb(0xa8b8d8).into(),
+                syntax_bullet: rgb(0x8c8c8c).into(),
+                syntax_code: rgb(0xd8d4cc).into(),
             }
         } else {
             Self {
@@ -199,21 +224,21 @@ impl ThemeColors {
                 bg: rgb(0xf5f4f0).into(),      // Warm stone paper for window & sidebar (#F5F4F0)
                 surface: rgb(0xffffff).into(), // Pure crisp white paper canvas (#FFFFFF)
                 border: rgb(0xe6e4de).into(),  // Delicate warm stone hairline divider (#E6E4DE)
-                text_primary: rgb(0x1f2328).into(), // Deep carbon gray text (#1F2328)
-                text_muted: rgb(0x787571).into(),   // Warm neutral muted text (#787571)
+                text_primary: rgb(0x2c2c2c).into(), // Neutral carbon text (#2C2C2C)
+                text_muted: rgb(0x8c8c8c).into(),   // Neutral secondary text (#8C8C8C)
                 accent: rgb(0xd9532f).into(),  // Warm Terracotta Coral matching Logo (#D9532F)
                 code_bg: rgb(0xf6f5ef).into(), // Warm paper code block (#F6F5EF)
                 conflict_bg: rgb(0xfef3e8).into(),
                 conflict_border: rgb(0xfcd9b8).into(),
-                syntax_keyword: rgb(0x7d56b3).into(),
-                syntax_attribute: rgb(0x596a88).into(),
-                syntax_string: rgb(0x8a6b12).into(),
-                syntax_number: rgb(0x995b2b).into(),
-                syntax_comment: rgb(0x676d65).into(),
-                syntax_inline_code: rgb(0x1f2328).into(),
-                syntax_link: rgb(0x8a5a2b).into(), // Warm brown link (#8A5A2B, CR 5.33:1)
-                syntax_bullet: rgb(0x96603c).into(), // Warm ochre bullet (#96603C, CR 4.73:1)
-                syntax_code: rgb(0x6b6b1e).into(), // Miaoyan olive gold light (#6b6b1e, CR >= 4.5:1)
+                syntax_keyword: rgb(0xa43f3f).into(),
+                syntax_attribute: rgb(0x4a6785).into(),
+                syntax_string: rgb(0x4f6f52).into(),
+                syntax_number: rgb(0x8a5a2b).into(),
+                syntax_comment: rgb(0x626c77).into(), // >=4.5:1 on code_bg
+                syntax_inline_code: rgb(0x2c2c2c).into(),
+                syntax_link: rgb(0x4a6fa5).into(),
+                syntax_bullet: rgb(0x8c8c8c).into(), // Markdown markers fade into the page
+                syntax_code: rgb(0x3e4a56).into(),
             }
         }
     }

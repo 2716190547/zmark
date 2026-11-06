@@ -14,8 +14,8 @@ fn test_default_palette_neutral_colors() {
     let light = ThemeColors::default_palette(false);
     assert_eq!(
         light.text_primary,
-        rgb(0x1f2328).into(),
-        "Default light text_primary must be #1f2328 (Deep carbon gray)"
+        rgb(0x2c2c2c).into(),
+        "Default light text_primary must be #2c2c2c (neutral carbon)"
     );
     assert_eq!(
         light.code_bg,
@@ -79,25 +79,25 @@ fn test_eight_palettes_six_syntax_tokens_matrix() {
 
     // 1. default light
     let def_light = ThemeColors::resolve("default", false);
-    assert_eq!(def_light.syntax_keyword, rgb(0x7d56b3).into(), "default light syntax_keyword");
-    assert_eq!(def_light.syntax_attribute, rgb(0x596a88).into(), "default light syntax_attribute");
-    assert_eq!(def_light.syntax_string, rgb(0x8a6b12).into(), "default light syntax_string");
-    assert_eq!(def_light.syntax_number, rgb(0x995b2b).into(), "default light syntax_number");
-    assert_eq!(def_light.syntax_comment, rgb(0x676d65).into(), "default light syntax_comment");
-    assert_eq!(def_light.syntax_inline_code, rgb(0x1f2328).into(), "default light syntax_inline_code");
-    assert_eq!(def_light.syntax_link, rgb(0x8a5a2b).into(), "default light syntax_link");
-    assert_eq!(def_light.syntax_bullet, rgb(0x96603c).into(), "default light syntax_bullet");
+    assert_eq!(def_light.syntax_keyword, rgb(0xa43f3f).into(), "default light syntax_keyword");
+    assert_eq!(def_light.syntax_attribute, rgb(0x4a6785).into(), "default light syntax_attribute");
+    assert_eq!(def_light.syntax_string, rgb(0x4f6f52).into(), "default light syntax_string");
+    assert_eq!(def_light.syntax_number, rgb(0x8a5a2b).into(), "default light syntax_number");
+    assert_eq!(def_light.syntax_comment, rgb(0x626c77).into(), "default light syntax_comment");
+    assert_eq!(def_light.syntax_inline_code, rgb(0x2c2c2c).into(), "default light syntax_inline_code");
+    assert_eq!(def_light.syntax_link, rgb(0x4a6fa5).into(), "default light syntax_link");
+    assert_eq!(def_light.syntax_bullet, rgb(0x8c8c8c).into(), "default light syntax_bullet");
 
     // 2. default dark
     let def_dark = ThemeColors::resolve("default", true);
-    assert_eq!(def_dark.syntax_keyword, rgb(0xd2a8ff).into(), "default dark syntax_keyword");
+    assert_eq!(def_dark.syntax_keyword, rgb(0xe28c8c).into(), "default dark syntax_keyword");
     assert_eq!(def_dark.syntax_attribute, rgb(0x9bb7d4).into(), "default dark syntax_attribute");
-    assert_eq!(def_dark.syntax_string, rgb(0xe5c07b).into(), "default dark syntax_string");
-    assert_eq!(def_dark.syntax_number, rgb(0xf39c6b).into(), "default dark syntax_number");
-    assert_eq!(def_dark.syntax_comment, rgb(0xa8a29e).into(), "default dark syntax_comment");
+    assert_eq!(def_dark.syntax_string, rgb(0xa8c79a).into(), "default dark syntax_string");
+    assert_eq!(def_dark.syntax_number, rgb(0xe0b080).into(), "default dark syntax_number");
+    assert_eq!(def_dark.syntax_comment, rgb(0x949494).into(), "default dark syntax_comment");
     assert_eq!(def_dark.syntax_inline_code, rgb(0xf3f1ed).into(), "default dark syntax_inline_code");
-    assert_eq!(def_dark.syntax_link, rgb(0xc89a6b).into(), "default dark syntax_link");
-    assert_eq!(def_dark.syntax_bullet, rgb(0xc08a5e).into(), "default dark syntax_bullet");
+    assert_eq!(def_dark.syntax_link, rgb(0xa8b8d8).into(), "default dark syntax_link");
+    assert_eq!(def_dark.syntax_bullet, rgb(0x8c8c8c).into(), "default dark syntax_bullet");
 
     // 3. github light
     let gh_light = ThemeColors::resolve("github", false);
@@ -313,11 +313,11 @@ fn test_ticket_g0_syntax_code_matrix_and_contrast() {
     let def_light = ThemeColors::resolve("default", false);
     assert_eq!(
         def_light.syntax_code,
-        rgb(0x6b6b1e).into(),
-        "Default light syntax_code must be Miaoyan olive gold #6b6b1e"
+        rgb(0x3e4a56).into(),
+        "Default light syntax_code must be #3e4a56"
     );
-    let def_light_code_lum = srgb_luminance(0x6b, 0x6b, 0x1e);
-    let def_light_bg_lum = srgb_luminance(0xf5, 0xf4, 0xf0);
+    let def_light_code_lum = srgb_luminance(0x3e, 0x4a, 0x56);
+    let def_light_bg_lum = srgb_luminance(0xf6, 0xf5, 0xef);
     let cr_light = wcag_contrast(def_light_code_lum, def_light_bg_lum);
     assert!(
         cr_light >= 4.5,
@@ -328,11 +328,11 @@ fn test_ticket_g0_syntax_code_matrix_and_contrast() {
     let def_dark = ThemeColors::resolve("default", true);
     assert_eq!(
         def_dark.syntax_code,
-        rgb(0xcfc458).into(),
-        "Default dark syntax_code must be Miaoyan olive gold dark #cfc458"
+        rgb(0xd8d4cc).into(),
+        "Default dark syntax_code must be #d8d4cc"
     );
-    let def_dark_code_lum = srgb_luminance(0xcf, 0xc4, 0x58);
-    let def_dark_bg_lum = srgb_luminance(0x18, 0x17, 0x16);
+    let def_dark_code_lum = srgb_luminance(0xd8, 0xd4, 0xcc);
+    let def_dark_bg_lum = srgb_luminance(0x28, 0x26, 0x23);
     let cr_dark = wcag_contrast(def_dark_code_lum, def_dark_bg_lum);
     assert!(
         cr_dark >= 4.5,
@@ -423,4 +423,33 @@ fn test_all_palettes_all_syntax_tokens_contrast_ratio() {
     }
 
     assert!(failures.is_empty(), "Contrast ratio failures:\n{}", failures.join("\n"));
+}
+
+
+#[test]
+fn test_default_reading_contrast_and_structural_tokens() {
+    let light = ThemeColors::resolve("default", false);
+    let comment_lum = hsla_luminance(light.syntax_comment);
+    let code_bg_lum = hsla_luminance(light.code_bg);
+    let comment_cr = wcag_contrast(comment_lum, code_bg_lum);
+    assert!(
+        comment_cr >= 4.5,
+        "syntax_comment on code_bg must be >= 4.5:1, got {comment_cr:.2}"
+    );
+
+    let muted_lum = hsla_luminance(light.text_muted);
+    let bg_lum = hsla_luminance(light.bg);
+    let muted_cr = wcag_contrast(muted_lum, bg_lum);
+    assert!(
+        (2.5..4.0).contains(&muted_cr),
+        "text_muted on paper should stay a secondary ~3:1 tone, got {muted_cr:.2}"
+    );
+
+    // Structural colors are neutral overlays, not accent tints.
+    assert_eq!(light.blockquote_border().a, 0.15);
+    assert_eq!(light.blockquote_bg().a, 0.02);
+    assert_eq!(light.table_header_bg().a, 0.02);
+    assert_eq!(light.table_border().a, 0.08);
+    assert_eq!(light.table_row_border().a, 0.06);
+    assert_eq!(light.heading_rule().a, 0.08);
 }

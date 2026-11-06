@@ -5,6 +5,9 @@ use thiserror::Error;
 
 use crate::i18n::SupportedLocale;
 
+/// Current preference schema version.
+pub const CURRENT_CONFIG_VERSION: u32 = 1;
+
 /// Pre-rename config directory. Kept only so existing preferences migrate once.
 pub const LEGACY_APP_DIR: &str = "GlideMark";
 
@@ -84,6 +87,12 @@ pub struct Preferences {
     /// Skip interface transitions, pulses and other decorative motion.
     #[serde(default)]
     pub reduce_motion: bool,
+    /// Show the editor gutter line numbers.
+    #[serde(default = "default_true")]
+    pub show_line_numbers: bool,
+    /// One-time preference migrations (0 = pre-0.2.1 config).
+    #[serde(default)]
+    pub config_version: u32,
     #[serde(default)]
     pub workspace_roots: Vec<PathBuf>,
 }
@@ -94,7 +103,7 @@ impl Default for Preferences {
             font_family: "system-ui".to_string(),
             font_size: 16.0,
             line_height: 1.6,
-            max_column_width: 820.0,
+            max_column_width: 760.0,
             theme: ThemeMode::Auto,
             palette: "default".to_string(),
             locale: SupportedLocale::Auto,
@@ -103,6 +112,8 @@ impl Default for Preferences {
             auto_save_delay_ms: 1000,
             auto_save_on_blur: true,
             reduce_motion: false,
+            show_line_numbers: true,
+            config_version: CURRENT_CONFIG_VERSION,
             workspace_roots: Vec::new(),
         }
     }
@@ -132,7 +143,26 @@ impl Preferences {
         let content = fs::read_to_string(path)?;
         let mut pref: Preferences = toml::from_str(&content)?;
         pref.line_height = Self::sanitize_line_height(pref.line_height);
+        if pref.migrate_defaults() {
+            // Best-effort: a read-only config directory must not block startup.
+            if let Err(error) = pref.save_to_path(path) {
+                eprintln!("zmark: could not persist config migration: {error}");
+            }
+        }
         Ok(pref)
+    }
+
+    /// Applies one-time defaults. `config_version` is bumped for every old
+    /// config, so a later user choice of 820 is never rewritten again.
+    fn migrate_defaults(&mut self) -> bool {
+        if self.config_version >= CURRENT_CONFIG_VERSION {
+            return false;
+        }
+        self.config_version = CURRENT_CONFIG_VERSION;
+        if (self.max_column_width - 820.0).abs() < 0.01 {
+            self.max_column_width = 760.0;
+        }
+        true
     }
 
     pub fn load_or_default_from_path(path: &Path) -> Self {
@@ -204,6 +234,64 @@ mod tests {
         assert_eq!(Preferences::sanitize_line_height(1.29), 1.6);
         assert_eq!(Preferences::sanitize_line_height(1.71), 1.6);
         assert_eq!(Preferences::sanitize_line_height(f32::NAN), 1.6);
+    }
+
+    #[test]
+    fn max_width_migrates_once_and_line_numbers_default_on() {
+        let root = std::env::temp_dir().join(format!("zmark_cfg_width_{}", std::process::id()));
+        let path = root.join("config.toml");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        // Old 820 config without a schema version -> 760 and version 1.
+        let mut old = Preferences::default();
+        old.max_column_width = 820.0;
+        old.config_version = 0;
+        fs::write(&path, toml::to_string(&old).unwrap()).unwrap();
+        let loaded = Preferences::load_from_path(&path).unwrap();
+        assert_eq!(loaded.max_column_width, 760.0);
+        assert_eq!(loaded.config_version, CURRENT_CONFIG_VERSION);
+        assert!(loaded.show_line_numbers, "old configs default to visible line numbers");
+
+        // A second load is stable.
+        assert_eq!(
+            Preferences::load_from_path(&path).unwrap().max_column_width,
+            760.0
+        );
+
+        // A user choice of 820 on the current schema is preserved.
+        let mut user = loaded;
+        user.max_column_width = 820.0;
+        fs::write(&path, toml::to_string(&user).unwrap()).unwrap();
+        assert_eq!(
+            Preferences::load_from_path(&path).unwrap().max_column_width,
+            820.0
+        );
+
+        // An old non-820 value is kept but still marked migrated, so a later
+        // 820 choice is not rewritten.
+        let mut old750 = Preferences::default();
+        old750.max_column_width = 750.0;
+        old750.config_version = 0;
+        fs::write(&path, toml::to_string(&old750).unwrap()).unwrap();
+        let loaded = Preferences::load_from_path(&path).unwrap();
+        assert_eq!(loaded.max_column_width, 750.0);
+        assert_eq!(loaded.config_version, CURRENT_CONFIG_VERSION);
+
+        // Missing config_version behaves like version 0.
+        let mut missing = toml::to_string(&old750).unwrap();
+        missing = missing
+            .lines()
+            .filter(|line| !line.starts_with("config_version"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, missing).unwrap();
+        assert_eq!(
+            Preferences::load_from_path(&path).unwrap().config_version,
+            CURRENT_CONFIG_VERSION
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
