@@ -8,7 +8,7 @@
   !define OUT_PATH "ZMark-${VERSION}-setup.exe"
 !endif
 !ifndef ICON
-  !define ICON "packaging/windows/zmark.ico"
+  !define ICON "zmark.ico"
 !endif
 
 Name "ZMark"

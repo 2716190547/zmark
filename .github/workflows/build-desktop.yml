@@ -132,12 +132,13 @@ jobs:
             Set-Content "$zip.sha256"
 
           choco install nsis -y --no-progress
+          $root = (Get-Location).Path
           & "C:\Program Files (x86)\NSIS\makensis.exe" `
             "/DVERSION=$($env:ZMARK_VERSION)" `
-            "/DEXE_PATH=target\release\zmark_app.exe" `
-            "/DICON=packaging\windows\zmark.ico" `
-            "/DOUT_PATH=ZMark-$($env:ZMARK_VERSION)-setup.exe" `
-            "packaging\windows\zmark.nsi"
+            "/DEXE_PATH=$root\target\release\zmark_app.exe" `
+            "/DICON=$root\packaging\windows\zmark.ico" `
+            "/DOUT_PATH=$root\ZMark-$($env:ZMARK_VERSION)-setup.exe" `
+            "$root\packaging\windows\zmark.nsi"
           Get-FileHash "ZMark-$($env:ZMARK_VERSION)-setup.exe" -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash.ToLower())  ZMark-$($env:ZMARK_VERSION)-setup.exe" } |
             Set-Content "ZMark-$($env:ZMARK_VERSION)-setup.exe.sha256"
