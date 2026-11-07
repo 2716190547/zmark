@@ -68,6 +68,11 @@ fn test_all_10_locales_have_complete_translations() {
         assert!(!t.search_incomplete.is_empty(), "search_incomplete missing in {}", tag);
         assert!(t.modal_save_prompt.contains("{}"), "modal_save_prompt must contain placeholder in {}", tag);
         assert!(t.remove_root_confirm_prompt.contains("{}"), "remove_root_confirm_prompt must contain placeholder in {}", tag);
+
+        if locale == SupportedLocale::En {
+            assert_eq!(t.status_line, "Ln");
+            assert_eq!(t.status_chars, "chars");
+        }
     }
 }
 

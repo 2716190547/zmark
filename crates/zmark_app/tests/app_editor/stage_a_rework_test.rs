@@ -1,5 +1,6 @@
 use zmark_app::state::{AppState, ViewMode};
 use zmark_app::views::drawer::SearchInput;
+use zmark_app::views::editor::DocumentLayoutCache;
 use zmark_app::views::workspace::WorkspaceView;
 use zmark_core::document::Document;
 use gpui::{px, Point, ScrollDelta, ScrollWheelEvent, TestAppContext};
@@ -221,71 +222,6 @@ async fn test_preview_scroll_reverse_mapping_with_soft_wrap(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-async fn test_500_line_layout_cache_performance(cx: &mut TestAppContext) {
-    let (view, cx) = cx.add_window_view(|_window, cx| {
-        let mut doc = Document::new_scratch();
-        let mut lines = Vec::with_capacity(500);
-        for i in 0..500 {
-            lines.push(format!(
-                "Line {} of medium document with typical prose and words",
-                i + 1
-            ));
-        }
-        doc.update_buffer(lines.join("\n"));
-        let state = AppState::new(doc);
-        WorkspaceView::new(state, cx)
-    });
-    cx.run_until_parked();
-
-    cx.update(|window, cx| {
-        view.update(cx, |workspace, _cx| {
-            workspace.cached_visual_rev = usize::MAX;
-            workspace.cached_visual_lines = std::sync::Arc::new(Vec::new());
-            workspace.document_layout_cache =
-                zmark_app::views::editor::DocumentLayoutCache::new();
-
-            let t0 = Instant::now();
-            let _ = workspace.compute_visual_lines(window);
-            let init_500_duration = t0.elapsed();
-            println!(
-                "[PERF] Initial 500-line full layout duration: {:?}",
-                init_500_duration
-            );
-
-            assert_eq!(
-                workspace.document_layout_cache.metrics.shaped_lines_count,
-                500
-            );
-            assert_eq!(
-                workspace.document_layout_cache.metrics.reused_lines_count,
-                0
-            );
-
-            // Single char edit
-            workspace.state.editor.set_cursor(250, 0);
-            workspace.state.editor.insert_text("x");
-
-            let t1 = Instant::now();
-            let _ = workspace.compute_visual_lines(window);
-            let edit_500_duration = t1.elapsed();
-            println!(
-                "[PERF] Incremental 500-line single-char edit duration: {:?}",
-                edit_500_duration
-            );
-
-            assert_eq!(
-                workspace.document_layout_cache.metrics.shaped_lines_count,
-                1
-            );
-            assert_eq!(
-                workspace.document_layout_cache.metrics.reused_lines_count,
-                499
-            );
-        });
-    });
-}
-
-#[gpui::test]
 async fn test_layout_cache_incremental_performance_and_fence_propagation(cx: &mut TestAppContext) {
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
@@ -387,6 +323,40 @@ async fn test_layout_cache_incremental_performance_and_fence_propagation(cx: &mu
                 workspace.document_layout_cache.metrics.reused_lines_count,
                 0,
                 "Changing font size cannot reuse lines from previous font size"
+            );
+
+            // 5. Unchanged lines must retain their shaped text allocations, and an
+            // incremental insertion must produce the same layout as a fresh cache.
+            let lines: Vec<String> = (0..120)
+                .map(|i| format!("line {i}: {}", "text ".repeat(100)))
+                .collect();
+            let fenced = vec![false; lines.len()];
+            let mut cache = DocumentLayoutCache::new();
+            let expected = cache.update(window.text_system(), &lines, &fenced, 3000., 14.);
+            let original_ptr = cache.entries[60].text.as_ptr();
+            assert_eq!(
+                cache.update(window.text_system(), &lines, &fenced, 3000., 14.),
+                expected
+            );
+            assert_eq!(
+                cache.entries[60].text.as_ptr(),
+                original_ptr,
+                "unchanged line must retain its text allocation"
+            );
+
+            let mut inserted = lines.clone();
+            inserted.insert(10, "new line".into());
+            let flags = vec![false; inserted.len()];
+            let actual = cache.update(window.text_system(), &inserted, &flags, 3000., 14.);
+            let mut fresh = DocumentLayoutCache::new();
+            assert_eq!(
+                actual,
+                fresh.update(window.text_system(), &inserted, &flags, 3000., 14.)
+            );
+            assert_eq!(
+                cache.entries[61].text.as_ptr(),
+                original_ptr,
+                "suffix reuse must retain its text allocation"
             );
         });
     });

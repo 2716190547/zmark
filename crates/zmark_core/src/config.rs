@@ -228,12 +228,18 @@ mod tests {
 
     #[test]
     fn test_sanitize_line_height() {
-        assert_eq!(Preferences::sanitize_line_height(1.6), 1.6);
-        assert_eq!(Preferences::sanitize_line_height(1.3), 1.3);
-        assert_eq!(Preferences::sanitize_line_height(1.7), 1.7);
-        assert_eq!(Preferences::sanitize_line_height(1.29), 1.6);
-        assert_eq!(Preferences::sanitize_line_height(1.71), 1.6);
+        for &valid in &[1.3f32, 1.4f32, 1.5f32, 1.6f32, 1.7f32] {
+            assert_eq!(Preferences::sanitize_line_height(valid), valid);
+        }
+        for &underflow in &[0.5f32, 1.0f32, 1.29f32, 0.0f32, -1.0f32, -100.0f32] {
+            assert_eq!(Preferences::sanitize_line_height(underflow), 1.6);
+        }
+        for &overflow in &[1.71f32, 2.0f32, 3.0f32, 10.0f32, 99.0f32] {
+            assert_eq!(Preferences::sanitize_line_height(overflow), 1.6);
+        }
         assert_eq!(Preferences::sanitize_line_height(f32::NAN), 1.6);
+        assert_eq!(Preferences::sanitize_line_height(f32::INFINITY), 1.6);
+        assert_eq!(Preferences::sanitize_line_height(f32::NEG_INFINITY), 1.6);
     }
 
     #[test]

@@ -48,6 +48,14 @@ fn header_has_no_dirty_or_update_dot() {
         !ws.contains("format!(\"dirty_pulse_{"),
         "the red dirty dot element must be gone"
     );
+    let title_pos = ws
+        .find("canvas_document_title")
+        .expect("workspace.rs must contain canvas_document_title");
+    let title_section = &ws[title_pos..title_pos + 1200.min(ws.len() - title_pos)];
+    assert!(
+        !title_section.contains("rounded_full().bg(theme.accent)"),
+        "no accent dot may be attached to canvas_document_title"
+    );
     assert!(
         ws.contains("dirty_title_"),
         "dirty state is expressed as a one-shot title fade instead"

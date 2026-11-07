@@ -245,47 +245,6 @@ fn test_line_height_i18n_all_ten_locales() {
 }
 
 #[test]
-fn test_line_height_clamping_and_fallback() {
-    // Valid values: 1.3, 1.4, 1.5, 1.6, 1.7 return themselves (within epsilon)
-    for &valid in &[1.3f32, 1.4f32, 1.5f32, 1.6f32, 1.7f32] {
-        let sanitized = Preferences::sanitize_line_height(valid);
-        assert!(
-            (sanitized - valid).abs() < f32::EPSILON,
-            "Valid line_height {} should remain unchanged, got {}",
-            valid,
-            sanitized
-        );
-    }
-
-    // Underflow cases return 1.6
-    for &underflow in &[0.5f32, 1.0f32, 1.29f32, 0.0f32, -1.0f32, -100.0f32] {
-        let sanitized = Preferences::sanitize_line_height(underflow);
-        assert!(
-            (sanitized - 1.6).abs() < f32::EPSILON,
-            "Underflow line_height {} should fallback to 1.6, got {}",
-            underflow,
-            sanitized
-        );
-    }
-
-    // Overflow cases return 1.6
-    for &overflow in &[1.71f32, 2.0f32, 3.0f32, 10.0f32, 99.0f32] {
-        let sanitized = Preferences::sanitize_line_height(overflow);
-        assert!(
-            (sanitized - 1.6).abs() < f32::EPSILON,
-            "Overflow line_height {} should fallback to 1.6, got {}",
-            overflow,
-            sanitized
-        );
-    }
-
-    // Edge cases return 1.6
-    assert!((Preferences::sanitize_line_height(f32::NAN) - 1.6).abs() < f32::EPSILON);
-    assert!((Preferences::sanitize_line_height(f32::INFINITY) - 1.6).abs() < f32::EPSILON);
-    assert!((Preferences::sanitize_line_height(f32::NEG_INFINITY) - 1.6).abs() < f32::EPSILON);
-}
-
-#[test]
 fn test_app_state_set_line_height_persistence() {
     let dir = tempdir().expect("tempdir");
     let config_path = dir.path().join("config.toml");

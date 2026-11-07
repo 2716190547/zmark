@@ -5,9 +5,8 @@ use gpui::rgb;
 ///
 /// Verifies:
 /// 1. Default palette neutral colors (pure clean stone base, deep carbon text, crisp light code_bg).
-/// 2. 8 palettes × 6 syntax tokens matrix (opacity, representative palette tokens match ADR 0034).
-/// 3. Canvas header removes dirty red dot indicator.
-/// 4. Preview code syntax styling contract (InlineItem::Code uses syntax_inline_code, code block bold tag).
+/// 2. 8 palettes × 7 syntax tokens matrix (opacity, representative palette tokens match ADR 0034).
+/// 3. Preview code syntax styling contract (InlineItem::Code uses syntax_inline_code, code block bold tag).
 
 #[test]
 fn test_default_palette_neutral_colors() {
@@ -61,6 +60,7 @@ fn test_eight_palettes_six_syntax_tokens_matrix() {
                 ("syntax_string", theme.syntax_string),
                 ("syntax_number", theme.syntax_number),
                 ("syntax_comment", theme.syntax_comment),
+                ("syntax_code", theme.syntax_code),
                 ("syntax_inline_code", theme.syntax_inline_code),
                 ("syntax_link", theme.syntax_link),
             ];
@@ -159,27 +159,26 @@ fn test_eight_palettes_six_syntax_tokens_matrix() {
     assert_eq!(one_dark.syntax_string, rgb(0x98c379).into(), "one-dark dark syntax_string");
     assert_eq!(one_dark.syntax_number, rgb(0xd19a66).into(), "one-dark dark syntax_number");
     assert_eq!(one_dark.syntax_inline_code, rgb(0xabb2bf).into(), "one-dark dark syntax_inline_code");
-}
 
-#[test]
-fn test_canvas_header_no_dirty_red_dot() {
-    let workspace_src = std::fs::read_to_string("src/views/workspace.rs")
-        .or_else(|_| std::fs::read_to_string("crates/zmark_app/src/views/workspace.rs"))
-        .expect("Failed to read workspace.rs");
-
-    let title_pos = workspace_src
-        .find("canvas_document_title")
-        .expect("workspace.rs must contain canvas_document_title");
-    let title_section = &workspace_src[title_pos..std::cmp::min(title_pos + 1200, workspace_src.len())];
-
-    assert!(
-        !title_section.contains("when(is_dirty, |el| el.child(div().w(px(6.)).h(px(6.)).rounded_full().bg(theme.accent)"),
-        "canvas_document_title must not contain dirty red dot indicator"
-    );
-    assert!(
-        !title_section.contains("rounded_full().bg(theme.accent)"),
-        "No red dot indicator should be attached to canvas_document_title"
-    );
+    // Plain/code-block text role exact values across all palettes and modes.
+    // Contrast against code_bg is covered by
+    // test_all_palettes_all_syntax_tokens_contrast_ratio.
+    assert_eq!(ThemeColors::resolve("default", false).syntax_code, rgb(0x3e4a56).into());
+    assert_eq!(ThemeColors::resolve("default", true).syntax_code, rgb(0xd8d4cc).into());
+    assert_eq!(ThemeColors::resolve("claude", false).syntax_code, rgb(0x6b4e1b).into());
+    assert_eq!(ThemeColors::resolve("claude", true).syntax_code, rgb(0xe5b567).into());
+    assert_eq!(ThemeColors::resolve("macos", false).syntax_code, rgb(0x1b4d89).into());
+    assert_eq!(ThemeColors::resolve("macos", true).syntax_code, rgb(0x70b0ff).into());
+    assert_eq!(ThemeColors::resolve("tokyo-night", false).syntax_code, rgb(0x2e4374).into());
+    assert_eq!(ThemeColors::resolve("tokyo-night", true).syntax_code, rgb(0x8ba4e8).into());
+    assert_eq!(ThemeColors::resolve("nord", false).syntax_code, rgb(0x3b5373).into());
+    assert_eq!(ThemeColors::resolve("nord", true).syntax_code, rgb(0x98c4d8).into());
+    assert_eq!(ThemeColors::resolve("github", false).syntax_code, rgb(0x24292f).into());
+    assert_eq!(ThemeColors::resolve("github", true).syntax_code, rgb(0xd0d7de).into());
+    assert_eq!(ThemeColors::resolve("solarized", false).syntax_code, rgb(0x475b62).into());
+    assert_eq!(ThemeColors::resolve("solarized", true).syntax_code, rgb(0x93a1a1).into());
+    assert_eq!(ThemeColors::resolve("one-dark", false).syntax_code, rgb(0x383a42).into());
+    assert_eq!(ThemeColors::resolve("one-dark", true).syntax_code, rgb(0xabb2bf).into());
 }
 
 #[test]
@@ -282,85 +281,10 @@ fn srgb_to_linear(c: f64) -> f64 {
     }
 }
 
-fn srgb_luminance(r: u8, g: u8, b: u8) -> f64 {
-    let r_lin = srgb_to_linear(r as f64 / 255.0);
-    let g_lin = srgb_to_linear(g as f64 / 255.0);
-    let b_lin = srgb_to_linear(b as f64 / 255.0);
-    0.2126 * r_lin + 0.7152 * g_lin + 0.0722 * b_lin
-}
-
 fn wcag_contrast(l1: f64, l2: f64) -> f64 {
     let lighter = l1.max(l2);
     let darker = l1.min(l2);
     (lighter + 0.05) / (darker + 0.05)
-}
-
-#[test]
-fn test_ticket_g0_syntax_code_matrix_and_contrast() {
-    // 1. Assert all 8 palettes across both light and dark modes have fully opaque syntax_code
-    for palette in ALL_PALETTES {
-        for &is_dark in &[false, true] {
-            let theme = ThemeColors::resolve(palette.id, is_dark);
-            assert_eq!(
-                theme.syntax_code.a, 1.0,
-                "Palette '{}' (is_dark={}) syntax_code must be fully opaque",
-                palette.id, is_dark
-            );
-        }
-    }
-
-    // 2. Default palette Miaoyan olive gold values and WCAG contrast >= 4.5:1
-    let def_light = ThemeColors::resolve("default", false);
-    assert_eq!(
-        def_light.syntax_code,
-        rgb(0x3e4a56).into(),
-        "Default light syntax_code must be #3e4a56"
-    );
-    let def_light_code_lum = srgb_luminance(0x3e, 0x4a, 0x56);
-    let def_light_bg_lum = srgb_luminance(0xf6, 0xf5, 0xef);
-    let cr_light = wcag_contrast(def_light_code_lum, def_light_bg_lum);
-    assert!(
-        cr_light >= 4.5,
-        "Default light syntax_code contrast ratio must be >= 4.5:1, got {:.2}",
-        cr_light
-    );
-
-    let def_dark = ThemeColors::resolve("default", true);
-    assert_eq!(
-        def_dark.syntax_code,
-        rgb(0xd8d4cc).into(),
-        "Default dark syntax_code must be #d8d4cc"
-    );
-    let def_dark_code_lum = srgb_luminance(0xd8, 0xd4, 0xcc);
-    let def_dark_bg_lum = srgb_luminance(0x28, 0x26, 0x23);
-    let cr_dark = wcag_contrast(def_dark_code_lum, def_dark_bg_lum);
-    assert!(
-        cr_dark >= 4.5,
-        "Default dark syntax_code contrast ratio must be >= 4.5:1, got {:.2}",
-        cr_dark
-    );
-
-    // 3. Verify representative palette values from 8 palettes 16 colors matrix
-    assert_eq!(ThemeColors::resolve("claude", false).syntax_code, rgb(0x6b4e1b).into());
-    assert_eq!(ThemeColors::resolve("claude", true).syntax_code, rgb(0xe5b567).into());
-
-    assert_eq!(ThemeColors::resolve("macos", false).syntax_code, rgb(0x1b4d89).into());
-    assert_eq!(ThemeColors::resolve("macos", true).syntax_code, rgb(0x70b0ff).into());
-
-    assert_eq!(ThemeColors::resolve("tokyo-night", false).syntax_code, rgb(0x2e4374).into());
-    assert_eq!(ThemeColors::resolve("tokyo-night", true).syntax_code, rgb(0x8ba4e8).into());
-
-    assert_eq!(ThemeColors::resolve("nord", false).syntax_code, rgb(0x3b5373).into());
-    assert_eq!(ThemeColors::resolve("nord", true).syntax_code, rgb(0x98c4d8).into());
-
-    assert_eq!(ThemeColors::resolve("github", false).syntax_code, rgb(0x24292f).into());
-    assert_eq!(ThemeColors::resolve("github", true).syntax_code, rgb(0xd0d7de).into());
-
-    assert_eq!(ThemeColors::resolve("solarized", false).syntax_code, rgb(0x475b62).into());
-    assert_eq!(ThemeColors::resolve("solarized", true).syntax_code, rgb(0x93a1a1).into());
-
-    assert_eq!(ThemeColors::resolve("one-dark", false).syntax_code, rgb(0x383a42).into());
-    assert_eq!(ThemeColors::resolve("one-dark", true).syntax_code, rgb(0xabb2bf).into());
 }
 
 fn hsla_luminance(c: gpui::Hsla) -> f64 {

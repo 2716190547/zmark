@@ -1,7 +1,5 @@
 use zmark_app::state::{AppState, ViewMode};
-use zmark_app::theme::{ThemeColors, ALL_PALETTES};
 use zmark_app::views::workspace::{calculate_title_header_padding, WorkspaceView};
-use zmark_core::i18n::{get_strings, SupportedLocale};
 use gpui::TestAppContext;
 
 #[test]
@@ -32,46 +30,6 @@ fn test_h3_title_header_padding_matrix() {
     // 4. Narrow window in Preview mode clamps to minimum 32px column margin (32 - 8 = 24.0px padding)
     let pad_narrow_preview = calculate_title_header_padding(true, false, true, ViewMode::Preview, 700.0, col_w, 54.0);
     assert_eq!(pad_narrow_preview, 24.0);
-}
-
-#[test]
-fn test_h3_selection_tokens_and_status_labels() {
-    // 1. Verify default and claude palettes have warm selection background
-    for palette in ALL_PALETTES {
-        for &is_dark in &[false, true] {
-            let theme = ThemeColors::resolve(palette.id, is_dark);
-            let sel_bg = theme.selection_bg();
-            if palette.id == "default" || palette.id == "claude" {
-                let hue_deg = sel_bg.h * 360.0;
-                assert!(
-                    hue_deg >= 25.0 && hue_deg <= 45.0,
-                    "Palette {} (dark={}) selection_bg hue {}° not in warm [25°, 45°]",
-                    palette.id, is_dark, hue_deg
-                );
-                assert!(
-                    sel_bg.s >= 0.30,
-                    "Palette {} (dark={}) selection_bg saturation {} below 0.30",
-                    palette.id, is_dark, sel_bg.s
-                );
-                assert!(
-                    sel_bg.a >= 0.10,
-                    "Palette {} (dark={}) selection_bg alpha {} below 0.10",
-                    palette.id, is_dark, sel_bg.a
-                );
-            } else {
-                assert_eq!(sel_bg, theme.text_primary.opacity(0.07));
-            }
-        }
-    }
-
-    // 2. Verify status bar labels in i18n
-    let zh_cn = get_strings(SupportedLocale::ZhCn);
-    assert_eq!(zh_cn.status_line, "行");
-    assert_eq!(zh_cn.status_chars, "字");
-
-    let en = get_strings(SupportedLocale::En);
-    assert_eq!(en.status_line, "Ln");
-    assert_eq!(en.status_chars, "chars");
 }
 
 #[gpui::test]

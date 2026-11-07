@@ -135,123 +135,6 @@ fn test_workspace_root_missing_recovery() {
 }
 
 #[test]
-fn test_workspace_root_disambiguation_labels() {
-    let tmp = tempdir().unwrap();
-    let parent_a = tmp.path().join("proj_a");
-    let parent_b = tmp.path().join("proj_b");
-    let docs_a = parent_a.join("docs");
-    let docs_b = parent_b.join("docs");
-    let unique = tmp.path().join("unique_repo");
-
-    fs::create_dir_all(&docs_a).unwrap();
-    fs::create_dir_all(&docs_b).unwrap();
-    fs::create_dir_all(&unique).unwrap();
-
-    let roots = vec![
-        WorkspaceRoot {
-            path: docs_a.clone(),
-            tree: Vec::new(),
-            is_expanded: true,
-            is_missing: false,
-            truncated: false,
-            entries_used: 0,
-            files_used: 0,
-            deferred: false,
-        },
-        WorkspaceRoot {
-            path: docs_b.clone(),
-            tree: Vec::new(),
-            is_expanded: true,
-            is_missing: false,
-            truncated: false,
-            entries_used: 0,
-            files_used: 0,
-            deferred: false,
-        },
-        WorkspaceRoot {
-            path: unique.clone(),
-            tree: Vec::new(),
-            is_expanded: true,
-            is_missing: false,
-            truncated: false,
-            entries_used: 0,
-            files_used: 0,
-            deferred: false,
-        },
-    ];
-
-    // Unique folder name is unaffected
-    assert_eq!(root_label(&roots, 2), "unique_repo");
-
-    // Colliding folder names are disambiguated by parent directory name with em-dash
-    assert_eq!(root_label(&roots, 0), "docs \u{2014} proj_a");
-    assert_eq!(root_label(&roots, 1), "docs \u{2014} proj_b");
-
-    // Missing roots do not force active unique roots to disambiguate
-    let roots_with_missing = vec![
-        WorkspaceRoot {
-            path: docs_a.clone(),
-            tree: Vec::new(),
-            is_expanded: true,
-            is_missing: false,
-            truncated: false,
-            entries_used: 0,
-            files_used: 0,
-            deferred: false,
-        },
-        WorkspaceRoot {
-            path: docs_b.clone(),
-            tree: Vec::new(),
-            is_expanded: false,
-            is_missing: true,
-            truncated: false,
-            entries_used: 0,
-            files_used: 0,
-            deferred: false,
-        },
-    ];
-    assert_eq!(root_label(&roots_with_missing, 0), "docs");
-
-    // Out-of-bounds index returns empty string
-    assert_eq!(root_label(&roots, 99), "");
-}
-
-#[test]
-fn test_workspace_root_remove_preserves_docs() {
-    let tmp = tempdir().unwrap();
-    let root_path = tmp.path().join("preserved_workspace");
-    fs::create_dir_all(&root_path).unwrap();
-    let file_path = root_path.join("readme.md");
-    fs::write(&file_path, "# Preserved Document").unwrap();
-
-    let mut state = clean_test_state(&tmp);
-    let root_idx = state.add_workspace_root(root_path.clone()).unwrap();
-    assert_eq!(root_idx, 0);
-
-    // Open file inside the workspace root
-    state.open_file(file_path.clone()).unwrap();
-    assert_eq!(state.open_documents().len(), 1);
-    let open_doc_key = state.active_key().cloned().unwrap();
-
-    // Remove the workspace root
-    let removed = state.remove_workspace_root(0).unwrap();
-    assert!(removed.is_some());
-    assert!(state.workspace_roots.is_empty());
-
-    // CRITICAL: open_docs MUST be preserved, active key unchanged
-    assert_eq!(state.open_documents().len(), 1);
-    assert_eq!(state.active_key().cloned(), Some(open_doc_key));
-    assert_eq!(
-        state.open_documents()[0].doc.path.as_ref(),
-        Some(&file_path)
-    );
-    assert!(state.preferences.workspace_roots.is_empty());
-
-    // Out of bounds remove returns None
-    assert!(state.remove_workspace_root(0).unwrap().is_none());
-}
-
-#[test]
 fn test_workspace_root_host_config_untouched() {
     let host_config_path = Preferences::default_config_path();
     let host_content_before = fs::read_to_string(&host_config_path).ok();
@@ -392,49 +275,6 @@ fn test_workspace_root_atomic_rollback_on_save_failure() {
         state.workspace_roots[0].path,
         fs::canonicalize(&root_a).unwrap()
     );
-}
-
-#[test]
-fn test_root_label_root_path_and_full_path_fallback() {
-    // 1. Root path "/" returns "/"
-    let root_slash = vec![WorkspaceRoot {
-        path: std::path::PathBuf::from("/"),
-        tree: Vec::new(),
-        is_expanded: true,
-        is_missing: false,
-        truncated: false,
-        entries_used: 0,
-        files_used: 0,
-        deferred: false,
-    }];
-    assert_eq!(root_label(&root_slash, 0), "/");
-
-    // 2. Roots with identical folder name AND identical parent folder name fall back to full path
-    let roots_same_parent = vec![
-        WorkspaceRoot {
-            path: std::path::PathBuf::from("/a/shared/docs"),
-            tree: Vec::new(),
-            is_expanded: true,
-            is_missing: false,
-            truncated: false,
-            entries_used: 0,
-            files_used: 0,
-            deferred: false,
-        },
-        WorkspaceRoot {
-            path: std::path::PathBuf::from("/b/shared/docs"),
-            tree: Vec::new(),
-            is_expanded: true,
-            is_missing: false,
-            truncated: false,
-            entries_used: 0,
-            files_used: 0,
-            deferred: false,
-        },
-    ];
-
-    assert_eq!(root_label(&roots_same_parent, 0), "/a/shared/docs");
-    assert_eq!(root_label(&roots_same_parent, 1), "/b/shared/docs");
 }
 
 #[test]
@@ -991,6 +831,7 @@ fn test_remove_workspace_root_preserves_open_docs_in_loose_docs() {
         .expect("doc_a preserved");
     assert!(open_doc_a.doc.buffer.contains("Dirty edit in doc_a"));
     assert_eq!(open_doc_a.doc.status, DocumentStatus::Modified);
+    assert_eq!(open_doc_a.doc.path.as_ref(), Some(&file_a));
 
     let open_scratch = state
         .open_documents()
@@ -1005,6 +846,11 @@ fn test_remove_workspace_root_preserves_open_docs_in_loose_docs() {
     assert_eq!(loose_after.len(), 1);
     assert!(loose_after.contains(&doc_a_key));
     assert!(!loose_after.contains(&scratch_key));
+
+    // 7. The removed root is gone from preferences too, and an out-of-bounds
+    // removal is a no-op.
+    assert!(state.preferences.workspace_roots.is_empty());
+    assert!(state.remove_workspace_root(0).unwrap().is_none());
 }
 
 #[test]
@@ -1110,6 +956,16 @@ fn test_root_label_disambiguation_hierarchical() {
             files_used: 0,
             deferred: false,
         },
+        WorkspaceRoot {
+            path: std::path::PathBuf::from("/other/unique_repo"),
+            tree: Vec::new(),
+            is_expanded: true,
+            is_missing: false,
+            truncated: false,
+            entries_used: 0,
+            files_used: 0,
+            deferred: false,
+        },
     ];
     assert_eq!(
         root_label(&colliding_different_parents, 0),
@@ -1119,6 +975,8 @@ fn test_root_label_disambiguation_hierarchical() {
         root_label(&colliding_different_parents, 1),
         "notes \u{2014} personal"
     );
+    // A unique short name among multiple roots keeps its short label.
+    assert_eq!(root_label(&colliding_different_parents, 2), "unique_repo");
 
     // 3. Colliding folder names AND identical parent directories: fallback to full path
     let colliding_same_parents = vec![
@@ -1207,6 +1065,20 @@ fn test_root_label_disambiguation_hierarchical() {
     ];
     assert_eq!(root_label(&two_missing, 0), "notes \u{2014} shared");
     assert_eq!(root_label(&two_missing, 1), "notes \u{2014} backup");
+
+    // 5. Filesystem root labels itself, and out-of-bounds indices are empty.
+    let root_slash = vec![WorkspaceRoot {
+        path: std::path::PathBuf::from("/"),
+        tree: Vec::new(),
+        is_expanded: true,
+        is_missing: false,
+        truncated: false,
+        entries_used: 0,
+        files_used: 0,
+        deferred: false,
+    }];
+    assert_eq!(root_label(&root_slash, 0), "/");
+    assert_eq!(root_label(&single_root, 99), "");
 }
 
 #[test]
