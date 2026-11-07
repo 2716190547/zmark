@@ -1,0 +1,128 @@
+name: build-desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - ".github/workflows/build-desktop.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "scripts/bundle_macos.sh"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-14
+            artifact: ZMark-macos-arm64
+          - name: Linux x86_64
+            os: ubuntu-22.04
+            artifact: ZMark-linux-x86_64
+          - name: Windows x86_64
+            os: windows-latest
+            artifact: ZMark-windows-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config clang cmake nasm \
+            libssl-dev libfontconfig1-dev libfreetype6-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libgles2-mesa-dev libvulkan-dev
+
+      - name: Build release binary
+        run: cargo build --release -p zmark_app
+
+      - name: Package macOS app
+        if: runner.os == 'macOS'
+        run: |
+          # The script installs into /Applications after creating the staging
+          # bundle. CI only needs the staging bundle, so tolerate an install
+          # failure as long as the signed bundle exists.
+          ./scripts/bundle_macos.sh || test -d target/bundle/ZMark.app
+          test -d target/bundle/ZMark.app
+          ditto -c -k --sequesterRsrc --keepParent \
+            target/bundle/ZMark.app "ZMark-0.2.0-macos-arm64.zip"
+          shasum -a 256 "ZMark-0.2.0-macos-arm64.zip" > "ZMark-0.2.0-macos-arm64.zip.sha256"
+
+      - name: Package Linux tarball and deb
+        if: runner.os == 'Linux'
+        run: |
+          VERSION=0.2.0
+          ARCH=$(uname -m)
+          PKG="ZMark-${VERSION}-linux-${ARCH}"
+          mkdir -p "$PKG/usr/bin" \
+                   "$PKG/usr/share/applications" \
+                   "$PKG/usr/share/icons/hicolor/256x256/apps"
+          cp target/release/zmark_app "$PKG/usr/bin/zmark_app"
+          cp assets/icon.iconset/icon_256x256.png \
+             "$PKG/usr/share/icons/hicolor/256x256/apps/zmark.png"
+          cat > "$PKG/usr/share/applications/zmark.desktop" <<'EOF'
+          [Desktop Entry]
+          Name=ZMark
+          Comment=Markdown reader and editor
+          Exec=zmark_app %F
+          Icon=zmark
+          Type=Application
+          Categories=Office;TextEditor;
+          MimeType=text/markdown;
+          Terminal=false
+          EOF
+          mkdir -p "$PKG/DEBIAN"
+          cat > "$PKG/DEBIAN/control" <<EOF
+          Package: zmark
+          Version: ${VERSION}
+          Section: editors
+          Priority: optional
+          Architecture: amd64
+          Maintainer: ZMark
+          Description: ZMark Markdown reader and editor
+           GPU-accelerated Markdown reader and editor built with Rust and GPUI.
+          Depends: libc6, libgcc-s1, libstdc++6, libx11-6, libxcb1, libxkbcommon0, libwayland-client0, libvulkan1
+          EOF
+          dpkg-deb --build --root-owner-group "$PKG" \
+            "ZMark-${VERSION}-linux-${ARCH}.deb"
+          tar -czf "ZMark-${VERSION}-linux-${ARCH}.tar.gz" -C "$PKG" usr
+          sha256sum ZMark-${VERSION}-linux-${ARCH}.* > SHA256SUMS-linux
+
+      - name: Package Windows zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item target/release/zmark_app.exe package/ZMark.exe
+          Compress-Archive -Path package/* -DestinationPath ZMark-0.2.0-windows-x86_64.zip
+          Get-FileHash ZMark-0.2.0-windows-x86_64.zip -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  ZMark-0.2.0-windows-x86_64.zip" } |
+            Set-Content ZMark-0.2.0-windows-x86_64.zip.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ZMark-*.zip
+            ZMark-*.zip.sha256
+            ZMark-*.tar.gz
+            ZMark-*.deb
+            SHA256SUMS-linux
+          if-no-files-found: error
