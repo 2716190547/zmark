@@ -13,6 +13,10 @@ use tempfile::NamedTempFile;
 pub const MAX_INPUT_BYTES: u64 = 20 * 1024 * 1024;
 pub const MAX_DECODED_BYTES: u64 = 64_000_000;
 pub const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+/// Largest side kept in the on-disk snapshot. The preview shows images at most
+/// 400pt high in a reading column, so a 2048px side is already above 2x display
+/// density while avoiding 64MP textures for a 400px picture.
+pub const MAX_TEXTURE_SIDE: u32 = 2048;
 
 pub fn resolve_image_path(reference: &str, document: Option<&Path>) -> Result<PathBuf, String> {
     let path = reference.split('#').next().unwrap_or("");
@@ -53,6 +57,18 @@ pub fn check_dimensions(width: u32, height: u32) -> Result<u64, String> {
         return Err("图片超限：最大边 4000px，最多 1600 万像素".into());
     }
     Ok(bytes)
+}
+
+fn fit_within(width: u32, height: u32, max_side: u32) -> (u32, u32) {
+    let longest = width.max(height);
+    if longest <= max_side {
+        return (width, height);
+    }
+    let scale = max_side as f64 / longest as f64;
+    (
+        ((width as f64 * scale).round() as u32).max(1),
+        ((height as f64 * scale).round() as u32).max(1),
+    )
 }
 
 #[derive(Debug)]
@@ -99,19 +115,35 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
             let (w, h) = decoder.dimensions();
             check_dimensions(w, h)?;
             // ImageDecoder reads the static first frame, never collects animation frames.
-            let decoded =
+            let mut decoded =
                 DynamicImage::from_decoder(decoder).map_err(|e| format!("图片解码失败：{e}"))?;
-            let used = check_dimensions(decoded.width(), decoded.height())?;
-            if matches!(format, ImageFormat::Gif | ImageFormat::WebP) {
-                let mut png = Cursor::new(Vec::new());
+            let (out_w, out_h) = fit_within(decoded.width(), decoded.height(), MAX_TEXTURE_SIDE);
+            let resized = (out_w, out_h) != (decoded.width(), decoded.height());
+            if resized {
+                decoded = decoded.resize(out_w, out_h, image::imageops::FilterType::Lanczos3);
+            }
+            let used = check_dimensions(out_w, out_h)?;
+            if resized || matches!(format, ImageFormat::Gif | ImageFormat::WebP) {
+                let encode_as = if format == ImageFormat::Jpeg {
+                    ImageFormat::Jpeg
+                } else {
+                    ImageFormat::Png
+                };
+                let mut encoded = Cursor::new(Vec::new());
                 decoded
-                    .write_to(&mut png, ImageFormat::Png)
+                    .write_to(&mut encoded, encode_as)
                     .map_err(|e| e.to_string())?;
-                (w, h, used, ".png", png.into_inner())
+                (
+                    out_w,
+                    out_h,
+                    used,
+                    if encode_as == ImageFormat::Png { ".png" } else { ".jpg" },
+                    encoded.into_inner(),
+                )
             } else {
                 (
-                    w,
-                    h,
+                    out_w,
+                    out_h,
                     used,
                     if format == ImageFormat::Png {
                         ".png"

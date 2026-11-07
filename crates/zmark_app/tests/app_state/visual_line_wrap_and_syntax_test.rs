@@ -112,10 +112,10 @@ fn test_bidirectional_coordinate_mapping_and_navigation() {
     }
 
     // Visual Cursor Navigation:
-    // EditorEngine::move_up_visual and EditorEngine::move_down_visual
+    // EditorEngine::move_up_visual_lines and EditorEngine::move_down_visual_lines
     let mut editor = EditorEngine::new("The quick brown fox jumps over the lazy dog and runs away into the forest.");
     let max_cols = 20;
-    let vis = editor.get_visual_lines(max_cols);
+    let vis = wrap_line_to_visual(0, &editor.lines[0], max_cols);
     assert!(vis.len() >= 3);
 
     // Cursor starts at top subline (line 0, col 0)
@@ -124,58 +124,24 @@ fn test_bidirectional_coordinate_mapping_and_navigation() {
     assert_eq!(editor.cursor_col, 0);
 
     // Move down into the second visual subline of the same physical line!
-    editor.move_down_visual(max_cols);
+    editor.move_down_visual_lines(&vis);
     assert_eq!(editor.cursor_line, 0);
     assert_eq!(editor.cursor_col, vis[1].char_start);
 
     // Move down into the third visual subline
-    editor.move_down_visual(max_cols);
+    editor.move_down_visual_lines(&vis);
     assert_eq!(editor.cursor_line, 0);
     assert_eq!(editor.cursor_col, vis[2].char_start);
 
     // Moving up returns to the second visual subline
-    editor.move_up_visual(max_cols);
+    editor.move_up_visual_lines(&vis);
     assert_eq!(editor.cursor_line, 0);
     assert_eq!(editor.cursor_col, vis[1].char_start);
 
     // Moving up again returns to the first visual subline!
-    editor.move_up_visual(max_cols);
+    editor.move_up_visual_lines(&vis);
     assert_eq!(editor.cursor_line, 0);
     assert_eq!(editor.cursor_col, 0);
-}
-
-#[test]
-fn test_visual_line_cache_invalidation_boundaries() {
-    let mut editor = EditorEngine::new("first line\nhello world long line here wrapping\nthird line");
-    let rev0 = editor.revision;
-    assert_eq!(rev0, 0);
-
-    // First computation caches result: cache.is_cached(revision, max_cols) is true.
-    let lines1 = editor.get_visual_lines(15);
-    assert!(editor.visual_cache.is_cached(rev0, 15));
-
-    // Same revision and max_cols returns cached Arc without recomputation.
-    let lines2 = editor.get_visual_lines(15);
-    assert!(std::sync::Arc::ptr_eq(&lines1, &lines2));
-
-    // Changing revision (e.g. editor.insert_text("abc") increments revision) causes cache to recompute.
-    editor.insert_text("abc");
-    assert_eq!(editor.revision, rev0 + 1);
-    assert!(!editor.visual_cache.is_cached(editor.revision, 15));
-
-    let lines3 = editor.get_visual_lines(15);
-    assert!(!std::sync::Arc::ptr_eq(&lines1, &lines3));
-    assert!(editor.visual_cache.is_cached(editor.revision, 15));
-
-    // Changing max_cols causes cache to recompute.
-    assert!(!editor.visual_cache.is_cached(editor.revision, 25));
-    let lines4 = editor.get_visual_lines(25);
-    assert!(!std::sync::Arc::ptr_eq(&lines3, &lines4));
-    assert!(editor.visual_cache.is_cached(editor.revision, 25));
-
-    // cache.invalidate() clears the cache.
-    editor.visual_cache.invalidate();
-    assert!(!editor.visual_cache.is_cached(editor.revision, 25));
 }
 
 #[test]

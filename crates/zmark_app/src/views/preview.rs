@@ -54,8 +54,8 @@ pub fn render_preview_pane_with_callbacks(
     let item_regions = regions.clone();
     let item_syntax_cache = syntax_cache.clone();
     let measurement_sink = scroll_state.measurement_sink();
-    let sizes = scroll_state.sizes().to_vec();
-    let origins = scroll_state.origins().to_vec();
+    let sizes = scroll_state.sizes();
+    let origins = scroll_state.origins();
     let total = scroll_state.total_height();
     let scroll_handle = scroll_state.scroll_handle().clone();
     let wheel_cb = callbacks.on_wheel.clone();
@@ -302,6 +302,21 @@ pub fn heading_spacing(level: u8) -> (f32, f32) {
     }
 }
 
+fn intersect_selection(
+    selected: Option<&std::ops::Range<usize>>,
+    start: usize,
+    len: usize,
+) -> Option<std::ops::Range<usize>> {
+    let range = selected?;
+    let end = start.saturating_add(len);
+    if range.start >= end || range.end <= start {
+        return None;
+    }
+    let local_start = range.start.saturating_sub(start).min(len);
+    let local_end = range.end.saturating_sub(start).min(len);
+    (local_start < local_end).then_some(local_start..local_end)
+}
+
 fn render_block_element(
     block: &BlockElement,
     theme: &ThemeColors,
@@ -348,16 +363,7 @@ fn render_block_element(
             let seg = flat.segments.iter().find(|s| s.child_path == path);
             let flat_char_offset = seg.map(|s| s.char_range.start).unwrap_or(0);
             let el_range = seg.and_then(|s| {
-                selected_char_range.as_ref().and_then(|range| {
-                    if range.start < s.char_range.end && range.end > s.char_range.start {
-                        let len = s.char_range.len();
-                        let start = range.start.saturating_sub(s.char_range.start).min(len);
-                        let end = range.end.saturating_sub(s.char_range.start).min(len);
-                        if start < end { Some(start..end) } else { None }
-                    } else {
-                        None
-                    }
-                })
+                intersect_selection(selected_char_range.as_ref(), s.char_range.start, s.char_range.len())
             });
 
             el = el.child(render_styled_inlines(content, theme, font_size, el_range, images, on_image_recovery));
@@ -385,16 +391,7 @@ fn render_block_element(
             let seg = flat.segments.iter().find(|s| s.child_path == path);
             let flat_char_offset = seg.map(|s| s.char_range.start).unwrap_or(0);
             let el_range = seg.and_then(|s| {
-                selected_char_range.as_ref().and_then(|range| {
-                    if range.start < s.char_range.end && range.end > s.char_range.start {
-                        let len = s.char_range.len();
-                        let start = range.start.saturating_sub(s.char_range.start).min(len);
-                        let end = range.end.saturating_sub(s.char_range.start).min(len);
-                        if start < end { Some(start..end) } else { None }
-                    } else {
-                        None
-                    }
-                })
+                intersect_selection(selected_char_range.as_ref(), s.char_range.start, s.char_range.len())
             });
 
             let el = div()
@@ -431,16 +428,7 @@ fn render_block_element(
                 let seg = flat.segments.iter().find(|s| s.child_path == path);
                 let flat_char_offset = seg.map(|s| s.char_range.start).unwrap_or(0);
                 let el_range = seg.and_then(|s| {
-                    selected_char_range.as_ref().and_then(|range| {
-                        if range.start < s.char_range.end && range.end > s.char_range.start {
-                            let len = s.char_range.len();
-                            let start = range.start.saturating_sub(s.char_range.start).min(len);
-                            let end = range.end.saturating_sub(s.char_range.start).min(len);
-                            if start < end { Some(start..end) } else { None }
-                        } else {
-                            None
-                        }
-                    })
+                    intersect_selection(selected_char_range.as_ref(), s.char_range.start, s.char_range.len())
                 });
 
                 let occurrence_path = format!("{}{}", block_ix, &path[1..]);
@@ -533,16 +521,7 @@ fn render_block_element(
                 let text = h.plain_text();
                 let len = text.chars().count();
                 let cell_start = cur_offset;
-                let cell_end = cur_offset + len;
-                let cell_range = selected_char_range.as_ref().and_then(|range| {
-                    if range.start < cell_end && range.end > cell_start {
-                        let s = range.start.saturating_sub(cell_start).min(len);
-                        let e = range.end.saturating_sub(cell_start).min(len);
-                        if s < e { Some(s..e) } else { None }
-                    } else {
-                        None
-                    }
-                });
+                let cell_range = intersect_selection(selected_char_range.as_ref(), cell_start, len);
                 cur_offset += len + 1;
                 header_cells.push(
                     with_text_probe(
@@ -579,16 +558,7 @@ fn render_block_element(
                     let text = cell.plain_text();
                     let len = text.chars().count();
                     let cell_start = cur_offset;
-                    let cell_end = cur_offset + len;
-                    let cell_range = selected_char_range.as_ref().and_then(|range| {
-                        if range.start < cell_end && range.end > cell_start {
-                            let s = range.start.saturating_sub(cell_start).min(len);
-                            let e = range.end.saturating_sub(cell_start).min(len);
-                            if s < e { Some(s..e) } else { None }
-                        } else {
-                            None
-                        }
-                    });
+                    let cell_range = intersect_selection(selected_char_range.as_ref(), cell_start, len);
                     cur_offset += len + 1;
                     cells.push(
                         with_text_probe(
@@ -1300,16 +1270,7 @@ fn render_list_element(
             let seg = flat.segments.iter().find(|s| s.child_path == child_path);
             let flat_char_offset = seg.map(|s| s.char_range.start).unwrap_or(0);
             let child_range = seg.and_then(|s| {
-                selected_char_range.as_ref().and_then(|range| {
-                    if range.start < s.char_range.end && range.end > s.char_range.start {
-                        let len = s.char_range.len();
-                        let start = range.start.saturating_sub(s.char_range.start).min(len);
-                        let end = range.end.saturating_sub(s.char_range.start).min(len);
-                        if start < end { Some(start..end) } else { None }
-                    } else {
-                        None
-                    }
-                })
+                intersect_selection(selected_char_range.as_ref(), s.char_range.start, s.char_range.len())
             });
 
             if ci == 0 {

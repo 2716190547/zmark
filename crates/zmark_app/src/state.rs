@@ -426,6 +426,9 @@ pub struct AppState {
     pub is_system_dark: bool,
     pub is_quitting: bool,
     pub error_message: Option<String>,
+    /// Set on every editor mutation so the dirty dot updates without joining
+    /// the whole buffer on each keystroke. Cleared when the buffer is synced.
+    editor_dirty: bool,
     #[allow(dead_code)]
     pub search_query: String,
     #[allow(dead_code)]
@@ -532,6 +535,7 @@ impl AppState {
             is_system_dark: false,
             is_quitting: false,
             error_message: None,
+            editor_dirty: false,
             search_query: String::new(),
             search_original_expanded: None,
             search_generation: 0,
@@ -640,13 +644,25 @@ impl AppState {
         self.theme = ThemeColors::resolve(&self.preferences.palette, is_dark);
     }
 
+    /// Marks the active document dirty without joining every line into a new
+    /// String. The full buffer is materialized by [`Self::sync_from_editor`]
+    /// when parsing, saving, switching, or auto-saving.
+    pub fn mark_editor_dirty(&mut self) {
+        if self.active.is_some() {
+            self.editor_dirty = true;
+        }
+    }
+
     /// Mirrors the editor buffer into the document. Returns whether the text changed.
     pub fn sync_from_editor(&mut self) -> bool {
         if self.active.is_none() {
+            self.editor_dirty = false;
             return false;
         }
         let new_text = self.editor.to_text();
-        self.doc_mut().set_buffer(new_text)
+        let changed = self.doc_mut().set_buffer(new_text);
+        self.editor_dirty = false;
+        changed
     }
 
     /// Parses the buffer now, ignoring the debounce tier.
@@ -1165,7 +1181,13 @@ impl AppState {
             });
         }
 
-        self.active = Some(target_key);
+        let previous_key = self.active.clone();
+        self.active = Some(target_key.clone());
+        if let Some(previous_key) = previous_key.filter(|old| old != &target_key) {
+            if let Some(old_pos) = self.open_docs.iter().position(|d| d.key == previous_key) {
+                self.open_docs[old_pos].doc.unload_parsed();
+            }
+        }
         let buffer = &self.open_docs.iter().find(|d| self.active.as_ref() == Some(&d.key)).unwrap().doc.buffer;
         self.editor.reset_text(buffer);
         if let Some(idx) = self.find_root_index_for_path(&path) {
@@ -1182,7 +1204,14 @@ impl AppState {
         self.sync_from_editor();
 
         if let Some(pos) = self.open_docs.iter().position(|d| &d.key == key) {
+            let old_key = self.active.clone();
+            if let Some(old_key) = old_key.filter(|old| old != key) {
+                if let Some(old_pos) = self.open_docs.iter().position(|d| d.key == old_key) {
+                    self.open_docs[old_pos].doc.unload_parsed();
+                }
+            }
             self.active = Some(key.clone());
+            self.open_docs[pos].doc.reparse();
             self.editor.reset_text(&self.open_docs[pos].doc.buffer);
             if let DocKey::Path(ref p) = key {
                 self.expand_to_file(p);
@@ -1334,6 +1363,7 @@ impl AppState {
                 };
                 let next_key = self.open_docs[next_idx].key.clone();
                 self.active = Some(next_key.clone());
+                self.open_docs[next_idx].doc.reparse();
                 self.editor.reset_text(&self.open_docs[next_idx].doc.buffer);
                 if let DocKey::Path(ref p) = next_key {
                     self.expand_to_file(p);
@@ -1465,25 +1495,23 @@ impl AppState {
             ));
         }
 
-        // Prepare candidate document clone to attempt save atomically
-        let mut candidate_doc = if self.active.as_ref() == Some(key) {
-            self.doc().clone()
-        } else if let Some(od) = self.open_docs.iter().find(|d| &d.key == key) {
-            od.doc.clone()
+        // `Document::save_to` writes first and only then updates the in-memory
+        // path/status, so a failed write leaves the document untouched without
+        // cloning the whole buffer first.
+        let doc = if self.active.as_ref() == Some(key) {
+            self.doc_mut()
+        } else if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == key) {
+            &mut od.doc
         } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "Document to save was not found",
             ));
         };
+        doc.save_to(path.clone())?;
 
-        candidate_doc.path = Some(path.clone());
-        candidate_doc.save()?; // Atomic test: if write fails, self state is completely untouched!
-
-        // Atomic commit upon save success
         if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == key) {
             od.key = new_key.clone();
-            od.doc = candidate_doc;
         }
 
         if self.active.as_ref() == Some(key) {
@@ -1512,7 +1540,7 @@ impl AppState {
         if self.active.is_none() {
             return false;
         }
-        self.doc().status != DocumentStatus::Clean
+        self.editor_dirty || self.doc().status != DocumentStatus::Clean
     }
 
     pub fn has_conflict(&self) -> bool {

@@ -53,11 +53,6 @@ impl Document {
         })
     }
 
-    /// User-friendly display name (file name or fallback).
-    pub fn display_name(&self) -> String {
-        self.display_name_with_fallback("Untitled")
-    }
-
     /// User-friendly display name with custom localized fallback for untitled documents.
     pub fn display_name_with_fallback(&self, fallback: &str) -> String {
         self.path
@@ -114,6 +109,13 @@ impl Document {
 
     pub fn is_parse_stale(&self) -> bool {
         self.parse_stale
+    }
+
+    /// Releases the AST of a document that is not visible. The buffer and saved
+    /// text stay intact; [`Self::reparse`] rebuilds the AST when it is shown again.
+    pub fn unload_parsed(&mut self) {
+        self.parsed = Arc::new(ParsedDocument::default());
+        self.parse_stale = true;
     }
 
     /// Saves the current buffer to the existing file path.

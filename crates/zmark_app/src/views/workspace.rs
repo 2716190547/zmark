@@ -95,6 +95,12 @@ pub struct WorkspaceView {
     pub cached_visual_width_bits: u64,
     pub cached_visual_font_bits: u32,
     pub cached_visual_lines: Arc<Vec<crate::editor_engine::VisualLine>>,
+    /// Sorted anchor map for the current AST. Rebuilding it per wheel event
+    /// copied and sorted the whole anchor list on every scroll tick.
+    sync_map_cache: Option<(
+        std::sync::Weak<zmark_core::ast::ParsedDocument>,
+        zmark_core::anchor::SyncScrollMap,
+    )>,
     pub rendered_regions: Arc<crate::views::preview::RegionsRegistry>,
     pub local_images: crate::local_images::SharedImages,
     pub local_image_task: Option<gpui::Task<()>>,
@@ -255,6 +261,7 @@ impl WorkspaceView {
             cached_visual_width_bits: 0,
             cached_visual_font_bits: 0,
             cached_visual_lines: Arc::new(Vec::new()),
+            sync_map_cache: None,
             rendered_regions: Arc::new(std::sync::Mutex::new(Vec::new())),
             local_images: Arc::new(std::sync::Mutex::new(
                 crate::local_images::LocalImages::default(),
@@ -317,6 +324,26 @@ impl WorkspaceView {
         view.init_update_service(cx);
 
         view
+    }
+
+    /// Drops syntax bookkeeping for code blocks that no longer exist in the
+    /// current AST. These maps are keyed by block content, so without pruning
+    /// every edit inside a code block keeps the old payload alive until the
+    /// document is switched.
+    fn prune_syntax_state(&mut self) {
+        let keys: std::collections::HashSet<_> = self
+            .state
+            .doc()
+            .parsed
+            .code_blocks
+            .iter()
+            .map(|block| block.key.clone())
+            .collect();
+        self.syntax_attempts.retain(|key, _| keys.contains(key));
+        self.syntax_block_states.retain(|key, _| keys.contains(key));
+        self.last_visible_syntax_keys.retain(|key| keys.contains(key));
+        self.syntax_invalid_positions.retain(|(key, _)| keys.contains(key));
+        self.current_ordered_candidates.retain(|key| keys.contains(key));
     }
 
     /// Swaps in a new document: the preview list drops cached heights and starts at the top.
@@ -469,7 +496,9 @@ impl WorkspaceView {
             self.parse_task = Some(cx.spawn(async move |this, app| {
                 app.background_executor().timer(delay).await;
                 let _ = this.update(app, |this, cx| {
+                    this.state.sync_from_editor();
                     if this.state.parse_now() {
+                        this.prune_syntax_state();
                         this.syntax_warm_pending = false;
                         this.start_warm_coordination_task(cx);
                     }
@@ -493,6 +522,7 @@ impl WorkspaceView {
         self.search_focused = false;
         self.state.sync_from_editor();
         if self.state.parse_now() {
+            self.prune_syntax_state();
             self.syntax_warm_pending = true;
             self.invalidate_preview_list();
             if self.state.view_mode == ViewMode::Split {
@@ -736,17 +766,33 @@ impl WorkspaceView {
         failures
     }
 
+    fn sync_scroll_map(&mut self) -> Option<&zmark_core::anchor::SyncScrollMap> {
+        if self.state.doc().is_parse_stale() || self.state.doc().parsed.anchors.is_empty() {
+            return None;
+        }
+        let parsed = self.state.doc().parsed.clone();
+        let current = Arc::downgrade(&parsed);
+        let cached = self.sync_map_cache.as_ref().is_some_and(|(weak, _)| {
+            weak.strong_count() > 0 && std::sync::Weak::ptr_eq(weak, &current)
+        });
+        if !cached {
+            self.sync_map_cache = Some((
+                current,
+                zmark_core::anchor::SyncScrollMap::new(parsed.anchors.clone()),
+            ));
+        }
+        self.sync_map_cache.as_ref().map(|(_, map)| map)
+    }
+
     /// Aligns preview virtual list position to current editor cursor block.
     pub fn align_preview_to_cursor(&mut self) {
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
-        if self.state.doc().is_parse_stale() || self.state.doc().parsed.anchors.is_empty() {
-            return;
-        }
         let cursor_line = self.state.editor.cursor().0 + 1;
-        let map =
-            zmark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
-        let (block_index, inner_progress) = map.source_line_to_preview_progress(cursor_line);
+        let (block_index, inner_progress) = match self.sync_scroll_map() {
+            Some(map) => map.source_line_to_preview_progress(cursor_line),
+            None => return,
+        };
         self.preview_list.set_scroll_offset(
             self.preview_list
                 .offset_for_block(block_index, inner_progress),
@@ -806,7 +852,7 @@ impl WorkspaceView {
 
         let ast_blocks_changed = !self.state.doc().is_parse_stale()
             && (self.source_code_blocks_rev != rev
-                || *self.source_code_blocks != self.state.doc().parsed.code_blocks);
+                || !Arc::ptr_eq(&self.source_code_blocks, &self.state.doc().parsed.code_blocks));
 
         if !self.cached_visual_lines.is_empty()
             && self.cached_visual_rev == rev
@@ -819,7 +865,7 @@ impl WorkspaceView {
 
         if !self.state.doc().is_parse_stale() {
             if ast_blocks_changed || self.source_code_blocks.is_empty() {
-                self.source_code_blocks = Arc::new(self.state.doc().parsed.code_blocks.clone());
+                self.source_code_blocks = self.state.doc().parsed.code_blocks.clone();
                 self.source_code_blocks_rev = rev;
                 self.syntax_invalid_positions.clear();
                 for b in self.state.doc().parsed.code_blocks.iter() {
@@ -1284,9 +1330,10 @@ impl WorkspaceView {
                 .filter(|vl| vl.physical_line_idx == phys_line_idx)
                 .count()
                 .max(1);
-            let map =
-                zmark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
-            let (block_index, inner_progress) = map.source_line_to_preview_progress(phys_line);
+            let (block_index, inner_progress) = match self.sync_scroll_map() {
+                Some(map) => map.source_line_to_preview_progress(phys_line),
+                None => (0, 0.0),
+            };
             let fraction =
                 calculate_subline_scroll_fraction(inner_progress, subline_idx, total_sublines);
             self.preview_list.offset_for_block(block_index, fraction)
@@ -1385,9 +1432,10 @@ impl WorkspaceView {
             visual_lines.len().saturating_sub(1)
         } else {
             let (block_ix, progress) = self.preview_list.block_progress_at_offset(offset);
-            let map =
-                zmark_core::anchor::SyncScrollMap::new(self.state.doc().parsed.anchors.clone());
-            let target_line = map.preview_to_source_line(block_ix, progress);
+            let target_line = match self.sync_scroll_map() {
+                Some(map) => map.preview_to_source_line(block_ix, progress),
+                None => 1,
+            };
             let phys_line_idx = target_line.saturating_sub(1);
             visual_lines
                 .iter()
@@ -2029,6 +2077,11 @@ impl WorkspaceView {
                 .timer(std::time::Duration::from_millis(delay_ms))
                 .await;
             let _ = this.update(app, |this, cx| {
+                if this.state.active.as_ref() == Some(&save_key) {
+                    // The editor buffer is materialized on the parse/save path,
+                    // not on every keystroke; refresh it before the dirty check.
+                    this.state.sync_from_editor();
+                }
                 let dirty = this.state.open_docs.iter().any(|doc| {
                     doc.key == save_key
                         && doc.doc.status == zmark_core::document::DocumentStatus::Modified
@@ -3245,7 +3298,7 @@ impl Render for WorkspaceView {
             if self.source_code_blocks_rev != self.state.editor.revision
                 || self.source_code_blocks.is_empty()
             {
-                self.source_code_blocks = Arc::new(self.state.doc().parsed.code_blocks.clone());
+                self.source_code_blocks = self.state.doc().parsed.code_blocks.clone();
                 self.source_code_blocks_rev = self.state.editor.revision;
             }
         }
@@ -3801,6 +3854,7 @@ impl Render for WorkspaceView {
                     return;
                 }
 
+                let revision_before = this.state.editor.revision;
                 let mut handled = true;
                 match key {
                     "backspace" => this.state.editor.delete_backward(),
@@ -3839,7 +3893,8 @@ impl Render for WorkspaceView {
 
                 if handled {
                     this.preview_focused = false;
-                    if this.state.sync_from_editor() {
+                    if this.state.editor.revision != revision_before {
+                        this.state.mark_editor_dirty();
                         this.schedule_parse(cx);
                     }
                     this.trigger_auto_save(cx);
@@ -4402,6 +4457,7 @@ impl Render for WorkspaceView {
                                                     )
                                                     .child(render_editor_pane(
                                                         self.state.editor.lines.clone(),
+                                                        self.state.editor.char_count,
                                                         visual_lines.clone(),
                                                         self.syntax_cache.clone(),
                                                         self.source_code_blocks.clone(),
@@ -4497,6 +4553,7 @@ impl Render for WorkspaceView {
                                                         )
                                                         .child(render_editor_pane(
                                                             self.state.editor.lines.clone(),
+                                                            self.state.editor.char_count,
                                                             visual_lines.clone(),
                                                             self.syntax_cache.clone(),
                                                             self.source_code_blocks.clone(),

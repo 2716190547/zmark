@@ -103,6 +103,26 @@ fn raster_snapshots_are_immutable_and_animations_are_static() {
 }
 
 #[test]
+fn raster_snapshots_are_downscaled_to_the_texture_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("large.png");
+    DynamicImage::new_rgba8(3000, 1000).save(&path).unwrap();
+    let image = load_image(path.to_str().unwrap(), None).unwrap();
+    assert_eq!((image.width, image.height), (2048, 683));
+    let decoded = image::open(image.snapshot.path()).unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (2048, 683));
+    assert_eq!(
+        image.decoded_bytes,
+        u64::from(2048u32) * u64::from(683u32) * 4
+    );
+
+    let small = dir.path().join("small.png");
+    DynamicImage::new_rgba8(8, 4).save(&small).unwrap();
+    let image = load_image(small.to_str().unwrap(), None).unwrap();
+    assert_eq!((image.width, image.height), (8, 4));
+}
+
+#[test]
 fn input_decode_and_svg_budgets_fail_with_reasons() {
     let dir = tempfile::tempdir().unwrap();
     let large = dir.path().join("large.png");

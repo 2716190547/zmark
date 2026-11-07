@@ -360,12 +360,12 @@ impl BlockElement {
 }
 
 /// A fully parsed Markdown document with synchronized source anchors.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedDocument {
     pub blocks: Vec<BlockElement>,
     pub anchors: Vec<SourceAnchor>,
     #[serde(skip, default)]
-    pub code_blocks: Vec<ParsedCodeBlock>,
+    pub code_blocks: Arc<Vec<ParsedCodeBlock>>,
 }
 
 impl ParsedDocument {
@@ -564,7 +564,7 @@ pub fn parse_markdown(source: &str) -> ParsedDocument {
     ParsedDocument {
         blocks,
         anchors,
-        code_blocks,
+        code_blocks: Arc::new(code_blocks),
     }
 }
 

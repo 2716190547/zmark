@@ -401,9 +401,16 @@ fn estimate_sizes(
         .blocks
         .iter()
         .map(|block| {
-            let flat = flatten_block(block, "0");
-            let text_lines = wrapped_lines(flat.text.chars().count(), chars_per_line);
-            let text_h = text_lines * lh;
+            // Only paragraphs use the flattened text height. Flattening every
+            // heading/list/quote/table on each layout rebuild copied text that
+            // the estimate below never reads.
+            let text_h = match block {
+                BlockElement::Paragraph(_) => {
+                    let flat = flatten_block(block, "0");
+                    wrapped_lines(flat.text.chars().count(), chars_per_line) * lh
+                }
+                _ => 0.0,
+            };
             let h = match block {
                 BlockElement::Heading { level, .. } => {
                     let mult = match level {
@@ -531,8 +538,13 @@ fn estimate_block(
     rem: f32,
     font_size: f32,
 ) -> f32 {
-    let flat = flatten_block(block, "0");
-    let text_h = wrapped_lines(flat.text.chars().count(), *chars_per_line) * *lh;
+    let text_h = match block {
+        BlockElement::Paragraph(_) => {
+            let flat = flatten_block(block, "0");
+            wrapped_lines(flat.text.chars().count(), *chars_per_line) * *lh
+        }
+        _ => 0.0,
+    };
     match block {
         BlockElement::Heading { level, .. } => {
             let mult = match level {

@@ -333,15 +333,15 @@ async fn test_layout_cache_incremental_performance_and_fence_propagation(cx: &mu
             let fenced = vec![false; lines.len()];
             let mut cache = DocumentLayoutCache::new();
             let expected = cache.update(window.text_system(), &lines, &fenced, 3000., 14.);
-            let original_ptr = cache.entries[60].text.as_ptr();
+            let original_ptr = cache.entries[60].spans.as_ptr();
             assert_eq!(
                 cache.update(window.text_system(), &lines, &fenced, 3000., 14.),
                 expected
             );
             assert_eq!(
-                cache.entries[60].text.as_ptr(),
+                cache.entries[60].spans.as_ptr(),
                 original_ptr,
-                "unchanged line must retain its text allocation"
+                "unchanged line must retain its layout allocation"
             );
 
             let mut inserted = lines.clone();
@@ -354,9 +354,9 @@ async fn test_layout_cache_incremental_performance_and_fence_propagation(cx: &mu
                 fresh.update(window.text_system(), &inserted, &flags, 3000., 14.)
             );
             assert_eq!(
-                cache.entries[61].text.as_ptr(),
+                cache.entries[61].spans.as_ptr(),
                 original_ptr,
-                "suffix reuse must retain its text allocation"
+                "suffix reuse must retain its layout allocation"
             );
         });
     });

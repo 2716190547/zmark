@@ -151,7 +151,7 @@ fn test_multi_block_selection_skips_rules_and_compacts_consecutive_lists() {
     let doc = ParsedDocument {
         blocks,
         anchors: Vec::new(),
-        code_blocks: Vec::new(),
+        code_blocks: std::sync::Arc::new(Vec::new()),
     };
 
     let text = doc.extract_plain_text(0, 3);

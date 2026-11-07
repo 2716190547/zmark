@@ -403,10 +403,21 @@ pub struct LineVisualSpan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CachedLineEntry {
-    pub text: String,
+    /// Fingerprint of the line text. The cache only needs to know whether the
+    /// line changed; keeping a second full copy of every line doubled editor
+    /// memory for no benefit.
+    pub text_hash: u64,
+    pub text_len: usize,
     pub is_fenced: bool,
     pub spans: Vec<LineVisualSpan>,
     pub natural_width_px: f32,
+}
+
+fn line_fingerprint(line: &str) -> (u64, usize) {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    line.hash(&mut hasher);
+    (hasher.finish(), line.len())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -455,8 +466,10 @@ fn shape_single_line(
             is_first: v.is_first,
         })
         .collect();
+    let (text_hash, text_len) = line_fingerprint(line);
     CachedLineEntry {
-        text: line.to_string(),
+        text_hash,
+        text_len,
         is_fenced,
         spans,
         natural_width_px,
@@ -478,7 +491,8 @@ fn evaluate_matching_line(
     } else if old.natural_width_px <= max_width_px {
         (
             CachedLineEntry {
-                text: old.text,
+                text_hash: old.text_hash,
+                text_len: old.text_len,
                 is_fenced,
                 spans: vec![LineVisualSpan {
                     char_start: 0,
@@ -536,7 +550,11 @@ impl DocumentLayoutCache {
                 .zip(old_entries.into_iter())
                 .enumerate()
             {
-                if old.is_fenced == is_fenced && old.text == *line {
+                let (text_hash, text_len) = line_fingerprint(line);
+                if old.is_fenced == is_fenced
+                    && old.text_hash == text_hash
+                    && old.text_len == text_len
+                {
                     let (entry, is_reused) = evaluate_matching_line(
                         old,
                         i,
@@ -566,11 +584,17 @@ impl DocumentLayoutCache {
                 }
             }
         } else if !font_changed && !old_entries.is_empty() {
+            let matches = |entry: &CachedLineEntry, line: &str, is_fenced: bool| {
+                let (text_hash, text_len) = line_fingerprint(line);
+                entry.is_fenced == is_fenced
+                    && entry.text_hash == text_hash
+                    && entry.text_len == text_len
+            };
+
             let mut prefix = 0;
             while prefix < lines.len()
                 && prefix < old_entries.len()
-                && old_entries[prefix].is_fenced == fenced_lines[prefix]
-                && old_entries[prefix].text == lines[prefix]
+                && matches(&old_entries[prefix], &lines[prefix], fenced_lines[prefix])
             {
                 prefix += 1;
             }
@@ -578,10 +602,11 @@ impl DocumentLayoutCache {
             let mut suffix = 0;
             while suffix < (lines.len() - prefix)
                 && suffix < (old_entries.len() - prefix)
-                && old_entries[old_entries.len() - 1 - suffix].is_fenced
-                    == fenced_lines[lines.len() - 1 - suffix]
-                && old_entries[old_entries.len() - 1 - suffix].text
-                    == lines[lines.len() - 1 - suffix]
+                && matches(
+                    &old_entries[old_entries.len() - 1 - suffix],
+                    &lines[lines.len() - 1 - suffix],
+                    fenced_lines[lines.len() - 1 - suffix],
+                )
             {
                 suffix += 1;
             }
@@ -788,6 +813,7 @@ pub fn slice_tokens_for_visual_subline(
 
 pub fn render_editor_pane(
     lines: Arc<Vec<String>>,
+    char_count: usize,
     visual_lines: Arc<Vec<VisualLine>>,
     syntax_cache: Arc<std::sync::Mutex<zmark_core::syntax::SyntaxCache>>,
     code_blocks: Arc<Vec<zmark_core::ast::ParsedCodeBlock>>,
@@ -807,12 +833,6 @@ pub fn render_editor_pane(
 ) -> impl IntoElement {
     let line_count = visual_lines.len().max(1);
     let (cursor_line, cursor_col) = cursor;
-    // Buffer character count including line breaks, shown in the status pill.
-    let char_count: usize = lines
-        .iter()
-        .map(|line| line.chars().count())
-        .sum::<usize>()
-        + lines.len().saturating_sub(1);
     let theme = theme.clone();
     let list_theme = theme.clone();
     let sanitized_lh = zmark_core::config::Preferences::sanitize_line_height(line_height);

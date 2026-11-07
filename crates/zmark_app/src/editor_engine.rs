@@ -204,93 +204,14 @@ pub fn visual_to_physical(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VisualLineCache {
-    pub buffer_revision: usize,
-    pub max_cols: usize,
-    pub tab_width: usize,
-    pub cached_visual_lines: Arc<Vec<VisualLine>>,
-}
-
-impl Default for VisualLineCache {
-    fn default() -> Self {
-        Self {
-            buffer_revision: usize::MAX,
-            max_cols: 0,
-            tab_width: 4,
-            cached_visual_lines: Arc::new(Vec::new()),
-        }
-    }
-}
-
-impl VisualLineCache {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[allow(dead_code)]
-    pub fn get_or_compute(
-        &mut self,
-        lines: &[String],
-        revision: usize,
-        max_cols: usize,
-    ) -> Arc<Vec<VisualLine>> {
-        self.get_or_compute_with_tab_width(lines, revision, max_cols, 4)
-    }
-
-    pub fn get_or_compute_with_tab_width(
-        &mut self,
-        lines: &[String],
-        revision: usize,
-        max_cols: usize,
-        tab_width: usize,
-    ) -> Arc<Vec<VisualLine>> {
-        if self.cached_visual_lines.is_empty()
-            || self.buffer_revision != revision
-            || self.max_cols != max_cols
-            || self.tab_width != tab_width
-        {
-            let mut result = Vec::new();
-            for (phys_idx, line) in lines.iter().enumerate() {
-                let wrapped = wrap_line_to_visual_with_tab_width(phys_idx, line, max_cols, tab_width);
-                result.extend(wrapped);
-            }
-            if result.is_empty() {
-                result.push(VisualLine {
-                    physical_line_idx: 0,
-                    subline_idx: 0,
-                    char_start: 0,
-                    char_len: 0,
-                    is_first: true,
-                });
-            }
-            self.buffer_revision = revision;
-            self.max_cols = max_cols;
-            self.tab_width = tab_width;
-            self.cached_visual_lines = Arc::new(result);
-        }
-        self.cached_visual_lines.clone()
-    }
-
-    #[allow(dead_code)]
-    pub fn is_cached(&self, revision: usize, max_cols: usize) -> bool {
-        !self.cached_visual_lines.is_empty()
-            && self.buffer_revision == revision
-            && self.max_cols == max_cols
-    }
-
-    #[allow(dead_code)]
-    pub fn invalidate(&mut self) {
-        self.cached_visual_lines = Arc::new(Vec::new());
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorEngine {
     pub lines: Arc<Vec<String>>,
+    /// Character count including line breaks, cached so the status pill does not
+    /// rescan every line on every frame.
+    pub char_count: usize,
     pub cursor_line: usize,
     pub cursor_col: usize,
     pub revision: usize,
-    pub visual_cache: VisualLineCache,
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
     undo_bytes: usize,
@@ -303,11 +224,11 @@ impl EditorEngine {
         let last_line_idx = lines.len() - 1;
         let last_col = lines[last_line_idx].chars().count();
         Self {
+            char_count: count_chars(&lines),
             lines: Arc::new(lines),
             cursor_line: last_line_idx,
             cursor_col: last_col,
             revision: 0,
-            visual_cache: VisualLineCache::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_bytes: 0,
@@ -317,6 +238,7 @@ impl EditorEngine {
 
     pub fn reset_text(&mut self, text: &str) {
         self.lines = Arc::new(split_lines(text));
+        self.char_count = count_chars(&self.lines);
         self.cursor_line = self.cursor_line.min(self.lines.len() - 1);
         self.clamp_cursor();
         self.undo_stack.clear();
@@ -378,6 +300,7 @@ impl EditorEngine {
         updated.replace_range(range, replacement);
         self.push_snapshot();
         self.lines = Arc::new(split_lines(&updated));
+        self.char_count = count_chars(&self.lines);
         self.cursor_col = cursor_col;
         self.clamp_cursor();
         self.revision += 1;
@@ -396,12 +319,14 @@ impl EditorEngine {
                 self.internal_insert_char(ch);
             }
         }
+        self.char_count = count_chars(&self.lines);
         self.revision += 1;
     }
 
     pub fn insert_newline(&mut self) {
         self.push_snapshot();
         self.internal_newline();
+        self.char_count = count_chars(&self.lines);
         self.revision += 1;
     }
 
@@ -445,6 +370,7 @@ impl EditorEngine {
             self.cursor_col = prev_len;
             self.revision += 1;
         }
+        self.char_count = count_chars(&self.lines);
     }
 
     pub fn delete_forward(&mut self) {
@@ -463,6 +389,7 @@ impl EditorEngine {
             lines[self.cursor_line].push_str(&next);
             self.revision += 1;
         }
+        self.char_count = count_chars(&self.lines);
     }
 
     pub fn move_left(&mut self) {
@@ -516,6 +443,7 @@ impl EditorEngine {
             self.redo_stack.push(current);
             trim_stack(&mut self.redo_stack, &mut self.redo_bytes);
             self.lines = Arc::new(split_lines(&prev));
+            self.char_count = count_chars(&self.lines);
             self.cursor_line = self.cursor_line.min(self.lines.len() - 1);
             self.clamp_cursor();
             self.revision += 1;
@@ -533,6 +461,7 @@ impl EditorEngine {
             self.undo_stack.push(current);
             trim_stack(&mut self.undo_stack, &mut self.undo_bytes);
             self.lines = Arc::new(split_lines(&next));
+            self.char_count = count_chars(&self.lines);
             self.cursor_line = self.cursor_line.min(self.lines.len() - 1);
             self.clamp_cursor();
             self.revision += 1;
@@ -540,18 +469,6 @@ impl EditorEngine {
         } else {
             false
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn get_visual_lines(&mut self, max_cols: usize) -> Arc<Vec<VisualLine>> {
-        let rev = self.revision;
-        self.visual_cache.get_or_compute(&self.lines, rev, max_cols)
-    }
-
-    #[allow(dead_code)]
-    pub fn get_visual_lines_with_tab_width(&mut self, max_cols: usize, tab_width: usize) -> Arc<Vec<VisualLine>> {
-        let rev = self.revision;
-        self.visual_cache.get_or_compute_with_tab_width(&self.lines, rev, max_cols, tab_width)
     }
 
     pub fn move_up_visual_lines(&mut self, vis_lines: &[VisualLine]) {
@@ -572,17 +489,11 @@ impl EditorEngine {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn move_up_visual(&mut self, max_cols: usize) {
-        let vis_lines = self.get_visual_lines(max_cols);
-        self.move_up_visual_lines(&vis_lines);
-    }
+}
 
-    #[allow(dead_code)]
-    pub fn move_down_visual(&mut self, max_cols: usize) {
-        let vis_lines = self.get_visual_lines(max_cols);
-        self.move_down_visual_lines(&vis_lines);
-    }
+fn count_chars(lines: &[String]) -> usize {
+    lines.iter().map(|line| line.chars().count()).sum::<usize>()
+        + lines.len().saturating_sub(1)
 }
 
 fn split_lines(text: &str) -> Vec<String> {
@@ -667,29 +578,33 @@ mod tests {
     }
 
     #[test]
-    fn test_visual_line_cache_and_engine_navigation() {
+    fn char_count_tracks_edits_and_undo() {
+        let mut editor = EditorEngine::new("a\nbc");
+        assert_eq!(editor.char_count, 4); // 'a' + '\n' + 'b' + 'c'
+        editor.insert_text("x");
+        assert_eq!(editor.char_count, 5);
+        assert!(editor.undo());
+        assert_eq!(editor.char_count, 4);
+        assert!(editor.redo());
+        assert_eq!(editor.char_count, 5);
+    }
+
+    #[test]
+    fn test_engine_navigation_with_wrapped_lines() {
         let mut editor = EditorEngine::new("first line\nhello world long line here wrapping\nthird line");
-        assert_eq!(editor.revision, 0);
-
-        let _lines1 = editor.get_visual_lines(12);
-        assert!(editor.visual_cache.is_cached(0, 12));
-
-        editor.insert_text("!");
-        assert_eq!(editor.revision, 1);
-        assert!(!editor.visual_cache.is_cached(1, 12));
-
-        let lines2 = editor.get_visual_lines(12);
-        assert_eq!(lines2.len(), editor.get_visual_lines(12).len());
-
-        editor.visual_cache.invalidate();
-        assert!(!editor.visual_cache.is_cached(1, 12));
+        let visual: Vec<VisualLine> = editor
+            .lines
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, line)| wrap_line_to_visual_with_tab_width(idx, line, 12, 4))
+            .collect();
 
         editor.set_cursor(1, 20);
-        editor.move_up_visual(12);
+        editor.move_up_visual_lines(&visual);
         let (cur_line, _) = editor.cursor();
         assert!(cur_line <= 1);
 
-        editor.move_down_visual(12);
+        editor.move_down_visual_lines(&visual);
     }
 
     #[test]
