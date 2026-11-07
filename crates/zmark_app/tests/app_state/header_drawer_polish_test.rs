@@ -200,6 +200,29 @@ fn test_document_title_display_name_and_i18n_fallback() {
 }
 
 #[test]
+fn mode_tabs_use_fill_only_without_accent_underline() {
+    let src = include_str!("../../src/views/workspace.rs");
+    let start = src
+        .find("fn render_mode_icon_tab")
+        .expect("render_mode_icon_tab must exist");
+    let rest = &src[start..];
+    let end = rest[1..]
+        .find("\nfn ")
+        .map(|i| i + 1)
+        .unwrap_or(rest.len());
+    let body = &rest[..end];
+
+    assert!(
+        !body.contains("mode_indicator_"),
+        "active view-mode tabs must not render an underline indicator"
+    );
+    assert!(
+        !body.contains("theme.accent"),
+        "active view-mode tabs must communicate selection with fill, not an accent dot"
+    );
+}
+
+#[test]
 fn test_fullscreen_padding_adaptive_calculation() {
     // Direct assertion on production function: adaptive_header_padding(is_macos, is_fullscreen, drawer_open)
 

@@ -79,11 +79,8 @@ Enjoy writing and reading with pure speed!
         ]);
 
         let window_options = WindowOptions {
-            titlebar: Some(TitlebarOptions {
-                title: Some("ZMark".into()),
-                appears_transparent: true,
-                traffic_light_position: Some(point(px(14.), px(12.))),
-            }),
+            titlebar: zmark_app::platform::titlebar_options("ZMark", 12.0),
+            window_decorations: zmark_app::platform::window_decorations(),
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
                 size(px(1200.), px(800.)),

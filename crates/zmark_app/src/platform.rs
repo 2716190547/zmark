@@ -4,6 +4,8 @@
 //! hardcoding macOS font names or window-chrome geometry. Nothing here changes
 //! macOS behaviour.
 
+use gpui::{point, px, TitlebarOptions, WindowDecorations};
+
 /// UI (proportional) font family list understood by the platform text system.
 pub const UI_FONT: &str = if cfg!(target_os = "macos") {
     "ui-sans-serif, system-ui"
@@ -25,13 +27,83 @@ pub const MONO_FONT: &str = if cfg!(target_os = "macos") {
 /// Leading inset that keeps header content clear of the native window controls.
 pub const LEADING_WINDOW_CONTROL_INSET: f32 = 76.0;
 
-/// Reserved space for native window controls: macOS draws traffic lights itself,
-/// Windows/Linux need room for the OS-drawn minimise/maximise/close buttons.
-pub const TRAILING_WINDOW_CONTROL_INSET: f32 = if cfg!(target_os = "macos") {
-    12.0
-} else {
-    138.0
-};
+/// Trailing inset before app content. macOS leaves a small gap for its traffic
+/// lights; Windows draws custom caption buttons as part of the header, so no
+/// extra inset is needed; Linux keeps native server-side decorations and only
+/// needs normal content padding.
+pub const fn trailing_window_control_inset(is_macos: bool, is_windows: bool) -> f32 {
+    if is_macos {
+        12.0
+    } else if is_windows {
+        0.0
+    } else {
+        8.0
+    }
+}
+
+pub const TRAILING_WINDOW_CONTROL_INSET: f32 =
+    trailing_window_control_inset(cfg!(target_os = "macos"), cfg!(target_os = "windows"));
+
+/// Width of one Windows caption button. Three buttons fill the standard 138px
+/// caption area (46px each at 100% scale).
+pub const WINDOW_CONTROL_BUTTON_WIDTH: f32 = 46.0;
+
+/// Title-bar policy that keeps exactly one bar on every desktop.
+///
+/// - macOS: transparent title bar with native traffic lights at the leading edge.
+/// - Windows: transparent title bar (native caption hidden), with minimise/
+///   maximise/close drawn into the existing canvas header, so no second bar.
+/// - Linux: native server-side decorations; the canvas header is ordinary
+///   content below the system title bar.
+pub fn titlebar_options(title: &str, traffic_light_y: f32) -> Option<TitlebarOptions> {
+    if cfg!(target_os = "macos") {
+        Some(TitlebarOptions {
+            title: Some(title.to_string().into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(14.), px(traffic_light_y))),
+        })
+    } else if cfg!(target_os = "windows") {
+        Some(TitlebarOptions {
+            title: Some(title.to_string().into()),
+            appears_transparent: true,
+            traffic_light_position: None,
+        })
+    } else {
+        None
+    }
+}
+
+/// Linux keeps compositor/server-side decorations; macOS and Windows use the
+/// in-app title bar instead.
+pub fn window_decorations() -> Option<WindowDecorations> {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        None
+    } else {
+        Some(WindowDecorations::Server)
+    }
+}
+
+/// Auxiliary windows (settings) have no in-app header to host caption buttons.
+/// macOS keeps its transparent traffic-light title bar; Windows uses the
+/// native caption bar; Linux uses server-side decorations.
+pub fn auxiliary_titlebar_options(title: &str, traffic_light_y: f32) -> Option<TitlebarOptions> {
+    if cfg!(target_os = "macos") {
+        Some(TitlebarOptions {
+            title: Some(title.to_string().into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(14.), px(traffic_light_y))),
+        })
+    } else if cfg!(target_os = "windows") {
+        Some(TitlebarOptions {
+            title: Some(title.to_string().into()),
+            appears_transparent: false,
+            traffic_light_position: None,
+        })
+    } else {
+        None
+    }
+}
+
 
 /// Whether the app gaining activation requires ordering the main window front.
 ///
@@ -64,8 +136,35 @@ mod tests {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            assert_eq!(TRAILING_WINDOW_CONTROL_INSET, 138.0);
             assert!(!UI_FONT.contains("system-ui"));
+        }
+    }
+
+    #[test]
+    fn trailing_inset_keeps_one_bar_per_platform() {
+        assert_eq!(trailing_window_control_inset(true, false), 12.0);
+        assert_eq!(trailing_window_control_inset(false, true), 0.0);
+        assert_eq!(trailing_window_control_inset(false, false), 8.0);
+        assert_eq!(WINDOW_CONTROL_BUTTON_WIDTH * 3.0, 138.0);
+    }
+
+    #[test]
+    fn titlebar_policy_never_adds_a_second_bar() {
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
+            let titlebar =
+                titlebar_options("ZMark", 12.0).expect("custom chrome on macOS/Windows");
+            assert!(titlebar.appears_transparent);
+            if cfg!(target_os = "macos") {
+                assert_eq!(
+                    titlebar.traffic_light_position,
+                    Some(point(px(14.), px(12.)))
+                );
+            } else {
+                assert_eq!(titlebar.traffic_light_position, None);
+            }
+        } else {
+            assert!(titlebar_options("ZMark", 12.0).is_none());
+            assert_eq!(window_decorations(), Some(WindowDecorations::Server));
         }
     }
 }

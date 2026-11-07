@@ -1989,11 +1989,11 @@ impl WorkspaceView {
             let bounds = Bounds::centered(None, size(px(640.), px(460.)), cx);
             let handle = cx.open_window(
                 WindowOptions {
-                    titlebar: Some(TitlebarOptions {
-                        title: Some(format!("ZMark - {}", strings.settings).into()),
-                        appears_transparent: true,
-                        traffic_light_position: Some(point(px(14.), px(14.))),
-                    }),
+                    titlebar: crate::platform::auxiliary_titlebar_options(
+                        &format!("ZMark - {}", strings.settings),
+                        14.0,
+                    ),
+                    window_decorations: crate::platform::window_decorations(),
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
@@ -2600,7 +2600,6 @@ impl WorkspaceView {
             // 38px matches the drawer header so both icon rows share one vertical
             // center (19px), which is where the native traffic lights sit.
             .h(px(38.))
-            .py(px(4.))
             .w_full()
             .pl(header_pl)
             .pr(header_pr)
@@ -2764,7 +2763,6 @@ impl WorkspaceView {
                                 "btn_mode_source",
                                 format!("{} (⌘1)", strings.source_mode),
                                 view_mode == ViewMode::Source,
-                                reduce_motion,
                                 theme,
                                 render_source_mode_icon(
                                     mode_tab_colors(view_mode == ViewMode::Source, theme).1,
@@ -2777,7 +2775,6 @@ impl WorkspaceView {
                                 "btn_mode_split",
                                 format!("{} (⌘2)", strings.split_mode),
                                 view_mode == ViewMode::Split,
-                                reduce_motion,
                                 theme,
                                 render_split_mode_icon(
                                     mode_tab_colors(view_mode == ViewMode::Split, theme).1,
@@ -2790,7 +2787,6 @@ impl WorkspaceView {
                                 "btn_mode_preview",
                                 format!("{} (⌘3)", strings.preview_mode),
                                 view_mode == ViewMode::Preview,
-                                reduce_motion,
                                 theme,
                                 render_preview_mode_icon(
                                     mode_tab_colors(view_mode == ViewMode::Preview, theme).1,
@@ -2868,6 +2864,9 @@ impl WorkspaceView {
                             )),
                     ),
             )
+            .when(cfg!(target_os = "windows") && !is_fullscreen, |el| {
+                el.child(render_window_controls(theme))
+            })
     }
 
     fn render_remove_root_modal(
@@ -4851,7 +4850,6 @@ fn render_mode_icon_tab<F>(
     tab_id: &'static str,
     tooltip_text: impl Into<String>,
     active: bool,
-    reduce_motion: bool,
     theme: &crate::theme::ThemeColors,
     icon: impl IntoElement + 'static,
     handler: F,
@@ -4863,8 +4861,6 @@ where
     let (bg_color, text_color) = mode_tab_colors(active, theme);
     let base = div()
         .id(tab_id)
-        .relative()
-        .overflow_hidden()
         .tooltip(move |_window, cx| {
             let t = text.clone();
             cx.new(|_| TooltipView { text: t }).into()
@@ -4879,29 +4875,75 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        let underline = crate::views::motion::animated(
-            div()
-                .absolute()
-                .bottom(px(2.))
-                .left(px(8.))
-                .w(px(12.))
-                .h(px(2.))
-                .rounded_full()
-                .bg(theme.accent),
-            reduce_motion,
-            format!("mode_indicator_{tab_id}"),
-            140,
-            |el, delta| el.opacity(delta),
-        );
-        base.bg(bg_color)
-            .text_color(text_color)
-            .child(icon)
-            .child(underline)
+        base.bg(bg_color).text_color(text_color).child(icon)
     } else {
         base.text_color(text_color)
             .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
             .child(icon)
     }
+}
+
+/// Windows has no native title bar when `appears_transparent` is set, so the
+/// canvas header is the single title bar. These client-drawn buttons use the
+/// native non-client hit-test areas, which keeps minimise/maximise/close and
+/// Snap behaviour identical to a system caption bar.
+fn render_window_controls(theme: &crate::theme::ThemeColors) -> impl IntoElement {
+    let color = theme.text_primary;
+    div()
+        .flex()
+        .flex_shrink_0()
+        .h_full()
+        .items_center()
+        .child(render_window_control_button(
+            "btn_window_minimize",
+            WindowControlArea::Min,
+            render_window_minimize_icon(color),
+        ))
+        .child(render_window_control_button(
+            "btn_window_maximize",
+            WindowControlArea::Max,
+            render_window_maximize_icon(color),
+        ))
+        .child(render_window_control_button(
+            "btn_window_close",
+            WindowControlArea::Close,
+            render_window_close_icon(color),
+        ))
+}
+
+fn render_window_control_button(
+    id: &'static str,
+    area: WindowControlArea,
+    icon: impl IntoElement + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .w(px(crate::platform::WINDOW_CONTROL_BUTTON_WIDTH))
+        .h_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .window_control_area(area)
+        .child(icon)
+}
+
+fn render_window_minimize_icon(color: Hsla) -> impl IntoElement {
+    div().w(px(10.)).h(px(1.)).bg(color)
+}
+
+fn render_window_maximize_icon(color: Hsla) -> impl IntoElement {
+    div()
+        .w(px(10.))
+        .h(px(10.))
+        .border_1()
+        .border_color(color)
+}
+
+fn render_window_close_icon(color: Hsla) -> impl IntoElement {
+    svg()
+        .path("icons/x.svg")
+        .size(px(10.))
+        .text_color(color)
 }
 
 // Standard Lucide SVG icons rendered natively by GPUI

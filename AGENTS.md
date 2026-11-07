@@ -26,7 +26,7 @@
 
 ## 开发循环与审查分级
 
-- **日常迭代**：每个改动/阶段运行 `scripts/dev_check.sh`（`cargo nextest run --workspace` + rename 门禁）。它并行执行全部 360 项测试，热运行约 7–10 秒；不要为每个中间提交重跑完整 `cargo test --workspace`。
+- **日常迭代**：每个改动/阶段运行 `scripts/dev_check.sh`（`cargo nextest run --workspace` + rename 门禁）。它并行执行全部 363 项测试，热运行约 7–10 秒；不要为每个中间提交重跑完整 `cargo test --workspace`。
 - **交付门槛**：在最终候选上运行一次 `scripts/full_gate.sh`（完整 `cargo test --workspace` + Phase I/H 六目标串行 + rename 门禁）；需要安装包时加 `--bundle`。当前最终门槛实测约 1.5 分钟（80.5 秒），改动前约 6–7 分钟。
 - **测试目标结构**：Phase H/I 的 6 个命名目标（`phase_h_b1/b2/b3/b4`、`phase_i_syntax_and_warm_palette_test`、`rework4_stage_a_workspace_test`）保持独立；其余 app 测试按领域合并为 `app_state/app_editor/app_preview/app_media`，core 测试合并为 `core_all`。`hidpi_lightbox_test`、`lightbox_*` 与 `cache_accounting_test` 因进程级纹理/分配器状态保持独立。不要把这些文件并入聚合目标，也不要把命名目标并入聚合目标。
 - **审查分级**：改名、更新协议、安全与大范围重构最多两轮独立审查；UI、文案、小重构不送独立审查，由测试与人工验收。
