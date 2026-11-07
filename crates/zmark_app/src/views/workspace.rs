@@ -2719,18 +2719,19 @@ impl WorkspaceView {
                                     .truncate()
                                     .child(title_text),
                             )
-                            .when(is_dirty, |el| {
-                                el.child(crate::views::motion::animated(
-                                    div()
-                                        .size(px(6.))
-                                        .rounded_full()
-                                        .bg(theme.accent)
-                                        .flex_shrink_0(),
-                                    reduce_motion,
-                                    format!("dirty_pulse_{dirty_generation}"),
-                                    200,
-                                    |el, delta| el.opacity(0.4 + 0.6 * delta),
-                                ))
+                            .map(|el| {
+                                if is_dirty {
+                                    crate::views::motion::animated(
+                                        el,
+                                        reduce_motion,
+                                        format!("dirty_title_{dirty_generation}"),
+                                        200,
+                                        |el, delta| el.opacity(0.55 + 0.45 * delta),
+                                    )
+                                    .into_any_element()
+                                } else {
+                                    el.into_any_element()
+                                }
                             })
                             .into_any_element()
                     }),
@@ -2810,30 +2811,20 @@ impl WorkspaceView {
                                     _ => None,
                                 },
                                 |el, version| {
-                                    el.child(
+                                    // One-shot pulse keyed by version: it replays when a new
+                                    // update is staged, never loops, and is skipped entirely
+                                    // under "Reduce motion".
+                                    el.child(crate::views::motion::animated(
                                         div()
                                             .debug_selector(|| "btn_update_ready".to_string())
                                             .child(render_animated_icon_button(
                                                 "btn_update_ready",
                                                 format!("{} v{}", strings.restart_update, version),
                                                 theme,
-                                                div()
-                                                    .relative()
-                                                    .child(
-                                                        svg()
-                                                            .path("icons/refresh.svg")
-                                                            .size(px(16.))
-                                                            .text_color(theme.accent),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .absolute()
-                                                            .top(px(1.))
-                                                            .right(px(1.))
-                                                            .size(px(5.))
-                                                            .rounded_full()
-                                                            .bg(theme.accent),
-                                                    ),
+                                                svg()
+                                                    .path("icons/refresh.svg")
+                                                    .size(px(16.))
+                                                    .text_color(theme.accent),
                                                 reduce_motion,
                                                 self.update_press_generation,
                                                 cx.listener(|this, _, window, cx| {
@@ -2842,7 +2833,11 @@ impl WorkspaceView {
                                                     this.restart_for_update(Some(window), cx);
                                                 }),
                                             )),
-                                    )
+                                        reduce_motion,
+                                        format!("update_ready_pulse_{version}"),
+                                        360,
+                                        |el, delta| el.opacity(0.35 + 0.65 * delta),
+                                    ))
                                 },
                             )
                             .child(render_animated_icon_button(

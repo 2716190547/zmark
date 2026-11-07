@@ -435,6 +435,77 @@ where
     }
 }
 
+/// Section heading shared by every settings page.
+fn render_section_title(text: impl Into<SharedString>, theme: &ThemeColors) -> impl IntoElement {
+    div()
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text_muted)
+        .child(text.into())
+}
+
+/// One settings row: label (+ optional description) on the left, a control on the right.
+fn render_setting_row(
+    label: impl Into<SharedString>,
+    desc: Option<SharedString>,
+    trailing: impl IntoElement,
+    theme: &ThemeColors,
+) -> impl IntoElement {
+    div()
+        .w_full()
+        .py_2()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .min_w(px(0.))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.text_primary)
+                        .child(label.into()),
+                )
+                .when_some(desc, |el, desc| {
+                    el.child(div().text_xs().text_color(theme.text_muted).child(desc))
+                }),
+        )
+        .child(div().flex_shrink_0().child(trailing))
+}
+
+/// Secondary push button used for in-page actions (About -> check for updates).
+fn render_secondary_button<F>(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    theme: &ThemeColors,
+    handler: F,
+) -> impl IntoElement
+where
+    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+{
+    div()
+        .id(id)
+        .h(px(26.))
+        .px(px(12.))
+        .rounded(px(6.))
+        .flex()
+        .items_center()
+        .bg(theme.text_primary.opacity(0.05))
+        .border(px(1.))
+        .border_color(theme.text_primary.opacity(0.12))
+        .text_size(px(12.))
+        .text_color(theme.text_primary)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme.text_primary.opacity(0.08)))
+        .on_mouse_down(MouseButton::Left, handler)
+        .child(label.into())
+}
+
 fn render_ios_toggle<F>(
     active: bool,
     theme: &ThemeColors,
@@ -605,36 +676,14 @@ fn render_appearance_tab(
                         })),
                 ),
         )
-        .child(
-            div()
-                .w_full()
-                .py_2()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_0p5()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text_primary)
-                                .child(strings.reduce_motion_label),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.text_muted)
-                                .child(strings.reduce_motion_desc),
-                        ),
-                )
-                .child(render_ios_toggle(reduce_motion, theme, move |_, window, cx| {
-                    on_toggle_reduce_motion(!reduce_motion, window, cx);
-                })),
-        )
+        .child(render_setting_row(
+            strings.reduce_motion_label,
+            Some(strings.reduce_motion_desc.into()),
+            render_ios_toggle(reduce_motion, theme, move |_, window, cx| {
+                on_toggle_reduce_motion(!reduce_motion, window, cx);
+            }),
+            theme,
+        ))
 }
 
 fn render_editor_save_tab(
@@ -666,84 +715,30 @@ fn render_editor_save_tab(
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(
-                    div()
-                        .w_full()
-                        .py_2()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_0p5()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.text_primary)
-                                        .child(strings.auto_save_label),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.text_muted)
-                                        .child(strings.auto_save_desc),
-                                ),
-                        )
-                        .child(render_ios_toggle(auto_save, theme, move |_, window, cx| {
-                            t_as(!auto_save, window, cx);
-                        })),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .py_2()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text_primary)
-                                .child(strings.auto_save_on_blur_label),
-                        )
-                        .child(render_ios_toggle(auto_save_on_blur, theme, move |_, window, cx| {
-                            t_asb(!auto_save_on_blur, window, cx);
-                        })),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .py_2()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_0p5()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.text_primary)
-                                        .child(strings.show_line_numbers_label),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.text_muted)
-                                        .child(strings.show_line_numbers_desc),
-                                ),
-                        )
-                        .child(render_ios_toggle(show_line_numbers, theme, move |_, window, cx| {
-                            t_ln(!show_line_numbers, window, cx);
-                        })),
-                ),
+                .child(render_setting_row(
+                    strings.auto_save_label,
+                    Some(strings.auto_save_desc.into()),
+                    render_ios_toggle(auto_save, theme, move |_, window, cx| {
+                        t_as(!auto_save, window, cx);
+                    }),
+                    theme,
+                ))
+                .child(render_setting_row(
+                    strings.auto_save_on_blur_label,
+                    None,
+                    render_ios_toggle(auto_save_on_blur, theme, move |_, window, cx| {
+                        t_asb(!auto_save_on_blur, window, cx);
+                    }),
+                    theme,
+                ))
+                .child(render_setting_row(
+                    strings.show_line_numbers_label,
+                    Some(strings.show_line_numbers_desc.into()),
+                    render_ios_toggle(show_line_numbers, theme, move |_, window, cx| {
+                        t_ln(!show_line_numbers, window, cx);
+                    }),
+                    theme,
+                )),
         )
         .child(
             div()
@@ -967,13 +962,7 @@ fn render_shortcuts_tab(theme: &ThemeColors, strings: &I18nStrings) -> impl Into
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.text_muted)
-                        .child(strings.shortcuts_label),
-                )
+                .child(render_section_title(strings.shortcuts_label, theme))
                 .child(
                     div()
                         .flex()
@@ -996,120 +985,84 @@ fn render_about_tab(
     on_open_github: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let update_text = match update_status {
-        UpdateStatus::Checking => strings.update_checking.to_string(),
+        UpdateStatus::Checking | UpdateStatus::Installing => strings.update_checking.to_string(),
         UpdateStatus::Latest => strings.up_to_date.to_string(),
         UpdateStatus::Error(error) => format!("{}: {error}", strings.update_failed),
-        UpdateStatus::Downloaded(version) => {
-            format!("{} v{version}", strings.update_ready)
-        }
-        UpdateStatus::Installing => strings.update_checking.to_string(),
-        UpdateStatus::Idle => {
-            if update_enabled {
-                String::new()
-            } else {
-                update_reason
-                    .unwrap_or(strings.update_disabled)
-                    .to_string()
-            }
-        }
+        UpdateStatus::Downloaded(version) => format!("{} v{version}", strings.update_ready),
+        UpdateStatus::Idle if update_enabled => String::new(),
+        UpdateStatus::Idle => update_reason
+            .unwrap_or(strings.update_disabled)
+            .to_string(),
     };
-    let downloaded = matches!(update_status, UpdateStatus::Downloaded(_));
 
     div()
         .flex()
         .flex_col()
         .gap_5()
+        // Product header: centered logo, name, tagline.
         .child(
             div()
+                .w_full()
                 .flex()
+                .flex_col()
                 .items_center()
-                .gap_3()
+                .gap_2()
+                .pt_2()
+                .child(img("brand/logo.png").w(px(64.)).h(px(64.)).flex_shrink_0())
                 .child(
-                    img("brand/logo.png")
-                        .w(px(72.))
-                        .h(px(72.))
-                        .flex_shrink_0(),
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.text_primary)
+                        .child("ZMark"),
                 )
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_base()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme.text_primary)
-                                .child("ZMark"),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.text_muted)
-                                .child("GPU-Accelerated Markdown Editor & Reader · Rust + GPUI"),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.text_muted)
-                                .child(format!("Version {}", crate::APP_VERSION)),
-                        ),
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child("GPU-Accelerated Markdown Editor & Reader"),
                 ),
+        )
+        // Version + updates share the same row component as the other pages.
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(render_section_title(strings.software_updates, theme))
+                .child(render_setting_row(
+                    strings.current_version_label,
+                    None,
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(crate::APP_VERSION),
+                    theme,
+                ))
+                .child(render_setting_row(
+                    strings.check_updates,
+                    Some(update_text).filter(|text| !text.is_empty()).map(Into::into),
+                    render_secondary_button(
+                        "btn_check_updates",
+                        strings.check_updates,
+                        theme,
+                        on_check_update,
+                    ),
+                    theme,
+                )),
         )
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.text_muted)
-                        .child(strings.software_updates),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .id("btn_check_updates")
-                                .h(px(26.))
-                                .px(px(12.))
-                                .rounded(px(6.))
-                                .bg(theme.text_primary.opacity(0.05))
-                                .border(px(1.))
-                                .border_color(theme.text_primary.opacity(0.12))
-                                .text_size(px(12.))
-                                .text_color(theme.text_primary)
-                                .cursor_pointer()
-                                .hover(|s| s.bg(theme.text_primary.opacity(0.08)))
-                                .on_mouse_down(MouseButton::Left, on_check_update)
-                                .child(strings.check_updates),
-                        )
-                        .when(downloaded, |el| {
-                            el.child(div().size(px(6.)).rounded_full().bg(theme.accent))
-                        })
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(theme.text_muted)
-                                .child(update_text),
-                        ),
-                ),
-        )
-        .child(
-            div().pt_2().child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(theme.text_muted)
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(theme.text_primary))
-                    .on_mouse_down(MouseButton::Left, on_open_github)
-                    .child(strings.footer_credit),
-            ),
+                .child(render_section_title(strings.open_source_label, theme))
+                .child(render_setting_row(
+                    "github.com/2716190547/zmark",
+                    Some(strings.footer_credit.into()),
+                    render_secondary_button("btn_open_github", "GitHub", theme, on_open_github),
+                    theme,
+                )),
         )
 }
 
