@@ -309,6 +309,16 @@ impl Render for SettingsWindowView {
                         },
                     ))
                     .child(render_nav_item(
+                        strings.shortcuts_label,
+                        "icons/keyboard.svg",
+                        current_tab == SettingsTab::Shortcuts,
+                        &theme,
+                        {
+                            let t = on_set_tab.clone();
+                            move |_, window, cx| t(SettingsTab::Shortcuts, window, cx)
+                        },
+                    ))
+                    .child(render_nav_item(
                         strings.about,
                         "icons/info.svg",
                         current_tab == SettingsTab::About,
@@ -363,6 +373,9 @@ impl Render for SettingsWindowView {
                             on_set_locale,
                         )
                         .into_any_element(),
+                        SettingsTab::Shortcuts => {
+                            render_shortcuts_tab(&theme, strings).into_any_element()
+                        }
                         SettingsTab::About => render_about_tab(
                             &theme,
                             strings,
@@ -370,6 +383,9 @@ impl Render for SettingsWindowView {
                             update_enabled,
                             update_reason.as_deref(),
                             on_check_update,
+                            move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+                                cx.open_url("https://github.com/2716190547/zmark");
+                            },
                         )
                         .into_any_element(),
                     }),
@@ -924,6 +940,52 @@ fn render_language_tab(
         )
 }
 
+pub fn shortcut_rows(strings: &I18nStrings) -> [(&'static str, String); 6] {
+    [
+        ("⌘O", strings.open_file.to_string()),
+        ("⌘S", strings.save_file.to_string()),
+        ("⇧⌘E", strings.export_html.to_string()),
+        ("⌘B", strings.directory_drawer.to_string()),
+        (
+            "⌘1 / ⌘2 / ⌘3",
+            format!(
+                "{} / {} / {}",
+                strings.source_mode, strings.split_mode, strings.preview_mode
+            ),
+        ),
+        ("⌘,", strings.settings.to_string()),
+    ]
+}
+
+fn render_shortcuts_tab(theme: &ThemeColors, strings: &I18nStrings) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_5()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text_muted)
+                        .child(strings.shortcuts_label),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .children(shortcut_rows(strings).into_iter().map(|(keys, desc)| {
+                            render_shortcut_row(keys, desc, theme)
+                        })),
+                ),
+        )
+}
+
 fn render_about_tab(
     theme: &ThemeColors,
     strings: &I18nStrings,
@@ -931,6 +993,7 @@ fn render_about_tab(
     update_enabled: bool,
     update_reason: Option<&str>,
     on_check_update: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    on_open_github: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let update_text = match update_status {
         UpdateStatus::Checking => strings.update_checking.to_string(),
@@ -950,20 +1013,7 @@ fn render_about_tab(
             }
         }
     };
-    let shortcuts: [(&'static str, String); 6] = [
-        ("⌘O", strings.open_file.to_string()),
-        ("⌘S", strings.save_file.to_string()),
-        ("⇧⌘E", strings.export_html.to_string()),
-        ("⌘B", strings.directory_drawer.to_string()),
-        (
-            "⌘1 / ⌘2 / ⌘3",
-            format!(
-                "{} / {} / {}",
-                strings.source_mode, strings.split_mode, strings.preview_mode
-            ),
-        ),
-        ("⌘,", strings.settings.to_string()),
-    ];
+    let downloaded = matches!(update_status, UpdateStatus::Downloaded(_));
 
     div()
         .flex()
@@ -1001,7 +1051,7 @@ fn render_about_tab(
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(theme.accent)
+                                .text_color(theme.text_muted)
                                 .child(format!("Version {}", crate::APP_VERSION)),
                         ),
                 ),
@@ -1014,31 +1064,9 @@ fn render_about_tab(
                 .child(
                     div()
                         .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_muted)
-                        .child(strings.shortcuts_label),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .children(shortcuts.into_iter().map(|(keys, desc)| {
-                            render_shortcut_row(keys, desc, theme)
-                        })),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child("Updates"),
+                        .child(strings.software_updates),
                 )
                 .child(
                     div()
@@ -1048,23 +1076,40 @@ fn render_about_tab(
                         .child(
                             div()
                                 .id("btn_check_updates")
-                                .px_3()
-                                .py_1()
-                                .rounded_md()
-                                .bg(theme.accent)
-                                .text_color(rgb(0xffffff))
+                                .h(px(26.))
+                                .px(px(12.))
+                                .rounded(px(6.))
+                                .bg(theme.text_primary.opacity(0.05))
+                                .border(px(1.))
+                                .border_color(theme.text_primary.opacity(0.12))
+                                .text_size(px(12.))
+                                .text_color(theme.text_primary)
                                 .cursor_pointer()
-                                .text_xs()
+                                .hover(|s| s.bg(theme.text_primary.opacity(0.08)))
                                 .on_mouse_down(MouseButton::Left, on_check_update)
                                 .child(strings.check_updates),
                         )
+                        .when(downloaded, |el| {
+                            el.child(div().size(px(6.)).rounded_full().bg(theme.accent))
+                        })
                         .child(
                             div()
-                                .text_xs()
+                                .text_size(px(11.))
                                 .text_color(theme.text_muted)
                                 .child(update_text),
                         ),
                 ),
+        )
+        .child(
+            div().pt_2().child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(theme.text_muted)
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(theme.text_primary))
+                    .on_mouse_down(MouseButton::Left, on_open_github)
+                    .child(strings.footer_credit),
+            ),
         )
 }
 
@@ -1135,3 +1180,4 @@ where
             .child(label)
     }
 }
+

@@ -47,6 +47,7 @@ pub enum SettingsTab {
     Appearance,
     EditorSave,
     Language,
+    Shortcuts,
     About,
 }
 

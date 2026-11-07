@@ -161,7 +161,10 @@ async fn control_scrolled_paragraph(cx: &mut TestAppContext) {
     obs::reset();
     draw(cx);
 
+    // Pick the last rendered paragraph: with the larger heading margins the
+    // first visible one can be partially clipped under the header.
     let visible = (0..12)
+        .rev()
         .map(|i| format!("Paragraph body number {} stays short.", i))
         .find(|k| obs::text_bounds(k).is_some())
         .expect("at least one paragraph must be rendered after scrolling");
@@ -180,7 +183,9 @@ async fn control_scrolled_paragraph(cx: &mut TestAppContext) {
     let xs = glyph_xs(cx, &visible, 16.0);
     let dx = xs[xs.len() / 4];
     let expected = char_at(&xs, dx);
-    let got = h.click(cx, point_at(b, dx, b.3 / 2.0)).expect("click must produce a selection");
+    // Click the lower part of the line: with the larger heading margins the
+    // heading item's hitbox reaches the very top of the following line.
+    let got = h.click(cx, point_at(b, dx, b.3 * 0.8)).expect("click must produce a selection");
     println!(
         "B1-GREEN scrolled paragraph: bounds=({:.0},{:.0}) dx={:.1} expected=(block {}, char {}) got={:?}",
         b.0, b.1, dx, block_ix, expected, got

@@ -41,6 +41,7 @@ pub struct WorkspaceView {
     /// (track bounds, grab offset inside the thumb, thumb height)
     pub preview_scroll_drag: Option<(Bounds<Pixels>, f32, f32)>,
     preview_drag_ratio: Option<f32>,
+    preview_drag_ratio_until: Option<std::time::Instant>,
     pub preview_scroll_activation_observed: bool,
     pub preview_scroll_end_pending: bool,
     preview_scroll_pending_seek: Option<(usize, f32)>,
@@ -69,16 +70,15 @@ pub struct WorkspaceView {
     pub export_notice: Option<(String, PathBuf)>,
     export_notice_generation: u64,
     export_notice_closing: bool,
-    update_banner_closing: bool,
     was_dirty: bool,
     dirty_pulse_generation: u64,
     export_press_generation: u64,
+    update_press_generation: u64,
     settings_press_generation: u64,
     pub update_config: UpdateConfig,
     pub update_status: UpdateStatus,
     pub prepared_update: Option<PreparedUpdate>,
     update_checking: bool,
-    update_banner_dismissed: Option<String>,
     pending_restart: bool,
     pub search_focused: bool,
     pub preview_focused: bool,
@@ -200,6 +200,7 @@ impl WorkspaceView {
             preview_viewport_size: None,
             preview_scroll_drag: None,
             preview_drag_ratio: None,
+            preview_drag_ratio_until: None,
             preview_scroll_activation_observed: false,
             preview_scroll_end_pending: false,
             preview_scroll_pending_seek: None,
@@ -229,16 +230,15 @@ impl WorkspaceView {
             export_notice: None,
             export_notice_generation: 0,
             export_notice_closing: false,
-            update_banner_closing: false,
             was_dirty: false,
             dirty_pulse_generation: 0,
             export_press_generation: 0,
+            update_press_generation: 0,
             settings_press_generation: 0,
             update_config,
             update_status: UpdateStatus::Idle,
             prepared_update: None,
             update_checking: false,
-            update_banner_dismissed: None,
             pending_restart: false,
             search_focused: false,
             preview_focused: false,
@@ -1419,18 +1419,29 @@ impl WorkspaceView {
 
     fn end_preview_scroll_drag(&mut self) {
         self.preview_drag_ratio = None;
+        self.preview_drag_ratio_until = None;
         if self.preview_scroll_drag.take().is_some() {
             self.preview_list.scrollbar_drag_ended();
         }
     }
 
     fn release_preview_scroll_drag(&mut self) {
+        // Keep the pointer-owned ratio for a short settle window: the first
+        // measured heights after release must not pull the thumb back.
+        let ratio = self.preview_drag_ratio;
         self.end_preview_scroll_drag();
+        if let Some(ratio) = ratio {
+            self.preview_drag_ratio = Some(ratio);
+            self.preview_drag_ratio_until = Some(
+                std::time::Instant::now() + std::time::Duration::from_millis(250),
+            );
+        }
     }
 
     fn cancel_pending_preview_seek(&mut self) {
         if self.preview_scroll_drag.is_none() {
             self.preview_drag_ratio = None;
+            self.preview_drag_ratio_until = None;
         }
         self.preview_scroll_seek_generation = self.preview_scroll_seek_generation.wrapping_add(1);
         self.preview_scroll_end_pending = false;
@@ -2401,7 +2412,6 @@ impl WorkspaceView {
             Ok(Some(prepared)) => {
                 self.update_status = UpdateStatus::Downloaded(prepared.version.clone());
                 self.prepared_update = Some(prepared);
-                self.update_banner_closing = false;
             }
             Ok(None) => {
                 self.update_status = if manual {
@@ -2423,34 +2433,6 @@ impl WorkspaceView {
     }
 
     /// Hides the update banner for the rest of this session.
-    pub fn dismiss_update_banner(&mut self, version: &str, cx: &mut Context<Self>) {
-        if self.update_banner_closing {
-            return;
-        }
-        if self.state.preferences.reduce_motion {
-            self.update_banner_dismissed = Some(version.to_string());
-            self.update_banner_closing = false;
-            cx.notify();
-            return;
-        }
-        self.update_banner_closing = true;
-        cx.notify();
-        let version = version.to_string();
-        let view = cx.entity().downgrade();
-        cx.spawn(async move |_this, app| {
-            app.background_executor()
-                .timer(std::time::Duration::from_millis(120))
-                .await;
-            let _ = view.update(app, |this, cx| {
-                if this.update_status == UpdateStatus::Downloaded(version.clone()) {
-                    this.update_banner_dismissed = Some(version);
-                    this.update_banner_closing = false;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
 
     /// Starts the restart flow. Dirty documents go through the existing close
     /// prompt; the actual swap happens only after they are all resolved.
@@ -2822,6 +2804,47 @@ impl WorkspaceView {
                             .flex()
                             .items_center()
                             .gap_1()
+                            .when_some(
+                                match &self.update_status {
+                                    UpdateStatus::Downloaded(version) => Some(version.clone()),
+                                    _ => None,
+                                },
+                                |el, version| {
+                                    el.child(
+                                        div()
+                                            .debug_selector(|| "btn_update_ready".to_string())
+                                            .child(render_animated_icon_button(
+                                                "btn_update_ready",
+                                                format!("{} v{}", strings.restart_update, version),
+                                                theme,
+                                                div()
+                                                    .relative()
+                                                    .child(
+                                                        svg()
+                                                            .path("icons/refresh.svg")
+                                                            .size(px(16.))
+                                                            .text_color(theme.accent),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .absolute()
+                                                            .top(px(1.))
+                                                            .right(px(1.))
+                                                            .size(px(5.))
+                                                            .rounded_full()
+                                                            .bg(theme.accent),
+                                                    ),
+                                                reduce_motion,
+                                                self.update_press_generation,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.update_press_generation =
+                                                        this.update_press_generation.wrapping_add(1);
+                                                    this.restart_for_update(Some(window), cx);
+                                                }),
+                                            )),
+                                    )
+                                },
+                            )
                             .child(render_animated_icon_button(
                                 "btn_export",
                                 format!("{} (⇧⌘E)", strings.export_html),
@@ -3134,7 +3157,18 @@ impl Render for WorkspaceView {
         let font_size = self.state.preferences.font_size;
         let line_height = self.state.preferences.line_height;
         let max_width = self.state.preferences.max_column_width;
-        let measured_changed = self.preview_list.apply_measured(self.preview_drag_ratio);
+        let drag_ratio = if self.preview_scroll_drag.is_some()
+            || self
+                .preview_drag_ratio_until
+                .is_some_and(|until| std::time::Instant::now() < until)
+        {
+            self.preview_drag_ratio
+        } else {
+            self.preview_drag_ratio = None;
+            self.preview_drag_ratio_until = None;
+            None
+        };
+        let measured_changed = self.preview_list.apply_measured(drag_ratio);
         let layout_changed =
             self.preview_list
                 .ensure_layout(&parsed, max_width, font_size, line_height, rem);
@@ -3241,19 +3275,10 @@ impl Render for WorkspaceView {
         let dirty_generation = self.dirty_pulse_generation;
         let reduce_motion = self.state.preferences.reduce_motion;
         let export_notice_closing = self.export_notice_closing;
-        let update_banner_closing = self.update_banner_closing;
         let export_notice_generation = self.export_notice_generation;
         let theme = &self.state.theme;
         let strings = self.state.strings;
         let export_view = cx.entity().downgrade();
-        let update_banner = match &self.update_status {
-            UpdateStatus::Downloaded(version)
-                if self.update_banner_dismissed.as_deref() != Some(version.as_str()) =>
-            {
-                Some(version.clone())
-            }
-            _ => None,
-        };
         let view_mode = self.state.view_mode;
         let has_conflict = self.state.has_conflict();
         let parse_paused = self.parse_paused;
@@ -4084,94 +4109,6 @@ impl Render for WorkspaceView {
                             move |el, delta| {
                                 let value = if export_notice_closing { 1.0 - delta } else { delta };
                                 el.h(px(32. * value)).opacity(value).overflow_hidden()
-                            },
-                        ))
-                    })
-                    // Downloaded update: restart now or defer this session.
-                    .when_some(update_banner, |el, version| {
-                        let later_version = version.clone();
-                        el.child(crate::views::motion::animated(
-                            div()
-                                .id("update_ready_banner")
-                                .debug_selector(|| "update_ready_banner".to_string())
-                                .h(px(36.))
-                                .px_4()
-                                .bg(rgba(0x3b82f61a))
-                                .border_b_1()
-                                .border_color(rgba(0x3b82f633))
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            svg()
-                                                .path("icons/download.svg")
-                                                .size(px(14.))
-                                                .text_color(rgb(0x3b82f6)),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(rgb(0x2563eb))
-                                                .child(format!("{} v{}", strings.update_ready, version)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .id("btn_restart_update")
-                                                .px_2()
-                                                .py_0p5()
-                                                .rounded_sm()
-                                                .cursor_pointer()
-                                                .text_xs()
-                                                .text_color(rgb(0x2563eb))
-                                                .hover(|s| s.bg(rgba(0x3b82f622)))
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _, window, cx| {
-                                                        this.restart_for_update(Some(window), cx);
-                                                    }),
-                                                )
-                                                .child(strings.restart_update),
-                                        )
-                                        .child(
-                                            div()
-                                                .id("btn_later_update")
-                                                .px_2()
-                                                .py_0p5()
-                                                .rounded_sm()
-                                                .cursor_pointer()
-                                                .text_xs()
-                                                .text_color(rgb(0x2563eb))
-                                                .hover(|s| s.bg(rgba(0x3b82f622)))
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(move |this, _, _, cx| {
-                                                        this.dismiss_update_banner(
-                                                            &later_version,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                )
-                                                .child(strings.later),
-                                        ),
-                                ),
-                            reduce_motion,
-                            format!("update_banner_{version}_{update_banner_closing}"),
-                            160,
-                            move |el, delta| {
-                                let value = if update_banner_closing { 1.0 - delta } else { delta };
-                                el.h(px(36. * value)).opacity(value).overflow_hidden()
                             },
                         ))
                     })

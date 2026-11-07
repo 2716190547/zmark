@@ -1060,7 +1060,8 @@ pub fn render_editor_pane(
             .w_full()
             .min_w(px(0.))
             .min_h(px(0.))
-            .p_4(),
+            .px(px(EDITOR_CONTAINER_PADDING_X))
+            .py_4(),
         )
         .child(
             div()

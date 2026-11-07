@@ -22,6 +22,8 @@ const PRODUCTION_ICONS: &[&str] = &[
     "icons/palette.svg",
     "icons/languages.svg",
     "icons/info.svg",
+    "icons/keyboard.svg",
+    "icons/refresh.svg",
     "icons/x.svg",
     "icons/maximize.svg",
 ];
