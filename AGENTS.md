@@ -20,9 +20,18 @@
 - 本轮用户已于 2026-11-04 明确要求任务完成后上传 PR：由协调端在任务完成并通过独立验收后推送交付分支、创建或更新对应 PR，附改动与验证结果并回传链接；保持 PR 打开供审阅，不自动关闭或合并。执行端继续按阶段交付回调，不提前发布未验收代码。
 - 按可独立验证的阶段提交；中间提交前运行本次改动及调用链上受影响功能的相关测试，记录所跑命令与未跑范围，不将有限验证提交报告为阶段完成。
 - 阶段提审、打包前，在最终候选上运行 `cargo test --workspace` 及项目要求的 feature 专项回归，全绿后再提交交付。共享 editor/preview/workspace/theme/AST/布局链路的修改须包含相关历史回归；影响范围不明确时扩大到全量。
-- Phase H 当前 21 项专项按既有命令串行运行（`--test-threads=1`）；其中 B3/B4 共 8 项与默认全量重叠，结果分报、去重，不把默认全量当作覆盖所有专项。
-- Phase I 的 `phase_i_syntax_and_warm_palette_test` 与 `rework4_stage_a_workspace_test` 已用 `required-features` 隔离观测，阶段交付必须另跑 `cargo test -p zmark_app --features test-observation --test phase_i_syntax_and_warm_palette_test --test rework4_stage_a_workspace_test -- --test-threads=1`，并单列结果；默认全量不包含这两组，不能漏跑后声称完整回归。
+- Phase H 当前 21 项与 Phase I 28 项观测专项在阶段交付时用同一条多目标 `cargo test` 命令串行运行（`--test-threads=1`），并分别报告结果。H 的 B3/B4 共 8 项与默认全量重叠，结果分报、去重，不把默认全量当作覆盖所有专项。
+- Phase I 的 `phase_i_syntax_and_warm_palette_test` 与 `rework4_stage_a_workspace_test` 已用 `required-features` 隔离观测；阶段交付将它们与 Phase H 四个目标合并运行：`cargo test -p zmark_app --features test-observation --test phase_i_syntax_and_warm_palette_test --test rework4_stage_a_workspace_test --test phase_h_b1_real_geometry --test phase_h_b2_highlight_matches_copy --test phase_h_b3_autoscroll_real_events --test phase_h_b4_cmd_c_routing -- --test-threads=1`。默认全量不包含 Phase I 两组及 Phase H B1/B2；不能漏跑后声称完整回归。
 - 已派发任务若明确要求更严格的验证门槛，按该任务要求完成，不用新规则回溯减免。测试精简只删除有证据的重复、失效或已被更强检查替代的用例，不通过 ignore、放宽断言或缩小输入降低保护；详见 `docs/plans/test-suite-maintenance.md`。
+
+## 开发循环与审查分级
+
+- **日常迭代**：每个改动/阶段运行 `scripts/dev_check.sh`（`cargo nextest run --workspace` + rename 门禁）。它并行执行全部 369 项测试，热运行约 25–30 秒；不要为每个中间提交重跑完整 `cargo test --workspace`。
+- **交付门槛**：在最终候选上运行一次 `scripts/full_gate.sh`（完整 `cargo test --workspace` + Phase I/H 六目标串行 + rename 门禁）；需要安装包时加 `--bundle`。当前最终门槛实测约 2 分钟，改动前约 6–7 分钟。
+- **测试目标结构**：Phase H/I 的 6 个命名目标（`phase_h_b1/b2/b3/b4`、`phase_i_syntax_and_warm_palette_test`、`rework4_stage_a_workspace_test`）保持独立；其余 app 测试按领域合并为 `app_state/app_editor/app_preview/app_media`，core 测试合并为 `core_all`。`hidpi_lightbox_test`、`lightbox_*` 与 `cache_accounting_test` 因进程级纹理/分配器状态保持独立。不要把这些文件并入聚合目标，也不要把命名目标并入聚合目标。
+- **审查分级**：改名、更新协议、安全与大范围重构最多两轮独立审查；UI、文案、小重构不送独立审查，由测试与人工验收。
+- **任务粒度**：一次会话只推进一个大任务；跨任务拆分为独立会话或分支，避免上下文与改动范围膨胀。
+- **单一写入者**：同一工作区同一时间只保留一个写入代理；批量格式化在门禁前一次完成，门禁运行期间不改源码。
 - 不把 `target/`、构建产物、临时文件加入 git。
 - 不使用 `git reset --hard`、`git checkout .`、`git clean -fd` 等会丢弃他人改动的命令。
 

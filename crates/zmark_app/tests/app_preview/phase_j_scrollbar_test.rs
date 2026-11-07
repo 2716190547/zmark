@@ -424,7 +424,7 @@ async fn thumb_follows_pointer_outside_window_and_releases(cx: &mut TestAppConte
 
 #[gpui::test]
 async fn sample_wheel_does_not_jump_thumb_to_bottom(cx: &mut TestAppContext) {
-    let text = include_str!("../src/main.rs").split("let sample_text = r#\"").nth(1).unwrap().split("\"#;").next().unwrap().to_owned();
+    let text = include_str!("../../src/main.rs").split("let sample_text = r#\"").nth(1).unwrap().split("\"#;").next().unwrap().to_owned();
     let (view, cx) = cx.add_window_view(|_, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(text);

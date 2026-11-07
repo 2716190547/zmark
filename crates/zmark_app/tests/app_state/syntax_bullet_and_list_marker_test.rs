@@ -240,7 +240,7 @@ fn test_slice_tokens_for_visual_subline_with_bullet_prefix() {
 
 #[test]
 fn test_preview_task_list_checkbox_uses_syntax_bullet() {
-    let preview_src = include_str!("../src/views/preview.rs");
+    let preview_src = include_str!("../../src/views/preview.rs");
     let task_item_pos = preview_src
         .find("if let Some(checked) = item.checked")
         .expect("task list checkbox branch must exist in preview.rs");

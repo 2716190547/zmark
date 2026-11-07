@@ -6,7 +6,7 @@ use gpui::AssetSource;
 /// Test 1: Verify preview.rs has 0 occurrences of emoji in mermaid cards/buttons.
 #[test]
 fn test_mermaid_card_no_emoji() {
-    let preview_src = include_str!("../src/views/preview.rs");
+    let preview_src = include_str!("../../src/views/preview.rs");
 
     // Assert that there are 0 occurrences of "🔍" (U+1F50D) in preview.rs
     let search_icon_count = preview_src.matches('🔍').count();

@@ -6,7 +6,7 @@ use tempfile::tempdir;
 
 #[test]
 fn test_dynamic_folder_open_icon_and_hover_new_file_action() {
-    let src = include_str!("../src/views/drawer.rs");
+    let src = include_str!("../../src/views/drawer.rs");
 
     // Dynamic folder icons
     assert!(
@@ -80,13 +80,13 @@ fn test_dynamic_folder_open_icon_and_hover_new_file_action() {
 
 #[test]
 fn test_secondary_confirmation_for_root_removal() {
-    let drawer_src = include_str!("../src/views/drawer.rs");
+    let drawer_src = include_str!("../../src/views/drawer.rs");
     assert!(
         drawer_src.contains("MouseButton::Right"),
         "drawer.rs must handle MouseButton::Right on root header"
     );
 
-    let workspace_src = include_str!("../src/views/workspace.rs");
+    let workspace_src = include_str!("../../src/views/workspace.rs");
     assert!(
         workspace_src.contains("render_remove_root_modal"),
         "workspace.rs must define render_remove_root_modal"

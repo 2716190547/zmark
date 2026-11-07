@@ -1,6 +1,6 @@
 # UI 迭代提速计划
 
-状态：讨论中。上一版已通过独立 Reviewer；用户选择分组普通 app 测试，并要求评估已完成的 GPUI/Phase H/I 回归是否可删。当前修订待复审和用户确认。目标是减少一次 UI 改动的反馈等待，不因功能完成而丢失回归保护。
+状态：讨论中。上一版已通过独立 Reviewer；用户选择分组普通 app 测试、评估 GPUI/Phase H/I 回归去留，并已选择合并 release 流程中的 H/I 专项命令。目标是减少一次 UI 改动的反馈等待，不因功能完成而丢失回归保护。
 
 ## 已确认的用户决策
 
@@ -9,7 +9,7 @@
 - 普通 UI 热迭代暂不设固定秒数目标，先测单目标编译/链接、运行和目视检查基线，再据实确定目标。
 - 不需要快捷脚本；直接使用 `cargo nextest` 的目标选择/测试名过滤及 `cargo run`。
 - 开发迭代可按改动范围选测试目标；阶段候选仍须执行项目规定的完整回归和打包门槛。
-- 用户要求评估 Phase H/I 与 GPUI 测试门槛是否可删除；本稿只给去留建议，不视为授权删除测试或改写 `AGENTS.md`。
+- 用户要求评估 Phase H/I 与 GPUI 测试门槛是否可删除；本稿不建议删除门槛或测试。用户已授权合并 H/I 命令并同步执行约定，没有授权删测或降低回归覆盖。
 
 ## 仓库证据
 
@@ -17,7 +17,7 @@
 - 同一计划已经用按目标滚动过冲、减少重复布局工作等方法精简过慢用例，但这些改动无法消除每个无关测试目标的重复链接成本。
 - `docs/plans/test-suite-maintenance.md` 仍引用旧候选：`test_topbar_settings_button_active_state_is_false` 当前不存在；`stage_b_preview_interaction_test.rs` 已不再调用 `calculate_block_click_char_offset`。这些旧条目应从当前候选清单移除，不能当作本轮删测依据。
 - B3/B4 的 8 项会在默认全量及 Phase H 串行专项中各运行一次；项目约定将默认全量与专项分别报告，且不能把默认并行结果替代专项串行结果。因此暂不移除这组重复运行。
-- 当前默认验证仍有 54 个结果行；特性门控的 Phase H/Phase I 观测测试还需独立命令。全量、专项、应用安装和发布分别有明确用途。
+- 当前默认验证仍有 54 个结果行；特性门控的 Phase H/Phase I 观测测试仍需独立于默认全量运行，但两组专项可用一条多目标命令完成。全量、专项、应用安装和发布分别有明确用途。
 - `HEAD a4efeb1` 有 46 个 app 集成测试源文件：24 个使用 `#[gpui::test]`，22 个没有使用 GPUI 测试 harness。后 22 个均未搜索到 `crate::` 根路径引用或文件级 `#![...]`；三个显式 `TEST_LOCK`/`TEST_MUTEX` 在单独保留的 GPUI/观测目标中。当前工作区新出现的未跟踪 `settings_about_layout_test.rs` 也未使用 GPUI harness，但属于用户进行中的变更，不计入此分组基线。
 - 将上述 22 个普通 app 目标由 22 个二进制归并为 4 个，默认 workspace 测试结果目标预计从 54 降至 36（减少 18 个 link target）；这是目标数量推算，不代表已测得的墙钟收益。
 - Cargo 会自动发现 `tests/` 目录顶层的测试源文件。分组需将原源文件移到子目录，再由 4 个顶层 wrapper 以模块形式引用，避免旧文件继续各自生成二进制。少数源文件使用相对 `include_str!` 路径，移动后需要同步修正。
@@ -29,7 +29,7 @@
 1. 在分组实施前先按现有目标运行；分组后，对 UI 微调运行最贴近的领域目标，例如设置 UI 使用 `settings_chrome_test`。使用 `cargo nextest run -p zmark_app --test <target>`，需要时通过 nextest 测试名过滤器缩小执行范围。只编译/链接所选分组，不链接其他集成测试目标。
 2. 用 `cargo run -p zmark_app` 启动 Debug 版本做实际目视检查。日常迭代不运行 `scripts/release.sh`，也不运行会安装到系统应用目录的 `scripts/bundle_macos.sh`。
 3. `editor`、`preview`、`workspace`、`theme`、AST 或共享布局改动，按现有约定扩展到相关历史测试；影响范围无法可靠划定时跑全量。
-4. 精确阶段候选仍执行 `cargo test --workspace`、Phase I `test-observation` 专项、Phase H 21 项串行专项，以及项目规定的 Bundle/验收。对重叠结果分开报数并去重，不降低既有门槛。
+4. 精确阶段候选仍执行 `cargo test --workspace`、Phase H/I 合并后的 `test-observation` 串行专项，以及项目规定的 Bundle/验收。对重叠结果分开报数并去重，不降低既有门槛。
 5. 第一次把工作区同步到干净状态后，记录改动前基线；分组后对同一类 UI 改动重复测量。分别记录目标构建/链接、全量 `nextest`、`cargo test --workspace` 与阶段完整门槛时间，区分编译/链接、用例执行和目视检查；不声称未经复测的收益。
 
 ## UI 区域到测试目标入口
@@ -80,7 +80,7 @@ cargo nextest run -p zmark_app --test settings_chrome_test
 
 H 的 21 项里，B3/B4 的 8 项本身也属于默认全量；I 的 28 项都不属于默认全量。因此删掉整组 H/I 专项且不补替代，将让默认验证失去 41 项独有检查（H 的 13 项 + I 的 28 项）。门槛只在阶段候选提审/打包前运行，不要求每次 UI 调整运行；取消它不会缩短主要的日常源码编译/链接等待。
 
-**无需改测试的操作精简候选：** `scripts/release.sh` 目前先运行默认全量，再分别运行 Phase I 和 Phase H 两条 feature 命令。可将两条专项调用合为一条，选择 H 四个和 I 两个测试目标，并统一使用 `--test-threads=1`：
+**已选操作精简：** `scripts/release.sh` 先运行默认全量，再用同一条 feature 命令串行运行 Phase I 和 Phase H 的六个目标，统一使用 `--test-threads=1`：
 
 ```sh
 cargo test -p zmark_app --features test-observation \
@@ -92,7 +92,7 @@ cargo test -p zmark_app --features test-observation \
   --test phase_h_b4_cmd_c_routing -- --test-threads=1
 ```
 
-这保留 49 项专项、仍可按目标分报，只减少一次命令入口；不缩短实际 49 项的执行时间。命令尚未实跑验证，改 `release.sh` 前应确认 Cargo 多目标选择与结果统计口径。默认全量与 B3/B4 的 8 项重跑仍存在。
+这保留 49 项专项、仍可按目标分报，只减少一次命令入口；不缩短实际 49 项的执行时间。默认全量与 B3/B4 的 8 项重跑仍存在。
 
 **减少 B3/B4 重复执行的候选：** 可把 B3/B4 声明为 `required-features = ["test-observation"]`，仍由 H 的串行专项运行。该方案会把 8 项从默认目标移到 feature 目标，当前 `docs/plans/test-suite-maintenance.md` 第 28 行明确禁止以“移到默认不跑的 feature”缩短运行；因此这不是现行规则允许的直接优化，必须先由用户决定是否修订该规则，再验证目标配置、覆盖统计和测量收益。现阶段不建议直接改。
 
@@ -124,4 +124,4 @@ cargo test -p zmark_app --features test-observation \
 
 首轮审查提出一项实质补充：加入 UI 区域→测试目标映射、当前精简结论，并规定目标覆盖不足时扩大回归；上一版已补入。上一版 Reviewer 复审无未解决实质异议；其非阻塞建议是今后刷新旧维护文档时用带日期的补充记录保留历史基线。
 
-用户随后选择把 22 个不使用 `#[gpui::test]` harness 的 app 测试分为 3–4 个目标，并确认不需要交脚本；之后要求评估 GPUI/Phase H/I 测试及门槛是否可删。本修订建议分组为 4 个领域目标，保留 Phase H/I 独有保护，并将 B3/B4 默认重复列为可选优化。Reviewer 对 SHA-256 `9f964009559c99f32a1407520f75ab625cf5ce7b7b1cac7db878ead65a45c194` 复审通过，无未解决实质异议；核实 41 项独有用例、合并命令的串行语义、24 个 GPUI 目标及 103 个 GPUI 用例数。当前等待用户决定是否推进操作精简；仍未移动测试源、未修改测试或 Cargo 门槛、未运行测试。
+用户随后选择把 22 个不使用 `#[gpui::test]` harness 的 app 测试分为 3–4 个目标，并确认不需要交脚本；之后要求评估 GPUI/Phase H/I 测试及门槛是否可删。本修订建议分组为 4 个领域目标，保留 Phase H/I 独有保护，并将 B3/B4 默认重复列为可选优化。Reviewer 对 SHA-256 `9f964009559c99f32a1407520f75ab625cf5ce7b7b1cac7db878ead65a45c194` 复审通过，无未解决实质异议；核实 41 项独有用例、合并命令的串行语义、24 个 GPUI 目标及 103 个 GPUI 用例数。用户选择仅合并 release 流程中的 H/I 专项命令；已同步脚本与当前运行约定，未移动测试源、未修改测试或 Cargo target 配置、未运行测试。

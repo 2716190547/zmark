@@ -2,11 +2,11 @@
 //! the header must no longer carry red-dot markers.
 
 fn settings_src() -> &'static str {
-    include_str!("../src/views/settings.rs")
+    include_str!("../../src/views/settings.rs")
 }
 
 fn workspace_src() -> &'static str {
-    include_str!("../src/views/workspace.rs")
+    include_str!("../../src/views/workspace.rs")
 }
 
 fn fn_body<'a>(src: &'a str, name: &str) -> &'a str {

@@ -41,8 +41,7 @@ echo "==> Running delivery gates..."
 cargo test --workspace
 cargo test -p zmark_app --features test-observation \
     --test phase_i_syntax_and_warm_palette_test \
-    --test rework4_stage_a_workspace_test -- --test-threads=1
-cargo test -p zmark_app --features test-observation \
+    --test rework4_stage_a_workspace_test \
     --test phase_h_b1_real_geometry \
     --test phase_h_b2_highlight_matches_copy \
     --test phase_h_b3_autoscroll_real_events \

@@ -64,7 +64,7 @@ fn raster_snapshots_are_immutable_and_animations_are_static() {
         }
     }
     let webp = dir.path().join("animated.webp");
-    let animated = include_bytes!("fixtures/animated.webp");
+    let animated = include_bytes!("../fixtures/animated.webp");
     std::fs::write(&webp, animated).unwrap();
     assert!(
         image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(animated))
@@ -212,7 +212,7 @@ async fn preview_elements_load_private_snapshots_and_remeasure(cx: &mut TestAppC
     std::fs::write(dir.path().join("vector.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><rect width="12" height="8" fill="red"/></svg>"#).unwrap();
     std::fs::write(
         dir.path().join("animated.webp"),
-        include_bytes!("fixtures/animated.webp"),
+        include_bytes!("../fixtures/animated.webp"),
     )
     .unwrap();
     let window = cx.add_window(|window, cx| {

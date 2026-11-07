@@ -1,0 +1,9 @@
+mod ast_test;
+mod config_test;
+mod document_test;
+mod export_test;
+mod flatten_copy_test;
+mod i18n_test;
+mod mermaid_desugar_test;
+mod rework4_stage_a_test;
+mod sync_scroll_test;

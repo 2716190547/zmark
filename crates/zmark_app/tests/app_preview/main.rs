@@ -1,0 +1,8 @@
+mod phase_j_gutter_test;
+mod phase_j_image_recovery_test;
+mod phase_j_scrollbar_test;
+mod preview_image_sizing_test;
+mod preview_selection_test;
+mod preview_virtual_scroll_test;
+mod split_scroll_sync_test;
+mod sync_scroll_app_test;
