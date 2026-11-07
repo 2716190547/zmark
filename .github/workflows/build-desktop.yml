@@ -9,6 +9,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/**"
+      - "packaging/**"
       - "scripts/bundle_macos.sh"
 
 jobs:
@@ -71,6 +72,13 @@ jobs:
             target/bundle/ZMark.app "ZMark-${ZMARK_VERSION}-macos.zip"
           shasum -a 256 "ZMark-${ZMARK_VERSION}-macos.zip" > "ZMark-${ZMARK_VERSION}-macos.zip.sha256"
 
+          mkdir -p dmg-stage
+          ditto target/bundle/ZMark.app dmg-stage/ZMark.app
+          ln -s /Applications dmg-stage/Applications
+          hdiutil create -volname "ZMark ${ZMARK_VERSION}" -srcfolder dmg-stage \
+            -ov -format UDZO "ZMark-${ZMARK_VERSION}.dmg"
+          shasum -a 256 "ZMark-${ZMARK_VERSION}.dmg" > "ZMark-${ZMARK_VERSION}.dmg.sha256"
+
       - name: Package Linux tarball and deb
         if: runner.os == 'Linux'
         run: |
@@ -123,6 +131,17 @@ jobs:
             ForEach-Object { "$($_.Hash.ToLower())  $zip" } |
             Set-Content "$zip.sha256"
 
+          choco install nsis -y --no-progress
+          & "C:\Program Files (x86)\NSIS\makensis.exe" `
+            "/DVERSION=$($env:ZMARK_VERSION)" `
+            "/DEXE_PATH=target\release\zmark_app.exe" `
+            "/DICON=packaging\windows\zmark.ico" `
+            "/DOUT_PATH=ZMark-$($env:ZMARK_VERSION)-setup.exe" `
+            "packaging\windows\zmark.nsi"
+          Get-FileHash "ZMark-$($env:ZMARK_VERSION)-setup.exe" -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  ZMark-$($env:ZMARK_VERSION)-setup.exe" } |
+            Set-Content "ZMark-$($env:ZMARK_VERSION)-setup.exe.sha256"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -130,6 +149,10 @@ jobs:
           path: |
             ZMark-*.zip
             ZMark-*.zip.sha256
+            ZMark-*.dmg
+            ZMark-*.dmg.sha256
+            ZMark-*-setup.exe
+            ZMark-*-setup.exe.sha256
             ZMark-*.tar.gz
             ZMark-*.deb
             SHA256SUMS-linux
