@@ -36,6 +36,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Read package version
+        shell: bash
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/zmark_app/Cargo.toml | head -n1)
+          test -n "$VERSION"
+          echo "ZMARK_VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -61,13 +68,13 @@ jobs:
           ./scripts/bundle_macos.sh || test -d target/bundle/ZMark.app
           test -d target/bundle/ZMark.app
           ditto -c -k --sequesterRsrc --keepParent \
-            target/bundle/ZMark.app "ZMark-0.2.0-macos.zip"
-          shasum -a 256 "ZMark-0.2.0-macos.zip" > "ZMark-0.2.0-macos.zip.sha256"
+            target/bundle/ZMark.app "ZMark-${ZMARK_VERSION}-macos.zip"
+          shasum -a 256 "ZMark-${ZMARK_VERSION}-macos.zip" > "ZMark-${ZMARK_VERSION}-macos.zip.sha256"
 
       - name: Package Linux tarball and deb
         if: runner.os == 'Linux'
         run: |
-          VERSION=0.2.0
+          VERSION="$ZMARK_VERSION"
           ARCH=$(uname -m)
           PKG="ZMark-${VERSION}-linux-${ARCH}"
           mkdir -p "$PKG/usr/bin" \
@@ -110,10 +117,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path package | Out-Null
           Copy-Item target/release/zmark_app.exe package/ZMark.exe
-          Compress-Archive -Path package/* -DestinationPath ZMark-0.2.0-windows-x86_64.zip
-          Get-FileHash ZMark-0.2.0-windows-x86_64.zip -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower())  ZMark-0.2.0-windows-x86_64.zip" } |
-            Set-Content ZMark-0.2.0-windows-x86_64.zip.sha256
+          $zip = "ZMark-$($env:ZMARK_VERSION)-windows-x86_64.zip"
+          Compress-Archive -Path package/* -DestinationPath $zip
+          Get-FileHash $zip -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $zip" } |
+            Set-Content "$zip.sha256"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

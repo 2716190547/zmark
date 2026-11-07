@@ -48,13 +48,17 @@ cargo test -p zmark_app --features test-observation \
     --test phase_h_b4_cmd_c_routing -- --test-threads=1
 ./scripts/check_rename.sh
 
-echo "==> Building and installing ZMark.app..."
-./scripts/bundle_macos.sh
-
-echo "==> Packaging the signed staging bundle..."
 ZIP="$DIR/target/release/ZMark-$VERSION.zip"
 rm -f "$ZIP"
-ditto -c -k --sequesterRsrc --keepParent "$DIR/target/bundle/ZMark.app" "$ZIP"
+if [ -n "${ZMARK_MACOS_ZIP:-}" ]; then
+    echo "==> Using prebuilt macOS bundle: $ZMARK_MACOS_ZIP"
+    cp "$ZMARK_MACOS_ZIP" "$ZIP"
+else
+    echo "==> Building and installing ZMark.app..."
+    ./scripts/bundle_macos.sh
+    echo "==> Packaging the signed staging bundle..."
+    ditto -c -k --sequesterRsrc --keepParent "$DIR/target/bundle/ZMark.app" "$ZIP"
+fi
 
 VERIFY_DIR="$(mktemp -d)"
 trap 'rm -rf "$VERIFY_DIR"' EXIT
