@@ -85,7 +85,7 @@ fn test_eight_palettes_six_syntax_tokens_matrix() {
     assert_eq!(def_light.syntax_number, rgb(0x8a5a2b).into(), "default light syntax_number");
     assert_eq!(def_light.syntax_comment, rgb(0x626c77).into(), "default light syntax_comment");
     assert_eq!(def_light.syntax_inline_code, rgb(0x2c2c2c).into(), "default light syntax_inline_code");
-    assert_eq!(def_light.syntax_link, rgb(0x4a6fa5).into(), "default light syntax_link");
+    assert_eq!(def_light.syntax_link, rgb(0x3a7a74).into(), "default light syntax_link");
     assert_eq!(def_light.syntax_bullet, rgb(0x8c8c8c).into(), "default light syntax_bullet");
 
     // 2. default dark
@@ -96,7 +96,7 @@ fn test_eight_palettes_six_syntax_tokens_matrix() {
     assert_eq!(def_dark.syntax_number, rgb(0xe0b080).into(), "default dark syntax_number");
     assert_eq!(def_dark.syntax_comment, rgb(0x949494).into(), "default dark syntax_comment");
     assert_eq!(def_dark.syntax_inline_code, rgb(0xf3f1ed).into(), "default dark syntax_inline_code");
-    assert_eq!(def_dark.syntax_link, rgb(0xa8b8d8).into(), "default dark syntax_link");
+    assert_eq!(def_dark.syntax_link, rgb(0x6fb3aa).into(), "default dark syntax_link");
     assert_eq!(def_dark.syntax_bullet, rgb(0x8c8c8c).into(), "default dark syntax_bullet");
 
     // 3. github light
@@ -319,6 +319,7 @@ fn test_all_palettes_all_syntax_tokens_contrast_ratio() {
     let roles = [
         SyntaxRole::Plain,
         SyntaxRole::Keyword,
+        SyntaxRole::Function,
         SyntaxRole::Attribute,
         SyntaxRole::String,
         SyntaxRole::Number,

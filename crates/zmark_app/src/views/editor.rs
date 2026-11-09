@@ -18,6 +18,9 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
         MarkdownTokenKind::Keyword => {
             el = el.text_color(theme.syntax_keyword);
         }
+        MarkdownTokenKind::Function => {
+            el = el.text_color(theme.syntax_function);
+        }
         MarkdownTokenKind::Attribute => {
             el = el.text_color(theme.syntax_attribute);
         }
@@ -33,10 +36,10 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
         MarkdownTokenKind::HeadingPrefix => {
             // The marker is structure, not emphasis: keep it quiet so the heading
             // text itself carries the weight.
-            el = el.text_color(theme.text_muted).font_weight(FontWeight::NORMAL);
+            el = el.text_color(theme.syntax_heading).font_weight(FontWeight::NORMAL);
         }
         MarkdownTokenKind::HeadingText => {
-            el = el.text_color(theme.text_primary).font_weight(FontWeight::BOLD);
+            el = el.text_color(theme.syntax_heading).font_weight(FontWeight::BOLD);
         }
         MarkdownTokenKind::BlockquotePrefix | MarkdownTokenKind::BlockquoteText => {
             el = el.text_color(theme.text_muted);
@@ -45,27 +48,27 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
             el = el.text_color(theme.syntax_bullet);
         }
         MarkdownTokenKind::InlineCode => {
-            el = el.text_color(theme.syntax_inline_code)
+            el = el.text_color(theme.syntax_emphasis)
                 .bg(theme.code_bg)
                 .rounded(px(3.))
                 .px(px(4.));
         }
         MarkdownTokenKind::InlineCodeSplitLeft => {
-            el = el.text_color(theme.syntax_inline_code)
+            el = el.text_color(theme.syntax_emphasis)
                 .bg(theme.code_bg)
                 .rounded_l(px(3.))
                 .pl(px(4.))
                 .pr_0();
         }
         MarkdownTokenKind::InlineCodeSplitRight => {
-            el = el.text_color(theme.syntax_inline_code)
+            el = el.text_color(theme.syntax_emphasis)
                 .bg(theme.code_bg)
                 .rounded_r(px(3.))
                 .pr(px(4.))
                 .pl_0();
         }
         MarkdownTokenKind::Bold => {
-            el = el.text_color(theme.text_primary).font_weight(FontWeight::BOLD);
+            el = el.text_color(theme.syntax_emphasis).font_weight(FontWeight::BOLD);
         }
         MarkdownTokenKind::LinkText | MarkdownTokenKind::LinkUrl => {
             el = el.text_color(theme.syntax_link).underline();

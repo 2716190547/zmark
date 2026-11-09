@@ -92,11 +92,12 @@ impl CodeKey {
     }
 }
 
-/// Minimal 6-role semantic contract shared across source editor and markdown preview.
+/// Minimal 7-role semantic contract shared across source editor and markdown preview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SyntaxRole {
     Plain,
     Keyword,
+    Function,
     Attribute,
     String,
     Number,
@@ -369,6 +370,14 @@ pub fn scope_stack_to_role(stack: &ScopeStack) -> SyntaxRole {
         // Numbers
         if name.starts_with("constant.numeric") {
             return SyntaxRole::Number;
+        }
+        // Function names (definitions and calls). Checked before keywords so
+        // `support.function` is not swallowed by a broader parent scope.
+        if name.starts_with("entity.name.function")
+            || name.starts_with("support.function")
+            || name.starts_with("variable.function")
+        {
+            return SyntaxRole::Function;
         }
         // Keywords and Storage types/modifiers
         if name.starts_with("keyword")

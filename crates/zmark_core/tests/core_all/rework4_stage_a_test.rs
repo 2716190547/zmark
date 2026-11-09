@@ -153,3 +153,15 @@ fn test_stage_a_canonical_bash_resolution() {
     let res_1_alias = parse_code_spans_bounded("echo 1", Some("bash"), None);
     assert_eq!(res_1, res_1_alias);
 }
+
+#[test]
+fn sql_function_calls_get_their_own_role_distinct_from_keywords() {
+    let code = "SELECT SUM(a) FROM t;";
+    let spans = zmark_core::syntax::parse_code_spans(code, Some("sql"));
+    let role_of = |word: &str| {
+        let at = code.find(word).unwrap();
+        spans.iter().find(|s| s.range.contains(&at)).map(|s| s.role).unwrap()
+    };
+    assert_eq!(role_of("SUM"), SyntaxRole::Function);
+    assert_eq!(role_of("SELECT"), SyntaxRole::Keyword);
+}

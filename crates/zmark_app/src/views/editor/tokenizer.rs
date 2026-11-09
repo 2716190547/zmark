@@ -13,6 +13,7 @@ pub enum MarkdownTokenKind {
     LinkText,
     LinkUrl,
     Keyword,
+    Function,
     Attribute,
     StringLiteral,
     Number,
@@ -324,6 +325,7 @@ pub fn spans_to_code_tokens(
         let kind = match span.role {
             zmark_core::syntax::SyntaxRole::Plain => MarkdownTokenKind::CodeText,
             zmark_core::syntax::SyntaxRole::Keyword => MarkdownTokenKind::Keyword,
+            zmark_core::syntax::SyntaxRole::Function => MarkdownTokenKind::Function,
             zmark_core::syntax::SyntaxRole::Attribute => MarkdownTokenKind::Attribute,
             zmark_core::syntax::SyntaxRole::String => MarkdownTokenKind::StringLiteral,
             zmark_core::syntax::SyntaxRole::Number => MarkdownTokenKind::Number,

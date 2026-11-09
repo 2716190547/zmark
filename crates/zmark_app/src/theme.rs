@@ -18,6 +18,7 @@ pub struct ThemeColors {
     pub conflict_border: Hsla,
     pub syntax_keyword: Hsla,
     pub syntax_attribute: Hsla,
+    pub syntax_function: Hsla,
     pub syntax_string: Hsla,
     pub syntax_number: Hsla,
     pub syntax_comment: Hsla,
@@ -25,6 +26,10 @@ pub struct ThemeColors {
     pub syntax_link: Hsla,
     pub syntax_bullet: Hsla,
     pub syntax_code: Hsla,
+    /// Markdown heading text in the source editor.
+    pub syntax_heading: Hsla,
+    /// Bold text, inline code and HTML tags in the source editor.
+    pub syntax_emphasis: Hsla,
 }
 
 pub struct PaletteDescriptor {
@@ -126,6 +131,7 @@ impl ThemeColors {
             zmark_core::syntax::SyntaxRole::Plain => self.syntax_code,
             zmark_core::syntax::SyntaxRole::Keyword => self.syntax_keyword,
             zmark_core::syntax::SyntaxRole::Attribute => self.syntax_attribute,
+            zmark_core::syntax::SyntaxRole::Function => self.syntax_function,
             zmark_core::syntax::SyntaxRole::String => self.syntax_string,
             zmark_core::syntax::SyntaxRole::Number => self.syntax_number,
             zmark_core::syntax::SyntaxRole::Comment => self.syntax_comment,
@@ -208,13 +214,16 @@ impl ThemeColors {
                 conflict_border: rgb(0x5e3322).into(),
                 syntax_keyword: rgb(0xe28c8c).into(),
                 syntax_attribute: rgb(0x9bb7d4).into(),
+                syntax_function: rgb(0x7fb0ff).into(),
                 syntax_string: rgb(0xa8c79a).into(),
                 syntax_number: rgb(0xe0b080).into(),
                 syntax_comment: rgb(0x949494).into(),
                 syntax_inline_code: rgb(0xf3f1ed).into(),
-                syntax_link: rgb(0xa8b8d8).into(),
+                syntax_link: rgb(0x6fb3aa).into(),
                 syntax_bullet: rgb(0x8c8c8c).into(),
                 syntax_code: rgb(0xd8d4cc).into(),
+                syntax_heading: rgb(0xb69cf0).into(),
+                syntax_emphasis: rgb(0xd9b45a).into(),
             }
         } else {
             Self {
@@ -232,13 +241,16 @@ impl ThemeColors {
                 conflict_border: rgb(0xfcd9b8).into(),
                 syntax_keyword: rgb(0xa43f3f).into(),
                 syntax_attribute: rgb(0x4a6785).into(),
+                syntax_function: rgb(0x265bbe).into(),
                 syntax_string: rgb(0x4f6f52).into(),
                 syntax_number: rgb(0x8a5a2b).into(),
                 syntax_comment: rgb(0x626c77).into(), // >=4.5:1 on code_bg
                 syntax_inline_code: rgb(0x2c2c2c).into(),
-                syntax_link: rgb(0x4a6fa5).into(),
+                syntax_link: rgb(0x3a7a74).into(), // teal, 4.5:1 on code_bg
                 syntax_bullet: rgb(0x8c8c8c).into(), // Markdown markers fade into the page
                 syntax_code: rgb(0x3e4a56).into(),
+                syntax_heading: rgb(0x5e3db3).into(), // violet headings
+                syntax_emphasis: rgb(0x7a5f12).into(), // gold bold / inline code
             }
         }
     }
@@ -260,6 +272,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xb45309).into(),
                 syntax_keyword: rgb(0xd2a8ff).into(),
                 syntax_attribute: rgb(0x9bb7d4).into(),
+                syntax_function: rgb(0x9bb7d4).into(),
                 syntax_string: rgb(0xe5c07b).into(),
                 syntax_number: rgb(0xf39c6b).into(),
                 syntax_comment: rgb(0xa8a29e).into(),
@@ -267,6 +280,8 @@ impl ThemeColors {
                 syntax_link: rgb(0xfbbf24).into(),
                 syntax_bullet: rgb(0xfbbf24).into(),
                 syntax_code: rgb(0xe5b567).into(),
+                syntax_heading: rgb(0xd2a8ff).into(),
+                syntax_emphasis: rgb(0xf39c6b).into(),
             }
         } else {
             Self {
@@ -284,6 +299,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xf59e0b).into(),
                 syntax_keyword: rgb(0x7d56b3).into(),
                 syntax_attribute: rgb(0x596a88).into(),
+                syntax_function: rgb(0x596a88).into(),
                 syntax_string: rgb(0x8a6b12).into(),
                 syntax_number: rgb(0x995b2b).into(),
                 syntax_comment: rgb(0x676d65).into(),
@@ -291,6 +307,8 @@ impl ThemeColors {
                 syntax_link: rgb(0xb45309).into(),
                 syntax_bullet: rgb(0xd97706).into(),
                 syntax_code: rgb(0x6b4e1b).into(),
+                syntax_heading: rgb(0x7d56b3).into(),
+                syntax_emphasis: rgb(0x995b2b).into(),
             }
         }
     }
@@ -312,6 +330,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xb45309).into(),
                 syntax_keyword: rgb(0xc76cf5).into(),
                 syntax_attribute: rgb(0x64d2ff).into(),
+                syntax_function: rgb(0x64d2ff).into(),
                 syntax_string: rgb(0x30d158).into(),
                 syntax_number: rgb(0xff9f0a).into(),
                 syntax_comment: rgb(0x98989d).into(),
@@ -319,6 +338,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x0a84ff).into(),
                 syntax_bullet: rgb(0x0a84ff).into(),
                 syntax_code: rgb(0x70b0ff).into(),
+                syntax_heading: rgb(0xc76cf5).into(),
+                syntax_emphasis: rgb(0xff9f0a).into(),
             }
         } else {
             Self {
@@ -336,6 +357,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xf59e0b).into(),
                 syntax_keyword: rgb(0x7b1fa2).into(),
                 syntax_attribute: rgb(0x00695c).into(),
+                syntax_function: rgb(0x00695c).into(),
                 syntax_string: rgb(0x1b5e20).into(),
                 syntax_number: rgb(0xbf360c).into(),
                 syntax_comment: rgb(0x546e7a).into(),
@@ -343,6 +365,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x007aff).into(),
                 syntax_bullet: rgb(0x007aff).into(),
                 syntax_code: rgb(0x1b4d89).into(),
+                syntax_heading: rgb(0x7b1fa2).into(),
+                syntax_emphasis: rgb(0xbf360c).into(),
             }
         }
     }
@@ -364,6 +388,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xf7768e).into(),
                 syntax_keyword: rgb(0xbb9af7).into(),
                 syntax_attribute: rgb(0x7dcfff).into(),
+                syntax_function: rgb(0x7dcfff).into(),
                 syntax_string: rgb(0x9ece6a).into(),
                 syntax_number: rgb(0xff9e64).into(),
                 syntax_comment: rgb(0xa9b1d6).into(),
@@ -371,6 +396,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x7dcfff).into(),
                 syntax_bullet: rgb(0x7aa2f7).into(),
                 syntax_code: rgb(0x8ba4e8).into(),
+                syntax_heading: rgb(0xbb9af7).into(),
+                syntax_emphasis: rgb(0xff9e64).into(),
             }
         } else {
             Self {
@@ -388,6 +415,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xf7768e).into(),
                 syntax_keyword: rgb(0x5a32a3).into(),
                 syntax_attribute: rgb(0x145a55).into(),
+                syntax_function: rgb(0x145a55).into(),
                 syntax_string: rgb(0x2b4c1c).into(),
                 syntax_number: rgb(0x8a2034).into(),
                 syntax_comment: rgb(0x4a4e69).into(),
@@ -395,6 +423,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x2e7de9).into(),
                 syntax_bullet: rgb(0x2e7de9).into(),
                 syntax_code: rgb(0x2e4374).into(),
+                syntax_heading: rgb(0x5a32a3).into(),
+                syntax_emphasis: rgb(0x8a2034).into(),
             }
         }
     }
@@ -416,6 +446,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xbf616a).into(),
                 syntax_keyword: rgb(0xcdabe1).into(),
                 syntax_attribute: rgb(0x88c0d0).into(),
+                syntax_function: rgb(0x88c0d0).into(),
                 syntax_string: rgb(0xbbe2a3).into(),
                 syntax_number: rgb(0xebcb8b).into(),
                 syntax_comment: rgb(0xb8c5db).into(),
@@ -423,6 +454,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x88c0d0).into(),
                 syntax_bullet: rgb(0x88c0d0).into(),
                 syntax_code: rgb(0x98c4d8).into(),
+                syntax_heading: rgb(0xcdabe1).into(),
+                syntax_emphasis: rgb(0xebcb8b).into(),
             }
         } else {
             Self {
@@ -440,6 +473,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xbf616a).into(),
                 syntax_keyword: rgb(0x7c4d7e).into(),
                 syntax_attribute: rgb(0x2e6b7d).into(),
+                syntax_function: rgb(0x2e6b7d).into(),
                 syntax_string: rgb(0x3b6e4c).into(),
                 syntax_number: rgb(0x8b4726).into(),
                 syntax_comment: rgb(0x4c566a).into(),
@@ -447,6 +481,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x88c0d0).into(),
                 syntax_bullet: rgb(0x5e81ac).into(),
                 syntax_code: rgb(0x3b5373).into(),
+                syntax_heading: rgb(0x7c4d7e).into(),
+                syntax_emphasis: rgb(0x8b4726).into(),
             }
         }
     }
@@ -468,6 +504,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xf85149).into(),
                 syntax_keyword: rgb(0xff7b72).into(),
                 syntax_attribute: rgb(0x79c0ff).into(),
+                syntax_function: rgb(0x79c0ff).into(),
                 syntax_string: rgb(0xa5d6ff).into(),
                 syntax_number: rgb(0xffa657).into(),
                 syntax_comment: rgb(0x8b949e).into(),
@@ -475,6 +512,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x58a6ff).into(),
                 syntax_bullet: rgb(0x58a6ff).into(),
                 syntax_code: rgb(0xd0d7de).into(),
+                syntax_heading: rgb(0xff7b72).into(),
+                syntax_emphasis: rgb(0xffa657).into(),
             }
         } else {
             Self {
@@ -492,6 +531,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xcf222e).into(),
                 syntax_keyword: rgb(0xcf222e).into(),
                 syntax_attribute: rgb(0x0550ae).into(),
+                syntax_function: rgb(0x0550ae).into(),
                 syntax_string: rgb(0x0a3069).into(),
                 syntax_number: rgb(0x953800).into(),
                 syntax_comment: rgb(0x57606a).into(),
@@ -499,6 +539,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x0969da).into(),
                 syntax_bullet: rgb(0x0969da).into(),
                 syntax_code: rgb(0x24292f).into(),
+                syntax_heading: rgb(0xcf222e).into(),
+                syntax_emphasis: rgb(0x953800).into(),
             }
         }
     }
@@ -520,6 +562,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xdc322f).into(),
                 syntax_keyword: rgb(0x99ad00).into(),
                 syntax_attribute: rgb(0x35b5ab).into(),
+                syntax_function: rgb(0x35b5ab).into(),
                 syntax_string: rgb(0x3ec2b7).into(),
                 syntax_number: rgb(0xf279b2).into(),
                 syntax_comment: rgb(0x93a1a1).into(),
@@ -527,6 +570,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x6c71c4).into(),
                 syntax_bullet: rgb(0x2aa198).into(),
                 syntax_code: rgb(0x93a1a1).into(),
+                syntax_heading: rgb(0x99ad00).into(),
+                syntax_emphasis: rgb(0xf279b2).into(),
             }
         } else {
             Self {
@@ -544,6 +589,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xdc322f).into(),
                 syntax_keyword: rgb(0x586e00).into(),
                 syntax_attribute: rgb(0x1a6b63).into(),
+                syntax_function: rgb(0x1a6b63).into(),
                 syntax_string: rgb(0x19665f).into(),
                 syntax_number: rgb(0xb53900).into(),
                 syntax_comment: rgb(0x475b62).into(),
@@ -551,6 +597,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x6c71c4).into(),
                 syntax_bullet: rgb(0x268bd2).into(),
                 syntax_code: rgb(0x475b62).into(),
+                syntax_heading: rgb(0x586e00).into(),
+                syntax_emphasis: rgb(0xb53900).into(),
             }
         }
     }
@@ -572,6 +620,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xb45309).into(),
                 syntax_keyword: rgb(0xc678dd).into(),
                 syntax_attribute: rgb(0x61afef).into(),
+                syntax_function: rgb(0x61afef).into(),
                 syntax_string: rgb(0x98c379).into(),
                 syntax_number: rgb(0xd19a66).into(),
                 syntax_comment: rgb(0x8e939d).into(),
@@ -579,6 +628,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x61afef).into(),
                 syntax_bullet: rgb(0x61afef).into(),
                 syntax_code: rgb(0xabb2bf).into(),
+                syntax_heading: rgb(0xc678dd).into(),
+                syntax_emphasis: rgb(0xd19a66).into(),
             }
         } else {
             Self {
@@ -596,6 +647,7 @@ impl ThemeColors {
                 conflict_border: rgb(0xfecaca).into(),
                 syntax_keyword: rgb(0xa626a4).into(),
                 syntax_attribute: rgb(0x2d5bc2).into(),
+                syntax_function: rgb(0x2d5bc2).into(),
                 syntax_string: rgb(0x2f6e2e).into(),
                 syntax_number: rgb(0x8a5b00).into(),
                 syntax_comment: rgb(0x6a6d75).into(),
@@ -603,6 +655,8 @@ impl ThemeColors {
                 syntax_link: rgb(0x4078f2).into(),
                 syntax_bullet: rgb(0x4078f2).into(),
                 syntax_code: rgb(0x383a42).into(),
+                syntax_heading: rgb(0xa626a4).into(),
+                syntax_emphasis: rgb(0x8a5b00).into(),
             }
         }
     }
