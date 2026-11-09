@@ -22,8 +22,11 @@ fn main() {
     let doc = zmark_app::welcome::initial_document(initial_path, preferences.locale);
 
     let app = Application::new().with_assets(AppAssets);
-    zmark_app::platform::register_application_icon();
     app.run(move |cx: &mut App| {
+        // GPUI creates its own NSApplication subclass during run(). Touching the
+        // shared application before this point makes GPUI write its `platform`
+        // ivar to the plain NSApplication and panic at startup.
+        zmark_app::platform::register_application_icon();
         // Register keybindings
         let shortcut = zmark_app::platform::shortcut;
         cx.bind_keys([
