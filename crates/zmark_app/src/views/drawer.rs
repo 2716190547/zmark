@@ -42,7 +42,7 @@ pub fn render_drawer(
     on_toggle_folder: Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
     on_select_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_rename_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
-    on_select_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
+    on_select_doc: Arc<dyn Fn(&DocKey, bool, &mut Window, &mut App)>,
     on_close_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
     on_new_draft: Arc<dyn Fn(&mut Window, &mut App)>,
     on_select_heading: Arc<dyn Fn(usize, &mut Window, &mut App)>,
@@ -98,7 +98,7 @@ pub fn render_drawer_with_search(
     on_toggle_folder: Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
     on_select_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_rename_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
-    on_select_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
+    on_select_doc: Arc<dyn Fn(&DocKey, bool, &mut Window, &mut App)>,
     on_close_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
     _on_new_draft: Arc<dyn Fn(&mut Window, &mut App)>,
     on_select_heading: Arc<dyn Fn(usize, &mut Window, &mut App)>,
@@ -382,6 +382,7 @@ pub fn render_drawer_with_search(
                             let sel_key = d_key.clone();
                             let mut draft_item = div()
                                 .id("drawer_draft_item")
+                                .debug_selector(|| "drawer_draft_item".to_string())
                                 .group("drawer_draft_row")
                                 .w_full()
                                 .h(px(28.))
@@ -397,8 +398,8 @@ pub fn render_drawer_with_search(
                                     let t = draft_tooltip_text.clone();
                                     cx.new(|_| DrawerTooltipView { text: t }).into()
                                 })
-                                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                                    t_switch_draft(&sel_key, window, cx);
+                                .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
+                                    t_switch_draft(&sel_key, event.click_count == 2, window, cx);
                                 });
 
                             if is_draft_active {
@@ -741,8 +742,8 @@ pub fn render_drawer_with_search(
                                         let t = tooltip_path.clone();
                                         cx.new(|_| DrawerTooltipView { text: t }).into()
                                     })
-                                    .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                                        on_select(&sel_key, window, cx);
+                                    .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
+                                        on_select(&sel_key, event.click_count == 2, window, cx);
                                     });
 
                                 if is_active {

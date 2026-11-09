@@ -1403,12 +1403,7 @@ impl AppState {
 
         let old_path = match self.doc().path.clone() {
             Some(p) => p,
-            None => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Draft documents cannot be renamed directly; use save_doc_as",
-                ));
-            }
+            None => return self.doc_mut().rename_scratch(new_name),
         };
 
         let clean_name = if new_name.ends_with(".md") || new_name.ends_with(".markdown") {

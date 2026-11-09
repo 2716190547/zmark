@@ -1,85 +1,38 @@
 # ZMark
 
-> **ZMark**（formerly GlideMark）是一款由 **Rust + GPUI** 强力驱动的、侧栏驱动的 GPU 原生极速 Markdown 阅读与编辑器。以现代、纯粹、克制的极简设计语言与暖石纸张质感，提供行云流水般的书写与排版阅读体验。
+<img src="assets/icon.iconset/icon_256x256.png" alt="ZMark icon" width="128">
 
----
+[简体中文](README.zh-CN.md)
 
-## 特性亮点
+ZMark is a Markdown editor and reader for local files, built with Rust and GPUI. Edit Markdown, read a formatted preview, or use both side by side.
 
-- **GPU 硬件加速渲染**：基于 Zed 同款的 GPUI 渲染引擎与 Metal 管线构建，极致轻量，告别 Electron 套壳的臃肿内存与掉帧卡顿。
-- **暖石纸张美学**：默认采用高级印刷质感的暖石纸张灰阶（画布 `#F5F4F0`、发丝线 `#E6E4DE`、正文字色 `#2C2A29` 与暖陶土强调色 `#D9532F`），杜绝刺眼纯白反光。
-- **侧栏驱动的多文件夹导航**：右侧只保留当前文档大标题，文档的打开、切换、关闭统一收敛到左侧文件树；支持同时挂载多个本地根目录并排折叠，外部文件单独分组。
-- **侧栏文件名搜索**：固定顶部输入框支持系统输入法，过滤工作区、外部文件与草稿名称，清空后恢复目录展开状态；当前搜索限制见下方。
-- **预览文字选取与复制**：阅读及分屏预览支持跨段落、列表、引用、表格与代码文字选取，`Cmd+C` 复制纯文本；自动滚动仍有已知限制。
-- **100% 纯 Rust 矢量图表**：内置 `rusty-mermaid` 渲染管线与视口归一化算法，无需 WebKit 或 Node.js 外部进程，原生支持复合子图与深色模式。
-- **去框化极简头部**：右侧 46px 头部呈现当前文档标题、模式切换与保存/导出/设置，未保存修改由保存按钮强调色提示，零 Emoji 严肃视觉规范。
-- **双向平滑同步滚动**：分屏模式下基于源码锚点与分段线性插值，配合 100ms 回声抑制与打字防抖，实现精准稳定的视口双向联动。
-- **解耦独立设置视窗**：按 `Cmd + ,` 调起两栏排版独立设置视窗，支持 8 套调色板、1000ms 防抖自动落盘与 10 国语言即时本地化。
-- **系统级原生拖拽与双击重命名**：
-  - 支持直接将 `.md` 文件拖拽进窗口瞬间载入。
-  - 双击当前文档标题直接内联原地重命名磁盘文件；草稿双击或 `Cmd+S` 进入另存为。
-- **离线独立 HTML 导出**：一键生成自包含完整排版与图表样式的单文件 HTML，脱机即阅。
-- **macOS 原生独立应用**：标准 App Bundle（`/Applications/ZMark.app`），配备 Apple Icon Composer 编译的标准 `Assets.car` 原生图标。
+## Features
 
----
+- Source, split, and preview modes with synchronized scrolling.
+- A drawer for multiple workspace folders, loose files, drafts, search, and document outline.
+- Markdown tables, task lists, code blocks with syntax highlighting, and Mermaid diagrams.
+- Light and dark appearance, multiple palettes, and localized settings.
+- Export a self-contained HTML document for offline reading.
 
-## 快捷键速查
+## Getting started
 
-| 操作 | 快捷键 / 鼠标操作 | 交互说明 |
-| :--- | :--- | :--- |
-| **源码模式** | `Cmd + 1` | 专注于 Markdown 源码编辑，按真实字形宽度软折行 |
-| **分屏模式** | `Cmd + 2` | 左右并排对照，5px 可拖拽调节条，支持 100ms 回声抑制双向同步滚动 |
-| **阅读模式** | `Cmd + 3` | 沉浸式阅读预览，居中舒适版心与安全底边距 |
-| **关闭当前文档** | `Cmd + W` | 关闭当前活动文档；dirty 时弹出保存/放弃/取消；关闭最后一个文档显示空画布 |
-| **新建草稿** | `Cmd + N` | 在侧栏“草稿”组创建或聚焦草稿，保存时走另存为 |
-| **展开/折叠抽屉** | `Cmd + B` | 展开或折叠左侧文件目录与大纲目录双视图抽屉 |
-| **打开文件** | `Cmd + O` | 调起原生异步文件选择器；或直接将文件从访达拖入窗口 |
-| **保存文件** | `Cmd + S` | 保存当前编辑内容至物理磁盘（支持 1000ms 停顿自动落盘） |
-| **重命名文档** | 双击当前文档标题 | 有路径的文档进入原地内联重命名；草稿进入另存为 |
-| **重置分屏比例** | 双击分界线 | 左右分栏宽度即刻恢复至精准 50/50 对称排版 |
-| **导出独立 HTML** | `Cmd + Shift + E` | 导出内联样式的自包含离线单文件 `.html` |
-| **偏好设置** | `Cmd + ,` | 打开独立分栏设置窗口（外观主题、自动保存、多语言、快捷键） |
+Download available builds from the [releases repository](https://github.com/2716190547/zmark-releases/releases), or build from source below. The repository includes desktop build workflows for macOS, Linux, and Windows; availability and platform behavior depend on the published build.
 
----
+On macOS, open a Markdown file with `Cmd+O`, switch views with `Cmd+1`, `Cmd+2`, or `Cmd+3`, and open settings with `Cmd+,`. Save with `Cmd+S` and export HTML with `Cmd+Shift+E`. The settings window lists common shortcuts.
 
-## 性能基线与已知限制
+## Build from source
 
-### 内存基线实测
-在 macOS release 优化构建下采样空闲驻留内存（RSS）：
-- **默认示例文档**：约 85 MB
-- **1.5 MB / 16,500+ 标题超大文档**：约 136–148 MB
+Install a current stable Rust toolchain and platform dependencies, then run:
 
-### 当前已知限制
-1. **大文档解析分档**：超过 10 MB 的超长文档会暂停打字自动解析，可通过保存（`Cmd+S`）、切换视图模式或点击刷新手动触发全量渲染。
-2. **代码块**：当前使用统一代码墨色和悬停复制按钮，没有语言标牌、行号或词法着色。
-3. **多根扫描预算**：超大工作区会按全局/单根预算截断，并在根节点显示“已截断”与“重新扫描”入口；缺失的根会保留并标记，不自动删除。
-4. **文件名搜索**：每次输入仍会后台重扫，旧任务未取消，异常复位和深度截断提示尚不完整；不提供全文搜索。
-5. **大文档改宽与自动滚动**：换行密集文档拖动分屏仍可能明显卡顿；预览自动滚动顶部停止、字符级估算及真机失活及时性仍有缺口。完整范围见 [Phase H 验收记录](docs/plans/phase-h-delivery.md)。
-
----
-
-## 本地开发与构建
-
-### 运行环境
-- macOS 12.0+ (Apple Silicon / Intel)
-- Rust 1.76+
-
-### 常用命令
-```bash
-# 启动本地开发热运行
+```sh
 cargo run -p zmark_app
-
-# 运行自动化测试套件
 cargo test --workspace
-
-# 一键编译 release 优化版本并安装至系统 Applications
-./scripts/bundle_macos.sh
 ```
 
----
+The [desktop workflow](.github/workflows/build-desktop.yml) lists the Linux build dependencies and packaging steps. On macOS, `./scripts/bundle_macos.sh` builds and installs an application bundle.
 
-## 架构演进与领域词汇
+## Technology
 
-- 架构决策记录权威总索引：[`docs/adr/README.md`](docs/adr/README.md)（收录有效 ADR 与作废去向映射）
-- 统一领域模型词汇表：[`GLOSSARY.md`](GLOSSARY.md)（定义核心业务概念与避免叫法）
-- 执行窗口约定：[`AGENTS.md`](AGENTS.md)（分支、测试与交付门槛）
+ZMark uses **Rust** for the application, **GPUI** for its interface, **pulldown-cmark** for Markdown parsing, **syntect** for code highlighting, and **rusty-mermaid** for diagram rendering. Images are decoded with the Rust `image` crate.
+
+See [architecture decisions](docs/adr/README.md) and the [project glossary](GLOSSARY.md) for more detail.

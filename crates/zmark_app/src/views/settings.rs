@@ -935,20 +935,25 @@ fn render_language_tab(
         )
 }
 
-pub fn shortcut_rows(strings: &I18nStrings) -> [(&'static str, String); 6] {
+pub fn shortcut_rows(strings: &I18nStrings) -> [(String, String); 6] {
+    let hint = crate::platform::shortcut_hint;
     [
-        ("⌘O", strings.open_file.to_string()),
-        ("⌘S", strings.save_file.to_string()),
-        ("⇧⌘E", strings.export_html.to_string()),
-        ("⌘B", strings.directory_drawer.to_string()),
+        (hint("O"), strings.open_file.to_string()),
+        (hint("S"), strings.save_file.to_string()),
+        (format!("⇧{}", hint("E")), strings.export_html.to_string()),
+        (hint("B"), strings.directory_drawer.to_string()),
         (
-            "⌘1 / ⌘2 / ⌘3",
+            [1, 2, 3]
+                .iter()
+                .map(|n| hint(&n.to_string()))
+                .collect::<Vec<_>>()
+                .join(" / "),
             format!(
                 "{} / {} / {}",
                 strings.source_mode, strings.split_mode, strings.preview_mode
             ),
         ),
-        ("⌘,", strings.settings.to_string()),
+        (hint(","), strings.settings.to_string()),
     ]
 }
 
@@ -1020,7 +1025,7 @@ fn render_about_tab(
                     div()
                         .text_xs()
                         .text_color(theme.text_muted)
-                        .child("GPU-Accelerated Markdown Editor & Reader"),
+                        .child(strings.about_tagline),
                 ),
         )
         // Version + updates share the same row component as the other pages.

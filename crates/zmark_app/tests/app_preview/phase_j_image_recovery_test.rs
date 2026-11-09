@@ -247,7 +247,7 @@ async fn recovery_undo_redo_shortcuts_follow_autosave_to_disk(cx: &mut gpui::Tes
         std::fs::read_to_string(&document).unwrap(),
         "![x](assets/pic.png)"
     );
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(50));
     cx.run_until_parked();

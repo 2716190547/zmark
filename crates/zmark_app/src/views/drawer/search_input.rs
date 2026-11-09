@@ -500,7 +500,7 @@ impl Render for SearchInput {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
                 let mods = event.keystroke.modifiers;
-                if mods.platform {
+                if mods.secondary() {
                     match key {
                         "v" | "V" => {
                             this.paste(window, cx);

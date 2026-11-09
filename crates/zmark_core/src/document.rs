@@ -17,6 +17,7 @@ pub enum DocumentStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
     pub path: Option<PathBuf>,
+    scratch_name: Option<String>,
     pub buffer: String,
     pub status: DocumentStatus,
     pub parsed: Arc<ParsedDocument>,
@@ -31,6 +32,7 @@ impl Document {
         let parsed = Arc::new(parse_markdown(&buffer));
         Self {
             path: None,
+            scratch_name: None,
             buffer,
             status: DocumentStatus::Clean,
             parsed,
@@ -45,6 +47,7 @@ impl Document {
         let parsed = Arc::new(parse_markdown(&buffer));
         Ok(Self {
             path: Some(path),
+            scratch_name: None,
             last_saved_content: buffer.clone(),
             buffer,
             status: DocumentStatus::Clean,
@@ -60,7 +63,32 @@ impl Document {
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .map(|s| s.to_string())
+            .or_else(|| self.scratch_name.clone())
             .unwrap_or_else(|| fallback.to_string())
+    }
+
+    /// Name a draft without creating a file; saving will choose its directory later.
+    pub fn rename_scratch(&mut self, name: &str) -> std::io::Result<()> {
+        let name = name.trim();
+        if self.path.is_some()
+            || name.is_empty()
+            || name == "."
+            || name == ".."
+            || name.chars().any(|c| c == '/' || c == '\\' || c.is_control())
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid draft name",
+            ));
+        }
+        let name = if name.ends_with(".md") || name.ends_with(".markdown") {
+            name.to_owned()
+        } else {
+            format!("{name}.md")
+        };
+        self.scratch_name = Some(name);
+        self.status = DocumentStatus::Modified;
+        Ok(())
     }
 
     /// Updates the buffer from user editing, recalculating AST and dirty state.
@@ -72,7 +100,7 @@ impl Document {
         self.parsed = Arc::new(parse_markdown(&self.buffer));
         self.parse_stale = false;
         if self.status != DocumentStatus::ConflictOnDisk {
-            if self.buffer == self.last_saved_content {
+            if self.buffer == self.last_saved_content && self.scratch_name.is_none() {
                 self.status = DocumentStatus::Clean;
             } else {
                 self.status = DocumentStatus::Modified;
@@ -88,7 +116,7 @@ impl Document {
         self.buffer = new_text;
         self.parse_stale = true;
         if self.status != DocumentStatus::ConflictOnDisk {
-            if self.buffer == self.last_saved_content {
+            if self.buffer == self.last_saved_content && self.scratch_name.is_none() {
                 self.status = DocumentStatus::Clean;
             } else {
                 self.status = DocumentStatus::Modified;
@@ -137,6 +165,7 @@ impl Document {
     pub fn save_to(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
         fs::write(&path, &self.buffer)?;
         self.path = Some(path);
+        self.scratch_name = None;
         self.last_saved_content = self.buffer.clone();
         self.status = DocumentStatus::Clean;
         Ok(())

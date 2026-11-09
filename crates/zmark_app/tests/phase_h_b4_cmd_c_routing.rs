@@ -1,6 +1,6 @@
 //! Phase H stage B · Cmd+C routing counterexamples (focus + view mode gating).
 //!
-//! Drives the real key path (`simulate_keystrokes("cmd-c")` through the
+//! Drives the real key path (`simulate_keystrokes("secondary-c")` through the
 //! Workspace key handler) and reads the real clipboard via
 //! `TestAppContext::read_from_clipboard`.
 //!
@@ -87,7 +87,7 @@ async fn red_split_editor_focused_must_not_copy_preview_selection(cx: &mut TestA
     );
 
     h.seed_clipboard(cx);
-    cx.simulate_keystrokes("cmd-c");
+    cx.simulate_keystrokes("secondary-c");
     cx.run_until_parked();
     let got = h.clipboard(cx);
     let preview_text = h.preview_copy_text(cx);
@@ -110,7 +110,7 @@ async fn green_preview_mode_copies_exact_selection(cx: &mut TestAppContext) {
     let (h, cx) = open(cx, ViewMode::Preview);
     h.focus_workspace(cx);
     h.seed_clipboard(cx);
-    cx.simulate_keystrokes("cmd-c");
+    cx.simulate_keystrokes("secondary-c");
     cx.run_until_parked();
     let got = h.clipboard(cx);
     println!("B4-GREEN preview mode: clipboard={:?} (expected \"Title\")", got);
@@ -125,7 +125,7 @@ async fn green_source_mode_never_copies_preview_selection(cx: &mut TestAppContex
     let (h, cx) = open(cx, ViewMode::Source);
     h.focus_workspace(cx);
     h.seed_clipboard(cx);
-    cx.simulate_keystrokes("cmd-c");
+    cx.simulate_keystrokes("secondary-c");
     cx.run_until_parked();
     let got = h.clipboard(cx);
     println!("B4-GREEN source mode: clipboard={:?}", got);
@@ -142,7 +142,7 @@ async fn green_search_focus_copies_query(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-f");
     cx.run_until_parked();
     h.seed_clipboard(cx);
-    cx.simulate_keystrokes("cmd-c");
+    cx.simulate_keystrokes("secondary-c");
     cx.run_until_parked();
     let got = h.clipboard(cx);
     let search_focused = cx.update(|_w, cx| h.view.read(cx).search_focused);

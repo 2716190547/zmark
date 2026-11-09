@@ -699,11 +699,12 @@ fn test_rename_file_boundaries_and_error_handling() {
     assert!(res.is_err());
     assert_eq!(res.unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
 
-    // 2. Draft rename returns Err(InvalidInput)
+    // 2. Draft rename changes its in-memory title without creating a file.
     state.focus_or_create_draft();
     let res_draft = state.rename_file("draft_renamed");
-    assert!(res_draft.is_err());
-    assert_eq!(res_draft.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+    assert!(res_draft.is_ok());
+    assert!(state.doc().path.is_none());
+    assert_eq!(state.doc().display_name_with_fallback("Untitled"), "draft_renamed.md");
 
     // 3. Normal rename to non-existing name succeeds
     state.switch_document(&DocKey::Path(f1.clone()));

@@ -61,7 +61,7 @@ async fn test_search_input_simulate_keystrokes_pipeline(cx: &mut TestAppContext)
     });
 
     // 4. Cmd+A and type 'r' -> "r", cursor at 1..1
-    cx.simulate_keystrokes("cmd-a r");
+    cx.simulate_keystrokes("secondary-a r");
     cx.update(|_window, cx| {
         let input = view.read(cx);
         assert_eq!(

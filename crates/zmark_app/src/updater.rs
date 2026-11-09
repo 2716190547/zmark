@@ -364,6 +364,56 @@ fn download_to(url: &str, path: &Path, max_time: &str, max_size: &str) -> Result
     Ok(())
 }
 
+fn github_release_api_url(manifest: &ReleaseManifest) -> Option<String> {
+    parse_version(&manifest.version)?;
+    let expected = format!(
+        "https://github.com/2716190547/zmark-releases/releases/download/v{0}/ZMark-{0}.zip",
+        manifest.version
+    );
+    (manifest.url == expected).then(|| {
+        format!(
+            "https://api.github.com/repos/2716190547/zmark-releases/releases/tags/v{}",
+            manifest.version
+        )
+    })
+}
+
+fn github_asset_api_url(manifest: &ReleaseManifest, metadata: &serde_json::Value) -> Option<String> {
+    github_release_api_url(manifest)?;
+    let expected_name = format!("ZMark-{}.zip", manifest.version);
+    let asset = metadata.get("assets")?.as_array()?.iter().find(|asset| {
+        asset.get("name").and_then(|v| v.as_str()) == Some(expected_name.as_str())
+            && asset.get("browser_download_url").and_then(|v| v.as_str())
+                == Some(manifest.url.as_str())
+            && asset.get("state").and_then(|v| v.as_str()) == Some("uploaded")
+    })?;
+    let id = asset.get("id")?.as_u64()?;
+    Some(format!(
+        "https://api.github.com/repos/2716190547/zmark-releases/releases/assets/{id}"
+    ))
+}
+
+fn download_github_asset_fallback(
+    manifest: &ReleaseManifest,
+    path: &Path,
+) -> Result<(), UpdateError> {
+    let release_url = github_release_api_url(manifest)
+        .ok_or_else(|| UpdateError::Http("no trusted GitHub fallback for this release URL".into()))?;
+    let metadata = run_command(
+        "/usr/bin/curl",
+        &["-fsSL", "--connect-timeout", "10", "--max-time", "30", "--max-filesize", "1048576", &release_url],
+    )?;
+    let metadata: serde_json::Value = serde_json::from_slice(&metadata)
+        .map_err(|error| UpdateError::Parse(error.to_string()))?;
+    let asset_url = github_asset_api_url(manifest, &metadata)
+        .ok_or_else(|| UpdateError::Http("matching GitHub release asset not found".into()))?;
+    run_command(
+        "/usr/bin/curl",
+        &["-fsSL", "--connect-timeout", "10", "--max-time", "300", "--retry", "2", "--max-filesize", "104857600", "-H", "Accept: application/octet-stream", "-o", &path.to_string_lossy(), &asset_url],
+    )?;
+    Ok(())
+}
+
 /// Downloads, verifies and stages an update. Never installs anything: the
 /// restart helper performs the swap once the process exits.
 pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, UpdateError> {
@@ -401,7 +451,13 @@ pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, Update
     std::fs::create_dir_all(&staging_root).map_err(|e| UpdateError::Io(e.to_string()))?;
 
     let zip_path = staging_root.join("update.zip");
-    download_to(&manifest.url, &zip_path, "300", "104857600")?;
+    if let Err(direct_error) = download_to(&manifest.url, &zip_path, "300", "104857600") {
+        download_github_asset_fallback(&manifest, &zip_path).map_err(|fallback_error| {
+            UpdateError::Http(format!(
+                "direct download failed ({direct_error}); fallback failed ({fallback_error})"
+            ))
+        })?;
+    }
     let zip_bytes = std::fs::read(&zip_path).map_err(|e| UpdateError::Io(e.to_string()))?;
     if sha256_hex(&zip_bytes) != manifest.sha256.to_lowercase() {
         let _ = std::fs::remove_dir_all(&staging_root);
@@ -552,6 +608,19 @@ xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn github_fallback_only_accepts_the_signed_release_asset() {
+        let (mut manifest, _) = signed_manifest();
+        manifest.version = "0.2.2".into();
+        manifest.url = "https://github.com/2716190547/zmark-releases/releases/download/v0.2.2/ZMark-0.2.2.zip".into();
+        let metadata = serde_json::json!({"assets": [{"id": 726074161u64, "name": "ZMark-0.2.2.zip", "browser_download_url": manifest.url, "state": "uploaded"}]});
+        assert_eq!(github_asset_api_url(&manifest, &metadata).as_deref(), Some("https://api.github.com/repos/2716190547/zmark-releases/releases/assets/726074161"));
+        manifest.url.push_str("?unexpected=1");
+        assert!(github_asset_api_url(&manifest, &metadata).is_none());
+        manifest.url = "https://example.com/ZMark-0.2.2.zip".into();
+        assert!(github_asset_api_url(&manifest, &metadata).is_none());
+    }
     use ring::signature::KeyPair;
 
     fn signed_manifest() -> (ReleaseManifest, String) {

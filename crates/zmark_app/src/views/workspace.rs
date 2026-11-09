@@ -2108,25 +2108,15 @@ impl WorkspaceView {
         self.auto_save_tasks.insert(key, (task_id, task));
     }
 
-    /// Begins editing the active file name in place. Drafts must use Save As so
-    /// this interaction never silently renames an unsaved document.
+    /// Begins editing the active document name in place.
     pub fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.state.active.is_none() {
-            return;
-        }
-        if self.state.doc().path.is_none() {
-            self.trigger_save(cx);
             return;
         }
         self.rename_buffer = self
             .state
             .doc()
-            .path
-            .as_ref()
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("Untitled.md")
-            .to_string();
+            .display_name_with_fallback("Untitled.md");
         self.is_renaming = true;
         window.focus(&self.focus_handle);
         cx.notify();
@@ -2157,7 +2147,8 @@ impl WorkspaceView {
                 .first()
                 .map(|r| r.path.clone())
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-            let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
+            let suggested_name = self.state.doc().display_name_with_fallback("Untitled.md");
+            let rx = cx.prompt_for_new_path(&suggested_dir, Some(&suggested_name));
             cx.spawn(async move |this, app| {
                 if let Ok(Ok(Some(path))) = rx.await {
                     let _ = this.update(app, |this, cx| {
@@ -2370,7 +2361,11 @@ impl WorkspaceView {
             .first()
             .map(|r| r.path.clone())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        let rx = cx.prompt_for_new_path(&suggested_dir, Some("Untitled.md"));
+        let suggested_name = self.state.open_docs.iter()
+            .find(|doc| doc.key == close_key)
+            .map(|doc| doc.doc.display_name_with_fallback("Untitled.md"))
+            .unwrap_or_else(|| "Untitled.md".to_string());
+        let rx = cx.prompt_for_new_path(&suggested_dir, Some(&suggested_name));
 
         cx.spawn(async move |this, app| {
             if let Ok(Ok(Some(path))) = rx.await {
@@ -3096,7 +3091,7 @@ impl WorkspaceView {
                                 "btn_modal_discard",
                                 discard_label,
                                 theme,
-                                ModalButtonRole::Danger,
+                                ModalButtonRole::Secondary,
                                 cx.listener(move |this, _, window, cx| {
                                     this.handle_modal_discard(&key_discard, window, cx);
                                 }),
@@ -3316,10 +3311,13 @@ impl Render for WorkspaceView {
 
         let view_doc_switch = cx.entity().clone();
         let on_select_doc = Arc::new(
-            move |key: &crate::state::DocKey, window: &mut Window, cx: &mut App| {
+            move |key: &crate::state::DocKey, rename: bool, window: &mut Window, cx: &mut App| {
                 view_doc_switch.update(cx, |this, cx| {
                     this.state.switch_document(key);
                     this.on_document_swapped(Some(window), cx);
+                    if rename {
+                        this.begin_rename(window, cx);
+                    }
                     cx.notify();
                 });
             },
@@ -3662,7 +3660,7 @@ impl Render for WorkspaceView {
                 if search_is_focused {
                     let key = event.keystroke.key.as_str();
                     let mods = event.keystroke.modifiers;
-                    if mods.platform && (key == "c" || key == "C") {
+                    if mods.secondary() && (key == "c" || key == "C") {
                         if !this.state.search_query.is_empty() {
                             cx.write_to_clipboard(ClipboardItem::new_string(this.state.search_query.clone()));
                         }
@@ -3726,9 +3724,9 @@ impl Render for WorkspaceView {
                     else { window.focus(&this.preview_scroll_focus); }
                     return;
                 }
-                if this.preview_scroll_focus.is_focused(window) && !mods.platform { return; }
+                if this.preview_scroll_focus.is_focused(window) && !mods.secondary() { return; }
 
-                if mods.platform {
+                if mods.secondary() {
                     match key {
                         "z" => {
                             if mods.shift {
