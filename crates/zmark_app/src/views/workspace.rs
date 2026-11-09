@@ -2108,6 +2108,30 @@ impl WorkspaceView {
         self.auto_save_tasks.insert(key, (task_id, task));
     }
 
+    /// Begins editing the active file name in place. Drafts must use Save As so
+    /// this interaction never silently renames an unsaved document.
+    pub fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.active.is_none() {
+            return;
+        }
+        if self.state.doc().path.is_none() {
+            self.trigger_save(cx);
+            return;
+        }
+        self.rename_buffer = self
+            .state
+            .doc()
+            .path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("Untitled.md")
+            .to_string();
+        self.is_renaming = true;
+        window.focus(&self.focus_handle);
+        cx.notify();
+    }
+
     fn rename_active_file(&mut self, new_name: &str, cx: &mut Context<Self>) {
         let old_key = self.state.active.clone();
         if self.state.rename_file(new_name).is_ok() && self.state.active != old_key {
@@ -2671,7 +2695,7 @@ impl WorkspaceView {
                     .when(!drawer_open, |el| {
                         el.child(render_icon_button(
                             "btn_expand_drawer",
-                            format!("{} (⌘B)", strings.directory_drawer),
+                            format!("{} ({})", strings.directory_drawer, crate::platform::shortcut_hint("B")),
                             false,
                             theme,
                             render_sidebar_icon(theme.text_muted),
@@ -2737,23 +2761,8 @@ impl WorkspaceView {
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                    if event.click_count == 2 && this.state.active.is_some() {
-                                        if this.state.doc().path.is_some() {
-                                            let name = this
-                                                .state
-                                                .doc()
-                                                .path
-                                                .as_ref()
-                                                .and_then(|p| p.file_name())
-                                                .and_then(|n| n.to_str())
-                                                .unwrap_or("Untitled.md");
-                                            this.rename_buffer = name.to_string();
-                                            this.is_renaming = true;
-                                            window.focus(&this.focus_handle);
-                                            cx.notify();
-                                        } else {
-                                            this.trigger_save(cx);
-                                        }
+                                    if event.click_count == 2 {
+                                        this.begin_rename(window, cx);
                                     }
                                 }),
                             )
@@ -2814,7 +2823,7 @@ impl WorkspaceView {
                             .gap_1()
                             .child(render_mode_icon_tab(
                                 "btn_mode_source",
-                                format!("{} (⌘1)", strings.source_mode),
+                                format!("{} ({})", strings.source_mode, crate::platform::shortcut_hint("1")),
                                 view_mode == ViewMode::Source,
                                 theme,
                                 render_source_mode_icon(
@@ -2826,7 +2835,7 @@ impl WorkspaceView {
                             ))
                             .child(render_mode_icon_tab(
                                 "btn_mode_split",
-                                format!("{} (⌘2)", strings.split_mode),
+                                format!("{} ({})", strings.split_mode, crate::platform::shortcut_hint("2")),
                                 view_mode == ViewMode::Split,
                                 theme,
                                 render_split_mode_icon(
@@ -2838,7 +2847,7 @@ impl WorkspaceView {
                             ))
                             .child(render_mode_icon_tab(
                                 "btn_mode_preview",
-                                format!("{} (⌘3)", strings.preview_mode),
+                                format!("{} ({})", strings.preview_mode, crate::platform::shortcut_hint("3")),
                                 view_mode == ViewMode::Preview,
                                 theme,
                                 render_preview_mode_icon(
@@ -2891,7 +2900,7 @@ impl WorkspaceView {
                             )
                             .child(render_animated_icon_button(
                                 "btn_export",
-                                format!("{} (⇧⌘E)", strings.export_html),
+                                format!("{} (⇧{})", strings.export_html, crate::platform::shortcut_hint("E")),
                                 theme,
                                 render_export_icon(theme.text_muted),
                                 reduce_motion,
@@ -2904,7 +2913,7 @@ impl WorkspaceView {
                             ))
                             .child(render_animated_icon_button(
                                 "btn_settings",
-                                format!("{} (⌘,)", strings.settings),
+                                format!("{} ({})", strings.settings, crate::platform::shortcut_hint(",")),
                                 theme,
                                 render_settings_icon(theme.text_muted),
                                 reduce_motion,
@@ -2918,7 +2927,7 @@ impl WorkspaceView {
                     ),
             )
             .when(cfg!(target_os = "windows") && !is_fullscreen, |el| {
-                el.child(render_window_controls(theme))
+                el.child(render_window_controls(theme, cx))
             })
     }
 
@@ -2947,8 +2956,8 @@ impl WorkspaceView {
             .child(
                 div()
                     .id("remove_root_modal_card")
-                    .w(px(380.))
-                    .p_5()
+                    .w(px(400.))
+                    .p_6()
                     .rounded_xl()
                     .bg(theme.surface)
                     .border_1()
@@ -2956,12 +2965,12 @@ impl WorkspaceView {
                     .shadow_2xl()
                     .flex()
                     .flex_col()
-                    .gap_4()
+                    .gap_6()
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .gap_1()
+                            .gap_2()
                             .child(
                                 div()
                                     .text_base()
@@ -2971,7 +2980,7 @@ impl WorkspaceView {
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_sm()
                                     .text_color(theme.text_muted)
                                     .child(strings.remove_root_confirm_detail),
                             ),
@@ -2982,48 +2991,24 @@ impl WorkspaceView {
                             .justify_end()
                             .items_center()
                             .gap_2()
-                            // Cancel button
-                            .child(
-                                div()
-                                    .id("btn_remove_root_cancel")
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .text_xs()
-                                    .text_color(theme.text_primary)
-                                    .hover(|s| s.bg(theme.bg))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _window, cx| {
-                                            this.handle_cancel_remove_root(cx);
-                                        }),
-                                    )
-                                    .child(format!("{} (Esc)", strings.modal_cancel)),
-                            )
-                            // Confirm button
-                            .child(
-                                div()
-                                    .id("btn_remove_root_confirm")
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(rgba(0xef44441a))
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(0xef4444))
-                                    .hover(|s| s.bg(rgba(0xef444433)))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _window, cx| {
-                                            this.handle_confirm_remove_root(cx);
-                                        }),
-                                    )
-                                    .child(strings.remove_root_confirm),
-                            ),
+                            .child(render_modal_button(
+                                "btn_remove_root_cancel",
+                                format!("{} (Esc)", strings.modal_cancel),
+                                theme,
+                                ModalButtonRole::Secondary,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.handle_cancel_remove_root(cx);
+                                }),
+                            ))
+                            .child(render_modal_button(
+                                "btn_remove_root_confirm",
+                                strings.remove_root_confirm.to_string(),
+                                theme,
+                                ModalButtonRole::Danger,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.handle_confirm_remove_root(cx);
+                                }),
+                            )),
                     ),
             )
     }
@@ -3047,6 +3032,9 @@ impl WorkspaceView {
         let key_discard = pending.key.clone();
         let key_save = pending.key.clone();
         let prompt_text = strings.modal_save_prompt.replace("{}", &title);
+        let cancel_label = format!("{} ({})", strings.modal_cancel, "Esc");
+        let discard_label = format!("{} ({})", strings.modal_discard, "D");
+        let save_label = format!("{} ({})", strings.modal_save, "S");
 
         div()
             .id("dirty_close_modal_backdrop")
@@ -3060,8 +3048,8 @@ impl WorkspaceView {
             .child(
                 div()
                     .id("dirty_close_modal_card")
-                    .w(px(380.))
-                    .p_5()
+                    .w(px(400.))
+                    .p_6()
                     .rounded_xl()
                     .bg(theme.surface)
                     .border_1()
@@ -3069,12 +3057,12 @@ impl WorkspaceView {
                     .shadow_2xl()
                     .flex()
                     .flex_col()
-                    .gap_4()
+                    .gap_6()
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .gap_1()
+                            .gap_2()
                             .child(
                                 div()
                                     .text_base()
@@ -3095,69 +3083,33 @@ impl WorkspaceView {
                             .justify_end()
                             .items_center()
                             .gap_2()
-                            // Cancel button
-                            .child(
-                                div()
-                                    .id("btn_modal_cancel")
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .text_xs()
-                                    .text_color(theme.text_primary)
-                                    .hover(|s| s.bg(theme.bg))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _window, cx| {
-                                            this.handle_modal_cancel(cx);
-                                        }),
-                                    )
-                                    .child(format!("{} (Esc)", strings.modal_cancel)),
-                            )
-                            // Discard button
-                            .child(
-                                div()
-                                    .id("btn_modal_discard")
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(rgba(0xef44441a))
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(0xef4444))
-                                    .hover(|s| s.bg(rgba(0xef444433)))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.handle_modal_discard(&key_discard, window, cx);
-                                        }),
-                                    )
-                                    .child(format!("{} (D)", strings.modal_discard)),
-                            )
-                            // Save button
-                            .child(
-                                div()
-                                    .id("btn_modal_save")
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(theme.accent)
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(0xffffff))
-                                    .hover(|s| s.opacity(0.9))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.handle_modal_save(&key_save, window, cx);
-                                        }),
-                                    )
-                                    .child(format!("{} (S)", strings.modal_save)),
-                            ),
+                            .child(render_modal_button(
+                                "btn_modal_cancel",
+                                cancel_label,
+                                theme,
+                                ModalButtonRole::Secondary,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.handle_modal_cancel(cx);
+                                }),
+                            ))
+                            .child(render_modal_button(
+                                "btn_modal_discard",
+                                discard_label,
+                                theme,
+                                ModalButtonRole::Danger,
+                                cx.listener(move |this, _, window, cx| {
+                                    this.handle_modal_discard(&key_discard, window, cx);
+                                }),
+                            ))
+                            .child(render_modal_button(
+                                "btn_modal_save",
+                                save_label,
+                                theme,
+                                ModalButtonRole::Primary,
+                                cx.listener(move |this, _, window, cx| {
+                                    this.handle_modal_save(&key_save, window, cx);
+                                }),
+                            )),
                     ),
             )
     }
@@ -3347,6 +3299,17 @@ impl Render for WorkspaceView {
                     let _ = this.state.load_file(path.clone());
                     this.on_document_swapped(Some(window), cx);
                     cx.notify();
+                });
+            },
+        );
+
+        let view_rename = cx.entity().clone();
+        let on_rename_file = Arc::new(
+            move |path: &std::path::PathBuf, window: &mut Window, cx: &mut App| {
+                view_rename.update(cx, |this, cx| {
+                    let _ = this.state.load_file(path.clone());
+                    this.on_document_swapped(Some(window), cx);
+                    this.begin_rename(window, cx);
                 });
             },
         );
@@ -3980,6 +3943,7 @@ impl Render for WorkspaceView {
                                         on_refresh_root,
                                         on_toggle_folder,
                                         on_select_file,
+                                        on_rename_file,
                                         on_select_doc,
                                         on_close_doc,
                                         on_new_draft,
@@ -4940,13 +4904,76 @@ where
     }
 }
 
+fn render_modal_button(
+    id: &'static str,
+    label: String,
+    theme: &crate::theme::ThemeColors,
+    role: ModalButtonRole,
+    on_press: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let (bg, text, border, hover_bg) = match role {
+        ModalButtonRole::Secondary => (
+            theme.bg,
+            theme.text_primary,
+            theme.border,
+            theme.hover_bg(),
+        ),
+        ModalButtonRole::Danger => (
+            theme.conflict_bg,
+            rgb(0xef4444).into(),
+            theme.conflict_border,
+            theme.conflict_border.opacity(0.35),
+        ),
+        ModalButtonRole::Primary => (
+            theme.accent,
+            rgb(0xffffff).into(),
+            theme.accent,
+            theme.accent.opacity(0.9),
+        ),
+    };
+    div()
+        .id(id)
+        .min_w(px(72.))
+        .h(px(32.))
+        .px_3()
+        .rounded_md()
+        .cursor_pointer()
+        .bg(bg)
+        .border_1()
+        .border_color(border)
+        .text_sm()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(text)
+        .flex()
+        .items_center()
+        .justify_center()
+        .hover(move |style| style.bg(hover_bg))
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            cx.stop_propagation();
+            on_press(event, window, cx);
+        })
+        .child(label)
+}
+
+#[derive(Clone, Copy)]
+enum ModalButtonRole {
+    Secondary,
+    Danger,
+    Primary,
+}
+
 /// Windows has no native title bar when `appears_transparent` is set, so the
 /// canvas header is the single title bar. These client-drawn buttons use the
 /// native non-client hit-test areas, which keeps minimise/maximise/close and
 /// Snap behaviour identical to a system caption bar.
-fn render_window_controls(theme: &crate::theme::ThemeColors) -> impl IntoElement {
+fn render_window_controls(
+    theme: &crate::theme::ThemeColors,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement {
     let color = theme.text_primary;
+    let hover = theme.hover_bg();
     div()
+        .id("windows_window_controls")
         .flex()
         .flex_shrink_0()
         .h_full()
@@ -4955,16 +4982,28 @@ fn render_window_controls(theme: &crate::theme::ThemeColors) -> impl IntoElement
             "btn_window_minimize",
             WindowControlArea::Min,
             render_window_minimize_icon(color),
+            hover,
+            cx.listener(|_, _, window, _| window.minimize_window()),
         ))
         .child(render_window_control_button(
             "btn_window_maximize",
             WindowControlArea::Max,
             render_window_maximize_icon(color),
+            hover,
+            cx.listener(|_, _, window, _| window.zoom_window()),
         ))
         .child(render_window_control_button(
             "btn_window_close",
             WindowControlArea::Close,
             render_window_close_icon(color),
+            hover,
+            cx.listener(|this, _, window, cx| {
+                // Use the same close decision as the native caption button so
+                // unsaved documents still get a confirmation prompt.
+                if this.on_window_should_close(Some(window), cx) {
+                    window.remove_window();
+                }
+            }),
         ))
 }
 
@@ -4972,6 +5011,8 @@ fn render_window_control_button(
     id: &'static str,
     area: WindowControlArea,
     icon: impl IntoElement + 'static,
+    hover: Hsla,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     div()
         .id(id)
@@ -4980,7 +5021,15 @@ fn render_window_control_button(
         .flex()
         .items_center()
         .justify_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(hover))
         .window_control_area(area)
+        // The native area still supplies Windows Snap and system caption
+        // behaviour; this listener also handles GPUI's ordinary click path.
+        .on_click(move |event, window, cx| {
+            cx.stop_propagation();
+            on_click(event, window, cx);
+        })
         .child(icon)
 }
 

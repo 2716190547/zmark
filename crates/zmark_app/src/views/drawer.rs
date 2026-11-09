@@ -41,6 +41,7 @@ pub fn render_drawer(
     on_refresh_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_toggle_folder: Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
     on_select_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
+    on_rename_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_select_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
     on_close_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
     on_new_draft: Arc<dyn Fn(&mut Window, &mut App)>,
@@ -67,6 +68,7 @@ pub fn render_drawer(
         on_refresh_root,
         on_toggle_folder,
         on_select_file,
+        on_rename_file,
         on_select_doc,
         on_close_doc,
         on_new_draft,
@@ -95,6 +97,7 @@ pub fn render_drawer_with_search(
     on_refresh_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_toggle_folder: Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
     on_select_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
+    on_rename_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_select_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
     on_close_doc: Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
     _on_new_draft: Arc<dyn Fn(&mut Window, &mut App)>,
@@ -274,7 +277,7 @@ pub fn render_drawer_with_search(
                 .gap_1()
                 .child(render_icon_btn(
                     "drawer_collapse_btn",
-                    &format!("{} (⌘B)", strings.collapse_sidebar),
+                    &format!("{} ({})", strings.collapse_sidebar, crate::platform::shortcut_hint("B")),
                     "icons/panel-left.svg",
                     false,
                     theme,
@@ -375,7 +378,7 @@ pub fn render_drawer_with_search(
                                         .child("×"),
                                 );
 
-                            let draft_tooltip_text = format!("{} (⌘N)", strings.draft_focus_hint);
+                            let draft_tooltip_text = format!("{} ({})", strings.draft_focus_hint, crate::platform::shortcut_hint("N"));
                             let sel_key = d_key.clone();
                             let mut draft_item = div()
                                 .id("drawer_draft_item")
@@ -620,6 +623,7 @@ pub fn render_drawer_with_search(
                                             &on_toggle_folder,
                                             &on_new_file_in_dir,
                                             &on_select_file,
+                                            &on_rename_file,
                                             &on_close_doc,
                                             &mut tree_elements,
                                         );
@@ -891,6 +895,7 @@ fn render_file_tree_nodes(
     on_toggle_folder: &Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
     on_new_file_in_dir: &Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_select_file: &Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
+    on_rename_file: &Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
     on_close_doc: &Arc<dyn Fn(&DocKey, &mut Window, &mut App)>,
     out: &mut Vec<AnyElement>,
 ) {
@@ -1008,6 +1013,7 @@ fn render_file_tree_nodes(
                     on_toggle_folder,
                     on_new_file_in_dir,
                     on_select_file,
+                    on_rename_file,
                     on_close_doc,
                     out,
                 );
@@ -1025,7 +1031,9 @@ fn render_file_tree_nodes(
             let file_name = node.name.clone();
             let tooltip_name = file_name.clone();
             let on_select = on_select_file.clone();
+            let on_rename = on_rename_file.clone();
             let on_close = on_close_doc.clone();
+            let rename_path = p.clone();
             let close_key = target_key.clone();
 
             let mut item = div()
@@ -1047,8 +1055,12 @@ fn render_file_tree_nodes(
                     let t = tooltip_name.clone();
                     cx.new(|_| DrawerTooltipView { text: t }).into()
                 })
-                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                    on_select(&p, window, cx);
+                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                    if is_active && event.click_count == 2 {
+                        on_rename(&rename_path, window, cx);
+                    } else {
+                        on_select(&p, window, cx);
+                    }
                 });
 
             if is_active {

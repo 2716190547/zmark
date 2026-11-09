@@ -44,6 +44,28 @@ pub const fn trailing_window_control_inset(is_macos: bool, is_windows: bool) -> 
 pub const TRAILING_WINDOW_CONTROL_INSET: f32 =
     trailing_window_control_inset(cfg!(target_os = "macos"), cfg!(target_os = "windows"));
 
+/// GPUI's `secondary` modifier is Command on macOS and Control on Windows/Linux.
+/// Use it for application shortcuts instead of the literal `cmd` key.
+pub const SHORTCUT_MODIFIER: &str = if cfg!(target_os = "macos") {
+    "cmd"
+} else {
+    "secondary"
+};
+
+pub const MODIFIER_SYMBOL: &str = if cfg!(target_os = "macos") {
+    "⌘"
+} else {
+    "Ctrl+"
+};
+
+pub fn shortcut(key: &str) -> String {
+    format!("{SHORTCUT_MODIFIER}-{key}")
+}
+
+pub fn shortcut_hint(key: &str) -> String {
+    format!("{MODIFIER_SYMBOL}{key}")
+}
+
 /// Width of one Windows caption button. Three buttons fill the standard 138px
 /// caption area (46px each at 100% scale).
 pub const WINDOW_CONTROL_BUTTON_WIDTH: f32 = 46.0;
@@ -105,7 +127,34 @@ pub fn auxiliary_titlebar_options(title: &str, traffic_light_y: f32) -> Option<T
 }
 
 
-/// Whether the app gaining activation requires ordering the main window front.
+/// Sets the packaged icon explicitly, so a Dock launch also uses the application
+/// icon even if LaunchServices has an older cached entry.
+#[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
+pub fn register_application_icon() {
+    use cocoa::appkit::NSApplication;
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::{NSBundle, NSString};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    unsafe {
+        let app = NSApplication::sharedApplication(nil);
+        let bundle: id = NSBundle::mainBundle();
+        let name = NSString::alloc(nil).init_str("AppIcon");
+        let image: id = msg_send![bundle, imageForResource: name];
+        let image = if image.is_null() {
+            msg_send![class!(NSImage), imageNamed: name]
+        } else {
+            image
+        };
+        if !image.is_null() {
+            let _: () = msg_send![app, setApplicationIconImage: image];
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn register_application_icon() {}
 ///
 /// Only the inactive → active transition does work; repeated active callbacks
 /// (for example while the window is already frontmost) must stay no-ops.
@@ -137,6 +186,17 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         {
             assert!(!UI_FONT.contains("system-ui"));
+        }
+    }
+
+    #[test]
+    fn application_shortcuts_use_command_on_macos_and_control_elsewhere() {
+        if cfg!(target_os = "macos") {
+            assert_eq!(shortcut("s"), "cmd-s");
+            assert_eq!(shortcut_hint("S"), "⌘S");
+        } else {
+            assert_eq!(shortcut("s"), "secondary-s");
+            assert_eq!(shortcut_hint("S"), "Ctrl+S");
         }
     }
 

@@ -1,0 +1,6 @@
+#include <winuser.h>
+
+// GPUI's Windows platform loads resource ID 1 for the taskbar, Alt-Tab and
+// window icons. Keep this resource in the application executable as well as in
+// the NSIS installer.
+1 ICON "../../packaging/windows/zmark.ico"

@@ -8,7 +8,7 @@ use zmark_app::actions::*;
 use zmark_app::assets::AppAssets;
 use zmark_app::state::AppState;
 use zmark_app::views::workspace::WorkspaceView;
-use zmark_core::document::Document;
+use zmark_core::config::Preferences;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -18,66 +18,23 @@ fn main() {
         None
     };
 
-    let doc = if let Some(path) = initial_path {
-        Document::from_file(path).unwrap_or_else(|_| Document::new_scratch())
-    } else {
-        let sample_text = r#"# Welcome to ZMark
-
-ZMark is a **high-performance**, GPU-accelerated Markdown reader and editor built with Rust and GPUI.
-
-## Key Features
-
-- **Blazing Fast**: Virtualized editor and preview keep a 1.5MB document under 150MB of RAM.
-- **Three View Modes**: 
-  - `Cmd+1` Source Editor
-  - `Cmd+2` Split View
-  - `Cmd+3` Typography Reading View
-- **GFM Compliant**: Tables, task lists, code blocks, blockquotes.
-
-### Sample Code Block
-
-```rust
-fn main() {
-    println!("ZMark: GPU Markdown Editor");
-}
-```
-
-### Task Checklist
-
-- [x] High precision AST parsing
-- [x] Virtualized preview and editor
-- [x] Standalone single-file HTML export
-- [ ] Modular KaTeX / LaTeX plugins
-
-### Comparison Table
-
-| Editor | Engine | Memory (Idle) | Scroll FPS |
-|---|---|---|---|
-| ZMark | Rust + GPUI | ~140 MB (1.5MB doc) | GPU-paced |
-| Typora | Electron | ~220 MB | 60 fps |
-| Obsidian | Electron | ~350 MB | 60 fps |
-
-> "The best code is the code that never drops a frame."
-
-Enjoy writing and reading with pure speed!
-"#;
-        let mut d = Document::new_scratch();
-        d.update_buffer(sample_text.to_string());
-        d
-    };
+    let preferences = Preferences::load_or_default();
+    let preferences_path = Preferences::default_config_path();
+    let doc = zmark_app::welcome::initial_document(initial_path, preferences.locale);
 
     let app = Application::new().with_assets(AppAssets);
+    zmark_app::platform::register_application_icon();
     app.run(move |cx: &mut App| {
-        // Register keybindings
+        let shortcut = zmark_app::platform::shortcut;
         cx.bind_keys([
-            KeyBinding::new("cmd-1", ToggleSourceMode, None),
-            KeyBinding::new("cmd-2", ToggleSplitMode, None),
-            KeyBinding::new("cmd-3", TogglePreviewMode, None),
-            KeyBinding::new("cmd-b", ToggleDrawer, None),
-            KeyBinding::new("cmd-o", OpenFileDialog, None),
-            KeyBinding::new("cmd-,", ToggleSettings, None),
-            KeyBinding::new("cmd-s", SaveFile, None),
-            KeyBinding::new("cmd-shift-e", ExportHtml, None),
+            KeyBinding::new(&shortcut("1"), ToggleSourceMode, None),
+            KeyBinding::new(&shortcut("2"), ToggleSplitMode, None),
+            KeyBinding::new(&shortcut("3"), TogglePreviewMode, None),
+            KeyBinding::new(&shortcut("b"), ToggleDrawer, None),
+            KeyBinding::new(&shortcut("o"), OpenFileDialog, None),
+            KeyBinding::new(&shortcut(","), ToggleSettings, None),
+            KeyBinding::new(&shortcut("s"), SaveFile, None),
+            KeyBinding::new(&shortcut("shift-e"), ExportHtml, None),
         ]);
 
         let window_options = WindowOptions {
@@ -92,7 +49,7 @@ Enjoy writing and reading with pure speed!
         };
 
         cx.open_window(window_options, |window, cx| {
-            let state = AppState::new(doc);
+            let state = AppState::new_with_preferences_at(doc, preferences, preferences_path);
             let update_config = zmark_app::updater::UpdateConfig::production();
             let view = cx.new(|cx| {
                 WorkspaceView::new_with_update_config(state, update_config, cx)

@@ -7469,9 +7469,12 @@ checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 name = "zmark_app"
 version = "0.2.1"
 dependencies = [
+ "cocoa 0.26.0",
+ "embed-resource",
  "gpui",
  "hex",
  "image",
+ "objc",
  "percent-encoding",
  "ring",
  "serde_json",

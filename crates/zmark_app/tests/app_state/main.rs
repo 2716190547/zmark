@@ -8,6 +8,7 @@ mod header_drawer_polish_test;
 mod inactive_ast_unload_test;
 mod parse_tier_test;
 mod pure_functions_and_wrappers_test;
+mod rename_interaction_test;
 mod settings_about_layout_test;
 mod settings_modern_ui_test;
 mod settings_shortcuts_test;
