@@ -145,6 +145,16 @@ window.on_window_should_close(cx, move |window, cx| {
   - 已保存文件点击红色关闭：进程退出。
   - 脏文件点击关闭：应用停留并显示确认；Esc 取消后窗口保留。
   - 脏文件丢弃（D）后进程退出，文件内容未写入。
+  - 欢迎页首次关闭：不再弹保存确认，第一次点击即退出。
   - 测试期间临时关闭 auto_save，结束后已恢复用户配置。
 
+### 补充根因（欢迎页首次关闭）
 
+欢迎页由 `Document::new_scratch()` + `update_buffer` 生成，`last_saved_content` 为空，
+导致初次显示就被标记为 `Modified`。同时 `next_dirty_doc_key` 还把“非空 scratch”
+无条件视为脏。两处都会让首次关闭进入保存确认，而不是退出。
+
+修复：
+- 新增 `Document::new_scratch_with_text`，让生成的欢迎内容初始为 `Clean`；
+- 删除 `next_dirty_doc_key` 中重复的“非空 scratch 即脏”条件，统一以
+  `DocumentStatus` 判断；编辑过的草稿仍会变成 `Modified`。

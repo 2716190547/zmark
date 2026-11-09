@@ -1296,7 +1296,6 @@ impl AppState {
         }
         self.open_docs.iter().find(|od| {
             od.doc.status != DocumentStatus::Clean
-                || (od.key.is_scratch() && !od.doc.buffer.trim().is_empty())
         }).map(|od| od.key.clone())
     }
 

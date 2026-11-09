@@ -28,15 +28,21 @@ pub struct Document {
 impl Document {
     /// Creates an empty scratchpad document.
     pub fn new_scratch() -> Self {
-        let buffer = String::new();
+        Self::new_scratch_with_text(String::new())
+    }
+
+    /// Creates a scratchpad with generated initial content that is already
+    /// considered clean. The welcome page is onboarding copy, not an unsaved
+    /// user edit, so closing it must not trigger the save prompt.
+    pub fn new_scratch_with_text(buffer: String) -> Self {
         let parsed = Arc::new(parse_markdown(&buffer));
         Self {
             path: None,
             scratch_name: None,
+            last_saved_content: buffer.clone(),
             buffer,
             status: DocumentStatus::Clean,
             parsed,
-            last_saved_content: String::new(),
             parse_stale: false,
         }
     }

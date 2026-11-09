@@ -6,14 +6,12 @@ pub fn initial_document(path: Option<PathBuf>, locale: SupportedLocale) -> Docum
     match path {
         Some(path) => Document::from_file(path).unwrap_or_else(|_| Document::new_scratch()),
         None => {
-            let mut document = Document::new_scratch();
             let modifier = if cfg!(target_os = "macos") {
                 "Cmd+"
             } else {
                 "Ctrl+"
             };
-            document.update_buffer(text(locale).replace("Cmd+", modifier));
-            document
+            Document::new_scratch_with_text(text(locale).replace("Cmd+", modifier))
         }
     }
 }
@@ -74,6 +72,18 @@ mod tests {
         assert_eq!(
             welcome.buffer,
             text(SupportedLocale::ZhCn).replace("Cmd+", modifier)
+        );
+        assert_eq!(
+            welcome.status,
+            zmark_core::document::DocumentStatus::Clean,
+            "untouched welcome page must not look like an unsaved edit"
+        );
+        let mut edited = welcome;
+        edited.update_buffer("# changed".to_string());
+        assert_eq!(
+            edited.status,
+            zmark_core::document::DocumentStatus::Modified,
+            "editing the welcome page must mark it dirty"
         );
         let opened = initial_document(Some(path.clone()), SupportedLocale::ZhCn);
         assert_eq!(opened.buffer, "# Existing document");

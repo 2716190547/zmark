@@ -554,6 +554,15 @@ fn test_window_should_close_blocks_on_dirty_draft() {
 }
 
 #[test]
+fn test_clean_welcome_scratch_does_not_block_window_close() {
+    let welcome = Document::new_scratch_with_text("# Welcome\n\nStart here.".to_string());
+    let mut state = AppState::new_isolated(welcome);
+    assert!(!state.is_dirty());
+    assert!(state.next_dirty_doc_key().is_none());
+    assert!(state.handle_window_should_close());
+}
+
+#[test]
 fn test_background_dirty_document_switches_on_close_request() {
     let dir = tempdir().unwrap();
     let f1 = dir.path().join("doc1.md");
