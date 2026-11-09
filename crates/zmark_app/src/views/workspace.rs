@@ -2413,12 +2413,14 @@ impl WorkspaceView {
             .staged_path
             .clone()
             .unwrap_or_else(crate::updater::staged_state_path);
-        if let Some(prepared) = crate::updater::read_staged_state(&staged_path) {
-            if crate::updater::is_newer(&self.update_config.current_version, &prepared.version) {
-                self.update_status = UpdateStatus::Downloaded(prepared.version.clone());
-                self.prepared_update = Some(prepared);
-            } else {
-                let _ = std::fs::remove_file(&staged_path);
+        if !cfg!(target_os = "windows") {
+            if let Some(prepared) = crate::updater::read_staged_state(&staged_path) {
+                if crate::updater::is_newer(&self.update_config.current_version, &prepared.version) {
+                    self.update_status = UpdateStatus::Downloaded(prepared.version.clone());
+                    self.prepared_update = Some(prepared);
+                } else {
+                    let _ = std::fs::remove_file(&staged_path);
+                }
             }
         }
         self.check_for_updates(cx, false);
@@ -2800,8 +2802,10 @@ impl WorkspaceView {
                     .h_full()
                     .min_w(px(20.))
                     .window_control_area(WindowControlArea::Drag)
-                    .on_mouse_down(MouseButton::Left, |_e, window, _| {
-                        window.start_window_move();
+                    .when(!cfg!(target_os = "windows"), |el| {
+                        el.on_mouse_down(MouseButton::Left, |_e, window, _| {
+                            window.start_window_move();
+                        })
                     }),
             )
             // Right Group: Flat View Mode Switcher + Action Buttons (Save, Export, Settings)
@@ -2922,7 +2926,7 @@ impl WorkspaceView {
                     ),
             )
             .when(cfg!(target_os = "windows") && !is_fullscreen, |el| {
-                el.child(render_window_controls(theme, cx))
+                el.child(render_window_controls(theme))
             })
     }
 
@@ -4964,10 +4968,7 @@ enum ModalButtonRole {
 /// canvas header is the single title bar. These client-drawn buttons use the
 /// native non-client hit-test areas, which keeps minimise/maximise/close and
 /// Snap behaviour identical to a system caption bar.
-fn render_window_controls(
-    theme: &crate::theme::ThemeColors,
-    cx: &mut Context<WorkspaceView>,
-) -> impl IntoElement {
+pub(crate) fn render_window_controls(theme: &crate::theme::ThemeColors) -> impl IntoElement {
     let color = theme.text_primary;
     let hover = theme.hover_bg();
     div()
@@ -4981,27 +4982,18 @@ fn render_window_controls(
             WindowControlArea::Min,
             render_window_minimize_icon(color),
             hover,
-            cx.listener(|_, _, window, _| window.minimize_window()),
         ))
         .child(render_window_control_button(
             "btn_window_maximize",
             WindowControlArea::Max,
             render_window_maximize_icon(color),
             hover,
-            cx.listener(|_, _, window, _| window.zoom_window()),
         ))
         .child(render_window_control_button(
             "btn_window_close",
             WindowControlArea::Close,
             render_window_close_icon(color),
             hover,
-            cx.listener(|this, _, window, cx| {
-                // Use the same close decision as the native caption button so
-                // unsaved documents still get a confirmation prompt.
-                if this.on_window_should_close(Some(window), cx) {
-                    window.remove_window();
-                }
-            }),
         ))
 }
 
@@ -5010,7 +5002,6 @@ fn render_window_control_button(
     area: WindowControlArea,
     icon: impl IntoElement + 'static,
     hover: Hsla,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     div()
         .id(id)
@@ -5022,12 +5013,6 @@ fn render_window_control_button(
         .cursor_pointer()
         .hover(|style| style.bg(hover))
         .window_control_area(area)
-        // The native area still supplies Windows Snap and system caption
-        // behaviour; this listener also handles GPUI's ordinary click path.
-        .on_click(move |event, window, cx| {
-            cx.stop_propagation();
-            on_click(event, window, cx);
-        })
         .child(icon)
 }
 

@@ -259,6 +259,7 @@ impl Render for SettingsWindowView {
 
         div()
             .size_full()
+            .relative()
             .bg(theme.bg)
             .text_color(theme.text_primary)
             .flex()
@@ -336,6 +337,7 @@ impl Render for SettingsWindowView {
                     .flex_1()
                     .h_full()
                     .p_5()
+                    .when(cfg!(target_os = "windows"), |el| el.pt(px(36.)))
                     .bg(theme.surface)
                     .overflow_y_scroll()
                     .child(match current_tab {
@@ -390,6 +392,19 @@ impl Render for SettingsWindowView {
                         .into_any_element(),
                     }),
             )
+            .when(cfg!(target_os = "windows"), |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(32.))
+                        .flex()
+                        .child(div().flex_1().h_full().window_control_area(WindowControlArea::Drag))
+                        .child(crate::views::workspace::render_window_controls(&theme)),
+                )
+            })
     }
 }
 

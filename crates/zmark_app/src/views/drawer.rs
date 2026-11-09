@@ -313,8 +313,10 @@ pub fn render_drawer_with_search(
                         .flex_1()
                         .h_full()
                         .window_control_area(WindowControlArea::Drag)
-                        .on_mouse_down(MouseButton::Left, |_e, window, _| {
-                            window.start_window_move();
+                        .when(!cfg!(target_os = "windows"), |el| {
+                            el.on_mouse_down(MouseButton::Left, |_e, window, _| {
+                                window.start_window_move();
+                            })
                         }),
                 ),
         );

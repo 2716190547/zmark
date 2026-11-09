@@ -9,6 +9,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::{run_check, spawn_install_helper};
+
 /// Stable release feed. Kept as a constant so a future mirror can be added
 /// without changing the updater's state machine.
 pub const UPDATE_FEED_URL: &str =
@@ -198,8 +203,14 @@ impl UpdateConfig {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    pub fn production() -> Self {
+        windows::production()
+    }
+
     /// Enables updates only for a writable `.app` bundle outside App
     /// Translocation and removable volumes.
+    #[cfg(not(target_os = "windows"))]
     pub fn production() -> Self {
         let mut config = Self::disabled();
         config.public_key_hex = UPDATE_PUBLIC_KEY_HEX.to_string();
@@ -416,6 +427,7 @@ fn download_github_asset_fallback(
 
 /// Downloads, verifies and stages an update. Never installs anything: the
 /// restart helper performs the swap once the process exits.
+#[cfg(not(target_os = "windows"))]
 pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, UpdateError> {
     if !config.enabled {
         return Ok(None);
@@ -532,6 +544,7 @@ pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, Update
 
 /// Starts the detached install helper. It waits for this process to exit, so
 /// the caller must quit only after the dirty-document flow is resolved.
+#[cfg(not(target_os = "windows"))]
 pub fn spawn_install_helper(
     prepared: &PreparedUpdate,
     target: &Path,

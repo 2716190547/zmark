@@ -105,9 +105,7 @@ pub fn window_decorations() -> Option<WindowDecorations> {
     }
 }
 
-/// Auxiliary windows (settings) have no in-app header to host caption buttons.
-/// macOS keeps its transparent traffic-light title bar; Windows uses the
-/// native caption bar; Linux uses server-side decorations.
+/// Auxiliary windows use the same transparent titlebar as the main window.
 pub fn auxiliary_titlebar_options(title: &str, traffic_light_y: f32) -> Option<TitlebarOptions> {
     if cfg!(target_os = "macos") {
         Some(TitlebarOptions {
@@ -118,7 +116,7 @@ pub fn auxiliary_titlebar_options(title: &str, traffic_light_y: f32) -> Option<T
     } else if cfg!(target_os = "windows") {
         Some(TitlebarOptions {
             title: Some(title.to_string().into()),
-            appears_transparent: false,
+            appears_transparent: true,
             traffic_light_position: None,
         })
     } else {
