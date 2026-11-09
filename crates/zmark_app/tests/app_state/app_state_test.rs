@@ -677,7 +677,7 @@ fn test_quit_draft_save_as_continues_exit_pipeline() {
     let save_ok = state.confirm_close_save(&DocKey::Path(f_pathed.clone())).unwrap();
     assert!(save_ok);
 
-    // 5. All dirty documents resolved, ready to remove_window
+    // 5. All dirty documents resolved, ready for the window callback to quit
     assert!(state.next_dirty_doc_key().is_none());
 }
 

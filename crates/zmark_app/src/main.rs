@@ -61,7 +61,16 @@ fn main() {
 
             let view_close = view.clone();
             window.on_window_should_close(cx, move |window, cx| {
-                view_close.update(cx, |this, cx| this.on_window_should_close(Some(window), cx))
+                let should_close = view_close.update(cx, |this, cx| {
+                    this.on_window_should_close(Some(window), cx)
+                });
+                if should_close {
+                    // Platform::quit is asynchronous on macOS, Windows and
+                    // Linux; it does not re-enter terminate inside this
+                    // windowShouldClose callback.
+                    cx.quit();
+                }
+                should_close
             });
 
             view.update(cx, |this, cx| {

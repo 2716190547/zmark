@@ -2397,6 +2397,7 @@ impl WorkspaceView {
                 let _ = this.update(app, |this, cx| {
                     this.state.is_quitting = false;
                     this.state.pending_close = None;
+                    this.pending_restart = false;
                     cx.notify();
                 });
             }
@@ -2526,6 +2527,7 @@ impl WorkspaceView {
         };
         let Some(target) = self.update_config.target_bundle.clone() else {
             self.prepared_update = Some(prepared);
+            self.pending_restart = false;
             self.update_status = UpdateStatus::Error("no target bundle configured".into());
             cx.notify();
             return;
@@ -2538,6 +2540,7 @@ impl WorkspaceView {
             }
             Err(error) => {
                 self.prepared_update = Some(prepared);
+                self.pending_restart = false;
                 self.update_status = UpdateStatus::Error(error.to_string());
                 self.error_banner =
                     Some(format!("{}: {error}", self.state.strings.update_failed));
@@ -2557,20 +2560,14 @@ impl WorkspaceView {
                 self.on_document_swapped(window_opt.as_deref_mut(), cx);
                 cx.notify();
             } else {
-                // All dirty documents resolved! Close window per ADR 0031,
-                // unless a downloaded update is waiting for this moment.
+                // All dirty documents resolved. A pending update still owns
+                // the quit path; otherwise closing the window quits ZMark.
                 self.state.is_quitting = false;
                 if self.pending_restart {
                     self.install_prepared_update(cx);
                     return;
                 }
-                if let Some(window) = window_opt.as_deref_mut() {
-                    window.remove_window();
-                } else if let Some(h) = self.window_handle {
-                    let _ = h.update(cx, |_view, window, _cx| {
-                        window.remove_window();
-                    });
-                }
+                cx.quit();
             }
         } else {
             cx.notify();
