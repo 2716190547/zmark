@@ -401,7 +401,7 @@ impl Render for SettingsWindowView {
                         .right_0()
                         .h(px(32.))
                         .flex()
-                        .child(div().flex_1().h_full().window_control_area(WindowControlArea::Drag))
+                        .child(div().flex_1().h_full().occlude().window_control_area(WindowControlArea::Drag))
                         .child(crate::views::workspace::render_window_controls(&theme)),
                 )
             })

@@ -312,6 +312,7 @@ pub fn render_drawer_with_search(
                         .id("drawer_header_drag_area")
                         .flex_1()
                         .h_full()
+                        .occlude()
                         .window_control_area(WindowControlArea::Drag)
                         .when(!cfg!(target_os = "windows"), |el| {
                             el.on_mouse_down(MouseButton::Left, |_e, window, _| {

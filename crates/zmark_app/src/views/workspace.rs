@@ -86,6 +86,8 @@ pub struct WorkspaceView {
     pub preview_selection: Option<crate::views::preview::PreviewSelectionRange>,
     pub is_preview_selecting: bool,
     pub preview_autoscroll_task: Option<gpui::Task<()>>,
+    /// Eased scroll started by an outline click; dropped on any manual scroll.
+    outline_scroll_task: Option<gpui::Task<()>>,
     preview_autoscroll_accum: f32,
     pub preview_mouse_window_pos: Option<Point<Pixels>>,
     pub preview_content_bounds: Option<Bounds<Pixels>>,
@@ -252,6 +254,7 @@ impl WorkspaceView {
             preview_selection: None,
             is_preview_selecting: false,
             preview_autoscroll_task: None,
+            outline_scroll_task: None,
             preview_autoscroll_accum: 0.0,
             preview_mouse_window_pos: None,
             preview_content_bounds: None,
@@ -517,6 +520,8 @@ impl WorkspaceView {
     pub fn parse_now_and_refresh(&mut self) {
         self.parse_task = None;
         self.parse_paused = false;
+        // A rename box belongs to the document it was opened on.
+        self.is_renaming = false;
         self.preview_selection = None;
         self.is_preview_selecting = false;
         self.search_focused = false;
@@ -1487,6 +1492,7 @@ impl WorkspaceView {
     }
 
     fn cancel_pending_preview_seek(&mut self) {
+        self.outline_scroll_task = None;
         if self.preview_scroll_drag.is_none() {
             self.preview_drag_ratio = None;
             self.preview_drag_ratio_until = None;
@@ -1494,6 +1500,48 @@ impl WorkspaceView {
         self.preview_scroll_seek_generation = self.preview_scroll_seek_generation.wrapping_add(1);
         self.preview_scroll_end_pending = false;
         self.preview_scroll_pending_seek = None;
+    }
+
+    /// Eases the preview to `target` (content px). The split-mode editor follows
+    /// each frame through `sync_preview_scroll`. Any manual scroll cancels it via
+    /// `cancel_pending_preview_seek`; "Reduce motion" jumps straight there.
+    pub fn animate_preview_scroll_to(&mut self, target: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let start = self.preview_list.offset();
+        let ms = outline_scroll_duration_ms(target - start);
+        if self.state.preferences.reduce_motion || ms == 0 {
+            self.apply_outline_scroll(target, window, cx);
+            return;
+        }
+        let began = std::time::Instant::now();
+        let view = cx.entity().downgrade();
+        let handle = window.window_handle();
+        self.outline_scroll_task = Some(cx.spawn(async move |_this, app| loop {
+            app.background_executor().timer(std::time::Duration::from_millis(16)).await;
+            let t = (began.elapsed().as_millis() as f32 / ms as f32).min(1.0);
+            let offset = start + (target - start) * outline_scroll_ease(t);
+            let alive = handle
+                .update(app, |_, window, app| {
+                    view.update(app, |this, cx| {
+                        this.apply_outline_scroll(offset, window, cx);
+                        if t >= 1.0 {
+                            this.outline_scroll_task = None;
+                        }
+                    })
+                    .is_ok()
+                })
+                .unwrap_or(false);
+            if !alive || t >= 1.0 {
+                break;
+            }
+        }));
+    }
+
+    fn apply_outline_scroll(&mut self, offset: f32, window: &mut Window, cx: &mut Context<Self>) {
+        self.preview_list.set_scroll_offset(offset);
+        self.last_scroll_origin = None;
+        self.sync_preview_scroll(window, cx);
+        self.last_preview_sync_offset = self.preview_list.offset();
+        cx.notify();
     }
 
     fn preview_scroll_to_ratio(&mut self, ratio: f32, window: &mut Window, cx: &mut Context<Self>) {
@@ -2122,6 +2170,24 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    /// Leaves inline rename. Committing skips unchanged or empty names so a stray
+    /// click never renames a file or marks an untouched draft as modified.
+    fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
+        if !self.is_renaming {
+            return;
+        }
+        self.is_renaming = false;
+        let new_name = self.rename_buffer.trim().to_owned();
+        if commit
+            && self.state.active.is_some()
+            && !new_name.is_empty()
+            && new_name != self.state.doc().display_name_with_fallback("Untitled.md")
+        {
+            self.rename_active_file(&new_name, cx);
+        }
+        cx.notify();
+    }
+
     fn rename_active_file(&mut self, new_name: &str, cx: &mut Context<Self>) {
         let old_key = self.state.active.clone();
         if self.state.rename_file(new_name).is_ok() && self.state.active != old_key {
@@ -2701,6 +2767,10 @@ impl WorkspaceView {
                     .child(if is_renaming && active_key.is_some() {
                         div()
                             .id("tab_rename_box")
+                            .debug_selector(|| "tab_rename_box".into())
+                            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                                this.finish_rename(true, cx);
+                            }))
                             .px_2()
                             .py_0p5()
                             .bg(theme.bg)
@@ -2795,9 +2865,11 @@ impl WorkspaceView {
             .child(
                 div()
                     .id("canvas_header_drag_area")
+                    .debug_selector(|| "canvas_header_drag_area".into())
                     .flex_1()
                     .h_full()
                     .min_w(px(20.))
+                    .occlude()
                     .window_control_area(WindowControlArea::Drag)
                     .when(!cfg!(target_os = "windows"), |el| {
                         el.on_mouse_down(MouseButton::Left, |_e, window, _| {
@@ -3356,12 +3428,11 @@ impl Render for WorkspaceView {
                 view_heading.update(cx, |this, cx| {
                     this.cancel_pending_preview_seek();
                     this.end_preview_scroll_drag();
-                    this.preview_list
-                        .set_scroll_offset(this.preview_list.offset_for_block(block_idx, 0.0));
-                    this.last_scroll_origin = None;
-                    this.sync_preview_scroll(window, cx);
-                    this.last_preview_sync_offset = this.preview_list.offset();
-                    cx.notify();
+                    let target = this
+                        .preview_list
+                        .offset_for_block(block_idx, 0.0)
+                        .clamp(0.0, this.preview_list.max_scroll());
+                    this.animate_preview_scroll_to(target, window, cx);
                 });
             });
 
@@ -3678,18 +3749,8 @@ impl Render for WorkspaceView {
 
                 if this.is_renaming {
                     match event.keystroke.key.as_str() {
-                        "enter" => {
-                            let new_name = this.rename_buffer.trim().to_owned();
-                            if !new_name.is_empty() {
-                                this.rename_active_file(&new_name, cx);
-                            }
-                            this.is_renaming = false;
-                            cx.notify();
-                        }
-                        "escape" => {
-                            this.is_renaming = false;
-                            cx.notify();
-                        }
+                        "enter" => this.finish_rename(true, cx),
+                        "escape" => this.finish_rename(false, cx),
                         "backspace" => {
                             this.rename_buffer.pop();
                             cx.notify();
@@ -4802,9 +4863,23 @@ fn projected_scroll_offset(current: f32, wheel_delta_y: f32, max: f32) -> f32 {
     (current - wheel_delta_y).clamp(0.0, max.max(0.0))
 }
 
+/// Outline-jump duration: short hops stay snappy, long jumps cap at 450ms.
+pub fn outline_scroll_duration_ms(distance_px: f32) -> u64 {
+    let d = distance_px.abs();
+    if d < 1.0 {
+        0
+    } else {
+        (160.0 + d * 0.12).min(450.0) as u64
+    }
+}
+
+pub fn outline_scroll_ease(t: f32) -> f32 {
+    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(4)
+}
+
 #[cfg(test)]
 mod scroll_tests {
-    use super::projected_scroll_offset;
+    use super::{outline_scroll_duration_ms, outline_scroll_ease, projected_scroll_offset};
 
     #[test]
     fn wheel_projection_matches_scroll_direction_and_clamps_at_edges() {
@@ -4813,6 +4888,20 @@ mod scroll_tests {
         assert_eq!(projected_scroll_offset(0.0, 20.0, 100.0), 0.0);
         assert_eq!(projected_scroll_offset(100.0, -20.0, 100.0), 100.0);
         assert_eq!(projected_scroll_offset(50.0, 0.0, 100.0), 50.0);
+    }
+
+    #[test]
+    fn outline_duration_scales_with_distance_and_is_capped() {
+        assert_eq!(outline_scroll_duration_ms(0.4), 0);
+        assert_eq!(outline_scroll_duration_ms(100.0), 172);
+        assert_eq!(outline_scroll_duration_ms(-100000.0), 450);
+    }
+
+    #[test]
+    fn outline_ease_runs_from_zero_to_one_and_decelerates() {
+        assert_eq!(outline_scroll_ease(0.0), 0.0);
+        assert_eq!(outline_scroll_ease(1.0), 1.0);
+        assert!(outline_scroll_ease(0.5) > 0.9);
     }
 }
 
@@ -5009,6 +5098,10 @@ fn render_window_control_button(
         .justify_center()
         .cursor_pointer()
         .hover(|style| style.bg(hover))
+        // `occlude` keeps the focusable root out of the hit test. Otherwise its
+        // focus listener calls `prevent_default()`, and GPUI's Windows
+        // non-client handler then swallows the click (no drag/min/max/close).
+        .occlude()
         .window_control_area(area)
         .child(icon)
 }

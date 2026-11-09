@@ -292,6 +292,9 @@ pub fn render_preview_pane_with_callbacks(
     pane
 }
 
+/// Narrowest a table column may shrink to before the table scrolls sideways.
+const TABLE_MIN_CELL_WIDTH: f32 = 72.0;
+
 /// Top/bottom margins for heading levels (top ≈ 2–3× bottom).
 pub fn heading_spacing(level: u8) -> (f32, f32) {
     match level {
@@ -527,7 +530,7 @@ fn render_block_element(
                     with_text_probe(
                         div()
                             .flex_1()
-                            .min_w(px(120.))
+                            .min_w(px(TABLE_MIN_CELL_WIDTH))
                             .p_3()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_size(px(base_font_size * 0.95))
@@ -551,6 +554,7 @@ fn render_block_element(
                 );
             }
 
+            let min_table_w = headers.len() as f32 * TABLE_MIN_CELL_WIDTH;
             let mut row_cells = Vec::new();
             for row in rows {
                 let mut cells = Vec::new();
@@ -564,7 +568,7 @@ fn render_block_element(
                         with_text_probe(
                             div()
                                 .flex_1()
-                                .min_w(px(120.))
+                                .min_w(px(TABLE_MIN_CELL_WIDTH))
                                 .p_3()
                                 .text_size(px(base_font_size * 0.95))
                                 .text_color(theme.text_primary)
@@ -604,7 +608,9 @@ fn render_block_element(
                 .child(
                     div()
                         .w_full()
-                        .min_w(px(520.))
+                        // Fit the pane and wrap cell text; only tables with many
+                        // columns exceed it and scroll horizontally.
+                        .min_w(px(min_table_w))
                         .rounded_md()
                         .border_1()
                         .border_color(theme.table_border())

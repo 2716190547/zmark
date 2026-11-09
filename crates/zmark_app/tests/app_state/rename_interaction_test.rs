@@ -83,3 +83,35 @@ async fn double_click_draft_title_or_sidebar_starts_rename(cx: &mut TestAppConte
         cx.update(|_, cx| assert!(view.read(cx).is_renaming, "{target}"));
     }
 }
+
+#[gpui::test]
+async fn clicking_outside_the_rename_box_leaves_rename_without_changes(cx: &mut TestAppContext) {
+    let window = cx.add_window(|window, cx| {
+        let view = WorkspaceView::new(AppState::new_isolated(Document::new_scratch()), cx);
+        window.focus(&view.focus_handle);
+        view
+    });
+    let view = window.root(cx).unwrap();
+    let cx = &mut VisualTestContext::from_window(*window, cx);
+    cx.update(|window, cx| view.update(cx, |ws, cx| ws.begin_rename(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| { let _ = window.draw(cx); });
+    let inside = cx.debug_bounds("tab_rename_box").expect("rename box visible").center();
+    let mouse_down = |position| MouseDownEvent {
+        position,
+        button: MouseButton::Left,
+        modifiers: Modifiers::none(),
+        click_count: 1,
+        first_mouse: false,
+    };
+    cx.simulate_event(mouse_down(inside));
+    cx.update(|_, cx| assert!(view.read(cx).is_renaming, "click inside keeps editing"));
+    let outside = gpui::point(inside.x + gpui::px(400.), inside.y + gpui::px(300.));
+    cx.simulate_event(mouse_down(outside));
+    cx.update(|_, cx| {
+        let ws = view.read(cx);
+        assert!(!ws.is_renaming, "click outside ends rename");
+        assert_eq!(ws.state.doc().display_name_with_fallback("-"), "-", "unchanged name is not committed");
+        assert_eq!(ws.state.doc().status, zmark_core::document::DocumentStatus::Clean);
+    });
+}

@@ -512,3 +512,61 @@ async fn repeated_arrow_keys_advance_without_intermediate_draw(cx: &mut TestAppC
     let moved = cx.update(|_, cx| { let ws = view.read(cx); let top = ws.preview_list.logical_scroll_top(); (top.item_ix, f32::from(top.offset_in_item)) });
     assert!(moved.0 > 0 || moved.1 > 70., "repeated keys should accumulate: {moved:?}");
 }
+
+#[gpui::test]
+async fn outline_jump_eases_and_manual_wheel_cancels_it(cx: &mut TestAppContext) {
+    let text = (0..300)
+        .map(|n| format!("## Heading {n}\n\nSome paragraph {n}.\n\n"))
+        .collect::<String>();
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut doc = Document::new_scratch();
+        doc.update_buffer(text);
+        let mut state = AppState::new_isolated(doc);
+        state.set_view_mode(ViewMode::Preview);
+        WorkspaceView::new(state, cx)
+    });
+    cx.update(|window, cx| {
+        view.update(cx, |ws, cx| {
+            ws.parse_now_and_refresh();
+            cx.notify();
+        });
+        let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let target = cx.update(|window, cx| {
+        view.update(cx, |ws, cx| {
+            let target = ws.preview_list.offset_for_block(400, 0.0).min(ws.preview_list.max_scroll());
+            ws.animate_preview_scroll_to(target, window, cx);
+            target
+        })
+    });
+    assert!(target > 1000.0, "fixture must be long enough to need easing");
+    // Nothing has ticked yet: an eased jump must not land immediately.
+    let offset = |cx: &mut gpui::VisualTestContext| cx.update(|_, cx| view.read(cx).preview_list.offset());
+    assert!(offset(cx) < target * 0.5);
+
+    cx.executor().advance_clock(std::time::Duration::from_millis(100));
+    cx.run_until_parked();
+    let mid = offset(cx);
+    assert!(mid > 0.0, "scroll must have started moving");
+
+    // A manual wheel event cancels the animation and keeps the user's position.
+    cx.simulate_event(ScrollWheelEvent {
+        position: Point::new(px(600.), px(300.)),
+        delta: ScrollDelta::Pixels(Point::new(px(0.), px(-1.))),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    let after_wheel = offset(cx);
+    cx.executor().advance_clock(std::time::Duration::from_millis(600));
+    cx.run_until_parked();
+    assert!(
+        (offset(cx) - after_wheel).abs() < 1.0,
+        "animation must stop after manual scroll"
+    );
+    assert!(offset(cx) < target - 1.0);
+}
