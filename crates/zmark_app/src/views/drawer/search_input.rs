@@ -41,6 +41,10 @@ pub struct SearchInput {
     pub last_layout: Option<ShapedLine>,
     pub last_bounds: Option<Bounds<Pixels>>,
     pub on_change: Option<Arc<dyn Fn(&str, &mut Window, &mut Context<Self>) + 'static>>,
+    /// Enter (`true`) / Escape (`false`) in submit mode, e.g. inline rename.
+    pub on_submit: Option<Arc<dyn Fn(bool, &mut Window, &mut Context<Self>) + 'static>>,
+    /// Larger bold text for the document title; `None` keeps the drawer style.
+    pub title_style: bool,
 }
 
 impl SearchInput {
@@ -55,6 +59,8 @@ impl SearchInput {
             last_layout: None,
             last_bounds: None,
             on_change: None,
+            on_submit: None,
+            title_style: false,
         }
     }
 
@@ -68,6 +74,19 @@ impl SearchInput {
         callback: impl Fn(&str, &mut Window, &mut Context<Self>) + 'static,
     ) -> Self {
         self.on_change = Some(Arc::new(callback));
+        self
+    }
+
+    pub fn on_submit(
+        mut self,
+        callback: impl Fn(bool, &mut Window, &mut Context<Self>) + 'static,
+    ) -> Self {
+        self.on_submit = Some(Arc::new(callback));
+        self
+    }
+
+    pub fn title_style(mut self) -> Self {
+        self.title_style = true;
         self
     }
 
@@ -494,9 +513,25 @@ impl Render for SearchInput {
             .flex()
             .flex_1()
             .items_center()
-            .text_size(px(13.))
+            .map(|el| {
+                if self.title_style {
+                    el.text_size(px(18.)).font_weight(FontWeight::BOLD).line_height(px(24.))
+                } else {
+                    el.text_size(px(13.))
+                }
+            })
             .track_focus(&focus_handle)
             .cursor(CursorStyle::IBeam)
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                if let (Some(layout), Some(bounds)) = (this.last_layout.as_ref(), this.last_bounds) {
+                    if !this.content.is_empty() {
+                        let x = event.position.x - bounds.left();
+                        let idx = layout.closest_index_for_x(x);
+                        this.move_to(idx);
+                        cx.notify();
+                    }
+                }
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
                 let mods = event.keystroke.modifiers;
@@ -556,6 +591,12 @@ impl Render for SearchInput {
                     }
                     "end" => {
                         this.end(window, cx);
+                        cx.stop_propagation();
+                    }
+                    "enter" | "escape" if this.on_submit.is_some() => {
+                        if let Some(cb) = this.on_submit.clone() {
+                            cb(key == "enter", window, cx);
+                        }
                         cx.stop_propagation();
                     }
                     "escape" => {

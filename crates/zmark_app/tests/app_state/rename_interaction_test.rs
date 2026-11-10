@@ -19,7 +19,7 @@ async fn active_file_can_start_rename_from_title_or_sidebar(cx: &mut TestAppCont
     cx.update(|_window, cx| {
         let ws = view.read(cx);
         assert!(ws.is_renaming);
-        assert_eq!(ws.rename_buffer, "note.md");
+        assert_eq!(ws.rename_input.read(cx).content.as_ref(), "note.md");
     });
 }
 
@@ -114,4 +114,41 @@ async fn clicking_outside_the_rename_box_leaves_rename_without_changes(cx: &mut 
         assert_eq!(ws.state.doc().display_name_with_fallback("-"), "-", "unchanged name is not committed");
         assert_eq!(ws.state.doc().status, zmark_core::document::DocumentStatus::Clean);
     });
+}
+
+#[gpui::test]
+async fn rename_input_accepts_ime_text_caret_moves_and_enter_commits(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    std::fs::write(&path, "content").unwrap();
+    let window = cx.add_window(|window, cx| {
+        let view = WorkspaceView::new(AppState::new_isolated(Document::from_file(path.clone()).unwrap()), cx);
+        window.focus(&view.focus_handle);
+        view
+    });
+    let view = window.root(cx).unwrap();
+    let cx = &mut VisualTestContext::from_window(*window, cx);
+    cx.update(|window, cx| view.update(cx, |ws, cx| ws.begin_rename(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| { let _ = window.draw(cx); });
+
+    // Caret starts at the end of "note.md"; move it before ".md" and insert Chinese text.
+    cx.simulate_keystrokes("left left left");
+    cx.update(|_, cx| {
+        let input = view.read(cx).rename_input.clone();
+        input.update(cx, |i, _| {
+            assert_eq!(i.cursor_offset(), 4, "arrow keys move the caret inside the name");
+            i.handle_replace_and_mark_text(None, "zhongwen", None);
+            i.handle_replace_text(None, "中文");
+        });
+        assert_eq!(input.read(cx).content.as_ref(), "note中文.md");
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let ws = view.read(cx);
+        assert!(!ws.is_renaming, "enter leaves rename");
+        assert_eq!(ws.state.doc().display_name_with_fallback("-"), "note中文.md");
+    });
+    assert!(dir.path().join("note中文.md").exists());
 }

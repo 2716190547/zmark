@@ -366,10 +366,9 @@ async fn pending_autosave_follows_renamed_document_key(cx: &mut gpui::TestAppCon
         });
     }
     cx.update(|window, cx| {
-        view.update(cx, |ws, _| {
-            ws.is_renaming = true;
-            ws.rename_buffer = "after".into();
-            window.focus(&ws.focus_handle);
+        view.update(cx, |ws, cx| {
+            ws.begin_rename(window, cx);
+            ws.rename_input.update(cx, |input, _| input.set_text("after"));
         })
     });
     cx.simulate_keystrokes("enter");

@@ -51,7 +51,8 @@ pub struct WorkspaceView {
     pub split_ratio: f32,
     pub is_resizing_split: bool,
     pub is_renaming: bool,
-    pub rename_buffer: String,
+    /// Inline title editor (IME, caret movement and blink come from `SearchInput`).
+    pub rename_input: Entity<crate::views::drawer::SearchInput>,
     pub workspace_width: f32,
     auto_save_tasks: HashMap<crate::state::DocKey, (u64, Task<()>)>,
     next_auto_save_id: u64,
@@ -200,6 +201,19 @@ impl WorkspaceView {
                     .detach();
                 })
         });
+        let view_rename = cx.entity().downgrade();
+        let rename_input = cx.new(|cx| {
+            crate::views::drawer::SearchInput::new(cx.focus_handle())
+                .title_style()
+                .on_submit(move |commit, _window, cx| {
+                    let view = view_rename.clone();
+                    // Defer: the input is mid-update while its key handler runs.
+                    cx.spawn(async move |_this, app| {
+                        let _ = view.update(app, |this, cx| this.finish_rename(commit, cx));
+                    })
+                    .detach();
+                })
+        });
         let mut view = Self {
             state,
             focus_handle: cx.focus_handle(),
@@ -220,7 +234,7 @@ impl WorkspaceView {
             split_ratio: 0.5,
             is_resizing_split: false,
             is_renaming: false,
-            rename_buffer: String::new(),
+            rename_input,
             workspace_width: 1200.0,
             auto_save_tasks: HashMap::new(),
             next_auto_save_id: 0,
@@ -2161,23 +2175,22 @@ impl WorkspaceView {
         if self.state.active.is_none() {
             return;
         }
-        self.rename_buffer = self
-            .state
-            .doc()
-            .display_name_with_fallback("Untitled.md");
+        let name = self.state.doc().display_name_with_fallback("Untitled.md");
+        self.rename_input.update(cx, |input, _| input.set_text(name));
         self.is_renaming = true;
-        window.focus(&self.focus_handle);
+        let handle = self.rename_input.read(cx).focus_handle.clone();
+        window.focus(&handle);
         cx.notify();
     }
 
     /// Leaves inline rename. Committing skips unchanged or empty names so a stray
     /// click never renames a file or marks an untouched draft as modified.
-    fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
+    pub fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
         if !self.is_renaming {
             return;
         }
         self.is_renaming = false;
-        let new_name = self.rename_buffer.trim().to_owned();
+        let new_name = self.rename_input.read(cx).content.trim().to_owned();
         if commit
             && self.state.active.is_some()
             && !new_name.is_empty()
@@ -2696,7 +2709,7 @@ impl WorkspaceView {
         let view_mode = self.state.view_mode;
         let strings = self.state.strings;
         let is_renaming = self.is_renaming;
-        let rename_buffer = self.rename_buffer.clone();
+        let rename_input = self.rename_input.clone();
 
         let viewport_w = f32::from(window.viewport_size().width);
         let col_w = self.state.preferences.max_column_width;
@@ -2765,46 +2778,21 @@ impl WorkspaceView {
                         ))
                     })
                     .child(if is_renaming && active_key.is_some() {
+                        // Same position and type as the static title: no frame, only a
+                        // blinking caret, so entering rename never shifts the layout.
                         div()
                             .id("tab_rename_box")
                             .debug_selector(|| "tab_rename_box".into())
+                            .min_w(px(120.))
+                            .px_2()
+                            .py_1()
+                            .flex()
+                            .items_center()
+                            .text_color(theme.text_primary)
                             .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _window, cx| {
                                 this.finish_rename(true, cx);
                             }))
-                            .px_2()
-                            .py_0p5()
-                            .bg(theme.bg)
-                            .border_1()
-                            .border_color(theme.accent)
-                            .rounded_sm()
-                            .flex()
-                            .items_center()
-                            .cursor_text()
-                            .child(
-                                div()
-                                    .text_size(px(18.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .line_height(px(24.))
-                                    .text_color(theme.text_primary)
-                                    .child(if rename_buffer.is_empty() {
-                                        "Untitled.md".to_string()
-                                    } else {
-                                        rename_buffer.clone()
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .w(px(1.5))
-                                    .h(px(14.))
-                                    .ml_0p5()
-                                    .bg(theme.accent)
-                                    .with_animation(
-                                        "rename_cursor_blink",
-                                        Animation::new(std::time::Duration::from_millis(600))
-                                            .repeat(),
-                                        |el, delta| el.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
-                                    ),
-                            )
+                            .child(rename_input)
                             .into_any_element()
                     } else {
                         let tooltip = tooltip_text.clone();
@@ -3748,34 +3736,7 @@ impl Render for WorkspaceView {
                 }
 
                 if this.is_renaming {
-                    match event.keystroke.key.as_str() {
-                        "enter" => this.finish_rename(true, cx),
-                        "escape" => this.finish_rename(false, cx),
-                        "backspace" => {
-                            this.rename_buffer.pop();
-                            cx.notify();
-                        }
-                        "space" => {
-                            this.rename_buffer.push(' ');
-                            cx.notify();
-                        }
-                        "period" => {
-                            this.rename_buffer.push('.');
-                            cx.notify();
-                        }
-                        key => {
-                            if let Some(ch) = &event.keystroke.key_char {
-                                this.rename_buffer.push_str(ch);
-                                cx.notify();
-                            } else if key.chars().count() == 1
-                                && !event.keystroke.modifiers.control
-                                && !event.keystroke.modifiers.platform
-                            {
-                                this.rename_buffer.push_str(key);
-                                cx.notify();
-                            }
-                        }
-                    }
+                    // The rename input handles its own keys and IME.
                     return;
                 }
 
@@ -4863,13 +4824,13 @@ fn projected_scroll_offset(current: f32, wheel_delta_y: f32, max: f32) -> f32 {
     (current - wheel_delta_y).clamp(0.0, max.max(0.0))
 }
 
-/// Outline-jump duration: short hops stay snappy, long jumps cap at 450ms.
+/// Outline-jump duration: short hops stay snappy, long jumps cap at 600ms.
 pub fn outline_scroll_duration_ms(distance_px: f32) -> u64 {
     let d = distance_px.abs();
     if d < 1.0 {
         0
     } else {
-        (160.0 + d * 0.12).min(450.0) as u64
+        (240.0 + d * 0.15).min(600.0) as u64
     }
 }
 
@@ -4893,8 +4854,8 @@ mod scroll_tests {
     #[test]
     fn outline_duration_scales_with_distance_and_is_capped() {
         assert_eq!(outline_scroll_duration_ms(0.4), 0);
-        assert_eq!(outline_scroll_duration_ms(100.0), 172);
-        assert_eq!(outline_scroll_duration_ms(-100000.0), 450);
+        assert_eq!(outline_scroll_duration_ms(100.0), 255);
+        assert_eq!(outline_scroll_duration_ms(-100000.0), 600);
     }
 
     #[test]
