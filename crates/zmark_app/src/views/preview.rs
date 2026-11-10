@@ -988,6 +988,8 @@ pub const MAX_DIAGRAM_CACHE_BYTES: usize = 32 * 1024 * 1024;
 struct DiagramCacheEntry {
     path: std::path::PathBuf,
     bytes: usize,
+    /// Frame in which the preview last asked for this diagram.
+    used_frame: u64,
 }
 
 pub struct DiagramCache {
@@ -997,6 +999,7 @@ pub struct DiagramCache {
     max_size: usize,
     max_bytes: usize,
     bytes: usize,
+    frame: u64,
 }
 
 impl DiagramCache {
@@ -1012,11 +1015,21 @@ impl DiagramCache {
             max_size,
             max_bytes,
             bytes: 0,
+            frame: 0,
         }
     }
 
+    /// Starts a new preview frame. Diagrams requested during a frame are
+    /// visible in it and are never evicted until a later frame leaves them out.
+    pub fn begin_frame(&mut self) {
+        self.frame += 1;
+    }
+
     pub fn get(&mut self, key: &(u64, bool)) -> Option<std::path::PathBuf> {
-        let path = self.entries.get(key)?.path.clone();
+        let frame = self.frame;
+        let entry = self.entries.get_mut(key)?;
+        entry.used_frame = frame;
+        let path = entry.path.clone();
         if let Some(pos) = self.order.iter().position(|k| k == key) {
             self.order.remove(pos);
             self.order.push_back(*key);
@@ -1026,7 +1039,9 @@ impl DiagramCache {
 
     pub fn insert(&mut self, key: (u64, bool), path: std::path::PathBuf) {
         let bytes = diagram_texture_bytes(&path);
+        let frame = self.frame;
         if let Some(entry) = self.entries.get_mut(&key) {
+            entry.used_frame = frame;
             if entry.path != path {
                 let old_path = std::mem::replace(&mut entry.path, path);
                 let _ = std::fs::remove_file(&old_path);
@@ -1040,7 +1055,7 @@ impl DiagramCache {
             }
             self.order.push_back(key);
         } else {
-            self.entries.insert(key, DiagramCacheEntry { path, bytes });
+            self.entries.insert(key, DiagramCacheEntry { path, bytes, used_frame: frame });
             self.order.push_back(key);
             self.bytes += bytes;
         }
@@ -1048,12 +1063,20 @@ impl DiagramCache {
     }
 
     fn evict_overflow(&mut self) {
-        // Keep at least one entry so a diagram larger than the whole budget is
-        // still shown; otherwise the visible range would thrash on every frame.
-        while self.entries.len() > 1
-            && (self.entries.len() > self.max_size || self.bytes > self.max_bytes)
-        {
-            let Some(evicted_key) = self.order.pop_front() else { break; };
+        // Diagrams used in the current frame are on screen: evicting them would
+        // delete the file the frame is about to draw and re-render it next
+        // frame, forever. The cache may exceed its budget while they are visible
+        // and shrinks as soon as they scroll out.
+        while self.entries.len() > self.max_size || self.bytes > self.max_bytes {
+            let frame = self.frame;
+            let Some(pos) = self
+                .order
+                .iter()
+                .position(|key| self.entries.get(key).is_some_and(|e| e.used_frame != frame))
+            else {
+                break;
+            };
+            let Some(evicted_key) = self.order.remove(pos) else { break; };
             let Some(entry) = self.entries.remove(&evicted_key) else { continue; };
             self.bytes = self.bytes.saturating_sub(entry.bytes);
             let _ = std::fs::remove_file(&entry.path);
@@ -1096,7 +1119,11 @@ static DIAGRAM_CACHE: std::sync::LazyLock<std::sync::Mutex<DiagramCache>> =
 
 /// Drop the GPU/CPU image assets for diagrams evicted from the preview cache.
 pub fn release_evicted_diagram_images(window: &mut Window, cx: &mut App) -> bool {
-    let paths = DIAGRAM_CACHE.lock().unwrap().take_evicted();
+    let paths = {
+        let mut cache = DIAGRAM_CACHE.lock().unwrap();
+        cache.begin_frame();
+        cache.take_evicted()
+    };
     if paths.is_empty() {
         return false;
     }

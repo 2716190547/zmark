@@ -17,7 +17,8 @@ fn test_diagram_cache_lru_cap_and_eviction() {
     cache.insert((2, false), file2.clone());
     assert_eq!(cache.len(), 2);
 
-    // Access 1 so 2 becomes the LRU item
+    // Next frame: only 1 is requested again, so 2 becomes the LRU item.
+    cache.begin_frame();
     assert_eq!(cache.get(&(1, false)), Some(file1.clone()));
 
     // Insert 3 -> 2 should be evicted and file2 deleted
@@ -54,7 +55,10 @@ fn diagram_cache_enforces_a_texture_byte_budget() {
     cache.insert((2, false), files[1].clone());
     assert_eq!(cache.len(), 2);
 
-    // The third texture pushes the cache over budget; the oldest is evicted.
+    // Next frame: 1 scrolled out of view. The third texture pushes the cache
+    // over budget, so the oldest unused entry is evicted.
+    cache.begin_frame();
+    cache.get(&(2, false));
     cache.insert((3, false), files[2].clone());
     assert_eq!(cache.len(), 2);
     assert_eq!(cache.get(&(1, false)), None);
@@ -66,6 +70,50 @@ fn diagram_cache_enforces_a_texture_byte_budget() {
     single.insert((9, false), files[2].clone());
     assert_eq!(single.len(), 1);
     assert!(single.take_evicted().is_empty());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+/// Mirrors the preview loop: each frame starts a new frame, then looks up every
+/// visible diagram and re-renders (writes + inserts) the ones that miss.
+#[test]
+fn visible_diagrams_over_budget_are_kept_and_not_rerendered_every_frame() {
+    let temp_dir = std::env::temp_dir().join("zmark_test_cache_visible");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let files: Vec<_> = (1..=3).map(|i| temp_dir.join(format!("t{i}.svg"))).collect();
+    let svg = r#"<svg width="500" height="500"></svg>"#; // 4 MB decoded each
+    // Budget fits two; all three are on screen.
+    let mut cache = DiagramCache::with_byte_budget(10, 8_500_000);
+    let mut renders = 0;
+    for _ in 0..6 {
+        cache.begin_frame();
+        let _ = cache.take_evicted();
+        for (i, file) in files.iter().enumerate() {
+            let key = (i as u64 + 1, false);
+            if cache.get(&key).is_none() || !file.exists() {
+                renders += 1;
+                std::fs::write(file, svg).unwrap();
+                cache.insert(key, file.clone());
+            }
+        }
+    }
+    assert_eq!(renders, 3, "each visible diagram renders once, not once per frame");
+    assert!(files.iter().all(|f| f.exists()), "visible diagram files must survive");
+
+    // Once the third scrolls out of view, the cache shrinks back under budget.
+    cache.begin_frame();
+    for i in 0..2 {
+        cache.get(&(i as u64 + 1, false));
+    }
+    cache.insert((4, false), {
+        let f = temp_dir.join("t4.svg");
+        std::fs::write(&f, svg).unwrap();
+        f
+    });
+    cache.begin_frame();
+    cache.insert((4, false), temp_dir.join("t4.svg"));
+    assert!(cache.len() <= 2, "offscreen entries are evicted, got {}", cache.len());
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
