@@ -744,9 +744,17 @@ fn render_styled_inlines(
                             status.into_any_element()
                         }
                         state => {
+                            if matches!(state, crate::local_images::ImageState::Waiting) {
+                                // Loading: reserve the space with a quiet block instead of flashing
+                                // a text box that the image then replaces (the "stutter").
+                                return div().w_full().min_w(px(0.)).h(px(LOADING_IMAGE_HEIGHT))
+                                    .rounded_md().bg(theme.hover_bg())
+                                    .debug_selector(|| format!("local_image_status:{url}"))
+                                    .into_any_element();
+                            }
                             let reason = match state {
                                 crate::local_images::ImageState::Failed(reason) => reason,
-                                _ => "正在加载图片…".to_owned(),
+                                _ => String::new(),
                             };
                             div().w_full().min_w(px(0.)).p_3().rounded_md().border_1()
                                 .border_color(theme.border).text_color(theme.text_muted)
@@ -1584,6 +1592,8 @@ fn render_list_element(
 ///   as interactive diagram widgets with pan/zoom lightbox capabilities.
 /// Upper bound for a single inline image's displayed height, in points.
 pub const MAX_IMAGE_DISPLAY_HEIGHT: f32 = 400.0;
+/// Height reserved for an image that is still decoding.
+const LOADING_IMAGE_HEIGHT: f32 = 120.0;
 
 pub fn should_wrap_code_block(lang: Option<&str>) -> bool {
     match lang {
