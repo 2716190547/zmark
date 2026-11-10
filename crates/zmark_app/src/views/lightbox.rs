@@ -240,6 +240,25 @@ impl LightboxState {
     }
 }
 
+/// Natural size of a lightbox image scaled to fit 800x640 (never upscaled past 800 wide).
+pub fn lightbox_fit_size(path: &std::path::Path) -> (f32, f32) {
+    const MAX_W: f32 = 800.0;
+    const MAX_H: f32 = 640.0;
+    let (w, h) = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
+        std::fs::read_to_string(path)
+            .map(|svg| zmark_core::mermaid::extract_svg_dimensions(&svg))
+            .map(|(w, h)| (w as f32, h as f32))
+            .unwrap_or((MAX_W, MAX_H))
+    } else {
+        image::image_dimensions(path)
+            .map(|(w, h)| (w as f32, h as f32))
+            .unwrap_or((MAX_W, MAX_H))
+    };
+    let (w, h) = (w.max(1.0), h.max(1.0));
+    let scale = (MAX_W / w).min(MAX_H / h);
+    (w * scale, h * scale)
+}
+
 pub fn render_lightbox(
     state: &LightboxState,
     theme: &ThemeColors,
@@ -303,9 +322,12 @@ pub fn render_lightbox(
                     cx.notify();
                 }))
                 .children(state.displayed_path().map(|path| {
+                    // Fit inside 800x640 at zoom 1.0 so tall images stay on screen.
+                    let (w, h) = lightbox_fit_size(path);
                     img(path.clone())
-                        .w(px(800.0 * zoom))
-                        .max_w(px(800.0 * zoom))
+                        .w(px(w * zoom))
+                        .h(px(h * zoom))
+                        .object_fit(ObjectFit::Contain)
                 }))
         )
         // Floating bottom HUD pill: [ - ] [ Current % ] [ + ] | [ 适应窗口 ] | [ 关闭 (Esc) ]

@@ -1963,6 +1963,19 @@ impl WorkspaceView {
         self.open_lightbox_with_scale(svg_path, code_hash, scale_factor, window, cx);
     }
 
+    /// Opens a local image snapshot as it is. Unlike diagrams, snapshots are already
+    /// display-sized and are not re-rendered per theme or DPI.
+    pub fn open_image_lightbox(
+        &mut self,
+        image_path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(evicted) = self.lightbox.open(image_path, 0) {
+            crate::views::lightbox::release_lightbox_image(&evicted, window, cx);
+        }
+    }
+
     pub fn open_lightbox_with_scale(
         &mut self,
         svg_path: std::path::PathBuf,
@@ -3574,7 +3587,11 @@ impl Render for WorkspaceView {
         let on_open_lightbox = Arc::new(
             move |svg_path: std::path::PathBuf, hash: u64, window: &mut Window, cx: &mut App| {
                 view_lb.update(cx, |this, cx| {
-                    this.open_lightbox(svg_path, hash, window, cx);
+                    if hash == crate::views::preview::LOCAL_IMAGE_LIGHTBOX_HASH {
+                        this.open_image_lightbox(svg_path, window, cx);
+                    } else {
+                        this.open_lightbox(svg_path, hash, window, cx);
+                    }
                     cx.notify();
                 });
             },

@@ -13,6 +13,10 @@ pub use selection::*;
 pub use virtual_list::*;
 
 pub type OnCopyCallback = Arc<dyn Fn(String, u64, &mut Window, &mut App) + Send + Sync>;
+/// Marks a lightbox request for a local image snapshot (as opposed to a Mermaid diagram,
+/// whose callback hash is the diagram source hash).
+pub const LOCAL_IMAGE_LIGHTBOX_HASH: u64 = 0;
+
 pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewSelectionCallback = Arc<dyn Fn(Option<PreviewSelection>, bool, &mut Window, &mut App) + Send + Sync>;
 pub type OnImageRecoveryCallback = Arc<dyn Fn(std::ops::Range<usize>, String, crate::local_images::RecoveryCandidate, &mut Window, &mut App) + Send + Sync>;
@@ -369,7 +373,7 @@ fn render_block_element(
                 intersect_selection(selected_char_range.as_ref(), s.char_range.start, s.char_range.len())
             });
 
-            el = el.child(render_styled_inlines(content, theme, font_size, el_range, images, on_image_recovery));
+            el = el.child(render_styled_inlines(content, theme, font_size, el_range, images, on_image_recovery, on_open_lightbox, reduce_motion));
 
             with_text_probe(
                 el,
@@ -403,7 +407,7 @@ fn render_block_element(
                 .text_size(px(base_font_size))
                 .line_height(relative(1.75))
                 .text_color(theme.text_primary)
-                .child(render_styled_inlines(content, theme, base_font_size, el_range, images, on_image_recovery));
+                .child(render_styled_inlines(content, theme, base_font_size, el_range, images, on_image_recovery, on_open_lightbox, reduce_motion));
 
             with_text_probe(
                 el,
@@ -426,7 +430,19 @@ fn render_block_element(
         }
         BlockElement::FencedCode { lang, code } => {
             if lang.as_deref() == Some("mermaid") {
-                render_mermaid_diagram(code, theme, strings, base_font_size, on_open_lightbox)
+                {
+                    let hash = {
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        code.hash(&mut hasher);
+                        hasher.finish()
+                    };
+                    fade_in_card(
+                        render_mermaid_diagram(code, theme, strings, base_font_size, on_open_lightbox),
+                        reduce_motion,
+                        format!("mermaid_fade:{hash:016x}:{}", theme.is_dark),
+                    )
+                }
             } else {
                 let seg = flat.segments.iter().find(|s| s.child_path == path);
                 let flat_char_offset = seg.map(|s| s.char_range.start).unwrap_or(0);
@@ -535,7 +551,7 @@ fn render_block_element(
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_size(px(base_font_size * 0.95))
                             .text_color(theme.text_primary)
-                            .child(render_styled_inlines(h, theme, base_font_size * 0.95, cell_range, images, on_image_recovery)),
+                            .child(render_styled_inlines(h, theme, base_font_size * 0.95, cell_range, images, on_image_recovery, on_open_lightbox, reduce_motion)),
                         TextRegionInfo {
                             block_ix,
                             text: text.clone(),
@@ -572,7 +588,7 @@ fn render_block_element(
                                 .p_3()
                                 .text_size(px(base_font_size * 0.95))
                                 .text_color(theme.text_primary)
-                                .child(render_styled_inlines(cell, theme, base_font_size * 0.95, cell_range, images, on_image_recovery)),
+                                .child(render_styled_inlines(cell, theme, base_font_size * 0.95, cell_range, images, on_image_recovery, on_open_lightbox, reduce_motion)),
                             TextRegionInfo {
                                 block_ix,
                                 text: text.clone(),
@@ -645,6 +661,8 @@ fn render_styled_inlines(
     selected_char_range: Option<std::ops::Range<usize>>,
     images: &crate::local_images::SharedImages,
     on_image_recovery: Option<&OnImageRecoveryCallback>,
+    on_open_lightbox: Option<&OnOpenLightboxCallback>,
+    reduce_motion: bool,
 ) -> AnyElement {
     if !group.0.iter().any(|item| matches!(item, InlineItem::Image { .. })) {
         return render_styled_text_only(group, theme, font_size, selected_char_range).into_any_element();
@@ -679,10 +697,27 @@ fn render_styled_inlines(
                                 .with_fallback(move || div().child(format!("图片显示失败 · {reference}")).into_any_element());
                             element.style().aspect_ratio = Some(ratio);
                             let description = if alt.is_empty() { url.clone() } else { format!("{alt} · {url}") };
-                            div().id(SharedString::from(format!("local_image_container:{url}")))
+                            let snapshot = image.snapshot.path().to_path_buf();
+                            let mut container = div().id(SharedString::from(format!("local_image_container:{url}")))
                                 .w_full().min_w(px(0.))
-                                .tooltip(move |_, cx| cx.new(|_| CodeTooltipView { text: description.clone() }).into())
-                                .child(element).into_any_element()
+                                .tooltip(move |_, cx| cx.new(|_| CodeTooltipView { text: description.clone() }).into());
+                            if let Some(open) = on_open_lightbox {
+                                let open = open.clone();
+                                container = container.cursor(CursorStyle::PointingHand).on_mouse_down(
+                                    MouseButton::Left,
+                                    move |_, window, cx| {
+                                        open(snapshot.clone(), LOCAL_IMAGE_LIGHTBOX_HASH, window, cx)
+                                    },
+                                );
+                            }
+                            // Fade in once when the decoded image arrives instead of popping in.
+                            crate::views::motion::animated(
+                                container.child(element),
+                                reduce_motion,
+                                format!("local_image_fade:{url}"),
+                                220,
+                                |el, delta| el.opacity(delta),
+                            )
                         }
                         crate::local_images::ImageState::RecoveryCandidates(candidates) => {
                             let mut status = div().w_full().min_w(px(0.)).p_3().rounded_md().border_1()
@@ -1212,6 +1247,17 @@ fn render_mermaid_container(
         .into_any_element()
 }
 
+/// Opacity fade for diagram/image cards the first time they are laid out.
+fn fade_in_card(card: AnyElement, reduce_motion: bool, id: String) -> AnyElement {
+    crate::views::motion::animated(
+        div().w_full().child(card),
+        reduce_motion,
+        id,
+        220,
+        |el, delta| el.opacity(delta),
+    )
+}
+
 fn render_mermaid_diagram(
     code: &str,
     theme: &ThemeColors,
@@ -1399,7 +1445,7 @@ fn render_list_element(
                                 .text_size(px(base_font_size))
                                 .line_height(relative(1.6))
                                 .text_color(theme.text_primary)
-                                .child(render_styled_inlines(content, theme, base_font_size, child_range, images, on_image_recovery)),
+                                .child(render_styled_inlines(content, theme, base_font_size, child_range, images, on_image_recovery, on_open_lightbox, reduce_motion)),
                             TextRegionInfo {
                                 block_ix,
                                 text: content_text,

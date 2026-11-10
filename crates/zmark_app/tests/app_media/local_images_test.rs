@@ -438,3 +438,60 @@ async fn switching_documents_with_an_image_in_flight_uses_current_base(cx: &mut 
         assert_eq!(&rendered.as_bytes(0).unwrap()[..4], &[0, 255, 0, 255]);
     });
 }
+
+#[gpui::test]
+async fn clicking_a_preview_image_opens_the_lightbox_and_escape_closes_it(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    write_image(&dir.path().join("pic.png"), ImageFormat::Png, [10, 120, 200, 255]);
+    std::fs::write(dir.path().join("vector.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><rect width="12" height="8" fill="red"/></svg>"#).unwrap();
+    let docpath = dir.path().join("note.md");
+    std::fs::write(&docpath, "![pic](pic.png)\n\n![vec](vector.svg)").unwrap();
+    let window = cx.add_window(|window, cx| {
+        let mut state = AppState::new_isolated(Document::from_file(docpath.clone()).unwrap());
+        state.set_view_mode(ViewMode::Preview);
+        let ws = WorkspaceView::new(state, cx);
+        window.focus(&ws.focus_handle);
+        ws
+    });
+    let view = window.root(cx).unwrap();
+    let cx = &mut VisualTestContext::from_window(*window, cx);
+    draw(cx);
+
+    for (name, selector, wanted_ext) in [
+        ("pic.png", "local_image:pic.png", "png"),
+        ("vector.svg", "local_image:vector.svg", "svg"),
+    ] {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{name} laid out"));
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        cx.update(|_, cx| {
+            let ws = view.read(cx);
+            assert!(ws.lightbox.is_open, "clicking {name} opens the lightbox");
+            let shown = ws.lightbox.displayed_path().expect("lightbox shows an image");
+            assert!(
+                shown.extension().is_some_and(|e| e.eq_ignore_ascii_case(wanted_ext)),
+                "{name} is shown as its own snapshot, got {shown:?}"
+            );
+        });
+        cx.simulate_keystrokes("escape");
+        cx.update(|_, cx| assert!(!view.read(cx).lightbox.is_open, "escape closes the lightbox"));
+    }
+}
+
+#[test]
+fn lightbox_fit_size_keeps_aspect_and_fits_800_by_640() {
+    use zmark_app::views::lightbox::lightbox_fit_size;
+    let dir = tempfile::tempdir().unwrap();
+    let wide = dir.path().join("wide.png");
+    let tall = dir.path().join("tall.png");
+    DynamicImage::new_rgba8(1600, 400).save(&wide).unwrap();
+    DynamicImage::new_rgba8(300, 1200).save(&tall).unwrap();
+    let (w, h) = lightbox_fit_size(&wide);
+    assert_eq!((w, h), (800.0, 200.0));
+    let (w, h) = lightbox_fit_size(&tall);
+    assert!((h - 640.0).abs() < 0.01, "a tall image is limited by height, got {h}");
+    assert!((w - 160.0).abs() < 0.01);
+    // Unreadable files fall back to the full box instead of failing to draw.
+    assert_eq!(lightbox_fit_size(&dir.path().join("missing.png")), (800.0, 640.0));
+}
