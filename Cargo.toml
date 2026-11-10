@@ -5,3 +5,9 @@ members = [
     "crates/release_tool",
 ]
 resolver = "2"
+
+# rusty-mermaid-diagrams 0.2.0 panics on non-ASCII input (it advances by one
+# byte and slices keywords by byte length). The vendored copy advances by one
+# char and slices with `get`; remove once upstream fixes it.
+[patch.crates-io]
+rusty-mermaid-diagrams = { path = "vendor/rusty-mermaid-diagrams" }

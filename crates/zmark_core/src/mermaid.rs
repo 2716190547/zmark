@@ -495,17 +495,16 @@ flowchart LR
     }
 
     #[test]
-    fn test_panic_isolation_on_malformed_or_panicking_diagram() {
-        // stateDiagram-v2 with Chinese/UTF-8 triggers string slice panic in rusty_mermaid 0.2.0
-        let state_diagram_panic = r#"
+    fn test_non_ascii_state_diagram_renders_and_malformed_input_errors() {
+        // rusty_mermaid 0.2.0 panicked on this (byte slicing inside a CJK char);
+        // the vendored parser advances by chars, so it must render now.
+        let state_diagram = r#"
 stateDiagram-v2
     [*] --> 状态1
     状态1 --> [*]
 "#;
-        let res = render_to_svg_themed(state_diagram_panic, false);
-        assert!(res.is_err());
-        let err = res.unwrap_err();
-        assert!(err.contains("Mermaid render error"));
+        let svg = render_to_svg_themed(state_diagram, false).expect("CJK state ids render");
+        assert!(svg.contains("<svg"));
 
         // Malformed diagram syntax returns error without panicking
         let invalid = "not_a_valid_mermaid_diagram\n123 -> 456";

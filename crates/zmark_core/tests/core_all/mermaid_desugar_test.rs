@@ -240,3 +240,20 @@ flowchart TD
     let svg = res.unwrap();
     assert!(svg.contains("<svg") && svg.contains("</svg>"));
 }
+
+/// Regression for issue #25: rusty-mermaid-diagrams 0.2.0 sliced strings at byte
+/// offsets and panicked on non-ASCII text. The vendored copy must render these.
+#[test]
+fn non_ascii_sequence_and_state_diagrams_render_instead_of_panicking() {
+    let cases = [
+        "sequenceDiagram\n  participant 用户\n  用户->>服务: 请求\n  Note over 用户,服务: 备注\n",
+        "sequenceDiagram\r\n  participant 用户\r\n  用户->>服务: 请求\r\n",
+        "sequenceDiagram\n  Note left of 用户: 说明\n",
+        "stateDiagram-v2\n  [*] --> 空闲\n  空闲 --> 运行 : 启动\n",
+    ];
+    for source in cases {
+        let svg = zmark_core::mermaid::render_to_svg(source)
+            .unwrap_or_else(|error| panic!("{source:?} failed: {error}"));
+        assert!(svg.contains("<svg"));
+    }
+}

@@ -4787,8 +4787,6 @@ dependencies = [
 [[package]]
 name = "rusty-mermaid-diagrams"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0e9e654d4f8738698f83a1258cf590334ec8de439fcffb486903d53875d2414"
 dependencies = [
  "rusty-mermaid-core",
  "rusty-mermaid-dagre",
