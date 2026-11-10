@@ -401,6 +401,11 @@ impl Render for SettingsWindowView {
                         .right_0()
                         .h(px(32.))
                         .flex()
+                        // Opaque bar: settings content scrolls under the caption buttons
+                        // and would otherwise show through and overlap them.
+                        .bg(theme.bg)
+                        .border_b_1()
+                        .border_color(theme.border)
                         .child(div().flex_1().h_full().occlude().window_control_area(WindowControlArea::Drag))
                         .child(crate::views::workspace::render_window_controls(&theme)),
                 )
