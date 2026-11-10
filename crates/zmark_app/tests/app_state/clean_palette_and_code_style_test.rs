@@ -244,16 +244,21 @@ fn test_ticket_g0_selection_tokens() {
                     "selection_bg must have warm saturation >= 0.30 for {} (is_dark={}), got {}",
                     palette.id, is_dark, sel_bg.s
                 );
+                let (lo, hi) = if is_dark { (0.20, 0.35) } else { (0.10, 0.22) };
                 assert!(
-                    sel_bg.a >= 0.10 && sel_bg.a <= 0.22,
-                    "selection_bg must have subtle warm opacity for {} (is_dark={}), got {}",
+                    sel_bg.a >= lo && sel_bg.a <= hi,
+                    "selection_bg opacity out of range for {} (is_dark={}), got {}",
                     palette.id, is_dark, sel_bg.a
                 );
             } else {
+                let expected = if is_dark {
+                    theme.accent.opacity(if palette.id == "solarized" { 0.26 } else { 0.30 })
+                } else {
+                    theme.text_primary.opacity(0.07)
+                };
                 assert_eq!(
-                    sel_bg,
-                    theme.text_primary.opacity(0.07),
-                    "selection_bg must derive text_primary.opacity(0.07) for {} (is_dark={})",
+                    sel_bg, expected,
+                    "selection_bg mismatch for {} (is_dark={})",
                     palette.id, is_dark
                 );
             }
@@ -377,4 +382,33 @@ fn test_default_reading_contrast_and_structural_tokens() {
     assert_eq!(light.table_border().a, 0.08);
     assert_eq!(light.table_row_border().a, 0.06);
     assert_eq!(light.heading_rule().a, 0.08);
+}
+
+fn relative_luminance(color: gpui::Hsla) -> f32 {
+    let rgb = color.to_rgb();
+    let lin = |c: f32| if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+    0.2126 * lin(rgb.r) + 0.7152 * lin(rgb.g) + 0.0722 * lin(rgb.b)
+}
+
+fn over(fg: gpui::Hsla, bg: gpui::Hsla) -> gpui::Hsla {
+    let (f, b) = (fg.to_rgb(), bg.to_rgb());
+    let mix = |x: f32, y: f32| x * fg.a + y * (1.0 - fg.a);
+    gpui::Rgba { r: mix(f.r, b.r), g: mix(f.g, b.g), b: mix(f.b, b.b), a: 1.0 }.into()
+}
+
+fn contrast(a: gpui::Hsla, b: gpui::Hsla) -> f32 {
+    let (x, y) = (relative_luminance(a), relative_luminance(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+#[test]
+fn dark_selection_is_visible_and_keeps_text_readable_in_every_palette() {
+    for id in ["default", "claude", "macos", "tokyo-night", "nord", "github", "solarized", "one-dark"] {
+        let theme = ThemeColors::resolve(id, true);
+        let selected = over(theme.selection_bg(), theme.surface);
+        let visible = contrast(selected, theme.surface);
+        let readable = contrast(over(theme.text_primary, selected), selected);
+        assert!(visible >= 1.45, "{id}: selection vs surface {visible:.2} is too faint");
+        assert!(readable >= 2.5, "{id}: text on selection {readable:.2} is unreadable");
+    }
 }

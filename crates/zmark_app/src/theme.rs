@@ -69,23 +69,28 @@ impl HslaExt for Hsla {
 impl ThemeColors {
     /// Adaptive selection background:
     /// In default and claude palettes, slightly warm-tinted selection background per Phase H specification.
-    /// In other palettes, retain their native neutral translucent tint.
+    /// Other light palettes keep a neutral translucent tint. Other dark palettes tint the
+    /// selection with their accent: a 7% text-colour wash had only 1.1-1.4:1 contrast against
+    /// the surface and was nearly invisible.
     pub fn selection_bg(&self) -> Hsla {
         match self.id {
             "default" => {
                 if self.is_dark {
-                    Hsla { h: 32.0 / 360.0, s: 0.35, l: 0.60, a: 0.16 }
+                    Hsla { h: 32.0 / 360.0, s: 0.35, l: 0.60, a: 0.26 }
                 } else {
                     Hsla { h: 38.0 / 360.0, s: 0.45, l: 0.50, a: 0.12 }
                 }
             }
             "claude" => {
                 if self.is_dark {
-                    Hsla { h: 35.0 / 360.0, s: 0.45, l: 0.60, a: 0.18 }
+                    Hsla { h: 35.0 / 360.0, s: 0.45, l: 0.60, a: 0.26 }
                 } else {
                     Hsla { h: 35.0 / 360.0, s: 0.55, l: 0.50, a: 0.14 }
                 }
             }
+            _ if self.is_dark => self
+                .accent
+                .opacity(if self.id == "solarized" { 0.26 } else { 0.30 }),
             _ => self.text_primary.opacity(0.07),
         }
     }

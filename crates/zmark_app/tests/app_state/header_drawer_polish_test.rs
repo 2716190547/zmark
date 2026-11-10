@@ -42,7 +42,7 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
 
     assert!(dark_bg.h >= 25.0 / 360.0 && dark_bg.h <= 45.0 / 360.0, "Default dark selection_bg must have warm hue");
     assert!(dark_bg.s >= 0.30, "Default dark selection_bg must have warm saturation");
-    assert!(dark_bg.a >= 0.10 && dark_bg.a <= 0.20, "Default dark selection_bg must have subtle warm opacity");
+    assert!(dark_bg.a >= 0.20 && dark_bg.a <= 0.35, "Default dark selection_bg must stay visible against the surface");
     assert_eq!(dark_text, dark_theme.text_primary);
 
     // Cross-mode distinctness
@@ -63,7 +63,9 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
             assert!(d_bg.s >= 0.30);
         } else {
             assert_eq!(l_theme.selection_bg(), l_theme.text_primary.opacity(0.07));
-            assert_eq!(d_theme.selection_bg(), d_theme.text_primary.opacity(0.07));
+            // Dark palettes tint with their accent so the selection stays visible.
+            let alpha = if palette.id == "solarized" { 0.26 } else { 0.30 };
+            assert_eq!(d_theme.selection_bg(), d_theme.accent.opacity(alpha));
         }
         assert_eq!(l_theme.selection_text(), l_theme.text_primary);
         assert_eq!(d_theme.selection_text(), d_theme.text_primary);
