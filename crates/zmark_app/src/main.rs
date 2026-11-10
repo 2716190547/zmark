@@ -52,7 +52,10 @@ fn main() {
         };
 
         cx.open_window(window_options, |window, cx| {
-            let state = AppState::new_with_preferences(doc, preferences);
+            let mut state = AppState::new_with_preferences(doc, preferences);
+            // Launch with the file sidebar open. Tests build AppState directly and
+            // keep the closed default so their layout assumptions stay stable.
+            state.drawer_open = true;
             let update_config = zmark_app::updater::UpdateConfig::production();
             let view = cx.new(|cx| {
                 WorkspaceView::new_with_update_config(state, update_config, cx)
