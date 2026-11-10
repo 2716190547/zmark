@@ -470,7 +470,10 @@ impl WorkspaceView {
                         result = Err("图片加载已关闭".into());
                     }
                 } else {
-                    result = Err("图片已退出当前文档或可见图片缓存超过 64MiB".into());
+                    result = Err(format!(
+                        "图片已退出当前文档或可见图片缓存超过 {}MiB",
+                        crate::local_images::MAX_CACHE_BYTES / (1024 * 1024)
+                    ));
                 }
             }
             let _ = this.update(app, |view, cx| {
@@ -3194,6 +3197,7 @@ impl Render for WorkspaceView {
                 crate::views::lightbox::release_lightbox_image(image.snapshot.path(), window, cx);
             }
         }
+        crate::views::preview::release_evicted_diagram_images(window, cx);
         let image_view = cx.entity().clone();
         cx.defer(move |cx| image_view.update(cx, |this, cx| this.process_local_images(cx)));
         let is_sys_dark = matches!(
@@ -3579,7 +3583,7 @@ impl Render for WorkspaceView {
         let show_drawer = self.state.drawer_open || self.drawer_closing;
         let is_drawer_closing = self.drawer_closing;
 
-        div()
+        let root = div()
             .key_context("Workspace")
             .track_focus(&self.focus_handle)
             .can_drop(|item, _window, _cx| {
@@ -4646,7 +4650,15 @@ impl Render for WorkspaceView {
                     })
                     .when(self.state.pending_close.is_some(), |root| {
                         root.child(self.render_close_modal(theme, cx))
-                    })
+                    });
+
+        if crate::views::preview::diagram_cache_has_pending_release() {
+            // The current frame may have evicted diagrams while building the
+            // preview. Re-render once so their textures can be released before
+            // the next interaction.
+            window.request_animation_frame();
+        }
+        root
     }
 }
 

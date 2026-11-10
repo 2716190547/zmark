@@ -12,11 +12,13 @@ use tempfile::NamedTempFile;
 
 pub const MAX_INPUT_BYTES: u64 = 20 * 1024 * 1024;
 pub const MAX_DECODED_BYTES: u64 = 64_000_000;
-pub const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
-/// Largest side kept in the on-disk snapshot. The preview shows images at most
-/// 400pt high in a reading column, so a 2048px side is already above 2x display
-/// density while avoiding 64MP textures for a 400px picture.
-pub const MAX_TEXTURE_SIDE: u32 = 2048;
+/// Budget for decoded images visible in the preview. GPUI retains both this
+/// CPU buffer and a matching GPU texture, so the effective peak is roughly 2x.
+pub const MAX_CACHE_BYTES: u64 = 48 * 1024 * 1024;
+/// Largest side kept in the on-disk snapshot. The preview column is 760pt wide
+/// and caps image height at 400pt; at 2x display density that needs at most
+/// 1600px on either side, so larger source pixels only wasted texture memory.
+pub const MAX_TEXTURE_SIDE: u32 = 1600;
 
 pub fn resolve_image_path(reference: &str, document: Option<&Path>) -> Result<PathBuf, String> {
     let path = reference.split('#').next().unwrap_or("");
@@ -122,6 +124,10 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
             if resized {
                 decoded = decoded.resize(out_w, out_h, image::imageops::FilterType::Lanczos3);
             }
+            // `resize` preserves the aspect ratio and can round the requested
+            // side down; report the bitmap we actually wrote so the GPUI
+            // decoder-size check and cache budget stay accurate.
+            let (out_w, out_h) = (decoded.width(), decoded.height());
             let used = check_dimensions(out_w, out_h)?;
             if resized || matches!(format, ImageFormat::Gif | ImageFormat::WebP) {
                 let encode_as = if format == ImageFormat::Jpeg {
@@ -291,7 +297,10 @@ impl LocalImages {
             Ok(image) if self.decoded_bytes() + image.decoded_bytes <= MAX_CACHE_BYTES => {
                 ImageState::Ready(image)
             }
-            Ok(_) => ImageState::Failed("可见图片缓存超过 64MiB，请减少同时显示的图片".into()),
+            Ok(_) => ImageState::Failed(format!(
+                "可见图片缓存超过 {}MiB，请减少同时显示的图片",
+                MAX_CACHE_BYTES / (1024 * 1024)
+            )),
             Err(error) => ImageState::Failed(error),
         };
         self.entries.insert(url, state);

@@ -977,25 +977,46 @@ pub mod obs {
     pub(crate) fn log_editor_tokens(_phys_idx: usize, _tokens: &[crate::views::editor::MarkdownToken]) {}
 }
 
-pub const MAX_DIAGRAM_CACHE: usize = 64;
+/// Preview diagrams are stored as rendered SVG textures. Keep enough around
+/// for the current viewport and a little scroll-back, but never the whole
+/// document: one 1000pt diagram can be ~14 MB of RGBA at GPUI's 2x raster.
+pub const MAX_DIAGRAM_CACHE: usize = 16;
+/// Upper bound for the decoded CPU textures retained by the preview cache.
+/// GPUI also keeps a matching GPU atlas texture while the asset is loaded.
+pub const MAX_DIAGRAM_CACHE_BYTES: usize = 32 * 1024 * 1024;
+
+struct DiagramCacheEntry {
+    path: std::path::PathBuf,
+    bytes: usize,
+}
 
 pub struct DiagramCache {
-    entries: std::collections::HashMap<(u64, bool), std::path::PathBuf>,
+    entries: std::collections::HashMap<(u64, bool), DiagramCacheEntry>,
     order: std::collections::VecDeque<(u64, bool)>,
+    evicted: Vec<std::path::PathBuf>,
     max_size: usize,
+    max_bytes: usize,
+    bytes: usize,
 }
 
 impl DiagramCache {
     pub fn new(max_size: usize) -> Self {
+        Self::with_byte_budget(max_size, MAX_DIAGRAM_CACHE_BYTES)
+    }
+
+    pub fn with_byte_budget(max_size: usize, max_bytes: usize) -> Self {
         Self {
             entries: std::collections::HashMap::new(),
             order: std::collections::VecDeque::new(),
+            evicted: Vec::new(),
             max_size,
+            max_bytes,
+            bytes: 0,
         }
     }
 
     pub fn get(&mut self, key: &(u64, bool)) -> Option<std::path::PathBuf> {
-        let path = self.entries.get(key)?.clone();
+        let path = self.entries.get(key)?.path.clone();
         if let Some(pos) = self.order.iter().position(|k| k == key) {
             self.order.remove(pos);
             self.order.push_back(*key);
@@ -1004,19 +1025,50 @@ impl DiagramCache {
     }
 
     pub fn insert(&mut self, key: (u64, bool), path: std::path::PathBuf) {
-        if self.entries.insert(key, path).is_none() {
-            self.order.push_back(key);
-            if self.order.len() > self.max_size {
-                if let Some(evicted_key) = self.order.pop_front() {
-                    if let Some(evicted_path) = self.entries.remove(&evicted_key) {
-                        let _ = std::fs::remove_file(evicted_path);
-                    }
-                }
+        let bytes = diagram_texture_bytes(&path);
+        if let Some(entry) = self.entries.get_mut(&key) {
+            if entry.path != path {
+                let old_path = std::mem::replace(&mut entry.path, path);
+                let _ = std::fs::remove_file(&old_path);
+                self.evicted.push(old_path);
+                self.bytes = self.bytes.saturating_sub(entry.bytes);
+                entry.bytes = bytes;
+                self.bytes += bytes;
             }
-        } else if let Some(pos) = self.order.iter().position(|k| k == &key) {
-            self.order.remove(pos);
+            if let Some(pos) = self.order.iter().position(|k| k == &key) {
+                self.order.remove(pos);
+            }
             self.order.push_back(key);
+        } else {
+            self.entries.insert(key, DiagramCacheEntry { path, bytes });
+            self.order.push_back(key);
+            self.bytes += bytes;
         }
+        self.evict_overflow();
+    }
+
+    fn evict_overflow(&mut self) {
+        // Keep at least one entry so a diagram larger than the whole budget is
+        // still shown; otherwise the visible range would thrash on every frame.
+        while self.entries.len() > 1
+            && (self.entries.len() > self.max_size || self.bytes > self.max_bytes)
+        {
+            let Some(evicted_key) = self.order.pop_front() else { break; };
+            let Some(entry) = self.entries.remove(&evicted_key) else { continue; };
+            self.bytes = self.bytes.saturating_sub(entry.bytes);
+            let _ = std::fs::remove_file(&entry.path);
+            self.evicted.push(entry.path);
+        }
+    }
+
+    /// Paths evicted since the last call. The caller must release their GPUI
+    /// `RenderImage` assets; removing the file alone leaves textures resident.
+    pub fn take_evicted(&mut self) -> Vec<std::path::PathBuf> {
+        std::mem::take(&mut self.evicted)
+    }
+
+    pub fn has_pending_release(&self) -> bool {
+        !self.evicted.is_empty()
     }
 
     #[allow(dead_code)]
@@ -1025,8 +1077,38 @@ impl DiagramCache {
     }
 }
 
+/// GPUI's image loader rasterizes SVG at `SMOOTH_SVG_SCALE_FACTOR = 2.0`.
+fn diagram_texture_bytes(path: &std::path::Path) -> usize {
+    let (width, height) = std::fs::read_to_string(path)
+        .map(|svg| zmark_core::mermaid::extract_svg_dimensions(&svg))
+        .unwrap_or((1000.0, 600.0));
+    let scale = zmark_core::mermaid::GPUI_SVG_DECODER_SCALE;
+    let width = (width.max(1.0) * scale).ceil().min(16_384.0) as u64;
+    let height = (height.max(1.0) * scale).ceil().min(16_384.0) as u64;
+    width
+        .saturating_mul(height)
+        .saturating_mul(4)
+        .min(usize::MAX as u64) as usize
+}
+
 static DIAGRAM_CACHE: std::sync::LazyLock<std::sync::Mutex<DiagramCache>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(DiagramCache::new(MAX_DIAGRAM_CACHE)));
+
+/// Drop the GPU/CPU image assets for diagrams evicted from the preview cache.
+pub fn release_evicted_diagram_images(window: &mut Window, cx: &mut App) -> bool {
+    let paths = DIAGRAM_CACHE.lock().unwrap().take_evicted();
+    if paths.is_empty() {
+        return false;
+    }
+    for path in paths {
+        crate::views::lightbox::release_lightbox_image(&path, window, cx);
+    }
+    true
+}
+
+pub fn diagram_cache_has_pending_release() -> bool {
+    DIAGRAM_CACHE.lock().unwrap().has_pending_release()
+}
 
 fn render_mermaid_container(
     path: std::path::PathBuf,

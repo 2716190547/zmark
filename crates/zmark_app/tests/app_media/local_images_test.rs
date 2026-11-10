@@ -108,12 +108,13 @@ fn raster_snapshots_are_downscaled_to_the_texture_budget() {
     let path = dir.path().join("large.png");
     DynamicImage::new_rgba8(3000, 1000).save(&path).unwrap();
     let image = load_image(path.to_str().unwrap(), None).unwrap();
-    assert_eq!((image.width, image.height), (2048, 683));
+    assert!(image.width <= 1600 && image.height <= 1600);
+    assert_eq!(image.height, 533);
     let decoded = image::open(image.snapshot.path()).unwrap();
-    assert_eq!((decoded.width(), decoded.height()), (2048, 683));
+    assert_eq!((decoded.width(), decoded.height()), (image.width, image.height));
     assert_eq!(
         image.decoded_bytes,
-        u64::from(2048u32) * u64::from(683u32) * 4
+        u64::from(image.width) * u64::from(image.height) * 4
     );
 
     let small = dir.path().join("small.png");
@@ -180,12 +181,12 @@ fn input_decode_and_svg_budgets_fail_with_reasons() {
 }
 
 #[test]
-fn cache_rejects_stale_results_evicts_and_enforces_64mib() {
+fn cache_rejects_stale_results_evicts_and_enforces_the_texture_budget() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("a.svg");
     std::fs::write(
         &path,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="2000"/>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1400"/>"#,
     )
     .unwrap();
     let image = load_image(path.to_str().unwrap(), None).unwrap();
