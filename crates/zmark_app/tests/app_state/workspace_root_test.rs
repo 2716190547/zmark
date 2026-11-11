@@ -48,7 +48,9 @@ fn test_workspace_root_add_canonicalize_and_dedup() {
     let canonical_a = fs::canonicalize(&root_a).unwrap();
     assert_eq!(state.workspace_roots[0].path, canonical_a);
     assert!(!state.workspace_roots[0].is_missing);
-    assert!(state.workspace_roots[0].is_expanded);
+    assert!(!state.workspace_roots[0].is_expanded);
+    state.refresh_root(0);
+    assert!(!state.workspace_roots[0].is_expanded, "refresh must not expand an added root");
 
     // 4. Duplicate addition returns AlreadyExists
     assert_eq!(
@@ -130,7 +132,7 @@ fn test_workspace_root_missing_recovery() {
     assert_eq!(state.workspace_roots.len(), 1);
     assert_eq!(state.workspace_roots[0].path, canonical);
     assert!(!state.workspace_roots[0].is_missing);
-    assert!(state.workspace_roots[0].is_expanded);
+    assert!(!state.workspace_roots[0].is_expanded);
     assert!(state.preferences.workspace_roots.contains(&canonical));
 }
 
@@ -1161,6 +1163,127 @@ fn test_state_error_feedback_lifecycle() {
     let nonexistent = tmp.path().join("does_not_exist_folder");
     let err = state.add_workspace_root(nonexistent).unwrap_err();
     assert_eq!(err, zmark_app::state::RootAddError::NotFound);
+}
+
+#[test]
+fn directory_rename_preserves_dirty_buffers_cursor_undo_and_rejects_old_search() {
+    let tmp = tempdir().unwrap();
+    let dir = tmp.path().join("project");
+    fs::create_dir_all(dir.join("nested")).unwrap();
+    fs::write(dir.join("a.md"), "alpha").unwrap();
+    fs::write(dir.join("nested/b.md"), "beta").unwrap();
+    let mut state = clean_test_state(&tmp);
+    state.add_workspace_root(dir).unwrap();
+    let old = state.workspace_roots[0].path.clone();
+    let a = old.join("a.md");
+    let b = old.join("nested/b.md");
+    state.open_file(b.clone()).unwrap();
+    state.editor.insert_text("未保存😀");
+    state.mark_editor_dirty();
+    state.open_file(a.clone()).unwrap();
+    state.editor.insert_text("修改");
+    state.mark_editor_dirty();
+    let text = state.editor.to_text();
+    let cursor = (state.editor.cursor_line, state.editor.cursor_col);
+    state.set_search_query("a");
+    let old_result = state.prepare_search_job().unwrap().execute();
+    state.pending_close = Some(zmark_app::state::PendingClose { key: DocKey::Path(a), title: "a.md".into(), has_path: true });
+    state.rename_path(&old, "renamed").unwrap();
+    let new = old.with_file_name("renamed");
+    assert!(!old.exists());
+    assert_eq!(state.workspace_roots[0].path, new);
+    assert_eq!(state.doc().path.as_ref(), Some(&new.join("a.md")));
+    assert_eq!(state.editor.to_text(), text);
+    assert_eq!((state.editor.cursor_line, state.editor.cursor_col), cursor);
+    assert_eq!(state.pending_close.as_ref().unwrap().key, DocKey::Path(new.join("a.md")));
+    let inactive = state.open_documents().iter().find(|d| d.key == DocKey::Path(new.join("nested/b.md"))).unwrap();
+    assert_eq!(inactive.doc.buffer, "未保存😀beta");
+    assert_eq!(inactive.doc.status, DocumentStatus::Modified);
+    assert!(!state.apply_search_result(old_result));
+    assert!(state.editor.undo());
+    assert_eq!(state.editor.to_text(), "alpha");
+    assert_eq!(Preferences::load_from_path(&state.preferences_path).unwrap().workspace_roots, vec![new]);
+}
+
+#[test]
+fn inactive_file_rename_never_switches_or_reloads_the_active_editor() {
+    let tmp = tempdir().unwrap();
+    let a = tmp.path().join("a.md");
+    let b = tmp.path().join("b.md");
+    fs::write(&a, "alpha").unwrap();
+    fs::write(&b, "beta").unwrap();
+    let mut state = clean_test_state(&tmp);
+    state.open_file(b.clone()).unwrap();
+    state.open_file(a.clone()).unwrap();
+    state.editor.insert_text("dirty");
+    state.mark_editor_dirty();
+    let before = state.editor.to_text();
+    state.rename_document(&DocKey::Path(b.clone()), "other").unwrap();
+    assert_eq!(state.doc().path.as_ref(), Some(&a));
+    assert_eq!(state.editor.to_text(), before);
+    assert!(state.editor.undo());
+    assert!(!b.exists());
+    assert_eq!(fs::read_to_string(tmp.path().join("other.md")).unwrap(), "beta");
+    for name in ["", ".", "..", "../escape", "a/b", "a\\b"] {
+        assert!(state.rename_path(&a, name).is_err());
+    }
+    assert_eq!(fs::read_to_string(&a).unwrap(), "alpha");
+    assert!(state.rename_path(&a, "other").is_err());
+    assert_eq!(fs::read_to_string(tmp.path().join("other.md")).unwrap(), "beta");
+}
+
+#[test]
+fn root_rename_rolls_back_if_preferences_cannot_be_saved() {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("a.md"), "original").unwrap();
+    let mut state = clean_test_state(&tmp);
+    state.add_workspace_root(root).unwrap();
+    let old = state.workspace_roots[0].path.clone();
+    state.open_file(old.join("a.md")).unwrap();
+    state.editor.insert_text("dirty");
+    state.mark_editor_dirty();
+    let before = state.editor.to_text();
+    let blocked = tmp.path().join("blocked");
+    fs::write(&blocked, "keep").unwrap();
+    state.preferences_path = blocked.join("config.toml");
+    assert!(state.rename_path(&old, "new").is_err());
+    assert!(old.is_dir());
+    assert!(!old.with_file_name("new").exists());
+    assert_eq!(state.workspace_roots[0].path, old);
+    assert_eq!(state.editor.to_text(), before);
+    assert_eq!(fs::read_to_string(&blocked).unwrap(), "keep");
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_rollback_keeps_the_real_new_path_and_unsaved_content() {
+    use std::os::unix::ffi::OsStringExt;
+    let tmp = tempdir().unwrap();
+    let root = tmp.path().join("old");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("a.md"), "original").unwrap();
+    let mut state = clean_test_state(&tmp);
+    state.add_workspace_root(root).unwrap();
+    let old = state.workspace_roots[0].path.clone();
+    state.open_file(old.join("a.md")).unwrap();
+    state.editor.insert_text("dirty");
+    state.mark_editor_dirty();
+    let before = state.editor.to_text();
+    let parent = old.parent().unwrap();
+    state.workspace_roots.push(WorkspaceRoot { path: parent.join(std::ffi::OsString::from_vec(vec![0xff])), is_missing: true, ..Default::default() });
+    // mkdir runs before serialization: it recreates old; non-UTF8 forces config failure.
+    state.preferences_path = parent.join("new/../old/config.toml");
+    let warning = state.rename_path(&old, "new").unwrap().unwrap();
+    assert!(warning.contains("回滚失败"));
+    let new = old.with_file_name("new");
+    assert!(old.is_dir() && new.is_dir());
+    assert_eq!(state.workspace_roots[0].path, new);
+    assert_eq!(state.doc().path.as_ref(), Some(&new.join("a.md")));
+    assert_eq!(state.editor.to_text(), before);
+    assert_eq!(fs::read_to_string(new.join("a.md")).unwrap(), "original");
+    assert!(!old.join("a.md").exists(), "rollback must not overwrite another directory");
 }
 
 

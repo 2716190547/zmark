@@ -76,23 +76,14 @@ impl Document {
     /// Name a draft without creating a file; saving will choose its directory later.
     pub fn rename_scratch(&mut self, name: &str) -> std::io::Result<()> {
         let name = name.trim();
-        if self.path.is_some()
-            || name.is_empty()
-            || name == "."
-            || name == ".."
-            || name.chars().any(|c| c == '/' || c == '\\' || c.is_control())
-        {
+        crate::file_ops::validate_name(name)?;
+        if self.path.is_some() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "invalid draft name",
             ));
         }
-        let name = if name.ends_with(".md") || name.ends_with(".markdown") {
-            name.to_owned()
-        } else {
-            format!("{name}.md")
-        };
-        self.scratch_name = Some(name);
+        self.scratch_name = Some(crate::file_ops::markdown_name(name));
         self.status = DocumentStatus::Modified;
         Ok(())
     }

@@ -5,6 +5,7 @@ pub mod ast;
 pub mod config;
 pub mod document;
 pub mod export;
+pub mod file_ops;
 pub mod i18n;
 pub mod mermaid;
 pub mod syntax;

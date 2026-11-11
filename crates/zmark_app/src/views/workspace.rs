@@ -51,6 +51,10 @@ pub struct WorkspaceView {
     pub split_ratio: f32,
     pub is_resizing_split: bool,
     pub is_renaming: bool,
+    pub rename_target: Option<crate::state::DocKey>,
+    pub rename_in_sidebar: bool,
+    pub selected_directory: Option<PathBuf>,
+    pub folder_transitions: HashMap<PathBuf, crate::views::motion::FolderTransition>,
     /// Inline title editor (IME, caret movement and blink come from `SearchInput`).
     pub rename_input: Entity<crate::views::drawer::SearchInput>,
     pub workspace_width: f32,
@@ -205,8 +209,9 @@ impl WorkspaceView {
         let rename_input = cx.new(|cx| {
             crate::views::drawer::SearchInput::new(cx.focus_handle())
                 .title_style()
-                .on_submit(move |commit, _window, cx| {
+                .on_submit(move |commit, window, cx| {
                     let view = view_rename.clone();
+                    if let Some(workspace) = view.upgrade() { window.focus(&workspace.read(cx).focus_handle); }
                     // Defer: the input is mid-update while its key handler runs.
                     cx.spawn(async move |_this, app| {
                         let _ = view.update(app, |this, cx| this.finish_rename(commit, cx));
@@ -234,6 +239,10 @@ impl WorkspaceView {
             split_ratio: 0.5,
             is_resizing_split: false,
             is_renaming: false,
+            rename_target: None,
+            rename_in_sidebar: false,
+            selected_directory: None,
+            folder_transitions: HashMap::new(),
             rename_input,
             workspace_width: 1200.0,
             auto_save_tasks: HashMap::new(),
@@ -1743,6 +1752,8 @@ impl WorkspaceView {
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
     /// Reclaims GPU texture memory by dropping any active HiDPI lightbox image.
     pub fn on_document_swapped(&mut self, window: Option<&mut Window>, cx: &mut App) {
+        self.is_renaming = false;
+        self.rename_target = None;
         self.parse_task = None;
         self.parse_paused = false;
         self.preview_selection = None;
@@ -2138,12 +2149,11 @@ impl WorkspaceView {
     }
 
     pub fn trigger_auto_save(&mut self, cx: &mut Context<Self>) {
-        if !self.state.preferences.auto_save {
-            return;
-        }
-        let Some(key) = self.state.active.clone() else {
-            return;
-        };
+        if let Some(key) = self.state.active.clone() { self.trigger_auto_save_for(key, cx); }
+    }
+
+    fn trigger_auto_save_for(&mut self, key: crate::state::DocKey, cx: &mut Context<Self>) {
+        if !self.state.preferences.auto_save { return; }
         self.auto_save_tasks.remove(&key);
         self.next_auto_save_id = self.next_auto_save_id.wrapping_add(1);
         let task_id = self.next_auto_save_id;
@@ -2186,44 +2196,95 @@ impl WorkspaceView {
         self.auto_save_tasks.insert(key, (task_id, task));
     }
 
-    /// Begins editing the active document name in place.
     pub fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.state.active.is_none() {
-            return;
-        }
-        let name = self.state.doc().display_name_with_fallback("Untitled.md");
-        self.rename_input.update(cx, |input, _| input.set_text(name));
+        if let Some(key) = self.state.active.clone() { self.begin_rename_target(key, false, window, cx); }
+    }
+
+    pub fn begin_rename_target(&mut self, key: crate::state::DocKey, sidebar: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let is_dir = key.as_path().is_some_and(|p| self.state.folder_expanded(p).is_some());
+        let name = if let Some(doc) = self.state.open_documents().iter().find(|d| d.key == key) {
+            doc.doc.display_name_with_fallback("Untitled.md")
+        } else if let Some(path) = key.as_path().filter(|p| p.exists()) {
+            path.file_name().unwrap_or_default().to_string_lossy().into_owned()
+        } else { return; };
+        let end = if is_dir { name.len() } else {
+            Path::new(&name).extension().and_then(|ext| ext.to_str())
+                .filter(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+                .map(|ext| name.len() - ext.len() - 1).unwrap_or(name.len())
+        };
+        self.rename_input.update(cx, |input, _| {
+            input.title_style = !sidebar;
+            input.set_text(name);
+            input.selected_range = 0..end;
+        });
+        self.rename_target = Some(key);
+        self.rename_in_sidebar = sidebar;
         self.is_renaming = true;
-        let handle = self.rename_input.read(cx).focus_handle.clone();
-        window.focus(&handle);
+        window.focus(&self.rename_input.read(cx).focus_handle);
         cx.notify();
     }
 
-    /// Leaves inline rename. Committing skips unchanged or empty names so a stray
-    /// click never renames a file or marks an untouched draft as modified.
     pub fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
-        if !self.is_renaming {
-            return;
-        }
+        if !self.is_renaming { return; }
         self.is_renaming = false;
-        let new_name = self.rename_input.read(cx).content.trim().to_owned();
-        if commit
-            && self.state.active.is_some()
-            && !new_name.is_empty()
-            && new_name != self.state.doc().display_name_with_fallback("Untitled.md")
-        {
-            self.rename_active_file(&new_name, cx);
+        let target = self.rename_target.take().or_else(|| self.state.active.clone());
+        let name = self.rename_input.read(cx).content.trim().to_owned();
+        if commit {
+            if let Some(target) = target {
+                let old = target.as_path().cloned();
+                let directory = old.as_ref().is_some_and(|p| self.state.folder_expanded(p).is_some());
+                let new = old.as_ref().and_then(|p| p.parent()).map(|parent| {
+                    parent.join(if directory { name.clone() } else { zmark_core::file_ops::markdown_name(&name) })
+                });
+                let original = self.state.open_documents().iter().find(|d| d.key == target)
+                    .map(|d| d.doc.display_name_with_fallback("Untitled.md"))
+                    .or_else(|| old.as_ref().and_then(|p| p.file_name()).map(|s| s.to_string_lossy().into_owned()));
+                if original.as_deref() != Some(&name) {
+                    match self.state.rename_document(&target, &name) {
+                        Ok(warning) => {
+                            if let (Some(old), Some(new)) = (old, new) {
+                                if old != new { self.on_paths_renamed(&old, &new, cx); }
+                                self.error_banner = Some(warning.unwrap_or_else(|| "已更名；旧名称的链接或图片引用需手动更新".into()));
+                            }
+                        }
+                        Err(error) => self.error_banner = Some(format!("更名失败：{error}")),
+                    }
+                }
+            }
         }
         cx.notify();
     }
 
-    fn rename_active_file(&mut self, new_name: &str, cx: &mut Context<Self>) {
-        let old_key = self.state.active.clone();
-        if self.state.rename_file(new_name).is_ok() && self.state.active != old_key {
-            if let Some(old_key) = old_key {
-                self.auto_save_tasks.remove(&old_key);
+    fn on_paths_renamed(&mut self, old: &Path, new: &Path, cx: &mut Context<Self>) {
+        self.auto_save_tasks.retain(|key, _| !key.as_path().is_some_and(|p| p.starts_with(old)));
+        let affected: Vec<_> = self.state.open_documents().iter()
+            .filter(|doc| doc.key.as_path().is_some_and(|p| p.starts_with(new)))
+            .map(|doc| doc.key.clone()).collect();
+        for key in affected { self.trigger_auto_save_for(key, cx); }
+        if let Some(path) = &self.selected_directory {
+            if let Some(mapped) = zmark_core::file_ops::remap_path(path, old, new) { self.selected_directory = Some(mapped); }
+        }
+        self.folder_transitions.retain(|path, _| !path.starts_with(old));
+        self.local_image_task = None;
+        self.local_images.lock().unwrap().refresh();
+        self.syntax_cancel_flag.store(true, Ordering::Relaxed);
+        self.syntax_active_task = None;
+        self.syntax_pending_request = None;
+        self.schedule_parse(cx);
+    }
+
+    pub fn toggle_folder(&mut self, root: usize, path: &Path, cx: &mut Context<Self>) {
+        let now = std::time::Instant::now();
+        let Some(expanded) = self.state.folder_expanded(path) else { return; };
+        let from = self.folder_transitions.get(path).map(|t| t.value(now)).unwrap_or(if expanded { 1.0 } else { 0.0 });
+        if self.state.toggle_root_folder(root, path) {
+            if !self.state.preferences.reduce_motion {
+                self.folder_transitions.insert(path.to_path_buf(), crate::views::motion::FolderTransition { from, expanded: !expanded, started: now });
             }
-            self.trigger_auto_save(cx);
+            if expanded && self.rename_target.as_ref().and_then(|k| k.as_path()).is_some_and(|p| p != path && p.starts_with(path)) {
+                self.finish_rename(false, cx);
+            }
+            cx.notify();
         }
     }
 
@@ -2724,7 +2785,7 @@ impl WorkspaceView {
         let drawer_open = self.state.drawer_open;
         let view_mode = self.state.view_mode;
         let strings = self.state.strings;
-        let is_renaming = self.is_renaming;
+        let is_renaming = self.is_renaming && !self.rename_in_sidebar;
         let rename_input = self.rename_input.clone();
 
         let viewport_w = f32::from(window.viewport_size().width);
@@ -2806,7 +2867,7 @@ impl WorkspaceView {
                             .items_center()
                             .text_color(theme.text_primary)
                             .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _window, cx| {
-                                this.finish_rename(true, cx);
+                                this.finish_rename(false, cx);
                             }))
                             .child(rename_input)
                             .into_any_element()
@@ -3338,6 +3399,16 @@ impl Render for WorkspaceView {
             });
         }
 
+        let now = std::time::Instant::now();
+        if self.state.preferences.reduce_motion { self.folder_transitions.clear(); }
+        else {
+            let state = &self.state;
+            self.folder_transitions.retain(|path, transition| {
+                !transition.finished(now) && state.folder_expanded(path) == Some(transition.expanded)
+            });
+            if !self.folder_transitions.is_empty() { window.request_animation_frame(); }
+        }
+        let folder_values = self.folder_transitions.iter().map(|(p, t)| (p.clone(), t.value(now))).collect::<HashMap<_, _>>();
         let is_dirty = self.state.is_dirty();
         (self.dirty_pulse_generation, self.was_dirty) = crate::views::motion::advance_dirty_generation(
             self.was_dirty,
@@ -3380,21 +3451,33 @@ impl Render for WorkspaceView {
         let on_rename_file = Arc::new(
             move |path: &std::path::PathBuf, window: &mut Window, cx: &mut App| {
                 view_rename.update(cx, |this, cx| {
-                    let _ = this.state.load_file(path.clone());
-                    this.on_document_swapped(Some(window), cx);
-                    this.begin_rename(window, cx);
+                    this.begin_rename_target(crate::state::DocKey::Path(path.clone()), true, window, cx);
                 });
             },
         );
+
+        let view_directory = cx.entity().clone();
+        let on_select_directory = Arc::new(move |path: &PathBuf, rename: bool, window: &mut Window, cx: &mut App| {
+            view_directory.update(cx, |this, cx| {
+                this.selected_directory = Some(path.clone());
+                if rename { this.begin_rename_target(crate::state::DocKey::Path(path.clone()), true, window, cx); }
+                cx.notify();
+            });
+        });
+        let view_cancel_rename = cx.entity().clone();
+        let on_cancel_rename = Arc::new(move |_window: &mut Window, cx: &mut App| {
+            view_cancel_rename.update(cx, |this, cx| this.finish_rename(false, cx));
+        });
 
         let view_doc_switch = cx.entity().clone();
         let on_select_doc = Arc::new(
             move |key: &crate::state::DocKey, rename: bool, window: &mut Window, cx: &mut App| {
                 view_doc_switch.update(cx, |this, cx| {
-                    this.state.switch_document(key);
-                    this.on_document_swapped(Some(window), cx);
                     if rename {
-                        this.begin_rename(window, cx);
+                        this.begin_rename_target(key.clone(), true, window, cx);
+                    } else {
+                        this.state.switch_document(key);
+                        this.on_document_swapped(Some(window), cx);
                     }
                     cx.notify();
                 });
@@ -3526,8 +3609,7 @@ impl Render for WorkspaceView {
                 view_toggle_root.update(cx, |this, cx| {
                     if root_idx < this.state.workspace_roots.len() {
                         let path = this.state.workspace_roots[root_idx].path.clone();
-                        this.state.toggle_root_folder(root_idx, &path);
-                        cx.notify();
+                        this.toggle_folder(root_idx, &path, cx);
                     }
                 });
             });
@@ -3557,8 +3639,7 @@ impl Render for WorkspaceView {
                   _window: &mut Window,
                   cx: &mut App| {
                 view_tree.update(cx, |this, cx| {
-                    this.state.toggle_root_folder(root_idx, path);
-                    cx.notify();
+                    this.toggle_folder(root_idx, path, cx);
                 });
             },
         );
@@ -3970,6 +4051,12 @@ impl Render for WorkspaceView {
                                         on_focus_search: Some(on_focus_search),
                                         search_input: self.search_input.clone(),
                                         focused: self.search_focused,
+                                        selected_directory: self.selected_directory.clone(),
+                                        folder_values: folder_values.clone(),
+                                        rename_target: if self.is_renaming && self.rename_in_sidebar { self.rename_target.clone() } else { None },
+                                        rename_input: if self.is_renaming && self.rename_in_sidebar { Some(self.rename_input.clone()) } else { None },
+                                        on_select_directory: Some(on_select_directory),
+                                        on_cancel_rename: Some(on_cancel_rename),
                                     };
                                     crate::views::drawer::render_drawer_with_search(
                                         is_fullscreen,

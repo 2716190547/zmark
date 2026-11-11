@@ -1,6 +1,7 @@
-use std::fs;
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::i18n::SupportedLocale;
@@ -186,7 +187,10 @@ impl Preferences {
         let serialized = toml::to_string_pretty(self)?;
 
         let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
-        let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("config");
+        let file_stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("config");
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("toml");
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
@@ -195,20 +199,22 @@ impl Preferences {
             .unwrap_or(0);
         let tmp_path = parent_dir.join(format!("{}.tmp.{}_{}.{}", file_stem, pid, nanos, ext));
 
-        // Write to temporary file in the same directory
-        if let Err(err) = fs::write(&tmp_path, serialized) {
+        // Never overwrite another writer's temporary file or unlink the old config first.
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)?;
+        if let Err(err) = file
+            .write_all(serialized.as_bytes())
+            .and_then(|_| file.sync_all())
+        {
+            drop(file);
             let _ = fs::remove_file(&tmp_path);
             return Err(ConfigError::Io(err));
         }
+        drop(file);
 
-        #[cfg(windows)]
-        {
-            if path.exists() {
-                let _ = fs::remove_file(path);
-            }
-        }
-
-        // Atomically replace the destination file
+        // std::fs::rename replaces existing files on Windows too (MoveFileExW).
         if let Err(err) = fs::rename(&tmp_path, path) {
             let _ = fs::remove_file(&tmp_path);
             return Err(ConfigError::Io(err));
@@ -225,6 +231,50 @@ impl Preferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacing_config_preserves_old_data_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut preferences = Preferences::default();
+        preferences.save_to_path(&path).unwrap();
+        preferences.tab_size = 8;
+        preferences.save_to_path(&path).unwrap();
+        assert_eq!(Preferences::load_from_path(&path).unwrap().tab_size, 8);
+        let blocked = dir.path().join("directory.toml");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("keep"), "original").unwrap();
+        assert!(preferences.save_to_path(&blocked).is_err());
+        assert_eq!(
+            fs::read_to_string(blocked.join("keep")).unwrap(),
+            "original"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_shared_destination_is_never_unlinked_on_replacement_failure() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut preferences = Preferences::default();
+        preferences.save_to_path(&path).unwrap();
+        let original = fs::read(&path).unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(4)
+            .open(&path)
+            .unwrap();
+        preferences.tab_size = 8;
+        let result = preferences.save_to_path(&path);
+        drop(lock);
+        assert!(path.exists());
+        if result.is_err() {
+            assert_eq!(fs::read(&path).unwrap(), original);
+        } else {
+            assert_eq!(Preferences::load_from_path(&path).unwrap().tab_size, 8);
+        }
+    }
 
     #[test]
     fn test_sanitize_line_height() {
@@ -257,7 +307,10 @@ mod tests {
         let loaded = Preferences::load_from_path(&path).unwrap();
         assert_eq!(loaded.max_column_width, 760.0);
         assert_eq!(loaded.config_version, CURRENT_CONFIG_VERSION);
-        assert!(loaded.show_line_numbers, "old configs default to visible line numbers");
+        assert!(
+            loaded.show_line_numbers,
+            "old configs default to visible line numbers"
+        );
 
         // A second load is stable.
         assert_eq!(
@@ -326,7 +379,10 @@ mod tests {
         assert!(migrate_config_if_needed(&old, &new));
         let migrated = fs::read_to_string(new.join("config.toml")).unwrap();
         assert!(migrated.contains("font_size = 18.0"));
-        assert!(old.join("config.toml").exists(), "legacy config must not be deleted");
+        assert!(
+            old.join("config.toml").exists(),
+            "legacy config must not be deleted"
+        );
 
         // A second call must not overwrite the migrated copy.
         fs::write(new.join("config.toml"), "font_size = 20.0\n").unwrap();

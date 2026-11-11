@@ -826,7 +826,7 @@ impl AppState {
                 let old_path = self.workspace_roots[idx].path.clone();
                 self.workspace_roots[idx].path = canonical.clone();
                 self.workspace_roots[idx].is_missing = false;
-                self.workspace_roots[idx].is_expanded = true;
+                self.workspace_roots[idx].is_expanded = false;
                 self.preferences.workspace_roots =
                     self.workspace_roots.iter().map(|root| root.path.clone()).collect();
                 if let Err(e) = self.preferences.save_to_path(&self.preferences_path) {
@@ -861,7 +861,7 @@ impl AppState {
         self.workspace_roots.push(WorkspaceRoot {
             path: canonical,
             tree: Vec::new(),
-            is_expanded: true,
+            is_expanded: false,
             is_missing: false,
             truncated: false,
             entries_used: 0,
@@ -992,6 +992,17 @@ impl AppState {
             global_budget.files_left = global_budget.files_left.saturating_sub(consumed_files);
         }
         self.scan_budget = global_budget;
+    }
+
+    pub fn folder_expanded(&self, path: &Path) -> Option<bool> {
+        fn find(nodes: &[FileTreeNode], path: &Path) -> Option<bool> {
+            nodes.iter().find_map(|n| {
+                if n.path == path && n.is_dir { Some(n.is_expanded) } else { find(&n.children, path) }
+            })
+        }
+        self.workspace_roots.iter().find_map(|r| {
+            if r.path == path { Some(r.is_expanded) } else { find(&r.tree, path) }
+        })
     }
 
     #[allow(dead_code)]
@@ -1396,67 +1407,110 @@ impl AppState {
     }
 
     pub fn rename_file(&mut self, new_name: &str) -> Result<(), std::io::Error> {
-        if self.active.is_none() {
-            return Ok(());
-        }
+        let Some(key) = self.active.clone() else { return Ok(()); };
+        self.rename_document(&key, new_name).map(|_| ())
+    }
 
-        let old_path = match self.doc().path.clone() {
-            Some(p) => p,
-            None => return self.doc_mut().rename_scratch(new_name),
+    pub fn rename_document(&mut self, key: &DocKey, name: &str) -> std::io::Result<Option<String>> {
+        if let DocKey::Path(path) = key {
+            return self.rename_path(path, name);
+        }
+        let doc = self.open_docs.iter_mut().find(|d| &d.key == key)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Document is no longer open"))?;
+        doc.doc.rename_scratch(name)?;
+        Ok(None)
+    }
+
+    /// Migrates metadata only after disk commit; never reloads an editor buffer.
+    pub fn rename_path(&mut self, old: &Path, name: &str) -> std::io::Result<Option<String>> {
+        use zmark_core::file_ops::{markdown_name, remap_path, rename_noreplace, validate_name};
+        validate_name(name)?;
+        let metadata = fs::symlink_metadata(old)?;
+        let is_dir = metadata.is_dir();
+        let parent = old.parent().filter(|_| old.file_name().is_some())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "Cannot rename a filesystem root"))?;
+        let new = parent.join(if is_dir { name.to_owned() } else { markdown_name(name) });
+        if new == old { return Ok(None); }
+        let map = |p: &Path| remap_path(p, old, &new).unwrap_or_else(|| p.to_path_buf());
+        let map_key = |key: &DocKey| match key {
+            DocKey::Path(p) => DocKey::Path(map(p)),
+            key => key.clone(),
         };
-
-        let clean_name = if new_name.ends_with(".md") || new_name.ends_with(".markdown") {
-            new_name.to_string()
-        } else {
-            format!("{}.md", new_name)
-        };
-
-        let parent = old_path.parent().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "Parent directory not found")
-        })?;
-        let new_path = parent.join(&clean_name);
-
-        if new_path == old_path {
-            return Ok(());
-        }
-
-        // Prevent overwriting existing file on disk
-        if new_path.exists() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "A file with the target name already exists",
-            ));
-        }
-
-        // Prevent collision with another open document key
-        let old_key = DocKey::Path(old_path.clone());
-        let new_key = DocKey::Path(new_path.clone());
-        if self.open_docs.iter().any(|d| d.key != old_key && d.key == new_key) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "A document with target path is already open in workspace",
-            ));
-        }
-
-        std::fs::rename(&old_path, &new_path)?;
-
-        if let Some(od) = self.open_docs.iter_mut().find(|d| d.key == old_key) {
-            od.key = new_key.clone();
-            od.doc.path = Some(new_path.clone());
-        }
-        self.active = Some(new_key);
-        let old_root_idx = self.find_root_index_for_path(&old_path);
-        let new_root_idx = self.find_root_index_for_path(&new_path);
-        if let Some(idx) = old_root_idx {
-            self.refresh_root(idx);
-        }
-        if let Some(idx) = new_root_idx {
-            if Some(idx) != old_root_idx {
-                self.refresh_root(idx);
+        let mut keys = HashSet::new();
+        for doc in &self.open_docs {
+            if !keys.insert(map_key(&doc.key)) {
+                return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "Target document is already open"));
             }
         }
-        self.expand_to_file(&new_path);
-        Ok(())
+        let root_paths: Vec<PathBuf> = self.workspace_roots.iter().map(|r| map(&r.path)).collect();
+        for (idx, path) in root_paths.iter().enumerate() {
+            let path = resolve_cmp_path(path);
+            if root_paths[..idx].iter().any(|other| {
+                let other = resolve_cmp_path(other);
+                path.starts_with(&other) || other.starts_with(&path)
+            }) {
+                return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "Target overlaps another workspace root"));
+            }
+        }
+        self.sync_from_editor();
+        rename_noreplace(old, &new)?;
+        let mut warning = None;
+        let preferences_path = map(&self.preferences_path);
+        let changes_config = root_paths.iter().zip(&self.workspace_roots).any(|(p, r)| p != &r.path)
+            || preferences_path != self.preferences_path;
+        if changes_config {
+            let mut preferences = self.preferences.clone();
+            preferences.workspace_roots = root_paths.clone();
+            if let Err(error) = preferences.save_to_path(&preferences_path) {
+                if let Err(rollback) = rename_noreplace(&new, old) {
+                    warning = Some(format!("已更名到 {}，但配置未保存且回滚失败：{error}；{rollback}", new.display()));
+                } else {
+                    return Err(std::io::Error::other(format!("配置保存失败，已回滚更名：{error}")));
+                }
+            }
+            self.preferences = preferences;
+            self.preferences_path = preferences_path;
+        }
+        for doc in &mut self.open_docs {
+            doc.key = map_key(&doc.key);
+            if let Some(path) = &mut doc.doc.path {
+                if let Some(mapped) = remap_path(path, old, &new) {
+                    *path = mapped;
+                    if !path.is_file() { doc.doc.status = DocumentStatus::ConflictOnDisk; }
+                }
+            }
+        }
+        self.active = self.active.as_ref().map(map_key);
+        if let Some(pending) = &mut self.pending_close {
+            pending.key = map_key(&pending.key);
+            if let DocKey::Path(p) = &pending.key {
+                pending.title = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            }
+        }
+        fn migrate_tree(nodes: &mut [FileTreeNode], old: &Path, new: &Path) {
+            for node in nodes {
+                if let Some(path) = zmark_core::file_ops::remap_path(&node.path, old, new) {
+                    node.path = path;
+                    node.name = node.path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                }
+                migrate_tree(&mut node.children, old, new);
+            }
+        }
+        for root in &mut self.workspace_roots {
+            if let Some(path) = remap_path(&root.path, old, &new) {
+                root.path = path;
+                root.is_missing = !root.path.is_dir();
+            }
+            migrate_tree(&mut root.tree, old, &new);
+        }
+        if let Some(saved) = self.search_original_expanded.take() {
+            self.search_original_expanded = Some(saved.into_iter().map(|(root, paths)| {
+                (map(&root), paths.into_iter().map(|p| map(&p)).collect())
+            }).collect());
+        }
+        self.search_generation = self.search_generation.wrapping_add(1);
+        self.search_in_progress = false;
+        Ok(warning)
     }
 
     pub fn save(&mut self) -> Result<(), std::io::Error> {
