@@ -1,83 +1,88 @@
-# GlideMark
+# ZMark
 
-> **GlideMark** 是一款由 **Rust + GPUI** 强力驱动的单文档 GPU 原生极速 Markdown 阅读与编辑器。以现代、纯粹、克制的极简设计语言（参考妙言 MiaoYan），提供行云流水般的书写与排版阅读体验。
+<img src="assets/icon.iconset/icon_256x256.png" alt="ZMark icon" width="128">
 
----
+[简体中文](README.zh-CN.md)
 
-## 特性亮点
+ZMark is a desktop Markdown editor and reader for local files. Write in source mode, read a formatted preview, or work in both views side by side. Organize folders in the sidebar and keep your documents where you choose.
 
-- **GPU 硬件加速渲染**：基于 Zed 同款的 GPUI 渲染引擎构建，极致轻量，告别 Electron 套壳的臃肿内存与卡顿。
-- **妙言 (MiaoYan) 极简美学**：纯白呼吸感画布（`#FFFFFF`）配合细致入微的浅灰发丝分割线（`#EDEDED`）与清爽的鲜绿强调色（`#2DA44E`）。
-- **去框化极简工具栏**：顶栏功能图标无硬框常态融入界面，悬停呈现圆润微胶囊，聚焦呈现强调色，零 Emoji 严肃视觉规范。
-- **三重视图自由切换**：
-  - **源码模式 (`Cmd+1`)**：专注编写，自研纯文本与行光标引擎。
-  - **左右分屏 (`Cmd+2`)**：边写边看，5px 舒适可拖拽分界条（双击快速回正至 50/50）。
-  - **阅读预览 (`Cmd+3`)**：正文自适应撑满，极佳阅读体验。
-- **系统级原生拖拽与双击重命名**：
-  - 支持直接将 `.md` 文件拖拽进窗口瞬间打开。
-  - 双击顶部标题直接内联原地重命名文件。
-- **多主题与多语言**：
-  - 8 套精美调色板：MiaoYan, Claude Warm, macOS Vibrant, Tokyo Night, Nord, GitHub Light, Solarized Light, One Dark Pro。
-  - 支持浅色/深色/跟随系统外观。
-  - 10 国主流语言完整支持。
-- **离线独立 HTML 导出**：一键生成自包含样式的单文件 HTML，脱机即阅。
-- **macOS 原生独立应用**：已预编译封装为标准 App Bundle（`/Applications/GlideMark.app`），搭配精美红褐-金黄渐变折叠 Z 原生图标。
+## Download and install
 
----
+Get the latest published version from [GitHub Releases](https://github.com/2716190547/zmark-releases/releases) or the [Gitee release mirror](https://gitee.com/zeng_sc/zmark-releases/releases). The current release provides a macOS ZIP and a Windows installer. Extract the ZIP and move `ZMark.app` to Applications, or run the Windows setup program. Platform-specific behavior may differ.
 
-## 性能基线
+Linux builds are configured in the project, but the current public release does not include a Linux installer.
 
-在 macOS release 构建下，使用 [`scripts/bench_memory.sh`](./scripts/bench_memory.sh) 采样空闲 RSS（8 次峰值）：
+## Get started
 
-| 场景 | 空闲内存 |
-| :--- | ---: |
-| 默认示例文档 | ~85 MB |
-| 1.5 MB / 16,500+ 标题文档 | ~136–148 MB |
+1. Open a Markdown file with **Cmd+O** on macOS or **Ctrl+O** on Windows and Linux. You can also start by editing the welcome draft.
+2. Choose **Source**, **Split**, or **Preview** in the toolbar. In split view, the two panes scroll together.
+3. Open the sidebar with **Cmd+B** or **Ctrl+B**. Add a folder to browse its Markdown files, search by file or folder name, or use the document outline to jump to a heading.
+4. Save with **Cmd+S** or **Ctrl+S**. Choose a location the first time you save a draft. Double-click the document title to rename it.
+5. Open settings with **Cmd+,** or **Ctrl+,** to adjust appearance, editing, saving, and language.
 
-多次运行存在约 10% 波动。预览与编辑器均只渲染视口内的块/行。当前 Split 模式尚未接线同步滚动；超过 10 MB 的文档会暂停自动解析，可通过保存、切换到预览/分屏，或横幅上的“刷新预览”手动触发。
+## Working with documents
 
----
+### Files and folders
 
-## 快速上手
+The sidebar groups workspace folders, files opened outside those folders, and drafts. You can add more than one workspace folder and create Markdown files inside one. Removing a workspace folder from the sidebar does not delete its files. The search field filters **names**, rather than searching document contents; the outline lists headings in the active document.
 
-### 运行环境
-- macOS 12.0+ (Apple Silicon / Intel)
-- Rust 1.76+
+Existing files can be saved automatically after editing or when the window loses focus; both behaviors can be configured in settings. A new draft needs a save location before it becomes a file. Unsaved changes are confirmed when closing.
 
-### 本地编译与运行
-```bash
-# 启动本地开发
-cargo run -p glidemark_app
+### Markdown and diagrams
 
-# 运行自动化测试套件
-cargo test --workspace
+The preview supports headings, paragraphs, emphasis, links, lists, task-list markers, tables, quotes, code blocks, local images, and Mermaid diagrams. Fenced code blocks can show syntax highlighting and a copy control. Change a task marker in the source to update its preview.
+
+Use a local path for images, relative to the saved Markdown file or as an absolute path. Network image URLs are not loaded in the preview. Click an image or use a diagram's expand control to inspect it at a larger size.
+
+For example, edit this in split view:
+
+````markdown
+# Project notes
+
+- [ ] Review the first draft
+- [x] Create a document
+
+| Item | Status |
+| --- | --- |
+| Preview | Ready |
+
+```mermaid
+flowchart LR
+    Write --> Preview --> Share
+```
+````
+
+Mermaid syntax support depends on the renderer; if a diagram does not render, check its syntax and simplify the example.
+
+### Export HTML
+
+Choose **Export HTML** in the toolbar or use **Cmd+Shift+E** / **Ctrl+Shift+E**, then choose a destination. The exported HTML includes its styles. Image paths remain references rather than being embedded, and Mermaid blocks are exported as code rather than rendered diagrams; keep referenced images available when sharing the file.
+
+### Appearance and editing
+
+Settings provide light, dark, and system appearance; color palettes; language; reduced motion; line numbers; indentation; line height; and automatic-save options. The application also shows its version and update status in **About**.
+
+## Keyboard shortcuts
+
+| Action | macOS | Windows / Linux |
+| --- | --- | --- |
+| Open file | Cmd+O | Ctrl+O |
+| Save | Cmd+S | Ctrl+S |
+| Source / split / preview | Cmd+1 / 2 / 3 | Ctrl+1 / 2 / 3 |
+| Toggle sidebar | Cmd+B | Ctrl+B |
+| Settings | Cmd+, | Ctrl+, |
+| Export HTML | Cmd+Shift+E | Ctrl+Shift+E |
+
+## Technology
+
+ZMark uses **Rust** and **GPUI** for the desktop app, **pulldown-cmark** for Markdown parsing, **syntect** for code highlighting, and **rusty-mermaid** for diagram rendering. Local images are decoded with the Rust `image` crate.
+
+## Build from source
+
+For contributors with access to the source repository, use the `dev` branch for the current application. Install a current stable Rust toolchain and platform dependencies, then run:
+
+```sh
+cargo run -p zmark_app
 ```
 
-### 打包安装至系统应用程序
-```bash
-./scripts/bundle_macos.sh
-```
-安装完成后，可在 **启动台 (Launchpad)** 或 `/Applications` 中直接点击打开 GlideMark，或右键关联 Markdown 文档。
-
----
-
-## 快捷键速查
-
-| 操作 | 快捷键 |
-| :--- | :--- |
-| **源码模式** | `Cmd + 1` |
-| **分屏模式** | `Cmd + 2` |
-| **阅读模式** | `Cmd + 3` |
-| **展开/折叠目录抽屉** | `Cmd + B` |
-| **打开文件** | `Cmd + O`（或拖拽文件进窗口） |
-| **保存文件** | `Cmd + S` |
-| **重命名文档** | 双击顶栏标题 |
-| **重置分屏比例** | 双击分界线 |
-| **导出独立 HTML** | `Cmd + Shift + E` |
-| **偏好设置** | `Cmd + ,` |
-
----
-
-## 详细交接与技术架构
-
-详见工程交接文档：[`HANDOVER.md`](./HANDOVER.md) 与架构决策记录 [`docs/adr/`](./docs/adr/)。
+The desktop workflow in `.github/workflows/build-desktop.yml` lists platform dependencies and packaging steps. On macOS, `./scripts/bundle_macos.sh` builds and installs an application bundle.
