@@ -255,8 +255,10 @@ fn test_workspace_root_atomic_rollback_on_save_failure() {
     state.add_workspace_root(root_a.clone()).unwrap();
     assert_eq!(state.workspace_roots.len(), 1);
 
-    // Point preferences_path to a forbidden read-only path to force save failure
-    state.preferences_path = std::path::PathBuf::from("/dev/null/forbidden/config.toml");
+    // A file cannot be a config parent on any supported OS (unlike /dev/null).
+    let blocked = tmp.path().join("blocked");
+    fs::write(&blocked, "preserve this file").unwrap();
+    state.preferences_path = blocked.join("config.toml");
 
     // 1. add_workspace_root failure must roll back newly added root
     let add_err = state.add_workspace_root(root_b.clone()).unwrap_err();
@@ -271,6 +273,7 @@ fn test_workspace_root_atomic_rollback_on_save_failure() {
     // 2. remove_workspace_root failure must roll back removed root
     let remove_err = state.remove_workspace_root(0).unwrap_err();
     assert!(remove_err.contains("Failed to save preferences"));
+    assert_eq!(fs::read_to_string(&blocked).unwrap(), "preserve this file");
     assert_eq!(state.workspace_roots.len(), 1);
     assert_eq!(state.preferences.workspace_roots.len(), 1);
     assert_eq!(
