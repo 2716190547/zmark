@@ -63,10 +63,7 @@ jobs:
       - name: Package macOS app
         if: runner.os == 'macOS'
         run: |
-          # The script installs into /Applications after creating the staging
-          # bundle. CI only needs the staging bundle, so tolerate an install
-          # failure as long as the signed bundle exists.
-          ./scripts/bundle_macos.sh || test -d target/bundle/ZMark.app
+          ./scripts/bundle_macos.sh
           test -d target/bundle/ZMark.app
           ditto -c -k --sequesterRsrc --keepParent \
             target/bundle/ZMark.app "ZMark-${ZMARK_VERSION}-macos.zip"

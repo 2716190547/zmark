@@ -59,7 +59,7 @@ if [ -n "${ZMARK_MACOS_ZIP:-}" ]; then
     echo "==> Using prebuilt macOS bundle: $ZMARK_MACOS_ZIP"
     cp "$ZMARK_MACOS_ZIP" "$ZIP"
 else
-    echo "==> Building and installing ZMark.app..."
+    echo "==> Building ZMark.app..."
     ./scripts/bundle_macos.sh
     echo "==> Packaging the signed staging bundle..."
     ditto -c -k --sequesterRsrc --keepParent "$DIR/target/bundle/ZMark.app" "$ZIP"

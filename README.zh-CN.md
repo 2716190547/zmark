@@ -85,4 +85,4 @@ ZMark 使用 **Rust** 和 **GPUI** 构建桌面应用，使用 **pulldown-cmark*
 cargo run -p zmark_app
 ```
 
-`.github/workflows/build-desktop.yml` 列出了各平台的构建依赖与打包步骤。在 macOS 上，`./scripts/bundle_macos.sh` 会构建并安装应用程序包。
+`.github/workflows/build-desktop.yml` 列出了各平台的构建依赖与打包步骤。在 macOS 上，`./scripts/bundle_macos.sh` 会生成待发布的应用程序包；如需手动安装，可添加 `--install` 参数。

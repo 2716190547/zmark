@@ -18,6 +18,39 @@ pub use windows::{run_check, spawn_install_helper};
 /// without changing the updater's state machine.
 pub const UPDATE_FEED_URL: &str =
     "https://github.com/2716190547/zmark-releases/releases/latest/download/latest.json";
+const GITEE_RELEASE_API: &str =
+    "https://gitee.com/api/v5/repos/zeng_sc/zmark-releases/releases/latest";
+const GITEE_RELEASE_BASE: &str = "https://gitee.com/zeng_sc/zmark-releases/releases/download";
+
+fn gitee_latest_feed(metadata: &str, windows: bool) -> Result<(String, String), UpdateError> {
+    let value: serde_json::Value =
+        serde_json::from_str(metadata).map_err(|error| UpdateError::Parse(error.to_string()))?;
+    let tag = str_field(&value, "tag_name")?;
+    let version = tag
+        .strip_prefix('v')
+        .ok_or_else(|| UpdateError::BadVersion(tag.into()))?;
+    parse_version(version).ok_or_else(|| UpdateError::BadVersion(version.into()))?;
+    let name = if windows {
+        "latest-windows.json"
+    } else {
+        "latest.json"
+    };
+    Ok((
+        format!("{GITEE_RELEASE_BASE}/{tag}/{name}"),
+        version.to_string(),
+    ))
+}
+
+fn gitee_asset_url(manifest: &ReleaseManifest, windows: bool) -> Option<String> {
+    parse_version(&manifest.version)?;
+    let suffix = if windows { "-setup.exe" } else { ".zip" };
+    let name = format!("ZMark-{}{suffix}", manifest.version);
+    let expected = format!(
+        "https://github.com/2716190547/zmark-releases/releases/download/v{}/{name}",
+        manifest.version
+    );
+    (manifest.url == expected).then(|| format!("{GITEE_RELEASE_BASE}/v{}/{name}", manifest.version))
+}
 
 /// Ed25519 public key of the release signing key. Filled by the release setup;
 /// an empty key makes every verification fail closed.
@@ -65,10 +98,7 @@ impl fmt::Display for UpdateError {
 
 impl std::error::Error for UpdateError {}
 
-fn str_field<'a>(
-    value: &'a serde_json::Value,
-    name: &'static str,
-) -> Result<&'a str, UpdateError> {
+fn str_field<'a>(value: &'a serde_json::Value, name: &'static str) -> Result<&'a str, UpdateError> {
     value
         .get(name)
         .and_then(|field| field.as_str())
@@ -221,8 +251,7 @@ impl UpdateConfig {
         }
         match classify_target_bundle(&std::env::current_exe().unwrap_or_default()) {
             None => {
-                config.disabled_reason =
-                    Some("not running from an installable .app bundle".into());
+                config.disabled_reason = Some("not running from an installable .app bundle".into());
             }
             Some(bundle) if !parent_is_writable(&bundle) => {
                 config.disabled_reason =
@@ -389,7 +418,10 @@ fn github_release_api_url(manifest: &ReleaseManifest) -> Option<String> {
     })
 }
 
-fn github_asset_api_url(manifest: &ReleaseManifest, metadata: &serde_json::Value) -> Option<String> {
+fn github_asset_api_url(
+    manifest: &ReleaseManifest,
+    metadata: &serde_json::Value,
+) -> Option<String> {
     github_release_api_url(manifest)?;
     let expected_name = format!("ZMark-{}.zip", manifest.version);
     let asset = metadata.get("assets")?.as_array()?.iter().find(|asset| {
@@ -408,19 +440,44 @@ fn download_github_asset_fallback(
     manifest: &ReleaseManifest,
     path: &Path,
 ) -> Result<(), UpdateError> {
-    let release_url = github_release_api_url(manifest)
-        .ok_or_else(|| UpdateError::Http("no trusted GitHub fallback for this release URL".into()))?;
+    let release_url = github_release_api_url(manifest).ok_or_else(|| {
+        UpdateError::Http("no trusted GitHub fallback for this release URL".into())
+    })?;
     let metadata = run_command(
         "/usr/bin/curl",
-        &["-fsSL", "--connect-timeout", "10", "--max-time", "30", "--max-filesize", "1048576", &release_url],
+        &[
+            "-fsSL",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "30",
+            "--max-filesize",
+            "1048576",
+            &release_url,
+        ],
     )?;
-    let metadata: serde_json::Value = serde_json::from_slice(&metadata)
-        .map_err(|error| UpdateError::Parse(error.to_string()))?;
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&metadata).map_err(|error| UpdateError::Parse(error.to_string()))?;
     let asset_url = github_asset_api_url(manifest, &metadata)
         .ok_or_else(|| UpdateError::Http("matching GitHub release asset not found".into()))?;
     run_command(
         "/usr/bin/curl",
-        &["-fsSL", "--connect-timeout", "10", "--max-time", "300", "--retry", "2", "--max-filesize", "104857600", "-H", "Accept: application/octet-stream", "-o", &path.to_string_lossy(), &asset_url],
+        &[
+            "-fsSL",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "300",
+            "--retry",
+            "2",
+            "--max-filesize",
+            "104857600",
+            "-H",
+            "Accept: application/octet-stream",
+            "-o",
+            &path.to_string_lossy(),
+            &asset_url,
+        ],
     )?;
     Ok(())
 }
@@ -444,11 +501,28 @@ pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, Update
     if let Some(parent) = feed_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| UpdateError::Io(e.to_string()))?;
     }
-    download_to(&config.feed_url, &feed_path, "30", "65536")?;
+    let mut mirror_version = None;
+    if let Err(primary_error) = download_to(&config.feed_url, &feed_path, "30", "65536") {
+        if config.feed_url != UPDATE_FEED_URL {
+            return Err(primary_error);
+        }
+        download_to(GITEE_RELEASE_API, &feed_path, "30", "1048576")?;
+        let metadata =
+            std::fs::read_to_string(&feed_path).map_err(|e| UpdateError::Io(e.to_string()))?;
+        let (url, version) = gitee_latest_feed(&metadata, false)?;
+        download_to(&url, &feed_path, "30", "65536")?;
+        mirror_version = Some(version);
+    }
     let feed = std::fs::read_to_string(&feed_path).map_err(|e| UpdateError::Io(e.to_string()))?;
     let _ = std::fs::remove_file(&feed_path);
     let manifest = parse_manifest(&feed)?;
     verify_manifest_with_key(&manifest, &config.public_key_hex)?;
+    if mirror_version
+        .as_deref()
+        .is_some_and(|version| version != manifest.version)
+    {
+        return Err(UpdateError::BadVersion(manifest.version));
+    }
     if !is_newer(&config.current_version, &manifest.version) {
         return Ok(None);
     }
@@ -463,12 +537,28 @@ pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, Update
     std::fs::create_dir_all(&staging_root).map_err(|e| UpdateError::Io(e.to_string()))?;
 
     let zip_path = staging_root.join("update.zip");
-    if let Err(direct_error) = download_to(&manifest.url, &zip_path, "300", "104857600") {
-        download_github_asset_fallback(&manifest, &zip_path).map_err(|fallback_error| {
-            UpdateError::Http(format!(
-                "direct download failed ({direct_error}); fallback failed ({fallback_error})"
-            ))
-        })?;
+    let mirror_url = gitee_asset_url(&manifest, false);
+    let primary_url = if mirror_version.is_some() {
+        mirror_url.as_deref().ok_or_else(|| {
+            UpdateError::Http("no trusted Gitee mirror for this release URL".into())
+        })?
+    } else {
+        &manifest.url
+    };
+    if let Err(direct_error) = download_to(primary_url, &zip_path, "300", "104857600") {
+        let alternate = if mirror_version.is_some() {
+            Some(manifest.url.as_str())
+        } else {
+            mirror_url.as_deref()
+        };
+        let alternate_result = alternate
+            .ok_or_else(|| UpdateError::Http("no trusted alternate release URL".into()))
+            .and_then(|url| download_to(url, &zip_path, "300", "104857600"));
+        if let Err(mirror_error) = alternate_result {
+            download_github_asset_fallback(&manifest, &zip_path).map_err(|fallback_error| {
+                UpdateError::Http(format!("direct download failed ({direct_error}); Gitee failed ({mirror_error}); GitHub API failed ({fallback_error})"))
+            })?;
+        }
     }
     let zip_bytes = std::fs::read(&zip_path).map_err(|e| UpdateError::Io(e.to_string()))?;
     if sha256_hex(&zip_bytes) != manifest.sha256.to_lowercase() {
@@ -508,7 +598,11 @@ pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, Update
     }
     let staged_version = run_command(
         "/usr/libexec/PlistBuddy",
-        &["-c", "Print :CFBundleShortVersionString", &plist.to_string_lossy()],
+        &[
+            "-c",
+            "Print :CFBundleShortVersionString",
+            &plist.to_string_lossy(),
+        ],
     )?;
     if String::from_utf8_lossy(&staged_version).trim() != manifest.version {
         let _ = std::fs::remove_dir_all(&staging_root);
@@ -516,11 +610,20 @@ pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, Update
     }
     run_command(
         "/usr/bin/codesign",
-        &["--verify", "--deep", "--strict", &staging_bundle.to_string_lossy()],
+        &[
+            "--verify",
+            "--deep",
+            "--strict",
+            &staging_bundle.to_string_lossy(),
+        ],
     )?;
     run_command(
         "/usr/bin/xattr",
-        &["-dr", "com.apple.quarantine", &staging_bundle.to_string_lossy()],
+        &[
+            "-dr",
+            "com.apple.quarantine",
+            &staging_bundle.to_string_lossy(),
+        ],
     )?;
     let _ = std::fs::remove_file(&zip_path);
 
@@ -529,10 +632,7 @@ pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, Update
         staging_bundle,
         sha256: manifest.sha256,
     };
-    let staged_path = config
-        .staged_path
-        .clone()
-        .unwrap_or_else(staged_state_path);
+    let staged_path = config.staged_path.clone().unwrap_or_else(staged_state_path);
     let _ = write_staged_state(
         &staged_path,
         &prepared.version,
@@ -545,10 +645,7 @@ pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, Update
 /// Starts the detached install helper. It waits for this process to exit, so
 /// the caller must quit only after the dirty-document flow is resolved.
 #[cfg(not(target_os = "windows"))]
-pub fn spawn_install_helper(
-    prepared: &PreparedUpdate,
-    target: &Path,
-) -> std::io::Result<()> {
+pub fn spawn_install_helper(prepared: &PreparedUpdate, target: &Path) -> std::io::Result<()> {
     let script_dir = prepared
         .staging_bundle
         .parent()
@@ -623,12 +720,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gitee_urls_accept_only_stable_tags_and_signed_github_asset_paths() {
+        let (url, version) = gitee_latest_feed(r#"{"tag_name":"v0.2.5"}"#, true).unwrap();
+        assert_eq!(version, "0.2.5");
+        assert_eq!(
+            url,
+            "https://gitee.com/zeng_sc/zmark-releases/releases/download/v0.2.5/latest-windows.json"
+        );
+        assert!(gitee_latest_feed(r#"{"tag_name":"v../../evil"}"#, false).is_err());
+        let (mut manifest, _) = signed_manifest();
+        manifest.version = version;
+        manifest.url = "https://github.com/2716190547/zmark-releases/releases/download/v0.2.5/ZMark-0.2.5-setup.exe".into();
+        assert_eq!(gitee_asset_url(&manifest, true).as_deref(), Some("https://gitee.com/zeng_sc/zmark-releases/releases/download/v0.2.5/ZMark-0.2.5-setup.exe"));
+        assert!(gitee_asset_url(&manifest, false).is_none());
+        manifest.url.push_str("?redirect=evil");
+        assert!(gitee_asset_url(&manifest, true).is_none());
+    }
+
+    #[test]
     fn github_fallback_only_accepts_the_signed_release_asset() {
         let (mut manifest, _) = signed_manifest();
         manifest.version = "0.2.2".into();
-        manifest.url = "https://github.com/2716190547/zmark-releases/releases/download/v0.2.2/ZMark-0.2.2.zip".into();
+        manifest.url =
+            "https://github.com/2716190547/zmark-releases/releases/download/v0.2.2/ZMark-0.2.2.zip"
+                .into();
         let metadata = serde_json::json!({"assets": [{"id": 726074161u64, "name": "ZMark-0.2.2.zip", "browser_download_url": manifest.url, "state": "uploaded"}]});
-        assert_eq!(github_asset_api_url(&manifest, &metadata).as_deref(), Some("https://api.github.com/repos/2716190547/zmark-releases/releases/assets/726074161"));
+        assert_eq!(
+            github_asset_api_url(&manifest, &metadata).as_deref(),
+            Some(
+                "https://api.github.com/repos/2716190547/zmark-releases/releases/assets/726074161"
+            )
+        );
         manifest.url.push_str("?unexpected=1");
         assert!(github_asset_api_url(&manifest, &metadata).is_none());
         manifest.url = "https://example.com/ZMark-0.2.2.zip".into();

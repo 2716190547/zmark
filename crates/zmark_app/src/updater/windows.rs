@@ -26,7 +26,7 @@ pub(super) fn production() -> UpdateConfig {
     config
 }
 
-fn curl(url: &str, path: &Path, max_size: &str) -> Result<(), UpdateError> {
+fn curl(url: &str, path: &Path, max_size: &str, max_time: &str) -> Result<(), UpdateError> {
     let system = std::env::var_os("SystemRoot")
         .map(PathBuf::from)
         .ok_or_else(|| UpdateError::Io("SystemRoot is not set".into()))?;
@@ -36,7 +36,7 @@ fn curl(url: &str, path: &Path, max_size: &str) -> Result<(), UpdateError> {
             "--connect-timeout",
             "10",
             "--max-time",
-            "300",
+            max_time,
             "--max-filesize",
             max_size,
             "-o",
@@ -63,11 +63,28 @@ pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, Update
         .tempdir()
         .map_err(|e| UpdateError::Io(e.to_string()))?;
     let feed = staging.path().join("latest.json");
-    curl(&config.feed_url, &feed, "65536")?;
+    let mut mirror_version = None;
+    if let Err(primary_error) = curl(&config.feed_url, &feed, "65536", "30") {
+        if config.feed_url != WINDOWS_FEED {
+            return Err(primary_error);
+        }
+        curl(GITEE_RELEASE_API, &feed, "1048576", "30")?;
+        let metadata =
+            std::fs::read_to_string(&feed).map_err(|e| UpdateError::Io(e.to_string()))?;
+        let (url, version) = gitee_latest_feed(&metadata, true)?;
+        curl(&url, &feed, "65536", "30")?;
+        mirror_version = Some(version);
+    }
     let manifest = parse_manifest(
         &std::fs::read_to_string(feed).map_err(|e| UpdateError::Io(e.to_string()))?,
     )?;
     verify_manifest_with_key(&manifest, &config.public_key_hex)?;
+    if mirror_version
+        .as_deref()
+        .is_some_and(|version| version != manifest.version)
+    {
+        return Err(UpdateError::BadVersion(manifest.version));
+    }
     if !is_newer(&config.current_version, &manifest.version) {
         return Ok(None);
     }
@@ -79,7 +96,20 @@ pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, Update
         return Err(UpdateError::Http("unexpected Windows installer URL".into()));
     }
     let installer = staging.path().join("setup.exe");
-    curl(&manifest.url, &installer, "104857600")?;
+    let mirror_url = gitee_asset_url(&manifest, true)
+        .ok_or_else(|| UpdateError::Http("no trusted Gitee mirror for this release URL".into()))?;
+    let (primary, alternate) = if mirror_version.is_some() {
+        (mirror_url.as_str(), manifest.url.as_str())
+    } else {
+        (manifest.url.as_str(), mirror_url.as_str())
+    };
+    if let Err(primary_error) = curl(primary, &installer, "104857600", "300") {
+        curl(alternate, &installer, "104857600", "300").map_err(|mirror_error| {
+            UpdateError::Http(format!(
+                "direct download failed ({primary_error}); Gitee failed ({mirror_error})"
+            ))
+        })?;
+    }
     let bytes = std::fs::read(&installer).map_err(|e| UpdateError::Io(e.to_string()))?;
     if sha256_hex(&bytes) != manifest.sha256.to_lowercase() {
         return Err(UpdateError::HashMismatch);

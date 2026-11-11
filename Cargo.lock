@@ -7465,7 +7465,7 @@ checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 
 [[package]]
 name = "zmark_app"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "cocoa 0.26.0",
  "embed-resource",
@@ -7483,7 +7483,7 @@ dependencies = [
 
 [[package]]
 name = "zmark_core"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "dirs 6.0.0",
  "notify",

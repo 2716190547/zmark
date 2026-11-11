@@ -1,20 +1,24 @@
 # Te damos la bienvenida a ZMark
 
-Un editor y lector Markdown para tus archivos locales.
+Escribe, lee y organiza archivos Markdown locales.
 
 ## Primeros pasos
 
-Abre un archivo con `Cmd+O`. Usa `Cmd+1`, `Cmd+2` y `Cmd+3` para cambiar de vista. Abre los ajustes con `Cmd+,`.
+1. Abre un archivo Markdown con `Cmd+O` o edita este borrador de bienvenida.
+2. Cambia entre código fuente, vista dividida y vista previa con `Cmd+1`, `Cmd+2` y `Cmd+3`.
+3. Abre la barra lateral con `Cmd+B` para añadir carpetas, buscar archivos por nombre y recorrer el esquema.
+4. Guarda con `Cmd+S`; un borrador nuevo pide una ubicación. Haz doble clic en el título para cambiar el nombre.
+5. Abre ajustes con `Cmd+,` y exporta HTML con `Cmd+Shift+E`.
 
-## Prueba Markdown
+## Pruébalo aquí
 
-Edita este documento y observa cómo se actualiza la vista previa.
+Edita estos ejemplos y observa los cambios en la vista previa.
 
-- [ ] Una tarea
+- [ ] Prueba una tarea
 
 | Función | Ejemplo |
 | --- | --- |
-| Markdown | **ZMark** |
+| Texto | **Negrita**, *cursiva* y `código` |
 
 ```rust
 fn main() {

@@ -269,6 +269,7 @@ impl Render for SettingsWindowView {
             .child(
                 div()
                     .w(px(160.))
+                    .flex_shrink_0()
                     .h_full()
                     .border_r_1()
                     .border_color(theme.border)
@@ -386,7 +387,7 @@ impl Render for SettingsWindowView {
                             update_reason.as_deref(),
                             on_check_update,
                             move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
-                                cx.open_url("https://github.com/2716190547/zmark");
+                                cx.open_url("https://github.com/2716190547/zmark-releases");
                             },
                         )
                         .into_any_element(),
@@ -445,13 +446,13 @@ where
         base.bg(theme.selection_bg())
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.selection_text())
-            .child(icon)
-            .child(title)
+            .child(div().flex_shrink_0().child(icon))
+            .child(div().flex_1().min_w(px(0.)).whitespace_normal().child(title))
     } else {
         base.text_color(theme.text_muted)
             .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
-            .child(icon)
-            .child(title)
+            .child(div().flex_shrink_0().child(icon))
+            .child(div().flex_1().min_w(px(0.)).whitespace_normal().child(title))
     }
 }
 
@@ -1083,7 +1084,7 @@ fn render_about_tab(
                 .gap_2()
                 .child(render_section_title(strings.open_source_label, theme))
                 .child(render_setting_row(
-                    "github.com/2716190547/zmark",
+                    "github.com/2716190547/zmark-releases",
                     Some(strings.footer_credit.into()),
                     render_secondary_button("btn_open_github", "GitHub", theme, on_open_github),
                     theme,

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Full delivery gate. Run once on the final candidate, not after every change.
-# Pass --bundle to also rebuild and install /Applications/ZMark.app.
+# Pass --bundle to also build a staging application bundle.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

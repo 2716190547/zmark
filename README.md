@@ -85,4 +85,4 @@ For contributors with access to the source repository, use the `dev` branch for 
 cargo run -p zmark_app
 ```
 
-The desktop workflow in `.github/workflows/build-desktop.yml` lists platform dependencies and packaging steps. On macOS, `./scripts/bundle_macos.sh` builds and installs an application bundle.
+The desktop workflow in `.github/workflows/build-desktop.yml` lists platform dependencies and packaging steps. On macOS, `./scripts/bundle_macos.sh` builds a staging bundle; add `--install` to install it explicitly.

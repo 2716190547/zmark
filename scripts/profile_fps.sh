@@ -8,7 +8,7 @@ APP_PATH="/Applications/ZMark.app"
 TRACE_OUTPUT="./target/zmark_profile.trace"
 
 if [ ! -d "$APP_PATH" ]; then
-    echo "未找到 $APP_PATH，请先运行 ./scripts/bundle_macos.sh 进行打包安装"
+    echo "未找到 $APP_PATH，请先运行 ./scripts/bundle_macos.sh --install 进行打包安装"
     exit 1
 fi
 

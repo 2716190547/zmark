@@ -89,6 +89,12 @@ echo "==> Applying Ad-Hoc signature to the staging bundle..."
 codesign --force --deep --sign - "$BUNDLE_DIR"
 codesign --verify --deep --strict "$BUNDLE_DIR"
 
+case "${1:-}" in
+    "") echo "==> $APP_NAME $VERSION bundle ready at $BUNDLE_DIR"; exit 0 ;;
+    --install) ;;
+    *) echo "usage: $0 [--install]" >&2; exit 2 ;;
+esac
+
 # Never replace a running bundle. pgrep exit 1 means "not running"; any other
 # failure is treated as an error instead of guessing.
 set +e
