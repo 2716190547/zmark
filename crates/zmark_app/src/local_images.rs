@@ -78,6 +78,8 @@ pub struct LocalImage {
     pub snapshot: NamedTempFile,
     pub width: u32,
     pub height: u32,
+    /// Logical source dimensions, before snapshot resampling or SVG 2x rasterization.
+    pub natural_size: (f32, f32),
     pub decoded_bytes: u64,
 }
 
@@ -101,6 +103,7 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
         return Err("图片文件超过 20MiB".into());
     }
 
+    let natural_size;
     let (width, height, decoded_bytes, extension, output) = match image::guess_format(&bytes) {
         Ok(
             format @ (ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP),
@@ -119,6 +122,7 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
             // ImageDecoder reads the static first frame, never collects animation frames.
             let mut decoded =
                 DynamicImage::from_decoder(decoder).map_err(|e| format!("图片解码失败：{e}"))?;
+            natural_size = (decoded.width() as f32, decoded.height() as f32);
             let (out_w, out_h) = fit_within(decoded.width(), decoded.height(), MAX_TEXTURE_SIDE);
             let resized = (out_w, out_h) != (decoded.width(), decoded.height());
             if resized {
@@ -184,6 +188,7 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
             if forbidden.load(Ordering::Relaxed) {
                 return Err("不支持 SVG 内嵌位图或外部图像".into());
             }
+            natural_size = (tree.size().width(), tree.size().height());
             // GPUI's resource loader rasterizes SVG at 2x. Budget the real bitmap.
             let w = (tree.size().width() * 2.0) as u32;
             let h = (tree.size().height() * 2.0) as u32;
@@ -203,6 +208,7 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
         snapshot,
         width,
         height,
+        natural_size,
         decoded_bytes,
     }))
 }

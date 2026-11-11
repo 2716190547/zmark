@@ -8,6 +8,11 @@ use zmark_core::i18n::I18nStrings;
 use crate::theme::ThemeColors;
 use crate::views::workspace::WorkspaceView;
 
+const LIGHTBOX_MARGIN: f32 = 24.0;
+const LIGHTBOX_PADDING: f32 = 16.0;
+const LIGHTBOX_HUD_SPACE: f32 = 88.0;
+const DEFAULT_IMAGE_SIZE: (f32, f32) = (800.0, 640.0);
+
 #[derive(Debug)]
 pub struct LightboxDiagramCache {
     entries: HashMap<(u64, bool, u8), PathBuf>,
@@ -70,7 +75,11 @@ pub static TEST_DROP_IMAGE_COUNT: std::sync::atomic::AtomicUsize =
 
 /// Removes GPU texture from sprite atlas and increments test drop counter in test/debug builds.
 #[inline]
-pub fn drop_image_from_atlas(cx: &mut App, render_image: Arc<gpui::RenderImage>, window: &mut Window) {
+pub fn drop_image_from_atlas(
+    cx: &mut App,
+    render_image: Arc<gpui::RenderImage>,
+    window: &mut Window,
+) {
     cx.drop_image(render_image, Some(window));
     #[cfg(any(test, debug_assertions))]
     TEST_DROP_IMAGE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -80,11 +89,7 @@ pub fn drop_image_from_atlas(cx: &mut App, render_image: Arc<gpui::RenderImage>,
 /// 1. Retrieves cached `RenderImage` via `window.get_asset::<ImgResourceLoader>`.
 /// 2. If present, calls `drop_image_from_atlas(cx, render, window)` to remove GPU texture from sprite atlas.
 /// 3. Purges from loading assets cache via `cx.remove_asset`.
-pub fn release_lightbox_image(
-    path: &std::path::Path,
-    window: &mut Window,
-    cx: &mut App,
-) {
+pub fn release_lightbox_image(path: &std::path::Path, window: &mut Window, cx: &mut App) {
     #[cfg(any(test, debug_assertions))]
     TEST_RELEASE_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
@@ -103,6 +108,10 @@ pub struct LightboxState {
     pub is_dark: Option<bool>,
     pub code_hash: Option<u64>,
     pub zoom: f32,
+    /// Original logical size, independent of the displayed texture's pixel budget.
+    pub natural_size: (f32, f32),
+    pub is_fitted: bool,
+    fit_zoom: f32,
     pub pan_x: f32,
     pub pan_y: f32,
     pub is_dragging: bool,
@@ -125,6 +134,9 @@ impl LightboxState {
             is_dark: None,
             code_hash: None,
             zoom: 1.0,
+            natural_size: DEFAULT_IMAGE_SIZE,
+            is_fitted: false,
+            fit_zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
             is_dragging: false,
@@ -142,16 +154,12 @@ impl LightboxState {
     /// The shared path itself is NOT returned, protecting preview assets from being dropped on close.
     pub fn open(&mut self, svg_path: PathBuf, code_hash: u64) -> Option<PathBuf> {
         let old_exclusive = self.hidpi_svg_path.take();
+        self.natural_size = lightbox_image_size(&svg_path);
         self.is_open = true;
         self.svg_path = Some(svg_path);
-        self.hidpi_svg_path = None;
         self.code_hash = Some(code_hash);
-        self.zoom = 1.0;
-        self.pan_x = 0.0;
-        self.pan_y = 0.0;
-        self.is_dragging = false;
-        self.drag_start_mouse = None;
-        self.drag_start_pan = (0.0, 0.0);
+        self.fit_zoom = 1.0;
+        self.fit();
         old_exclusive
     }
 
@@ -163,17 +171,8 @@ impl LightboxState {
         hidpi_svg_path: PathBuf,
         code_hash: u64,
     ) -> Option<PathBuf> {
-        let old_exclusive = self.hidpi_svg_path.take();
-        self.is_open = true;
-        self.svg_path = Some(svg_path);
+        let old_exclusive = self.open(svg_path, code_hash);
         self.hidpi_svg_path = Some(hidpi_svg_path);
-        self.code_hash = Some(code_hash);
-        self.zoom = 1.0;
-        self.pan_x = 0.0;
-        self.pan_y = 0.0;
-        self.is_dragging = false;
-        self.drag_start_mouse = None;
-        self.drag_start_pan = (0.0, 0.0);
         old_exclusive
     }
 
@@ -185,12 +184,9 @@ impl LightboxState {
         self.svg_path = None;
         self.is_dark = None;
         self.code_hash = None;
-        self.zoom = 1.0;
-        self.pan_x = 0.0;
-        self.pan_y = 0.0;
-        self.is_dragging = false;
-        self.drag_start_mouse = None;
-        self.drag_start_pan = (0.0, 0.0);
+        self.natural_size = DEFAULT_IMAGE_SIZE;
+        self.fit_zoom = 1.0;
+        self.reset();
         old_exclusive
     }
 
@@ -204,17 +200,45 @@ impl LightboxState {
 
     pub fn reset(&mut self) {
         self.zoom = 1.0;
+        self.is_fitted = false;
         self.pan_x = 0.0;
         self.pan_y = 0.0;
         self.is_dragging = false;
         self.drag_start_mouse = None;
+        self.drag_start_pan = (0.0, 0.0);
+    }
+
+    pub fn fit(&mut self) {
+        self.reset();
+        self.is_fitted = true;
+    }
+
+    pub fn update_viewport(&mut self, viewport: Size<Pixels>) {
+        let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
+        if !self.is_fitted || !width.is_finite() || !height.is_finite() {
+            return;
+        }
+        let available_width = (width - 2.0 * (LIGHTBOX_MARGIN + LIGHTBOX_PADDING)).max(1.0);
+        let available_height =
+            (height - LIGHTBOX_HUD_SPACE - 2.0 * (LIGHTBOX_MARGIN + LIGHTBOX_PADDING)).max(1.0);
+        self.fit_zoom =
+            (available_width / self.natural_size.0).min(available_height / self.natural_size.1);
+        self.zoom = self.fit_zoom;
     }
 
     pub fn set_zoom(&mut self, new_zoom: f32) {
-        self.zoom = new_zoom.clamp(0.2, 5.0);
+        if !new_zoom.is_finite() {
+            return;
+        }
+        // Keep fit reachable, even when intrinsic dimensions put it outside 20–500%.
+        self.zoom = new_zoom.clamp(0.2 * self.fit_zoom.min(1.0), 5.0 * self.fit_zoom.max(1.0));
+        self.is_fitted = false;
     }
 
     pub fn apply_scroll_zoom(&mut self, delta_y: f32) {
+        if delta_y == 0.0 {
+            return;
+        }
         let factor = 1.0 + (delta_y * 0.002);
         self.set_zoom(self.zoom * factor);
     }
@@ -228,8 +252,14 @@ impl LightboxState {
     pub fn update_drag(&mut self, mouse_x: f32, mouse_y: f32) {
         if let Some((start_x, start_y)) = self.drag_start_mouse {
             if self.is_dragging {
-                self.pan_x = self.drag_start_pan.0 + (mouse_x - start_x);
-                self.pan_y = self.drag_start_pan.1 + (mouse_y - start_y);
+                let pan = (
+                    self.drag_start_pan.0 + (mouse_x - start_x),
+                    self.drag_start_pan.1 + (mouse_y - start_y),
+                );
+                if pan != (self.pan_x, self.pan_y) {
+                    self.is_fitted = false;
+                }
+                (self.pan_x, self.pan_y) = pan;
             }
         }
     }
@@ -240,38 +270,45 @@ impl LightboxState {
     }
 }
 
-/// Natural size of a lightbox image scaled to fit 800x640 (never upscaled past 800 wide).
-pub fn lightbox_fit_size(path: &std::path::Path) -> (f32, f32) {
-    const MAX_W: f32 = 800.0;
-    const MAX_H: f32 = 640.0;
-    let (w, h) = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
+fn lightbox_image_size(path: &std::path::Path) -> (f32, f32) {
+    let (w, h) = if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+    {
         std::fs::read_to_string(path)
             .map(|svg| zmark_core::mermaid::extract_svg_dimensions(&svg))
             .map(|(w, h)| (w as f32, h as f32))
-            .unwrap_or((MAX_W, MAX_H))
+            .unwrap_or(DEFAULT_IMAGE_SIZE)
     } else {
         image::image_dimensions(path)
             .map(|(w, h)| (w as f32, h as f32))
-            .unwrap_or((MAX_W, MAX_H))
+            .unwrap_or(DEFAULT_IMAGE_SIZE)
     };
-    let (w, h) = (w.max(1.0), h.max(1.0));
-    let scale = (MAX_W / w).min(MAX_H / h);
-    (w * scale, h * scale)
+    if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
+        (w.max(1.0), h.max(1.0))
+    } else {
+        DEFAULT_IMAGE_SIZE
+    }
 }
 
 pub fn render_lightbox(
-    state: &LightboxState,
+    state: &mut LightboxState,
+    viewport: Size<Pixels>,
     theme: &ThemeColors,
     strings: &'static I18nStrings,
+    reduce_motion: bool,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement {
+    state.update_viewport(viewport);
+    let (image_width, image_height) = state.natural_size;
     let pan_x = state.pan_x;
     let pan_y = state.pan_y;
     let zoom = state.zoom;
     let is_dragging = state.is_dragging;
 
-    div()
+    let backdrop = div()
         .id("diagram_lightbox_backdrop")
+        .debug_selector(|| "diagram_lightbox_backdrop".into())
         .absolute()
         .inset_0()
         .bg(rgba(0x000000e0)) // ~88% deep black
@@ -280,22 +317,33 @@ pub fn render_lightbox(
         .items_center()
         .justify_center()
         .overflow_hidden()
-        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-            this.close_lightbox(window, cx);
-            cx.notify();
-        }))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, cx| {
+                this.close_lightbox(window, cx);
+                cx.notify();
+            }),
+        )
         .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
             if this.lightbox.is_dragging {
-                this.lightbox.update_drag(f32::from(event.position.x), f32::from(event.position.y));
+                if event.pressed_button == Some(MouseButton::Left) {
+                    this.lightbox
+                        .update_drag(f32::from(event.position.x), f32::from(event.position.y));
+                } else {
+                    this.lightbox.end_drag();
+                }
                 cx.notify();
             }
         }))
-        .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-            if this.lightbox.is_dragging {
-                this.lightbox.end_drag();
-                cx.notify();
-            }
-        }))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|this, _, _window, cx| {
+                if this.lightbox.is_dragging {
+                    this.lightbox.end_drag();
+                    cx.notify();
+                }
+            }),
+        )
         .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
             let delta = match event.delta {
                 ScrollDelta::Pixels(p) => -f32::from(p.y),
@@ -305,35 +353,56 @@ pub fn render_lightbox(
             cx.notify();
         }))
         .child(
-            // Centered vector diagram canvas
             div()
-                .id("lightbox_diagram_card")
-                .relative()
-                .left(px(pan_x))
-                .top(px(pan_y))
-                .rounded_xl()
-                .p_4()
-                .shadow_lg()
-                .bg(theme.surface)
-                .cursor(if is_dragging { CursorStyle::ClosedHand } else { CursorStyle::OpenHand })
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                    cx.stop_propagation(); // Don't trigger backdrop click
-                    this.lightbox.start_drag(f32::from(event.position.x), f32::from(event.position.y));
-                    cx.notify();
-                }))
-                .children(state.displayed_path().map(|path| {
-                    // Fit inside 800x640 at zoom 1.0 so tall images stay on screen.
-                    let (w, h) = lightbox_fit_size(path);
-                    img(path.clone())
-                        .w(px(w * zoom))
-                        .h(px(h * zoom))
-                        .object_fit(ObjectFit::Contain)
-                }))
+                .absolute()
+                .left_0()
+                .right_0()
+                .top_0()
+                .bottom(px(LIGHTBOX_HUD_SPACE))
+                .p(px(LIGHTBOX_MARGIN))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .id("lightbox_diagram_card")
+                        .debug_selector(|| "lightbox_diagram_card".into())
+                        .relative()
+                        .left(px(pan_x))
+                        .top(px(pan_y))
+                        .rounded_xl()
+                        .p(px(LIGHTBOX_PADDING))
+                        .shadow_lg()
+                        .bg(theme.surface)
+                        .cursor(if is_dragging {
+                            CursorStyle::ClosedHand
+                        } else {
+                            CursorStyle::OpenHand
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                                this.lightbox.start_drag(
+                                    f32::from(event.position.x),
+                                    f32::from(event.position.y),
+                                );
+                                cx.notify();
+                            }),
+                        )
+                        .children(state.displayed_path().map(|path| {
+                            img(path.clone())
+                                .w(px(image_width * zoom))
+                                .h(px(image_height * zoom))
+                                .object_fit(ObjectFit::Contain)
+                        })),
+                ),
         )
         // Floating bottom HUD pill: [ - ] [ Current % ] [ + ] | [ 适应窗口 ] | [ 关闭 (Esc) ]
         .child(
             div()
                 .id("lightbox_hud_pill")
+                .debug_selector(|| "lightbox_hud_pill".into())
                 .absolute()
                 .bottom(px(32.))
                 .left_0()
@@ -356,11 +425,14 @@ pub fn render_lightbox(
                         .text_xs()
                         .text_color(rgb(0xf4f4f5))
                         .font_family(crate::platform::UI_FONT)
-                        .on_mouse_down(MouseButton::Left, |_event, _window, _app| {}) // Stop propagation
+                        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                            cx.stop_propagation()
+                        })
                         // [ - ] Zoom out
                         .child(
                             div()
                                 .id("hud_btn_zoom_out")
+                                .debug_selector(|| "hud_btn_zoom_out".into())
                                 .w(px(22.))
                                 .h(px(22.))
                                 .rounded_full()
@@ -372,18 +444,24 @@ pub fn render_lightbox(
                                 .hover(|s| s.bg(rgba(0xffffff20)))
                                 .tooltip({
                                     let t = strings.lightbox_zoom_out.to_string();
-                                    move |_window, cx| cx.new(|_| HudTooltipView { text: t.clone() }).into()
+                                    move |_window, cx| {
+                                        cx.new(|_| HudTooltipView { text: t.clone() }).into()
+                                    }
                                 })
-                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-                                    this.lightbox.zoom_out();
-                                    cx.notify();
-                                }))
-                                .child("−")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _window, cx| {
+                                        this.lightbox.zoom_out();
+                                        cx.notify();
+                                    }),
+                                )
+                                .child("−"),
                         )
                         // [ 100% ] Click to reset
                         .child(
                             div()
                                 .id("hud_zoom_display")
+                                .debug_selector(|| "hud_zoom_display".into())
                                 .min_w(px(46.))
                                 .px_1()
                                 .flex()
@@ -394,18 +472,24 @@ pub fn render_lightbox(
                                 .hover(|s| s.text_color(rgb(0x38bdf8)))
                                 .tooltip({
                                     let t = strings.lightbox_reset.to_string();
-                                    move |_window, cx| cx.new(|_| HudTooltipView { text: t.clone() }).into()
+                                    move |_window, cx| {
+                                        cx.new(|_| HudTooltipView { text: t.clone() }).into()
+                                    }
                                 })
-                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-                                    this.lightbox.reset();
-                                    cx.notify();
-                                }))
-                                .child(format!("{:.0}%", zoom * 100.0))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _window, cx| {
+                                        this.lightbox.reset();
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(format!("{:.0}%", zoom * 100.0)),
                         )
                         // [ + ] Zoom in
                         .child(
                             div()
                                 .id("hud_btn_zoom_in")
+                                .debug_selector(|| "hud_btn_zoom_in".into())
                                 .w(px(22.))
                                 .h(px(22.))
                                 .rounded_full()
@@ -417,13 +501,18 @@ pub fn render_lightbox(
                                 .hover(|s| s.bg(rgba(0xffffff20)))
                                 .tooltip({
                                     let t = strings.lightbox_zoom_in.to_string();
-                                    move |_window, cx| cx.new(|_| HudTooltipView { text: t.clone() }).into()
+                                    move |_window, cx| {
+                                        cx.new(|_| HudTooltipView { text: t.clone() }).into()
+                                    }
                                 })
-                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-                                    this.lightbox.zoom_in();
-                                    cx.notify();
-                                }))
-                                .child("+")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _window, cx| {
+                                        this.lightbox.zoom_in();
+                                        cx.notify();
+                                    }),
+                                )
+                                .child("+"),
                         )
                         // Divider
                         .child(div().w(px(1.)).h(px(12.)).bg(rgba(0xffffff26)))
@@ -431,16 +520,20 @@ pub fn render_lightbox(
                         .child(
                             div()
                                 .id("hud_btn_fit")
+                                .debug_selector(|| "hud_btn_fit".into())
                                 .px_2()
                                 .py_0p5()
                                 .rounded_full()
                                 .cursor_pointer()
                                 .hover(|s| s.bg(rgba(0xffffff20)))
-                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
-                                    this.lightbox.reset();
-                                    cx.notify();
-                                }))
-                                .child(strings.lightbox_fit_window)
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _window, cx| {
+                                        this.lightbox.fit();
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(strings.lightbox_fit_window),
                         )
                         // Divider
                         .child(div().w(px(1.)).h(px(12.)).bg(rgba(0xffffff26)))
@@ -448,24 +541,30 @@ pub fn render_lightbox(
                         .child(
                             div()
                                 .id("hud_btn_close")
+                                .debug_selector(|| "hud_btn_close".into())
                                 .px_2()
                                 .py_0p5()
                                 .rounded_full()
                                 .cursor_pointer()
                                 .hover(|s| s.bg(rgba(0xffffff20)).text_color(rgb(0xf87171)))
-                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                                    this.close_lightbox(window, cx);
-                                    cx.notify();
-                                }))
-                                .child(format!("{} (Esc)", strings.lightbox_close))
-                        )
-                )
-        )
-        .with_animation(
-            "lightbox_fade_in",
-            Animation::new(std::time::Duration::from_millis(150)),
-            |el, delta| el.opacity(delta),
-        )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.close_lightbox(window, cx);
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(format!("{} (Esc)", strings.lightbox_close)),
+                        ),
+                ),
+        );
+    crate::views::motion::animated(
+        backdrop,
+        reduce_motion,
+        "lightbox_fade_in",
+        150,
+        |el, delta| el.opacity(delta),
+    )
 }
 
 struct HudTooltipView {
@@ -488,5 +587,3 @@ impl Render for HudTooltipView {
             .child(self.text.clone())
     }
 }
-
-

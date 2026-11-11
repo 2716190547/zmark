@@ -17,7 +17,7 @@ pub type OnCopyCallback = Arc<dyn Fn(String, u64, &mut Window, &mut App) + Send 
 /// whose callback hash is the diagram source hash).
 pub const LOCAL_IMAGE_LIGHTBOX_HASH: u64 = 0;
 
-pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, &mut Window, &mut App) + Send + Sync>;
+pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, Option<(f32, f32)>, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewSelectionCallback = Arc<dyn Fn(Option<PreviewSelection>, bool, &mut Window, &mut App) + Send + Sync>;
 pub type OnImageRecoveryCallback = Arc<dyn Fn(std::ops::Range<usize>, String, crate::local_images::RecoveryCandidate, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewAutoscrollCallback = Arc<dyn Fn(f32, &mut Window, &mut App) + Send + Sync>;
@@ -698,6 +698,7 @@ fn render_styled_inlines(
                             element.style().aspect_ratio = Some(ratio);
                             let description = if alt.is_empty() { url.clone() } else { format!("{alt} · {url}") };
                             let snapshot = image.snapshot.path().to_path_buf();
+                            let natural_size = image.natural_size;
                             let mut container = div().id(SharedString::from(format!("local_image_container:{url}")))
                                 .w_full().min_w(px(0.))
                                 .tooltip(move |_, cx| cx.new(|_| CodeTooltipView { text: description.clone() }).into());
@@ -706,7 +707,7 @@ fn render_styled_inlines(
                                 container = container.cursor(CursorStyle::PointingHand).on_mouse_down(
                                     MouseButton::Left,
                                     move |_, window, cx| {
-                                        open(snapshot.clone(), LOCAL_IMAGE_LIGHTBOX_HASH, window, cx)
+                                        open(snapshot.clone(), LOCAL_IMAGE_LIGHTBOX_HASH, Some(natural_size), window, cx)
                                     },
                                 );
                             }
@@ -1229,7 +1230,7 @@ fn render_mermaid_container(
             })
             .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                 cx.stop_propagation(); // 防冒泡到外层容器
-                cb_btn(p_btn.clone(), code_hash, window, cx);
+                cb_btn(p_btn.clone(), code_hash, None, window, cx);
             })
             .child(
                 svg()
@@ -1242,7 +1243,7 @@ fn render_mermaid_container(
             .cursor(CursorStyle::PointingHand)
             .hover(|s| s.border_color(theme.accent))
             .on_mouse_down(MouseButton::Left, move |_event, window, app| {
-                cb(p_click.clone(), code_hash, window, app);
+                cb(p_click.clone(), code_hash, None, window, app);
             })
             .child(btn);
     }

@@ -108,6 +108,7 @@ fn raster_snapshots_are_downscaled_to_the_texture_budget() {
     let path = dir.path().join("large.png");
     DynamicImage::new_rgba8(3000, 1000).save(&path).unwrap();
     let image = load_image(path.to_str().unwrap(), None).unwrap();
+    assert_eq!(image.natural_size, (3000.0, 1000.0));
     assert!(image.width <= 1600 && image.height <= 1600);
     assert_eq!(image.height, 533);
     let decoded = image::open(image.snapshot.path()).unwrap();
@@ -442,7 +443,7 @@ async fn switching_documents_with_an_image_in_flight_uses_current_base(cx: &mut 
 #[gpui::test]
 async fn clicking_a_preview_image_opens_the_lightbox_and_escape_closes_it(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    write_image(&dir.path().join("pic.png"), ImageFormat::Png, [10, 120, 200, 255]);
+    DynamicImage::new_rgba8(2000, 500).save(dir.path().join("pic.png")).unwrap();
     std::fs::write(dir.path().join("vector.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><rect width="12" height="8" fill="red"/></svg>"#).unwrap();
     let docpath = dir.path().join("note.md");
     std::fs::write(&docpath, "![pic](pic.png)\n\n![vec](vector.svg)").unwrap();
@@ -457,9 +458,9 @@ async fn clicking_a_preview_image_opens_the_lightbox_and_escape_closes_it(cx: &m
     let cx = &mut VisualTestContext::from_window(*window, cx);
     draw(cx);
 
-    for (name, selector, wanted_ext) in [
-        ("pic.png", "local_image:pic.png", "png"),
-        ("vector.svg", "local_image:vector.svg", "svg"),
+    for (name, selector, wanted_ext, natural_size) in [
+        ("pic.png", "local_image:pic.png", "png", (2000., 500.)),
+        ("vector.svg", "local_image:vector.svg", "svg", (12., 8.)),
     ] {
         let bounds = cx
             .debug_bounds(selector)
@@ -468,7 +469,11 @@ async fn clicking_a_preview_image_opens_the_lightbox_and_escape_closes_it(cx: &m
         cx.update(|_, cx| {
             let ws = view.read(cx);
             assert!(ws.lightbox.is_open, "clicking {name} opens the lightbox");
+            assert_eq!(ws.lightbox.natural_size, natural_size, "100% must use source dimensions, not the resized snapshot");
             let shown = ws.lightbox.displayed_path().expect("lightbox shows an image");
+            if wanted_ext == "png" {
+                assert_eq!(image::image_dimensions(shown).unwrap(), (1600, 400), "the texture budget must remain unchanged");
+            }
             assert!(
                 shown.extension().is_some_and(|e| e.eq_ignore_ascii_case(wanted_ext)),
                 "{name} is shown as its own snapshot, got {shown:?}"
@@ -480,18 +485,23 @@ async fn clicking_a_preview_image_opens_the_lightbox_and_escape_closes_it(cx: &m
 }
 
 #[test]
-fn lightbox_fit_size_keeps_aspect_and_fits_800_by_640() {
-    use zmark_app::views::lightbox::lightbox_fit_size;
+fn lightbox_caches_natural_image_size_and_falls_back_for_missing_files() {
+    use zmark_app::views::lightbox::LightboxState;
     let dir = tempfile::tempdir().unwrap();
     let wide = dir.path().join("wide.png");
     let tall = dir.path().join("tall.png");
     DynamicImage::new_rgba8(1600, 400).save(&wide).unwrap();
     DynamicImage::new_rgba8(300, 1200).save(&tall).unwrap();
-    let (w, h) = lightbox_fit_size(&wide);
-    assert_eq!((w, h), (800.0, 200.0));
-    let (w, h) = lightbox_fit_size(&tall);
-    assert!((h - 640.0).abs() < 0.01, "a tall image is limited by height, got {h}");
-    assert!((w - 160.0).abs() < 0.01);
-    // Unreadable files fall back to the full box instead of failing to draw.
-    assert_eq!(lightbox_fit_size(&dir.path().join("missing.png")), (800.0, 640.0));
+    let mut state = LightboxState::new();
+    state.open(wide.clone(), 0);
+    assert_eq!(state.natural_size, (1600.0, 400.0));
+    std::fs::remove_file(wide).unwrap();
+    state.update_viewport(gpui::size(gpui::px(1000.), gpui::px(700.)));
+    assert_eq!(state.natural_size, (1600.0, 400.0), "resizing must not reread image metadata");
+    state.open(tall, 0);
+    assert_eq!(state.natural_size, (300.0, 1200.0));
+    state.open(dir.path().join("missing.png"), 0);
+    assert_eq!(state.natural_size, (800.0, 640.0));
+    state.update_viewport(gpui::size(gpui::px(640.), gpui::px(480.)));
+    assert!(state.zoom.is_finite() && state.zoom > 0.0);
 }

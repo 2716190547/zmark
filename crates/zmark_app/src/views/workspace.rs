@@ -3585,10 +3585,13 @@ impl Render for WorkspaceView {
 
         let view_lb = cx.entity().clone();
         let on_open_lightbox = Arc::new(
-            move |svg_path: std::path::PathBuf, hash: u64, window: &mut Window, cx: &mut App| {
+            move |svg_path: std::path::PathBuf, hash: u64, natural_size: Option<(f32, f32)>, window: &mut Window, cx: &mut App| {
                 view_lb.update(cx, |this, cx| {
                     if hash == crate::views::preview::LOCAL_IMAGE_LIGHTBOX_HASH {
                         this.open_image_lightbox(svg_path, window, cx);
+                        if let Some(size) = natural_size {
+                            this.lightbox.natural_size = size;
+                        }
                     } else {
                         this.open_lightbox(svg_path, hash, window, cx);
                     }
@@ -3695,8 +3698,9 @@ impl Render for WorkspaceView {
                     if event.keystroke.key == "escape" {
                         this.close_lightbox(window, cx);
                         cx.notify();
-                        return;
                     }
+                    // Skip hidden-source editing without swallowing native window shortcuts.
+                    return;
                 }
 
                 if this.state.pending_remove_root.is_some() {
@@ -4660,7 +4664,7 @@ impl Render for WorkspaceView {
                             })
                     )
                     .when(self.lightbox.is_open, |root| {
-                        root.child(render_lightbox(&self.lightbox, theme, strings, cx))
+                        root.child(render_lightbox(&mut self.lightbox, window.viewport_size(), theme, strings, reduce_motion, cx))
                     })
                     .when(self.state.pending_remove_root.is_some(), |root| {
                         root.child(self.render_remove_root_modal(theme, cx))
