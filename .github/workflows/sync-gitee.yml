@@ -22,20 +22,23 @@ jobs:
       - name: Fetch and sync branches and tags
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_SYNC_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           GIT_TERMINAL_PROMPT: '0'
         run: |
           set -eu
           test -n "$GITEE_TOKEN"
-          git init --bare mirror.git
-          git -C mirror.git fetch https://github.com/2716190547/zmark.git '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
           cat > "$RUNNER_TEMP/gitee-askpass" <<'EOF'
           #!/bin/sh
           case "$1" in
-            *Username*) printf '%s\n' 'zeng_sc' ;;
-            *Password*) printf '%s\n' "$GITEE_TOKEN" ;;
+            *Username*github.com*) printf '%s\n' 'x-access-token' ;;
+            *Password*github.com*) printf '%s\n' "$GH_TOKEN" ;;
+            *Username*gitee.com*) printf '%s\n' 'zeng_sc' ;;
+            *Password*gitee.com*) printf '%s\n' "$GITEE_TOKEN" ;;
             *) exit 1 ;;
           esac
           EOF
           chmod 700 "$RUNNER_TEMP/gitee-askpass"
           export GIT_ASKPASS="$RUNNER_TEMP/gitee-askpass"
+          git init --bare mirror.git
+          git -C mirror.git fetch https://github.com/2716190547/zmark.git '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
           git -C mirror.git push https://gitee.com/zeng_sc/zmark.git 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
