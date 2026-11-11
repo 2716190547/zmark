@@ -4,35 +4,85 @@
 
 [简体中文](README.zh-CN.md)
 
-ZMark is a Markdown editor and reader for local files, built with Rust and GPUI. Edit Markdown, read a formatted preview, or use both side by side.
+ZMark is a desktop Markdown editor and reader for local files. Write in source mode, read a formatted preview, or work in both views side by side. Organize folders in the sidebar and keep your documents where you choose.
 
-## Features
+## Download and install
 
-- Source, split, and preview modes with synchronized scrolling.
-- A drawer for multiple workspace folders, loose files, drafts, search, and document outline.
-- Markdown tables, task lists, code blocks with syntax highlighting, and Mermaid diagrams.
-- Light and dark appearance, multiple palettes, and localized settings.
-- Export a self-contained HTML document for offline reading.
+Get the latest published version from [GitHub Releases](https://github.com/2716190547/zmark-releases/releases) or the [Gitee release mirror](https://gitee.com/zeng_sc/zmark-releases/releases). The current release provides a macOS ZIP and a Windows installer. Extract the ZIP and move `ZMark.app` to Applications, or run the Windows setup program. Platform-specific behavior may differ.
 
-## Getting started
+Linux builds are configured in the project, but the current public release does not include a Linux installer.
 
-Download available builds from the [releases repository](https://github.com/2716190547/zmark-releases/releases), or build from source below. The repository includes desktop build workflows for macOS, Linux, and Windows; availability and platform behavior depend on the published build.
+## Get started
 
-On macOS, open a Markdown file with `Cmd+O`, switch views with `Cmd+1`, `Cmd+2`, or `Cmd+3`, and open settings with `Cmd+,`. Save with `Cmd+S` and export HTML with `Cmd+Shift+E`. The settings window lists common shortcuts.
+1. Open a Markdown file with **Cmd+O** on macOS or **Ctrl+O** on Windows and Linux. You can also start by editing the welcome draft.
+2. Choose **Source**, **Split**, or **Preview** in the toolbar. In split view, the two panes scroll together.
+3. Open the sidebar with **Cmd+B** or **Ctrl+B**. Add a folder to browse its Markdown files, search by file or folder name, or use the document outline to jump to a heading.
+4. Save with **Cmd+S** or **Ctrl+S**. Choose a location the first time you save a draft. Double-click the document title to rename it.
+5. Open settings with **Cmd+,** or **Ctrl+,** to adjust appearance, editing, saving, and language.
 
-## Build from source
+## Working with documents
 
-Install a current stable Rust toolchain and platform dependencies, then run:
+### Files and folders
 
-```sh
-cargo run -p zmark_app
-cargo test --workspace
+The sidebar groups workspace folders, files opened outside those folders, and drafts. You can add more than one workspace folder and create Markdown files inside one. Removing a workspace folder from the sidebar does not delete its files. The search field filters **names**, rather than searching document contents; the outline lists headings in the active document.
+
+Existing files can be saved automatically after editing or when the window loses focus; both behaviors can be configured in settings. A new draft needs a save location before it becomes a file. Unsaved changes are confirmed when closing.
+
+### Markdown and diagrams
+
+The preview supports headings, paragraphs, emphasis, links, lists, task-list markers, tables, quotes, code blocks, local images, and Mermaid diagrams. Fenced code blocks can show syntax highlighting and a copy control. Change a task marker in the source to update its preview.
+
+Use a local path for images, relative to the saved Markdown file or as an absolute path. Network image URLs are not loaded in the preview. Click an image or use a diagram's expand control to inspect it at a larger size.
+
+For example, edit this in split view:
+
+````markdown
+# Project notes
+
+- [ ] Review the first draft
+- [x] Create a document
+
+| Item | Status |
+| --- | --- |
+| Preview | Ready |
+
+```mermaid
+flowchart LR
+    Write --> Preview --> Share
 ```
+````
 
-The [desktop workflow](.github/workflows/build-desktop.yml) lists the Linux build dependencies and packaging steps. On macOS, `./scripts/bundle_macos.sh` builds and installs an application bundle.
+Mermaid syntax support depends on the renderer; if a diagram does not render, check its syntax and simplify the example.
+
+### Export HTML
+
+Choose **Export HTML** in the toolbar or use **Cmd+Shift+E** / **Ctrl+Shift+E**, then choose a destination. The exported HTML includes its styles. Image paths remain references rather than being embedded, and Mermaid blocks are exported as code rather than rendered diagrams; keep referenced images available when sharing the file.
+
+### Appearance and editing
+
+Settings provide light, dark, and system appearance; color palettes; language; reduced motion; line numbers; indentation; line height; and automatic-save options. The application also shows its version and update status in **About**.
+
+## Keyboard shortcuts
+
+| Action | macOS | Windows / Linux |
+| --- | --- | --- |
+| Open file | Cmd+O | Ctrl+O |
+| Save | Cmd+S | Ctrl+S |
+| Source / split / preview | Cmd+1 / 2 / 3 | Ctrl+1 / 2 / 3 |
+| Toggle sidebar | Cmd+B | Ctrl+B |
+| Settings | Cmd+, | Ctrl+, |
+| Export HTML | Cmd+Shift+E | Ctrl+Shift+E |
 
 ## Technology
 
-ZMark uses **Rust** for the application, **GPUI** for its interface, **pulldown-cmark** for Markdown parsing, **syntect** for code highlighting, and **rusty-mermaid** for diagram rendering. Images are decoded with the Rust `image` crate.
+ZMark uses **Rust** and **GPUI** for the desktop app, **pulldown-cmark** for Markdown parsing, **syntect** for code highlighting, and **rusty-mermaid** for diagram rendering. Local images are decoded with the Rust `image` crate.
 
-See [architecture decisions](docs/adr/README.md) and the [project glossary](GLOSSARY.md) for more detail.
+## Build from source
+
+For contributors with access to the source repository, use the `dev` branch for the current application. Install a current stable Rust toolchain and platform dependencies, then run:
+
+```sh
+cargo run -p zmark_app
+```
+
+The desktop workflow in `.github/workflows/build-desktop.yml` lists platform dependencies and packaging steps. On macOS, `./scripts/bundle_macos.sh` builds and installs an application bundle.
