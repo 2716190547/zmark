@@ -11,6 +11,8 @@ on:
       - "crates/**"
       - "packaging/**"
       - "scripts/bundle_macos.sh"
+      - "scripts/release.sh"
+      - "scripts/test_release_assets.sh"
 
 jobs:
   build:
@@ -56,6 +58,16 @@ jobs:
             libxcb-shape0-dev libxcb-xfixes0-dev libxcursor-dev \
             libxrandr-dev libxi-dev libgl1-mesa-dev libegl1-mesa-dev \
             libgles2-mesa-dev libvulkan-dev
+
+      - name: Verify native filesystem safety
+        shell: bash
+        run: |
+          cargo test -p zmark_core --lib -- --test-threads=1
+          cargo test -p zmark_app --test app_state workspace_root_test:: -- --test-threads=1
+
+      - name: Verify release asset preflight
+        if: runner.os != 'Windows'
+        run: bash scripts/test_release_assets.sh
 
       - name: Build release binary
         run: cargo build --release -p zmark_app

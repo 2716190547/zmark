@@ -8,6 +8,7 @@ VERSION="${1:-}"
 RELEASES_REPO="${ZMARK_RELEASES_REPO:-2716190547/zmark-releases}"
 RELEASE_KEY="${ZMARK_RELEASE_KEY:-$HOME/.config/zmark/release.key}"
 WINDOWS_SETUP="${ZMARK_WINDOWS_SETUP:-}"
+LINUX_DIR="${ZMARK_LINUX_ASSETS_DIR:-}"
 
 if [ -z "$VERSION" ]; then
     echo "usage: scripts/release.sh <version>" >&2
@@ -27,6 +28,19 @@ if [ ! -f "$WINDOWS_SETUP" ]; then
     echo "error: set ZMARK_WINDOWS_SETUP to the Windows installer for version $VERSION" >&2
     exit 1
 fi
+for suffix in deb tar.gz; do
+    ASSET="ZMark-$VERSION-linux-x86_64.$suffix"
+    if [ ! -f "$LINUX_DIR/$ASSET" ] || [ ! -f "$LINUX_DIR/SHA256SUMS-linux" ]; then
+        echo "error: set ZMARK_LINUX_ASSETS_DIR to the complete Linux CI artifacts for $VERSION" >&2
+        exit 1
+    fi
+    EXPECTED="$(awk -v name="$ASSET" '$2 == name { print $1 }' "$LINUX_DIR/SHA256SUMS-linux")"
+    ACTUAL="$(shasum -a 256 "$LINUX_DIR/$ASSET" | awk '{print $1}')"
+    if [ "$EXPECTED" != "$ACTUAL" ]; then
+        echo "error: Linux artifact checksum mismatch: $ASSET" >&2
+        exit 1
+    fi
+done
 if ! gh auth status >/dev/null 2>&1; then
     echo "error: gh is not authenticated" >&2
     exit 1
@@ -75,6 +89,19 @@ if [ "$PACKAGED_VERSION" != "$VERSION" ]; then
     exit 1
 fi
 
+DMG="$VERIFY_DIR/ZMark-$VERSION.dmg"
+mkdir -p "$VERIFY_DIR/dmg-stage"
+ditto "$VERIFY_DIR/ZMark.app" "$VERIFY_DIR/dmg-stage/ZMark.app"
+ln -s /Applications "$VERIFY_DIR/dmg-stage/Applications"
+hdiutil create -volname "ZMark $VERSION" -srcfolder "$VERIFY_DIR/dmg-stage" -ov -format UDZO "$DMG"
+hdiutil verify "$DMG"
+(cd "$VERIFY_DIR" && shasum -a 256 "ZMark-$VERSION.dmg") > "$DMG.sha256"
+LINUX_DEB="$VERIFY_DIR/ZMark-$VERSION-linux-x86_64.deb"
+LINUX_TAR="$VERIFY_DIR/ZMark-$VERSION-linux-x86_64.tar.gz"
+cp "$LINUX_DIR/ZMark-$VERSION-linux-x86_64.deb" "$LINUX_DEB"
+cp "$LINUX_DIR/ZMark-$VERSION-linux-x86_64.tar.gz" "$LINUX_TAR"
+(cd "$VERIFY_DIR" && shasum -a 256 "$(basename "$LINUX_DEB")" "$(basename "$LINUX_TAR")") > "$VERIFY_DIR/SHA256SUMS-linux"
+
 SHA256="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
 URL="https://github.com/$RELEASES_REPO/releases/download/v$VERSION/ZMark-$VERSION.zip"
 PUBLISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -113,7 +140,8 @@ gh release create "v$VERSION" \
     --draft \
     --title "ZMark v$VERSION" \
     --notes "ZMark v$VERSION" \
-    "$ZIP" "$MANIFEST" "$WINDOWS_ASSET" "$WINDOWS_MANIFEST"
+    "$ZIP" "$MANIFEST" "$WINDOWS_ASSET" "$WINDOWS_MANIFEST" \
+    "$DMG" "$DMG.sha256" "$LINUX_DEB" "$LINUX_TAR" "$VERIFY_DIR/SHA256SUMS-linux"
 
 DRAFT_DIR="$VERIFY_DIR/draft"
 mkdir -p "$DRAFT_DIR"
@@ -123,10 +151,16 @@ gh release download "v$VERSION" \
     --pattern 'latest.json' \
     --pattern 'latest-windows.json' \
     --pattern 'ZMark-*-setup.exe' \
+    --pattern 'ZMark-*.dmg*' \
+    --pattern 'ZMark-*-linux-x86_64.*' \
+    --pattern 'SHA256SUMS-linux' \
     --dir "$DRAFT_DIR"
 cmp "$MANIFEST" "$DRAFT_DIR/latest.json"
 cmp "$WINDOWS_MANIFEST" "$DRAFT_DIR/latest-windows.json"
 cmp "$WINDOWS_ASSET" "$DRAFT_DIR/ZMark-$VERSION-setup.exe"
+for asset in "$DMG" "$DMG.sha256" "$LINUX_DEB" "$LINUX_TAR" "$VERIFY_DIR/SHA256SUMS-linux"; do
+    cmp "$asset" "$DRAFT_DIR/$(basename "$asset")"
+done
 DOWNLOADED_SHA="$(shasum -a 256 "$DRAFT_DIR/ZMark-$VERSION.zip" | awk '{print $1}')"
 if [ "$DOWNLOADED_SHA" != "$SHA256" ]; then
     echo "error: uploaded zip hash mismatch" >&2
