@@ -21,7 +21,7 @@ pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, Option<(f3
 pub type OnPreviewSelectionCallback = Arc<dyn Fn(Option<PreviewSelection>, bool, &mut Window, &mut App) + Send + Sync>;
 pub type OnImageRecoveryCallback = Arc<dyn Fn(std::ops::Range<usize>, String, crate::local_images::RecoveryCandidate, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewAutoscrollCallback = Arc<dyn Fn(f32, &mut Window, &mut App) + Send + Sync>;
-pub type OnPreviewWheelCallback = Arc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App) + Send + Sync>;
+pub type OnPreviewWheelCallback = Arc<dyn Fn(&ScrollEvent, &mut Window, &mut App) + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct PreviewCallbacks {
@@ -217,7 +217,7 @@ pub fn render_preview_pane_with_callbacks(
         .child(content);
 
     if let Some(cb) = wheel_cb {
-        scroll_view = scroll_view.on_scroll_wheel(move |event: &ScrollWheelEvent, window, cx| {
+        scroll_view = scroll_view.on_scroll(move |event: &ScrollEvent, window, cx| {
             cb(event, window, cx);
         });
     }
@@ -271,7 +271,7 @@ pub fn render_preview_pane_with_callbacks(
                     if let Some(ref sel_cb) = on_sel_down {
                         let text_system = window.text_system();
                         let reg = regions_down.lock().unwrap();
-                        if let Some(pos) = hit_test_point_across_all_regions(&reg, Some(text_system), event.position, &parsed_down.blocks) {
+                        if let Some(pos) = hit_test_point_across_all_regions(&reg, text_system, event.position, &parsed_down.blocks) {
                             sel_cb(Some(PreviewSelection::new(pos, pos)), true, window, cx);
                         }
                     }
@@ -282,7 +282,7 @@ pub fn render_preview_pane_with_callbacks(
                             if let Some(sel) = selection {
                                 let text_system = window.text_system();
                                 let reg = regions_move.lock().unwrap();
-                                if let Some(head) = hit_test_point_across_all_regions(&reg, Some(text_system), event.position, &parsed_move.blocks) {
+                                if let Some(head) = hit_test_point_across_all_regions(&reg, text_system, event.position, &parsed_move.blocks) {
                                     sel_cb(Some(PreviewSelection::new(sel.anchor, head)), true, window, cx);
                                 }
                             }
@@ -690,18 +690,21 @@ fn render_styled_inlines(
                             // (it made the preview blocks huge and left big empty gaps).
                             let max_display_width = (MAX_IMAGE_DISPLAY_HEIGHT * ratio)
                                 .min(image.width as f32);
-                            let mut element = img(image.snapshot.path().to_path_buf())
-                                .w_full().max_w(px(max_display_width))
+                            let element = img(image.snapshot.path().to_path_buf())
+                                .absolute().inset_0().size_full()
                                 .object_fit(ObjectFit::Contain)
                                 .debug_selector(|| format!("local_image:{url}"))
                                 .with_fallback(move || div().child(format!("图片显示失败 · {reference}")).into_any_element());
-                            element.style().aspect_ratio = Some(ratio);
                             let description = if alt.is_empty() { url.clone() } else { format!("{alt} · {url}") };
                             let snapshot = image.snapshot.path().to_path_buf();
                             let natural_size = image.natural_size;
                             let mut container = div().id(SharedString::from(format!("local_image_container:{url}")))
-                                .w_full().min_w(px(0.))
+                                .debug_selector(|| format!("local_image_container:{url}"))
+                                .relative().w_full().max_w(px(max_display_width))
+                                .max_h(px(max_display_width / ratio)).min_w(px(0.))
                                 .tooltip(move |_, cx| cx.new(|_| CodeTooltipView { text: description.clone() }).into());
+                            // Percentage-sized Img otherwise falls back to intrinsic SVG height.
+                            container.style().aspect_ratio = Some(ratio);
                             if let Some(open) = on_open_lightbox {
                                 let open = open.clone();
                                 container = container.cursor(CursorStyle::PointingHand).on_mouse_down(

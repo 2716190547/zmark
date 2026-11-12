@@ -288,230 +288,195 @@ fn test_root_removal_during_search_does_not_shift_indices_or_panic() {
     assert!(sub_b_restored.is_expanded, "root_b's sub_b folder must be restored properly without index shift");
 }
 
-#[gpui::test]
-async fn test_chinese_ime_entity_input_handler(cx: &mut gpui::TestAppContext) {
-    use zmark_app::views::drawer::SearchInput;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    let (_view, cx) = cx.add_window_view(|_window, cx| {
-        let focus = cx.focus_handle();
-        SearchInput::new(focus).with_placeholder("Search...")
+fn native_search(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    gpui::Entity<zmark_app::views::workspace::WorkspaceView>,
+    gpui::Entity<zmark_app::views::drawer::SearchInput>,
+    &mut gpui::VisualTestContext,
+) {
+    use gpui::{AppContext as _, Focusable as _};
+    use zmark_app::views::workspace::WorkspaceView;
+    let (root, cx) = cx.add_window_view(|window, cx| {
+        let mut state = AppState::new_isolated(Document::new_scratch());
+        state.drawer_open = true;
+        state.preferences.reduce_motion = true;
+        let view = cx.new(|cx| WorkspaceView::new(state, cx));
+        gpui_component::Root::new(view, window, cx)
     });
     cx.run_until_parked();
+    let view = cx.update(|_, cx| root.read(cx).view().clone().downcast::<WorkspaceView>().unwrap());
+    let input = cx.update(|window, cx| {
+        let input = view.read(cx).search_input.as_ref().unwrap().clone();
+        let focus = input.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        input
+    });
+    cx.run_until_parked();
+    (view, input, cx)
+}
 
-    cx.update(|_window, cx| {
-        let focus = cx.focus_handle();
-        let query_changed = std::sync::Arc::new(AtomicBool::new(false));
-        let qc = query_changed.clone();
-
-        let mut input = SearchInput::new(focus)
-            .with_placeholder("Search...")
-            .on_change(move |_q, _window, _cx| {
-                qc.store(true, Ordering::SeqCst);
-            });
-
-        // 1. Initial state
-        assert_eq!(input.content.as_ref(), "");
-        assert_eq!(input.marked_range, None);
-
-        // 2. Composition (typing Chinese pinyin "zhongwen")
-        input.handle_replace_and_mark_text(None, "zhongwen", None);
-        assert_eq!(input.content.as_ref(), "zhongwen");
-        assert_eq!(input.marked_range, Some(0..8));
-
-        // 3. Confirm candidate (IME commits "中文")
-        input.handle_replace_text(None, "中文");
-        assert_eq!(input.content.as_ref(), "中文");
-        assert_eq!(input.marked_range, None);
-
-        // 4. Composition cancellation
-        input.handle_replace_and_mark_text(None, "pinyin", None);
-        assert!(input.marked_range.is_some());
-        input.handle_unmark_text();
-        assert_eq!(input.marked_range, None);
-
-        // 5. Backspace, delete, paste, cursor movement
-        input.set_text("test");
-
-        input.handle_backspace();
-        assert_eq!(input.content.as_ref(), "tes");
-
-        input.handle_home();
-        assert_eq!(input.selected_range, 0..0);
-
-        input.handle_delete();
-        assert_eq!(input.content.as_ref(), "es");
-
-        input.handle_end();
-        assert_eq!(input.selected_range, 2..2);
-
-        input.handle_paste_text(" pasted");
-        assert_eq!(input.content.as_ref(), "es pasted");
+#[gpui::test]
+async fn test_chinese_ime_entity_input_handler(cx: &mut gpui::TestAppContext) {
+    use gpui::{ClipboardItem, EntityInputHandler};
+    let (view, input, cx) = native_search(cx);
+    cx.update(|window, cx| input.update(cx, |input, cx| {
+        assert_eq!(input.value().as_ref(), "");
+        assert_eq!(input.marked_text_range(window, cx), None);
+        input.replace_and_mark_text_in_range(None, "zhongwen", None, window, cx);
+        assert_eq!(input.value().as_ref(), "zhongwen");
+        assert_eq!(input.marked_text_range(window, cx), Some(0..8));
+    }));
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).state.search_query, "", "preedit must not launch a search"));
+    cx.update(|window, cx| input.update(cx, |input, cx| {
+        input.replace_text_in_range(None, "中文", window, cx);
+        assert_eq!(input.value().as_ref(), "中文");
+        assert_eq!(input.marked_text_range(window, cx), None);
+    }));
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).state.search_query, "中文"));
+    cx.update(|window, cx| input.update(cx, |input, cx| {
+        input.replace_and_mark_text_in_range(None, "pinyin", None, window, cx);
+        assert!(input.marked_text_range(window, cx).is_some());
+        input.unmark_text(window, cx);
+        assert_eq!(input.marked_text_range(window, cx), None);
+        input.set_value("test", window, cx);
+    }));
+    cx.simulate_keystrokes("backspace");
+    cx.update(|_, cx| assert_eq!(input.read(cx).value().as_ref(), "tes"));
+    cx.simulate_keystrokes("home");
+    cx.update(|_, cx| assert_eq!(input.read(cx).selected_range(), 0..0));
+    cx.simulate_keystrokes("delete");
+    cx.update(|_, cx| assert_eq!(input.read(cx).value().as_ref(), "es"));
+    cx.simulate_keystrokes("end");
+    cx.update(|_, cx| assert_eq!(input.read(cx).selected_range(), 2..2));
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(" pasted".into())));
+    cx.simulate_keystrokes("secondary-v");
+    cx.update(|_, cx| {
+        assert_eq!(input.read(cx).value().as_ref(), "es pasted");
+        assert_eq!(view.read(cx).state.editor.revision, 0, "native input must not edit the document");
     });
 }
 
 #[gpui::test]
 async fn test_search_input_single_pipeline_cursor_and_selection(cx: &mut gpui::TestAppContext) {
-    use zmark_app::views::drawer::SearchInput;
     use gpui::EntityInputHandler;
-
-    let (view, cx) = cx.add_window_view(|_window, cx| {
-        let focus = cx.focus_handle();
-        SearchInput::new(focus).with_placeholder("Search...")
-    });
-    cx.run_until_parked();
-
-    cx.update(|window, cx| {
-        view.update(cx, |input, cx| {
-            // Setup initial content "ab"
-            input.set_text("ab");
-            assert_eq!(input.content.as_ref(), "ab");
-            assert_eq!(input.selected_range, 2..2);
-
-            // a) Simulate input 'x' once via EntityInputHandler
-            input.replace_text_in_range(None, "x", window, cx);
-            assert_eq!(input.content.as_ref(), "abx", "Content must be 'abx', never 'abxx'");
-            assert_eq!(input.selected_range, 3..3);
-
-            // b) Move cursor left twice -> between 'a' and 'b' (index 1)
-            input.handle_left();
-            assert_eq!(input.selected_range, 2..2);
-            input.handle_left();
-            assert_eq!(input.selected_range, 1..1);
-
-            // Input 'z' once via EntityInputHandler
-            input.replace_text_in_range(None, "z", window, cx);
-            assert_eq!(
-                input.content.as_ref(),
-                "azbx",
-                "Content must be 'azbx', cursor must not jump to tail"
-            );
-            assert_eq!(
-                input.selected_range, 2..2,
-                "Cursor must be immediately after inserted 'z' (index 2)"
-            );
-
-            // c) Selection replacement: select range 1..3 ("zb") and input 'w'
-            input.selected_range = 1..3;
-            input.replace_text_in_range(None, "w", window, cx);
-            assert_eq!(
-                input.content.as_ref(),
-                "awx",
-                "Selection 1..3 ('zb') replaced by 'w' -> 'awx'"
-            );
-            assert_eq!(
-                input.selected_range, 2..2,
-                "Cursor must be at index 2 after replacing selection"
-            );
-
-            // d) Backspace / Delete in presence of selection only deletes selection
-            // d.1 Backspace on selection
-            input.set_text("hello world");
-            input.selected_range = 5..11; // " world"
-            input.handle_backspace();
-            assert_eq!(
-                input.content.as_ref(),
-                "hello",
-                "Backspace on selection 5..11 must delete only ' world'"
-            );
-            assert_eq!(input.selected_range, 5..5);
-
-            // d.2 Delete on selection
-            input.set_text("hello world");
-            input.selected_range = 0..6; // "hello "
-            input.handle_delete();
-            assert_eq!(
-                input.content.as_ref(),
-                "world",
-                "Delete on selection 0..6 must delete only 'hello '"
-            );
-            assert_eq!(input.selected_range, 0..0);
-
-            // e) IME composition lifecycle:
-            // e.1 replace_and_mark_text_in_range marks range
-            input.set_text("find: ");
-            input.replace_and_mark_text_in_range(None, "zhongwen", None, window, cx);
-            assert_eq!(input.content.as_ref(), "find: zhongwen");
-            assert_eq!(input.marked_range, Some(6..14));
-
-            // e.2 confirm candidate replaces marked range and clears marked_range
-            input.replace_text_in_range(None, "中文", window, cx);
-            assert_eq!(input.content.as_ref(), "find: 中文");
-            assert_eq!(input.marked_range, None);
-
-            // e.3 composition cancellation via unmark_text
-            input.replace_and_mark_text_in_range(None, "pinyin", None, window, cx);
-            assert_eq!(input.content.as_ref(), "find: 中文pinyin");
-            assert_eq!(input.marked_range, Some(12..18));
-            input.unmark_text(window, cx);
-            assert_eq!(input.marked_range, None);
-        });
-    });
+    let (_, input, cx) = native_search(cx);
+    cx.update(|window, cx| input.update(cx, |input, cx| {
+        input.set_value("ab", window, cx);
+        assert_eq!(input.value().as_ref(), "ab");
+        assert_eq!(input.selected_range(), 2..2);
+        input.replace_text_in_range(None, "x", window, cx);
+        assert_eq!(input.value().as_ref(), "abx", "never double-insert 'x'");
+        assert_eq!(input.selected_range(), 3..3);
+    }));
+    cx.simulate_keystrokes("left");
+    cx.update(|_, cx| assert_eq!(input.read(cx).selected_range(), 2..2));
+    cx.simulate_keystrokes("left");
+    cx.update(|window, cx| input.update(cx, |input, cx| {
+        assert_eq!(input.selected_range(), 1..1);
+        input.replace_text_in_range(None, "z", window, cx);
+        assert_eq!(input.value().as_ref(), "azbx", "insertion must not jump to the tail");
+        assert_eq!(input.selected_range(), 2..2);
+        input.set_selected_range(1..3, cx);
+        input.replace_text_in_range(None, "w", window, cx);
+        assert_eq!(input.value().as_ref(), "awx");
+        assert_eq!(input.selected_range(), 2..2);
+        input.set_value("hello world", window, cx);
+        input.set_selected_range(5..11, cx);
+    }));
+    cx.simulate_keystrokes("backspace");
+    cx.update(|window, cx| input.update(cx, |input, cx| {
+        assert_eq!(input.value().as_ref(), "hello", "Backspace deletes only the selection");
+        assert_eq!(input.selected_range(), 5..5);
+        input.set_value("hello world", window, cx);
+        input.set_selected_range(0..6, cx);
+    }));
+    cx.simulate_keystrokes("delete");
+    cx.update(|window, cx| input.update(cx, |input, cx| {
+        assert_eq!(input.value().as_ref(), "world", "Delete deletes only the selection");
+        assert_eq!(input.selected_range(), 0..0);
+        input.set_value("find: ", window, cx);
+        input.replace_and_mark_text_in_range(None, "zhongwen", None, window, cx);
+        assert_eq!(input.value().as_ref(), "find: zhongwen");
+        assert_eq!(input.marked_text_range(window, cx), Some(6..14));
+        input.replace_text_in_range(None, "中文", window, cx);
+        assert_eq!(input.value().as_ref(), "find: 中文");
+        assert_eq!(input.marked_text_range(window, cx), None);
+        input.replace_and_mark_text_in_range(None, "pinyin", None, window, cx);
+        assert_eq!(input.value().as_ref(), "find: 中文pinyin");
+        // The public native IME range is UTF-16, while selected_range is UTF-8.
+        assert_eq!(input.marked_text_range(window, cx), Some(8..14));
+        input.unmark_text(window, cx);
+        assert_eq!(input.marked_text_range(window, cx), None);
+    }));
 }
 
 #[gpui::test]
 async fn test_chinese_ime_relative_selection_with_cjk_prefix(cx: &mut gpui::TestAppContext) {
-    use zmark_app::views::drawer::SearchInput;
     use gpui::EntityInputHandler;
+    let (_, input, cx) = native_search(cx);
+    cx.update(|window, cx| input.update(cx, |input, cx| {
+        input.set_value("你好", window, cx);
+        assert_eq!(input.value().len(), 6);
+        assert_eq!(input.selected_range(), 6..6);
+        input.replace_and_mark_text_in_range(None, "ma", Some(1..1), window, cx);
+        assert_eq!(input.value().as_ref(), "你好ma");
+        assert_eq!(input.marked_text_range(window, cx), Some(2..4));
+        assert_eq!(input.selected_range(), 7..7, "caret is between m and a, not at byte 9");
+    }));
+}
 
-    let (view, cx) = cx.add_window_view(|_window, cx| {
-        let focus = cx.focus_handle();
-        SearchInput::new(focus).with_placeholder("Search...")
-    });
-    cx.run_until_parked();
-
-    cx.update(|window, cx| {
-        view.update(cx, |input, cx| {
-            // Content has 2 Chinese chars: "你好" (6 UTF-8 bytes, 2 UTF-16 code units)
-            input.set_text("你好");
-            assert_eq!(input.content.len(), 6);
-            assert_eq!(input.selected_range, 6..6);
-
-            // macOS IME calls replace_and_mark_text_in_range with new_selected_range_utf16:
-            // e.g. typing "ma" (2 UTF-16 code units), caret at 1..1 within "ma"
-            input.replace_and_mark_text_in_range(None, "ma", Some(1..1), window, cx);
-            assert_eq!(input.content.as_ref(), "你好ma");
-            assert_eq!(input.marked_range, Some(6..8));
-            // Caret should be at UTF-8 offset 7 (between 'm' and 'a'), NOT out-of-bounds 9..9!
-            assert_eq!(input.selected_range, 7..7);
-        });
+#[gpui::test]
+async fn native_search_clipboard_history_and_escape_leave_source_untouched(cx: &mut gpui::TestAppContext) {
+    let (view, input, cx) = native_search(cx);
+    cx.simulate_input("中文abc");
+    cx.simulate_keystrokes("shift-left shift-left secondary-c");
+    assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()).as_deref(), Some("bc"));
+    cx.simulate_keystrokes("secondary-x");
+    cx.update(|_, cx| assert_eq!(input.read(cx).value().as_ref(), "中文a"));
+    cx.simulate_keystrokes("secondary-z");
+    cx.update(|_, cx| assert_eq!(input.read(cx).value().as_ref(), "中文abc"));
+    cx.simulate_keystrokes("secondary-shift-z");
+    cx.update(|_, cx| assert_eq!(input.read(cx).value().as_ref(), "中文a"));
+    cx.simulate_keystrokes("escape");
+    cx.update(|_, cx| {
+        assert!(input.read(cx).value().is_empty());
+        assert!(view.read(cx).state.search_query.is_empty());
+        assert_eq!(view.read(cx).state.editor.revision, 0);
+        assert!(view.read(cx).state.editor.to_text().is_empty());
     });
 }
 
 #[gpui::test]
 async fn test_search_input_selection_reversal_and_movement(cx: &mut gpui::TestAppContext) {
-    use zmark_app::views::drawer::SearchInput;
-
-    let (_view, cx) = cx.add_window_view(|_window, cx| {
-        let focus = cx.focus_handle();
-        SearchInput::new(focus)
+    let (_, input, cx) = native_search(cx);
+    cx.update(|window, cx| input.update(cx, |input, cx| {
+        input.set_value("abcdef", window, cx);
+        input.set_selected_range(3..3, cx);
+        assert_eq!(input.selected_range(), 3..3);
+        assert!(!input.is_selection_reversed());
+    }));
+    cx.simulate_keystrokes("shift-left");
+    cx.update(|_, cx| {
+        let input = input.read(cx);
+        assert_eq!(input.selected_range(), 2..3);
+        assert!(input.is_selection_reversed());
+        assert_eq!(input.cursor(), 2);
     });
-    cx.run_until_parked();
-
-    cx.update(|_window, cx| {
-        let focus = cx.focus_handle();
-        let mut input = SearchInput::new(focus);
-        input.set_text("abcdef");
-        input.move_to(3);
-        assert_eq!(input.selected_range, 3..3);
-        assert!(!input.selection_reversed);
-
-        // Shift+Left: select to 2
-        input.handle_select_left();
-        assert_eq!(input.selected_range, 2..3);
-        assert!(input.selection_reversed);
-        assert_eq!(input.cursor_offset(), 2);
-
-        // Press Left: collapses selection to start (2..2), resets selection_reversed
-        input.handle_left();
-        assert_eq!(input.selected_range, 2..2);
-        assert!(!input.selection_reversed, "selection_reversed must be reset to false on move");
-        assert_eq!(input.cursor_offset(), 2);
-
-        // Shift+Right: select to 3
-        input.handle_select_right();
-        assert_eq!(input.selected_range, 2..3);
-        assert!(!input.selection_reversed);
-        assert_eq!(input.cursor_offset(), 3);
+    cx.simulate_keystrokes("left");
+    cx.update(|_, cx| {
+        let input = input.read(cx);
+        assert_eq!(input.selected_range(), 2..2);
+        assert!(!input.is_selection_reversed());
+        assert_eq!(input.cursor(), 2);
+    });
+    cx.simulate_keystrokes("shift-right");
+    cx.update(|_, cx| {
+        let input = input.read(cx);
+        assert_eq!(input.selected_range(), 2..3);
+        assert!(!input.is_selection_reversed());
+        assert_eq!(input.cursor(), 3);
     });
 }

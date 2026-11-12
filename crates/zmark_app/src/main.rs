@@ -21,23 +21,23 @@ fn main() {
     let preferences = Preferences::load_or_default();
     let doc = zmark_app::welcome::initial_document(initial_path, preferences.locale);
 
-    let app = Application::new().with_assets(AppAssets);
+    let app = gpui_platform::application().with_assets(AppAssets);
     app.run(move |cx: &mut App| {
         // GPUI creates its own NSApplication subclass during run(). Touching the
         // shared application before this point makes GPUI write its `platform`
         // ivar to the plain NSApplication and panic at startup.
+        zmark_app::theme::init_components(cx);
         zmark_app::platform::register_application_icon();
-        // Register keybindings
-        let shortcut = zmark_app::platform::shortcut;
+        // Resolve the platform's Cmd/Ctrl modifier without allocating static strings.
         cx.bind_keys([
-            KeyBinding::new(&shortcut("1"), ToggleSourceMode, None),
-            KeyBinding::new(&shortcut("2"), ToggleSplitMode, None),
-            KeyBinding::new(&shortcut("3"), TogglePreviewMode, None),
-            KeyBinding::new(&shortcut("b"), ToggleDrawer, None),
-            KeyBinding::new(&shortcut("o"), OpenFileDialog, None),
-            KeyBinding::new(&shortcut(","), ToggleSettings, None),
-            KeyBinding::new(&shortcut("s"), SaveFile, None),
-            KeyBinding::new(&shortcut("shift-e"), ExportHtml, None),
+            KeyBinding::load("secondary-1", Box::new(ToggleSourceMode), None, false, None, cx).unwrap(),
+            KeyBinding::load("secondary-2", Box::new(ToggleSplitMode), None, false, None, cx).unwrap(),
+            KeyBinding::load("secondary-3", Box::new(TogglePreviewMode), None, false, None, cx).unwrap(),
+            KeyBinding::load("secondary-b", Box::new(ToggleDrawer), None, false, None, cx).unwrap(),
+            KeyBinding::load("secondary-o", Box::new(OpenFileDialog), None, false, None, cx).unwrap(),
+            KeyBinding::load("secondary-,", Box::new(ToggleSettings), None, false, None, cx).unwrap(),
+            KeyBinding::load("secondary-s", Box::new(SaveFile), None, false, None, cx).unwrap(),
+            KeyBinding::load("secondary-shift-e", Box::new(ExportHtml), None, false, None, cx).unwrap(),
         ]);
 
         let window_options = WindowOptions {
@@ -60,7 +60,8 @@ fn main() {
             let view = cx.new(|cx| {
                 WorkspaceView::new_with_update_config(state, update_config, cx)
             });
-            window.focus(&view.read(cx).focus_handle);
+            let focus_handle = view.read(cx).focus_handle.clone();
+            window.focus(&focus_handle, cx);
 
             let view_close = view.clone();
             window.on_window_should_close(cx, move |window, cx| {
@@ -105,7 +106,7 @@ fn main() {
                 .detach();
             }
 
-            view
+            cx.new(|cx| gpui_component::Root::new(view, window, cx))
         })
         .unwrap();
     });

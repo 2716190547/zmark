@@ -8,7 +8,10 @@ test-observation = ["zmark_core/test-observation"]
 
 [dependencies]
 zmark_core = { path = "../zmark_core" }
-gpui = "0.2.2"
+gpui = { package = "gpui-pre", version = "=0.3.12", default-features = false, features = ["font-kit", "wayland", "x11", "windows-manifest"] }
+gpui-component = { version = "=0.9.1", default-features = false }
+gpui-kit-assets = "=0.9.1"
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", default-features = false, features = ["font-kit", "wayland", "x11", "runtime_shaders"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 usvg = "0.45.1"
 percent-encoding = "2.3"
@@ -25,7 +28,9 @@ cocoa = "0.26"
 objc = "0.2.7"
 
 [dev-dependencies]
-gpui = { version = "0.2.2", features = ["test-support", "runtime_shaders"] }
+gpui = { package = "gpui-pre", version = "=0.3.12", default-features = false, features = ["font-kit", "test-support"] }
+gpui-component = { version = "=0.9.1", default-features = false, features = ["test-support"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", default-features = false, features = ["font-kit", "wayland", "x11", "runtime_shaders", "test-support"] }
 
 [[test]]
 name = "phase_h_b1_real_geometry"

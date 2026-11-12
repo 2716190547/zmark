@@ -3,21 +3,21 @@ use zmark_app::views::drawer::SearchInput;
 use zmark_app::views::editor::DocumentLayoutCache;
 use zmark_app::views::workspace::WorkspaceView;
 use zmark_core::document::Document;
-use gpui::{px, Point, ScrollDelta, ScrollWheelEvent, TestAppContext};
+use gpui::{px, Focusable, Point, ScrollDelta, ScrollEvent, ScrollSource, TestAppContext};
 use std::time::Instant;
 
 #[gpui::test]
 async fn test_search_input_simulate_keystrokes_pipeline(cx: &mut TestAppContext) {
-    let (view, cx) = cx.add_window_view(|_window, cx| {
-        let focus = cx.focus_handle();
-        SearchInput::new(focus).with_placeholder("Search...")
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        zmark_app::theme::init_components(cx);
+        SearchInput::new(window, cx).placeholder("Search...")
     });
     cx.run_until_parked();
 
     // 1. Focus SearchInput and simulate "a b x"
     cx.update(|window, cx| {
-        let handle = view.read(cx).focus_handle.clone();
-        window.focus(&handle);
+        let handle = view.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
     });
     cx.run_until_parked();
 
@@ -25,11 +25,11 @@ async fn test_search_input_simulate_keystrokes_pipeline(cx: &mut TestAppContext)
     cx.update(|_window, cx| {
         let input = view.read(cx);
         assert_eq!(
-            input.content.as_ref(),
+            input.value().as_ref(),
             "abx",
             "Typing 'a b x' via simulate_keystrokes must produce 'abx'"
         );
-        assert_eq!(input.selected_range, 3..3);
+        assert_eq!(input.selected_range(), 3..3);
     });
 
     // 2. Move left twice and type 'z' -> "azbx", cursor at 2..2
@@ -37,12 +37,12 @@ async fn test_search_input_simulate_keystrokes_pipeline(cx: &mut TestAppContext)
     cx.update(|_window, cx| {
         let input = view.read(cx);
         assert_eq!(
-            input.content.as_ref(),
+            input.value().as_ref(),
             "azbx",
             "Typing 'left left z' must produce 'azbx'"
         );
         assert_eq!(
-            input.selected_range,
+            input.selected_range(),
             2..2,
             "Cursor must be immediately after 'z' at index 2"
         );
@@ -53,11 +53,11 @@ async fn test_search_input_simulate_keystrokes_pipeline(cx: &mut TestAppContext)
     cx.update(|_window, cx| {
         let input = view.read(cx);
         assert_eq!(
-            input.content.as_ref(),
+            input.value().as_ref(),
             "aqbx",
             "Shift-left selection replaced by 'q' must produce 'aqbx'"
         );
-        assert_eq!(input.selected_range, 2..2);
+        assert_eq!(input.selected_range(), 2..2);
     });
 
     // 4. Cmd+A and type 'r' -> "r", cursor at 1..1
@@ -65,11 +65,11 @@ async fn test_search_input_simulate_keystrokes_pipeline(cx: &mut TestAppContext)
     cx.update(|_window, cx| {
         let input = view.read(cx);
         assert_eq!(
-            input.content.as_ref(),
+            input.value().as_ref(),
             "r",
             "Cmd-a select all followed by 'r' must produce 'r'"
         );
-        assert_eq!(input.selected_range, 1..1);
+        assert_eq!(input.selected_range(), 1..1);
     });
 }
 
@@ -86,7 +86,7 @@ async fn test_search_to_editor_focus_transition_and_typing(cx: &mut TestAppConte
     // 1. Focus WorkspaceView then press Cmd+F to focus search
     cx.update(|window, cx| {
         let handle = view.read(cx).focus_handle.clone();
-        window.focus(&handle);
+        window.focus(&handle, cx);
     });
     cx.run_until_parked();
 
@@ -102,7 +102,7 @@ async fn test_search_to_editor_focus_transition_and_typing(cx: &mut TestAppConte
         let ws = view.read(cx);
         let si = ws.search_input.as_ref().unwrap().read(cx);
         assert_eq!(
-            si.content.as_ref(),
+            si.value().as_ref(),
             "foo",
             "Search input must receive 'foo'"
         );
@@ -110,8 +110,8 @@ async fn test_search_to_editor_focus_transition_and_typing(cx: &mut TestAppConte
 
     // 3. Click editor line to transfer focus
     cx.update(|window, cx| {
-        view.update(cx, |workspace, _cx| {
-            workspace.on_editor_click_line(0, 0, window);
+        view.update(cx, |workspace, cx| {
+            workspace.on_editor_click_line(0, 0, window, cx);
         });
     });
     cx.run_until_parked();
@@ -135,7 +135,7 @@ async fn test_search_to_editor_focus_transition_and_typing(cx: &mut TestAppConte
         let ws = view.read(cx);
         // Search input content must NOT receive 'q'
         let si = ws.search_input.as_ref().unwrap().read(cx);
-        assert_eq!(si.content.as_ref(), "foo", "Search input must remain 'foo'");
+        assert_eq!(si.value().as_ref(), "foo", "Search input must remain 'foo'");
         // Editor line must contain 'q'
         assert!(
             ws.state.editor.lines[0].starts_with('q'),
@@ -196,7 +196,7 @@ async fn test_preview_scroll_reverse_mapping_with_soft_wrap(cx: &mut TestAppCont
             // Trigger handle_preview_scroll_wheel. A real (non-zero) delta is
             // required now that zero-delta events are no-ops; 1px down stays
             // inside block 1 and remains within the scroll range.
-            let dummy_event = ScrollWheelEvent {
+            let dummy_event = ScrollEvent {
                 position: Point::default(),
                 delta: ScrollDelta::Pixels(Point {
                     x: px(0.),
@@ -204,6 +204,7 @@ async fn test_preview_scroll_reverse_mapping_with_soft_wrap(cx: &mut TestAppCont
                 }),
                 modifiers: gpui::Modifiers::none(),
                 touch_phase: gpui::TouchPhase::Moved,
+                source: ScrollSource::Pointer,
             };
             workspace.handle_preview_scroll_wheel(&dummy_event, window, cx);
 

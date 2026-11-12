@@ -97,7 +97,7 @@ async fn test_focus_transfer_discriminator_without_on_editor_click(cx: &mut Test
     // 1. Focus workspace view and activate search via Cmd+F
     cx.update(|window, cx| {
         let handle = view.read(cx).focus_handle.clone();
-        window.focus(&handle);
+        window.focus(&handle, cx);
     });
     cx.run_until_parked();
 
@@ -112,14 +112,14 @@ async fn test_focus_transfer_discriminator_without_on_editor_click(cx: &mut Test
     cx.update(|_window, cx| {
         let ws = view.read(cx);
         let si = ws.search_input.as_ref().unwrap().read(cx);
-        assert_eq!(si.content.as_ref(), "foo");
+        assert_eq!(si.value().as_ref(), "foo");
     });
 
     // 2. Critical review discriminator test:
     // Transfer focus to workspace.focus_handle DIRECTLY without calling `on_editor_click_line`!
     cx.update(|window, cx| {
         let handle = view.read(cx).focus_handle.clone();
-        window.focus(&handle);
+        window.focus(&handle, cx);
     });
     cx.run_until_parked();
 
@@ -130,7 +130,7 @@ async fn test_focus_transfer_discriminator_without_on_editor_click(cx: &mut Test
         let ws = view.read(cx);
         // Search input must NOT receive 'q'
         let si = ws.search_input.as_ref().unwrap().read(cx);
-        assert_eq!(si.content.as_ref(), "foo", "Search input must remain 'foo'");
+        assert_eq!(si.value().as_ref(), "foo", "Search input must remain 'foo'");
         // Editor must have received 'q'
         // Editor must have received 'q'
         assert!(

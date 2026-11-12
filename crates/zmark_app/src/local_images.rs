@@ -231,7 +231,8 @@ pub struct LocalImages {
     pub wanted: BTreeSet<String>,
     pub entries: HashMap<String, ImageState>,
     pub retired: Vec<Arc<LocalImage>>,
-    pub loading: Option<Arc<LocalImage>>,
+    /// Prepared snapshot waiting for GPUI's native decode and completion notification.
+    pub loading: Option<(u64, String, Arc<LocalImage>)>,
 }
 
 impl LocalImages {
@@ -247,6 +248,9 @@ impl LocalImages {
             self.generation = self.generation.wrapping_add(1);
             self.document = path;
             self.identity = identity;
+            if let Some((_, _, image)) = self.loading.take() {
+                self.retired.push(image);
+            }
             for (_, state) in self.entries.drain() {
                 if let ImageState::Ready(image) = state {
                     self.retired.push(image);

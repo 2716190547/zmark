@@ -6,7 +6,7 @@ use zmark_app::state::{AppState, ViewMode};
 use zmark_app::views::workspace::WorkspaceView;
 use zmark_core::document::Document;
 use gpui::{
-    point, px, Modifiers, MouseButton, Point, ScrollDelta, ScrollWheelEvent, TestAppContext,
+    point, px, Modifiers, MouseButton, Point, ScrollDelta, ScrollEvent, ScrollSource, TestAppContext,
     TouchPhase,
 };
 
@@ -130,11 +130,12 @@ async fn editor_bottom_wheel_keeps_preview_at_end(cx: &mut TestAppContext) {
     let max_steps = ((max_scroll / 320.0).ceil() as usize + 40).min(140);
     let mut at_end_steps = 0usize;
     for _ in 0..max_steps {
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: wheel_at,
             delta: ScrollDelta::Pixels(point(px(0.), px(-320.))),
             modifiers: Modifiers::none(),
             touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
         });
         cx.update(|window, cx| {
             let _ = window.draw(cx);
@@ -223,11 +224,12 @@ async fn preview_dragged_to_end_stays_pinned_while_editor_wheels(cx: &mut TestAp
     };
     let mut previous = initial;
     for step in 0..40 {
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: wheel_at,
             delta: ScrollDelta::Pixels(point(px(0.), px(-320.))),
             modifiers: Modifiers::none(),
             touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
         });
         cx.update(|window, cx| {
             let _ = window.draw(cx);
@@ -282,11 +284,12 @@ async fn preview_wheel_keeps_visible_range_monotonic_during_measurement(cx: &mut
     });
 
     for step in 0..20 {
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: wheel_at,
             delta: ScrollDelta::Pixels(point(px(0.), px(-120.))),
             modifiers: Modifiers::none(),
             touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
         });
         for _ in 0..2 {
             cx.update(|window, cx| {

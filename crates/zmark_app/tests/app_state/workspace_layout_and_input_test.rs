@@ -40,42 +40,35 @@ async fn test_workspace_real_layout_visual_lines_and_navigation(cx: &mut TestApp
 
 #[gpui::test]
 async fn test_workspace_search_single_input_pipeline(cx: &mut TestAppContext) {
+    use gpui::Focusable;
     let (view, cx) = cx.add_window_view(|_window, cx| {
-        let doc = Document::new_scratch();
-        let state = AppState::new(doc);
+        let mut state = AppState::new_isolated(Document::new_scratch());
+        state.drawer_open = true;
+        state.preferences.reduce_motion = true;
         WorkspaceView::new(state, cx)
     });
     cx.run_until_parked();
-
-    cx.update(|_window, app| {
-        view.update(app, |workspace, cx| {
-            // 1. Initial state
-            assert!(!workspace.search_focused);
-            assert_eq!(workspace.state.search_query, "");
-
-            // 2. Focus search and type via SearchInput EntityInputHandler
-            workspace.search_focused = true;
-            let input = workspace.search_input.clone().expect("search_input should exist");
-
-            // Type "ab" through SearchInput
-            input.update(cx, |inp, _cx| {
-                inp.handle_replace_text(None, "ab");
-            });
-            assert_eq!(input.read(cx).content.as_ref(), "ab");
-
-            // 3. Move left twice in SearchInput (cursor at 0)
-            input.update(cx, |inp, _cx| {
-                inp.handle_left();
-                inp.handle_left();
-            });
-            assert_eq!(input.read(cx).selected_range, 0..0);
-
-            // 4. Type 'z' at cursor 0: should become "zab" with cursor at 1 (NOT jumping to tail "abz")
-            input.update(cx, |inp, _cx| {
-                inp.handle_replace_text(None, "z");
-            });
-            assert_eq!(input.read(cx).content.as_ref(), "zab");
-            assert_eq!(input.read(cx).selected_range, 1..1);
-        });
+    let input = cx.update(|window, cx| {
+        let workspace = view.read(cx);
+        assert!(!workspace.search_focused);
+        assert_eq!(workspace.state.search_query, "");
+        let input = workspace.search_input.clone().expect("native search input mounted");
+        let focus = input.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        input
+    });
+    cx.simulate_input("ab");
+    cx.update(|_, cx| {
+        assert_eq!(input.read(cx).value().as_ref(), "ab");
+        assert_eq!(view.read(cx).state.search_query, "ab");
+    });
+    cx.simulate_keystrokes("left left");
+    cx.update(|_, cx| assert_eq!(input.read(cx).selected_range(), 0..0));
+    cx.simulate_input("z");
+    cx.update(|_, cx| {
+        assert_eq!(input.read(cx).value().as_ref(), "zab", "typing must not jump to the tail or double-insert");
+        assert_eq!(input.read(cx).selected_range(), 1..1);
+        assert_eq!(view.read(cx).state.search_query, "zab");
+        assert_eq!(view.read(cx).state.editor.revision, 0);
     });
 }

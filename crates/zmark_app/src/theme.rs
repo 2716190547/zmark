@@ -1,5 +1,37 @@
 use gpui::*;
 
+pub fn init_components(cx: &mut App) {
+    if !cx.has_global::<gpui_component::Theme>() {
+        gpui_component::init(cx);
+        cx.bind_keys([KeyBinding::new("escape", crate::actions::CancelRename, Some("InlineRename"))]);
+    }
+}
+
+pub fn sync_component_theme(theme: &ThemeColors, cx: &mut App) {
+    use gpui_component::{Theme, ThemeMode};
+    let mode = if theme.is_dark { ThemeMode::Dark } else { ThemeMode::Light };
+    if Theme::global(cx).mode != mode {
+        Theme::change(mode, None, cx);
+    }
+    let mut colors = Theme::global(cx).colors;
+    colors.background = theme.surface;
+    colors.foreground = theme.text_primary;
+    colors.muted_foreground = theme.text_muted;
+    colors.muted = theme.hover_bg();
+    colors.accent = theme.selection_bg();
+    colors.accent_foreground = theme.selection_text();
+    colors.primary = theme.accent;
+    colors.border = theme.border;
+    colors.input = theme.border;
+    colors.popover = theme.surface;
+    colors.popover_foreground = theme.text_primary;
+    colors.selection = theme.selection_bg();
+    colors.caret = theme.text_primary.opacity(0.85);
+    if colors != Theme::global(cx).colors {
+        Theme::update(cx, |native| native.colors = colors);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ThemeColors {
     #[allow(dead_code)]

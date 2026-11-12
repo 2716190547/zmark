@@ -12,7 +12,7 @@ async fn lightbox_fit_hud_click_keeps_overlay_open(cx: &mut TestAppContext) {
     image::RgbaImage::new(80, 40).save(&image_path).unwrap();
     let (view, cx) = cx.add_window_view(|window, cx| {
         let view = WorkspaceView::new(AppState::new_isolated(Document::new_scratch()), cx);
-        window.focus(&view.focus_handle);
+        window.focus(&view.focus_handle, cx);
         view
     });
     cx.update(|window, cx| {
@@ -109,7 +109,7 @@ async fn lightbox_fits_live_viewport_and_100_percent_is_natural(cx: &mut TestApp
         let _ = window.draw(cx);
     });
     // Wait for the existing 180ms drawer animation to expose the final layout.
-    std::thread::sleep(std::time::Duration::from_millis(210));
+    cx.executor().advance_clock(std::time::Duration::from_millis(210));
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
@@ -227,7 +227,7 @@ async fn lightbox_does_not_edit_the_document_behind_it(cx: &mut TestAppContext) 
     image::RgbaImage::new(80, 40).save(&path).unwrap();
     let (view, cx) = cx.add_window_view(|window, cx| {
         let view = WorkspaceView::new(AppState::new_isolated(Document::new_scratch()), cx);
-        window.focus(&view.focus_handle);
+        window.focus(&view.focus_handle, cx);
         view
     });
     cx.update(|window, cx| {

@@ -153,6 +153,11 @@ async fn red_edge_autoscroll_head_must_follow_pointer(cx: &mut TestAppContext) {
         s2.top_item, s2.top_offset, s2.head, head_len, s2.task_active
     );
 
+    h.release(cx, edge);
+    h.press(cx, edge);
+    let current_pointer = h.state(cx).anchor.expect("a press after scrolling must hit revealed text");
+    h.release(cx, edge);
+    assert_eq!(s2.head, Some(current_pointer), "the parked head must match the actual character under the pointer after scrolling");
     assert_ne!(
         s2.head, s1.head,
         "with the pointer parked at the edge the head must keep following newly revealed text (head did not move: {:?})",
@@ -163,14 +168,6 @@ async fn red_edge_autoscroll_head_must_follow_pointer(cx: &mut TestAppContext) {
         "after 10 ticks of edge autoscroll the list must have crossed at least one item (top_item {} -> {})",
         s1.top_item,
         s2.top_item
-    );
-    assert!(
-        s2.head
-            .map(|(bix, _)| (bix as i32 - under_pointer.0 as i32).abs() <= 1)
-            .unwrap_or(false),
-        "the head must sit on the block under the pointer (pointer block {}), got {:?}",
-        under_pointer.0,
-        s2.head
     );
     assert!(
         s2.head.map(|(_, c)| c != head_len).unwrap_or(false),
@@ -243,7 +240,7 @@ async fn red_autoscroll_must_stop_when_focus_is_lost(cx: &mut TestAppContext) {
     let before = h.state(cx);
     cx.update(|window, cx| {
         let other = cx.focus_handle();
-        window.focus(&other);
+        window.focus(&other, cx);
     });
     cx.run_until_parked();
     for _ in 0..10 {

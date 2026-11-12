@@ -1,6 +1,27 @@
 use zmark_app::theme::{ThemeColors, ALL_PALETTES};
 use gpui::rgb;
 
+#[gpui::test]
+fn native_input_theme_tracks_every_palette_without_a_second_color_source(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        zmark_app::theme::init_components(cx);
+        for palette in ALL_PALETTES {
+            for dark in [false, true] {
+                let theme = ThemeColors::resolve(palette.id, dark);
+                zmark_app::theme::sync_component_theme(&theme, cx);
+                let native = gpui_component::Theme::global(cx);
+                assert_eq!(native.is_dark(), dark);
+                assert_eq!(native.colors.foreground, theme.text_primary);
+                assert_eq!(native.colors.caret, theme.text_primary.opacity(0.85));
+                assert_eq!(native.colors.selection, theme.selection_bg());
+                assert_eq!(native.colors.popover, theme.surface);
+                assert_eq!(native.tokens.selection.color, theme.selection_bg());
+                assert_eq!(native.tokens.foreground.color, theme.text_primary);
+            }
+        }
+    });
+}
+
 /// Ticket E1: Clean Palette & Code Style Test Suite (ADR 0034)
 ///
 /// Verifies:

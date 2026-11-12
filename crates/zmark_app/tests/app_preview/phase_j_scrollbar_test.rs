@@ -2,7 +2,7 @@ use zmark_app::state::{AppState, ViewMode};
 use zmark_app::views::workspace::WorkspaceView;
 use zmark_core::document::Document;
 use gpui::{
-    px, Modifiers, MouseButton, Point, ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase,
+    px, Modifiers, MouseButton, Point, ScrollDelta, ScrollEvent, ScrollSource, TestAppContext, TouchPhase,
 };
 
 #[gpui::test]
@@ -351,7 +351,7 @@ async fn later_wheel_cancels_deferred_end_seek(cx: &mut TestAppContext) {
         y: track.bottom() - px(1.),
     };
     cx.update(|window, cx| {
-        let wheel = ScrollWheelEvent {
+        let wheel = ScrollEvent {
             position: end,
             delta: ScrollDelta::Pixels(Point {
                 x: px(0.),
@@ -359,6 +359,7 @@ async fn later_wheel_cancels_deferred_end_seek(cx: &mut TestAppContext) {
             }),
             modifiers: Modifiers::none(),
             touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
         };
         view.update(cx, |ws, _| {
             ws.preview_list.scroll_to(gpui::ListOffset {
@@ -439,7 +440,7 @@ async fn sample_wheel_does_not_jump_thumb_to_bottom(cx: &mut TestAppContext) {
     let wheel_at = Point { x: track.origin.x - px(40.), y: track.center().y };
     let mut previous = f32::from(cx.debug_bounds("preview_scrollbar_thumb").unwrap().origin.y);
     for _ in 0..30 {
-        cx.simulate_event(ScrollWheelEvent { position: wheel_at, delta: ScrollDelta::Pixels(gpui::point(px(0.), px(-12.))), modifiers: Modifiers::none(), touch_phase: TouchPhase::Moved });
+        cx.simulate_event(ScrollEvent { position: wheel_at, delta: ScrollDelta::Pixels(gpui::point(px(0.), px(-12.))), modifiers: Modifiers::none(), touch_phase: TouchPhase::Moved, source: ScrollSource::Pointer });
         cx.update(|window, cx| { let _ = window.draw(cx); });
         cx.run_until_parked();
         cx.update(|window, cx| { let _ = window.draw(cx); });
@@ -555,11 +556,12 @@ async fn outline_jump_eases_and_manual_wheel_cancels_it(cx: &mut TestAppContext)
     assert!(mid > 0.0, "scroll must have started moving");
 
     // A manual wheel event cancels the animation and keeps the user's position.
-    cx.simulate_event(ScrollWheelEvent {
+    cx.simulate_event(ScrollEvent {
         position: Point::new(px(600.), px(300.)),
         delta: ScrollDelta::Pixels(Point::new(px(0.), px(-1.))),
         modifiers: Modifiers::none(),
         touch_phase: TouchPhase::Moved,
+        source: ScrollSource::Pointer,
     });
     let after_wheel = offset(cx);
     cx.executor().advance_clock(std::time::Duration::from_millis(600));

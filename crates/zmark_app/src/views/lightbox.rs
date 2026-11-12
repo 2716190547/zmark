@@ -344,7 +344,7 @@ pub fn render_lightbox(
                 }
             }),
         )
-        .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
+        .on_scroll(cx.listener(|this, event: &ScrollEvent, _window, cx| {
             let delta = match event.delta {
                 ScrollDelta::Pixels(p) => -f32::from(p.y),
                 ScrollDelta::Lines(l) => -f32::from(l.y) * 20.0,

@@ -555,7 +555,7 @@ pub fn hit_test_char_offset_in_block(
 
 pub fn hit_test_point_across_all_regions(
     regions: &[TextLayoutRegion],
-    text_system: Option<&gpui::WindowTextSystem>,
+    text_system: &gpui::WindowTextSystem,
     mouse_pos: Point<Pixels>,
     blocks: &[BlockElement],
 ) -> Option<PreviewCharPosition> {
@@ -595,32 +595,7 @@ pub fn hit_test_point_across_all_regions(
         .map(|b| b.to_plain_text().chars().count())
         .unwrap_or(0);
 
-    let offset = if let Some(ts) = text_system {
-        compute_offset_in_region(ts, &matching_region, click_x, click_y, block_len)
-    } else {
-        let rx = f32::from(matching_region.bounds.left()) + matching_region.padding_left;
-        let ry = f32::from(matching_region.bounds.top()) + matching_region.padding_top;
-        let local_x = (click_x - rx).max(0.0);
-        let local_y = (click_y - ry).max(0.0);
-        let line_height = matching_region.font_size * matching_region.line_height_factor;
-        let line_idx = (local_y / line_height).floor() as usize;
-        let char_width = matching_region.font_size * 0.55;
-        let char_idx = (local_x / char_width).round() as usize;
-        let phys_lines: Vec<&str> = matching_region.text.split('\n').collect();
-        let target_line = line_idx.min(phys_lines.len().saturating_sub(1));
-        let mut off = 0;
-        for i in 0..target_line {
-            off += phys_lines[i].chars().count() + 1;
-        }
-        let line_chars = phys_lines.get(target_line).map(|l| l.chars().count()).unwrap_or(0);
-        off += char_idx.min(line_chars);
-        let raw = (matching_region.flat_char_offset + off).min(block_len);
-        if raw >= block_len && block_len > 0 {
-            block_len - 1
-        } else {
-            raw
-        }
-    };
+    let offset = compute_offset_in_region(text_system, &matching_region, click_x, click_y, block_len);
 
     Some(PreviewCharPosition::new(matching_region.block_ix, offset))
 }

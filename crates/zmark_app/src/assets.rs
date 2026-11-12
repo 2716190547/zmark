@@ -33,15 +33,24 @@ const ASSETS: &[(&str, &[u8])] = &[
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        let bytes = ASSETS
-            .iter()
-            .find(|(p, _)| *p == path)
-            .map(|(_, b)| Cow::Borrowed(*b));
-        Ok(bytes)
+        if let Some((_, bytes)) = ASSETS.iter().find(|(p, _)| *p == path) {
+            return Ok(Some(Cow::Borrowed(*bytes)));
+        }
+        let native = gpui_kit_assets::Assets;
+        // The kit reports unknown paths as errors; keep our optional lookup contract.
+        if native.list(path)?.iter().any(|p| p.as_ref() == path) {
+            native.load(path)
+        } else {
+            Ok(None)
+        }
     }
 
-    fn list(&self, _path: &str) -> Result<Vec<SharedString>> {
-        Ok(ASSETS.iter().map(|(p, _)| SharedString::from(*p)).collect())
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut paths = gpui_kit_assets::Assets.list(path)?;
+        paths.extend(ASSETS.iter().filter(|(p, _)| p.starts_with(path)).map(|(p, _)| SharedString::from(*p)));
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
     }
 }
 
@@ -54,6 +63,10 @@ mod tests {
         let assets = AppAssets;
         let list = assets.list("").expect("should list assets");
         assert!(list.iter().any(|p| p.as_ref() == "icons/x.svg"));
+        assert!(list.iter().any(|p| p.as_ref() == "icons/loader-circle.svg"));
+        assert_eq!(assets.load("icons/x.svg").unwrap().unwrap().as_ref(), include_bytes!("../assets/icons/x.svg"));
+        assert!(assets.load("not-an-asset").unwrap().is_none());
+        assert!(assets.list("brand/").unwrap().iter().all(|path| path.starts_with("brand/")));
         let logo = assets.load("brand/logo.png").expect("logo should load");
         assert!(logo.is_some_and(|bytes| !bytes.is_empty()));
 

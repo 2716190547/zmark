@@ -48,7 +48,7 @@ impl Harness {
     fn focus_workspace(&self, cx: &mut VisualTestContext) {
         cx.update(|window, cx| {
             let handle = self.view.read(cx).focus_handle.clone();
-            window.focus(&handle);
+            window.focus(&handle, cx);
         });
         cx.run_until_parked();
     }

@@ -8,7 +8,7 @@ fn main() {
     let config = root.join("config.toml");
     let mut preferences = Preferences::load_or_default_from_path(&config);
     preferences.workspace_roots = vec![root.clone()];
-    Application::new()
+    gpui_platform::application()
         .with_assets(AppAssets)
         .run(move |cx: &mut App| {
             let options = WindowOptions {
@@ -26,7 +26,8 @@ fn main() {
                         cx,
                     )
                 });
-                window.focus(&view.read(cx).focus_handle);
+                let focus_handle = view.read(cx).focus_handle.clone();
+                window.focus(&focus_handle, cx);
                 view.update(cx, |_, cx| {
                     cx.spawn(async move |this, app| {
                         app.background_executor()
@@ -52,7 +53,7 @@ fn main() {
                     })
                     .detach()
                 });
-                view
+                cx.new(|cx| gpui_component::Root::new(view, window, cx))
             })
             .unwrap();
         });

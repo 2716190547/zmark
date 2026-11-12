@@ -1078,7 +1078,7 @@ pub fn render_editor_pane(
                     })
                     .collect()
             })
-            .track_scroll(scroll_handle.clone())
+            .track_scroll(scroll_handle)
             .flex_1()
             .w_full()
             .min_w(px(0.))

@@ -203,7 +203,10 @@ fn cache_rejects_stale_results_evicts_and_enforces_the_texture_budget() {
     ));
     assert!(cache.decoded_bytes() <= MAX_CACHE_BYTES);
     let old_generation = cache.generation;
+    cache.loading = Some((old_generation, "pending".into(), image.clone()));
     cache.begin_frame(Some(DocKey::Scratch(2)), None);
+    assert!(cache.loading.is_none(), "switching documents retires a pending native decode");
+    assert!(cache.retired.iter().any(|i| Arc::ptr_eq(i, &image)));
     cache.request("a");
     assert!(!cache.complete(old_generation, "a".into(), Ok(image.clone())));
     assert!(matches!(cache.entries.get("a"), Some(ImageState::Waiting)));
@@ -241,7 +244,7 @@ async fn preview_elements_load_private_snapshots_and_remeasure(cx: &mut TestAppC
         let mut state = AppState::new(Document::from_file(docpath.clone()).unwrap());
         state.set_view_mode(ViewMode::Preview);
         let ws = WorkspaceView::new(state, cx);
-        window.focus(&ws.focus_handle);
+        window.focus(&ws.focus_handle, cx);
         ws
     });
     let view = window.root(cx).unwrap();
@@ -451,20 +454,23 @@ async fn clicking_a_preview_image_opens_the_lightbox_and_escape_closes_it(cx: &m
         let mut state = AppState::new_isolated(Document::from_file(docpath.clone()).unwrap());
         state.set_view_mode(ViewMode::Preview);
         let ws = WorkspaceView::new(state, cx);
-        window.focus(&ws.focus_handle);
+        window.focus(&ws.focus_handle, cx);
         ws
     });
     let view = window.root(cx).unwrap();
     let cx = &mut VisualTestContext::from_window(*window, cx);
     draw(cx);
 
-    for (name, selector, wanted_ext, natural_size) in [
-        ("pic.png", "local_image:pic.png", "png", (2000., 500.)),
-        ("vector.svg", "local_image:vector.svg", "svg", (12., 8.)),
+    for (name, selector, container_selector, wanted_ext, natural_size) in [
+        ("pic.png", "local_image:pic.png", "local_image_container:pic.png", "png", (2000., 500.)),
+        ("vector.svg", "local_image:vector.svg", "local_image_container:vector.svg", "svg", (12., 8.)),
     ] {
         let bounds = cx
             .debug_bounds(selector)
             .unwrap_or_else(|| panic!("{name} laid out"));
+        let container = cx.debug_bounds(container_selector).expect("image hit target laid out");
+        assert_eq!(bounds, container, "image and click target share the same geometry");
+        assert!((f32::from(bounds.size.width) / f32::from(bounds.size.height) - natural_size.0 / natural_size.1).abs() < 0.01);
         cx.simulate_click(bounds.center(), gpui::Modifiers::none());
         cx.update(|_, cx| {
             let ws = view.read(cx);
@@ -481,6 +487,8 @@ async fn clicking_a_preview_image_opens_the_lightbox_and_escape_closes_it(cx: &m
         });
         cx.simulate_keystrokes("escape");
         cx.update(|_, cx| assert!(!view.read(cx).lightbox.is_open, "escape closes the lightbox"));
+        draw(cx);
+        assert!(cx.debug_bounds("diagram_lightbox_backdrop").is_none());
     }
 }
 

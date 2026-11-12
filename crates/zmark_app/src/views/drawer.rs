@@ -8,8 +8,7 @@ use zmark_core::i18n::I18nStrings;
 use crate::state::{root_label, DocKey, DrawerTab, FileTreeNode, OpenDoc, WorkspaceRoot};
 use crate::theme::ThemeColors;
 
-mod search_input;
-pub use search_input::{SearchInput, SearchInputElement, SearchInputPrepaintState};
+pub use gpui_component::input::InputState as SearchInput;
 
 #[derive(Clone, Default)]
 pub struct DrawerSearchParams {
@@ -167,7 +166,7 @@ pub fn render_drawer_with_search(
                 .id("drawer_search_input_host")
                 .min_w(px(0.))
                 .flex_1()
-                .child(input.clone())
+                .child(render_input(input, false))
                 .into_any_element()
         } else {
             div()
@@ -885,11 +884,24 @@ pub fn render_drawer_with_search(
         )
 }
 
+pub fn render_input(input: &Entity<SearchInput>, title: bool) -> gpui_component::input::Input {
+    gpui_component::input::Input::new(input)
+        .appearance(false)
+        .bordered(false)
+        .focus_bordered(false)
+        .h(px(24.))
+        .px_0().py_0()
+        .text_size(px(if title { 18. } else { 13. }))
+        .font_family(crate::platform::UI_FONT)
+        .map(|input| if title { input.font_weight(FontWeight::BOLD) } else { input })
+}
+
 fn inline_rename(key: &DocKey, params: &DrawerSearchParams) -> Option<AnyElement> {
     if params.rename_target.as_ref() != Some(key) { return None; }
-    let input = params.rename_input.as_ref()?.clone();
+    let input = params.rename_input.as_ref()?;
     Some(div().id("sidebar_rename_box").debug_selector(|| "sidebar_rename_box".into())
-        .min_w(px(0.)).w_full().child(input)
+        .key_context("InlineRename")
+        .min_w(px(0.)).w_full().child(render_input(input, false))
         .when_some(params.on_cancel_rename.clone(), |el, cancel| {
             el.on_mouse_down_out(move |_, window, cx| cancel(window, cx))
         }).into_any_element())

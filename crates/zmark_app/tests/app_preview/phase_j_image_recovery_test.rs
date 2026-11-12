@@ -103,7 +103,7 @@ async fn clicking_recovery_changes_only_selected_reference_and_can_undo(
         let mut state = AppState::new_isolated(Document::from_file(document.clone()).unwrap());
         state.set_view_mode(ViewMode::Preview);
         let ws = WorkspaceView::new(state, cx);
-        window.focus(&ws.focus_handle);
+        window.focus(&ws.focus_handle, cx);
         ws
     });
     let view = window.root(cx).unwrap();
@@ -155,7 +155,7 @@ async fn entity_like_filename_round_trips_through_preview(cx: &mut gpui::TestApp
         let mut state = AppState::new_isolated(Document::from_file(document.clone()).unwrap());
         state.set_view_mode(ViewMode::Preview);
         let ws = WorkspaceView::new(state, cx);
-        window.focus(&ws.focus_handle);
+        window.focus(&ws.focus_handle, cx);
         ws
     });
     let view = window.root(cx).unwrap();
@@ -221,7 +221,7 @@ async fn recovery_undo_redo_shortcuts_follow_autosave_to_disk(cx: &mut gpui::Tes
         state.preferences.auto_save_delay_ms = 20;
         state.set_view_mode(ViewMode::Preview);
         let ws = WorkspaceView::new(state, cx);
-        window.focus(&ws.focus_handle);
+        window.focus(&ws.focus_handle, cx);
         ws
     });
     let view = window.root(cx).unwrap();
@@ -287,7 +287,7 @@ async fn pending_autosaves_survive_switching_and_editing_another_document(
         state.preferences.auto_save_delay_ms = 100;
         state.set_view_mode(ViewMode::Preview);
         let ws = WorkspaceView::new(state, cx);
-        window.focus(&ws.focus_handle);
+        window.focus(&ws.focus_handle, cx);
         ws
     });
     let view = window.root(cx).unwrap();
@@ -345,7 +345,7 @@ async fn pending_autosave_follows_renamed_document_key(cx: &mut gpui::TestAppCon
         state.preferences.auto_save_delay_ms = 100;
         state.set_view_mode(ViewMode::Preview);
         let ws = WorkspaceView::new(state, cx);
-        window.focus(&ws.focus_handle);
+        window.focus(&ws.focus_handle, cx);
         ws
     });
     let view = window.root(cx).unwrap();
@@ -368,7 +368,8 @@ async fn pending_autosave_follows_renamed_document_key(cx: &mut gpui::TestAppCon
     cx.update(|window, cx| {
         view.update(cx, |ws, cx| {
             ws.begin_rename(window, cx);
-            ws.rename_input.update(cx, |input, _| input.set_text("after"));
+            let input = ws.rename_input.as_ref().unwrap().clone();
+            input.update(cx, |input, cx| input.set_value("after", window, cx));
         })
     });
     cx.simulate_keystrokes("enter");
@@ -386,14 +387,17 @@ async fn background_tasks_do_not_retain_workspace(cx: &mut gpui::TestAppContext)
     use zmark_app::state::{AppState, ViewMode};
     use zmark_app::views::workspace::WorkspaceView;
     use zmark_core::document::Document;
-    use gpui::{point, px, size, AppContext, Bounds};
+    use gpui::{point, px, size, Bounds};
     let mut state = AppState::new_isolated(Document::new_scratch());
     state.preferences.auto_save = true;
     state.preferences.auto_save_delay_ms = 60_000;
     state.set_view_mode(ViewMode::Preview);
-    let view = cx.new(|cx| WorkspaceView::new(state, cx));
+    let window = cx.add_window(|_, cx| WorkspaceView::new(state, cx));
+    let view = window.root(cx).unwrap();
     let weak = view.downgrade();
-    cx.update(|cx| {
+    let cx = &mut gpui::VisualTestContext::from_window(*window, cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|_, cx| {
         view.update(cx, |ws, cx| {
             ws.trigger_auto_save(cx);
             ws.is_preview_selecting = true;
@@ -404,6 +408,7 @@ async fn background_tasks_do_not_retain_workspace(cx: &mut gpui::TestAppContext)
             assert!(ws.preview_autoscroll_task.is_some());
         })
     });
+    cx.update(|window, _| window.remove_window());
     drop(view);
     cx.run_until_parked();
     assert!(
@@ -430,7 +435,7 @@ async fn switching_documents_warms_only_their_fenced_languages_without_edit(
         let mut state = AppState::new_isolated(Document::from_file(rust.clone()).unwrap());
         state.set_view_mode(ViewMode::Preview);
         let view = WorkspaceView::new(state, cx);
-        window.focus(&view.focus_handle);
+        window.focus(&view.focus_handle, cx);
         view
     });
     let view = window.root(cx).unwrap();
@@ -489,7 +494,7 @@ async fn recovery_respects_manual_save_preference(cx: &mut gpui::TestAppContext)
         state.preferences.auto_save = false;
         state.set_view_mode(ViewMode::Preview);
         let ws = WorkspaceView::new(state, cx);
-        window.focus(&ws.focus_handle);
+        window.focus(&ws.focus_handle, cx);
         ws
     });
     let view = window.root(cx).unwrap();

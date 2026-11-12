@@ -10,6 +10,7 @@ actions!(
         ToggleSettings,
         OpenFileDialog,
         SaveFile,
-        ExportHtml
+        ExportHtml,
+        CancelRename
     ]
 );

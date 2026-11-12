@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::actions::{
-    ExportHtml, OpenFileDialog, SaveFile, ToggleDrawer, TogglePreviewMode, ToggleSettings,
+    CancelRename, ExportHtml, OpenFileDialog, SaveFile, ToggleDrawer, TogglePreviewMode, ToggleSettings,
     ToggleSourceMode, ToggleSplitMode,
 };
 use crate::state::{parse_debounce, AppState, CloseDecision, ViewMode};
@@ -55,15 +55,15 @@ pub struct WorkspaceView {
     pub rename_in_sidebar: bool,
     pub selected_directory: Option<PathBuf>,
     pub folder_transitions: HashMap<PathBuf, crate::views::motion::FolderTransition>,
-    /// Inline title editor (IME, caret movement and blink come from `SearchInput`).
-    pub rename_input: Entity<crate::views::drawer::SearchInput>,
+    /// Native input states are created when this view is first mounted in a window.
+    pub rename_input: Option<Entity<crate::views::drawer::SearchInput>>,
     pub workspace_width: f32,
     auto_save_tasks: HashMap<crate::state::DocKey, (u64, Task<()>)>,
     next_auto_save_id: u64,
     pub parse_task: Option<Task<()>>,
     pub parse_paused: bool,
     pub drawer_closing: bool,
-    pub settings_window: Option<WindowHandle<SettingsWindowView>>,
+    pub settings_window: Option<WindowHandle<gpui_component::Root>>,
     pub copied_code_hash: Option<(u64, std::time::Instant)>,
     pub last_scroll_origin: Option<(ScrollOrigin, std::time::Instant)>,
     pub lightbox: LightboxState,
@@ -185,40 +185,9 @@ impl WorkspaceView {
         update_config: UpdateConfig,
         cx: &mut Context<Self>,
     ) -> Self {
+        crate::theme::init_components(cx);
         let mut preview_list = PreviewScrollState::new();
         preview_list.reset(state.doc().parsed.blocks.len());
-        let search_focus = cx.focus_handle();
-        let view_search = cx.entity().downgrade();
-        let search_placeholder = state.strings.search_placeholder;
-        let search_input = cx.new(|_| {
-            let view = view_search.clone();
-            crate::views::drawer::SearchInput::new(search_focus)
-                .with_placeholder(search_placeholder)
-                .on_change(move |new_q, _window, cx| {
-                    let view = view.clone();
-                    let q = new_q.to_string();
-                    cx.spawn(async move |_this, app| {
-                        let _ = view.update(app, |workspace, cx| {
-                            workspace.update_search_query(&q, cx);
-                        });
-                    })
-                    .detach();
-                })
-        });
-        let view_rename = cx.entity().downgrade();
-        let rename_input = cx.new(|cx| {
-            crate::views::drawer::SearchInput::new(cx.focus_handle())
-                .title_style()
-                .on_submit(move |commit, window, cx| {
-                    let view = view_rename.clone();
-                    if let Some(workspace) = view.upgrade() { window.focus(&workspace.read(cx).focus_handle); }
-                    // Defer: the input is mid-update while its key handler runs.
-                    cx.spawn(async move |_this, app| {
-                        let _ = view.update(app, |this, cx| this.finish_rename(commit, cx));
-                    })
-                    .detach();
-                })
-        });
         let mut view = Self {
             state,
             focus_handle: cx.focus_handle(),
@@ -243,7 +212,7 @@ impl WorkspaceView {
             rename_in_sidebar: false,
             selected_directory: None,
             folder_transitions: HashMap::new(),
-            rename_input,
+            rename_input: None,
             workspace_width: 1200.0,
             auto_save_tasks: HashMap::new(),
             next_auto_save_id: 0,
@@ -273,7 +242,7 @@ impl WorkspaceView {
             pending_restart: false,
             search_focused: false,
             preview_focused: false,
-            search_input: Some(search_input),
+            search_input: None,
             preview_selection: None,
             is_preview_selecting: false,
             preview_autoscroll_task: None,
@@ -330,7 +299,7 @@ impl WorkspaceView {
                     images.retired.push(image);
                 }
             }
-            if let Some(image) = images.loading.take() {
+            if let Some((_, _, image)) = images.loading.take() {
                 images.retired.push(image);
             }
             for image in images.retired.drain(..) {
@@ -350,6 +319,42 @@ impl WorkspaceView {
         view.init_update_service(cx);
 
         view
+    }
+
+    fn ensure_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_component::input::{InputEvent, InputState};
+        if self.search_input.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx)
+                .placeholder(self.state.strings.search_placeholder)
+                .clean_on_escape()
+                .default_value(self.state.search_query.clone()));
+            cx.subscribe_in(&input, window, |this, input, event, window, cx| {
+                match event {
+                    InputEvent::Change => {
+                        let query = input.read(cx).value();
+                        this.update_search_query(&query, cx);
+                    }
+                    InputEvent::PressEnter { .. } => {
+                        this.search_focused = false;
+                        window.focus(&this.focus_handle, cx);
+                        cx.notify();
+                    }
+                    InputEvent::Focus => { this.search_focused = true; cx.notify(); }
+                    InputEvent::Blur => { this.search_focused = false; cx.notify(); }
+                }
+            }).detach();
+            self.search_input = Some(input);
+        }
+        if self.rename_input.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx));
+            cx.subscribe_in(&input, window, |this, _, event, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) && this.is_renaming {
+                    window.focus(&this.focus_handle, cx);
+                    this.finish_rename(true, cx);
+                }
+            }).detach();
+            self.rename_input = Some(input);
+        }
     }
 
     /// Drops syntax bookkeeping for code blocks that no longer exist in the
@@ -422,7 +427,7 @@ impl WorkspaceView {
                 cx.notify();
                 return;
             }
-            if self.local_image_task.is_some() {
+            if self.local_image_task.is_some() || images.loading.is_some() {
                 return;
             }
             images
@@ -448,63 +453,79 @@ impl WorkspaceView {
                 } else { None };
                 (result, candidates)
             }).await;
-            // Await GPUI's own resource decode before starting another image. This
-            // preserves its color channel path and validates the actual bitmap.
-            if let Ok(image) = &result {
-                let image = image.clone();
-                let allowed = this.update(app, |view, _| {
-                    let mut images = view.local_images.lock().unwrap();
-                    if images.generation != generation || !images.wanted.contains(&url) { return false; }
-                    if images.decoded_bytes() + image.decoded_bytes > crate::local_images::MAX_CACHE_BYTES { return false; }
-                    images.loading = Some(image.clone());
-                    true
-                }).unwrap_or(false);
-                if allowed {
-                    let resource = gpui::Resource::Path(Arc::from(image.snapshot.path()));
-                    if let Ok(task) = app.update(|cx| cx.fetch_asset::<gpui::ImgResourceLoader>(&resource).0) {
-                        match task.await {
-                            Ok(render) => {
-                                let size = render.size(0);
-                                if size.width.0 < 1 || size.height.0 < 1 || render.frame_count() != 1
-                                    || crate::local_images::check_dimensions(size.width.0 as u32, size.height.0 as u32).is_err()
-                                    || size.width.0 as u32 != image.width || size.height.0 as u32 != image.height
-                                    || render.as_bytes(0).is_none_or(|bytes| bytes.len() as u64 > crate::local_images::MAX_DECODED_BYTES)
-                                {
-                                    result = Err("图片实际解码尺寸或帧数超限".into());
-                                }
-                            }
-                            Err(error) => result = Err(format!("图片解码失败：{error}")),
-                        }
-                    } else {
-                        result = Err("图片加载已关闭".into());
-                    }
-                } else {
-                    result = Err(format!(
-                        "图片已退出当前文档或可见图片缓存超过 {}MiB",
-                        crate::local_images::MAX_CACHE_BYTES / (1024 * 1024)
-                    ));
-                }
-            }
             let _ = this.update(app, |view, cx| {
                 view.local_image_task = None;
                 let changed = {
                     let mut images = view.local_images.lock().unwrap();
-                    let changed = images.complete(generation, url.clone(), result);
-                    if changed {
-                        if let (Some(candidates), Some(crate::local_images::ImageState::Failed(_))) = (candidates, images.entries.get(&url)) {
-                            images.entries.insert(url.clone(), crate::local_images::ImageState::RecoveryCandidates(candidates));
+                    if images.generation != generation || !images.wanted.contains(&url) {
+                        false
+                    } else {
+                        if result.as_ref().is_ok_and(|image| images.decoded_bytes() + image.decoded_bytes > crate::local_images::MAX_CACHE_BYTES) {
+                            result = Err(format!("可见图片缓存超过 {}MiB，请减少同时显示的图片", crate::local_images::MAX_CACHE_BYTES / (1024 * 1024)));
+                        }
+                        match result {
+                            Ok(image) => {
+                                images.loading = Some((generation, url.clone(), image));
+                                true
+                            }
+                            Err(error) => {
+                                let changed = images.complete(generation, url.clone(), Err(error));
+                                if changed {
+                                    if let Some(candidates) = candidates {
+                                        images.entries.insert(url.clone(), crate::local_images::ImageState::RecoveryCandidates(candidates));
+                                    }
+                                }
+                                changed
+                            }
                         }
                     }
-                    if let Some(image) = images.loading.take() {
-                        let retained = matches!(images.entries.get(&url), Some(crate::local_images::ImageState::Ready(i)) if Arc::ptr_eq(i, &image));
-                        if !retained { images.retired.push(image); }
-                    }
-                    changed || !images.retired.is_empty()
                 };
                 if changed { view.preview_list.invalidate_layout(); cx.notify(); }
                 view.process_local_images(cx);
             });
         }));
+    }
+
+    fn complete_local_image_decode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (generation, url, image) = {
+            let mut images = self.local_images.lock().unwrap();
+            let Some((generation, url, image)) = images.loading.clone() else { return; };
+            if generation != images.generation || !images.wanted.contains(&url) {
+                images.loading = None;
+                images.retired.push(image);
+                cx.notify();
+                return;
+            }
+            (generation, url, image)
+        };
+        let resource = gpui::Resource::Path(Arc::from(image.snapshot.path()));
+        // Pending is not failure: GPUI caches the decode and notifies this view when ready.
+        let Some(render) = window.use_asset::<gpui::ImgResourceLoader>(&resource, cx) else { return; };
+        let result = match render {
+            Ok(render) => {
+                let size = render.size(0);
+                if size.width.0 < 1 || size.height.0 < 1 || render.frame_count() != 1
+                    || crate::local_images::check_dimensions(size.width.0 as u32, size.height.0 as u32).is_err()
+                    || size.width.0 as u32 != image.width || size.height.0 as u32 != image.height
+                    || render.as_bytes(0).is_none_or(|bytes| bytes.len() as u64 > crate::local_images::MAX_DECODED_BYTES)
+                {
+                    Err("图片实际解码尺寸或帧数超限".into())
+                } else {
+                    Ok(image.clone())
+                }
+            }
+            Err(error) => Err(format!("图片解码失败：{error}")),
+        };
+        let mut images = self.local_images.lock().unwrap();
+        images.loading = None;
+        let changed = images.complete(generation, url.clone(), result);
+        if !matches!(images.entries.get(&url), Some(crate::local_images::ImageState::Ready(i)) if Arc::ptr_eq(i, &image)) {
+            images.retired.push(image);
+        }
+        if changed || !images.retired.is_empty() {
+            self.preview_list.invalidate_layout();
+            cx.notify();
+        }
     }
 
     /// Re-measures the preview after an edit, keeping the current scroll position.
@@ -1300,7 +1321,7 @@ impl WorkspaceView {
     /// move the editor (already at the top/bottom) no longer drag the preview.
     pub fn handle_editor_scroll_wheel(
         &mut self,
-        event: &ScrollWheelEvent,
+        event: &ScrollEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1328,7 +1349,7 @@ impl WorkspaceView {
             let handle = self.editor_scroll_handle.0.borrow();
             (
                 (-f32::from(handle.base_handle.offset().y)).max(0.0),
-                f32::from(handle.base_handle.max_offset().height).max(0.0),
+                f32::from(handle.base_handle.max_offset().y).max(0.0),
             )
         };
         // GPUI applies `scroll_offset.y += delta_y`; content offset is its negation.
@@ -1385,7 +1406,7 @@ impl WorkspaceView {
     /// Synchronizes preview wheel scrolling to the editor pane with 100ms echo suppression.
     pub fn handle_preview_scroll_wheel(
         &mut self,
-        event: &ScrollWheelEvent,
+        event: &ScrollEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1689,7 +1710,7 @@ impl WorkspaceView {
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
-                    window.focus(&this.preview_scroll_focus);
+                    window.focus(&this.preview_scroll_focus, cx);
                     this.preview_focused = true;
                     this.is_preview_selecting = false;
                     this.preview_autoscroll_task = None;
@@ -1803,8 +1824,8 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    pub fn on_editor_click_line(&mut self, vis_idx: usize, vis_col: usize, window: &mut Window) {
-        window.focus(&self.focus_handle);
+    pub fn on_editor_click_line(&mut self, vis_idx: usize, vis_col: usize, window: &mut Window, cx: &mut App) {
+        window.focus(&self.focus_handle, cx);
         self.search_focused = false;
         self.preview_focused = false;
         let vl = self.compute_visual_lines(window);
@@ -1821,6 +1842,7 @@ impl WorkspaceView {
         velocity: f32,
         mouse_pos: Point<Pixels>,
         _bounds: Bounds<Pixels>,
+        text_system: &gpui::WindowTextSystem,
         _cx: &mut Context<Self>,
     ) {
         self.cancel_pending_preview_seek();
@@ -1876,7 +1898,7 @@ impl WorkspaceView {
             let reg = self.rendered_regions.lock().unwrap();
             if let Some(head) = crate::views::preview::hit_test_point_across_all_regions(
                 &reg,
-                None,
+                text_system,
                 mouse_pos,
                 &self.state.doc().parsed.blocks,
             ) {
@@ -1906,13 +1928,14 @@ impl WorkspaceView {
             .is_some()
         {
             if self.preview_autoscroll_task.is_none() {
+                let Some(window_handle) = self.window_handle else { return; };
                 let view = cx.entity().downgrade();
                 self.preview_autoscroll_task = Some(cx.spawn(async move |_this, app| loop {
                     app.background_executor()
                         .timer(std::time::Duration::from_millis(16))
                         .await;
-                    let keep_going = view
-                        .update(app, |this, cx| {
+                    let keep_going = window_handle
+                        .update(app, |_, window, cx| view.update(cx, |this, cx| {
                             if !this.is_preview_selecting || this.preview_autoscroll_task.is_none()
                             {
                                 this.preview_autoscroll_task = None;
@@ -1937,13 +1960,14 @@ impl WorkspaceView {
                                 this.preview_autoscroll_task = None;
                                 return false;
                             };
-                            this.step_preview_autoscroll(vel, mouse_pos, bounds, cx);
+                            this.step_preview_autoscroll(vel, mouse_pos, bounds, window.text_system(), cx);
                             if this.preview_autoscroll_task.is_none() {
                                 return false;
                             }
                             cx.notify();
                             true
-                        })
+                        }))
+                        .and_then(|result| result)
                         .unwrap_or(false);
                     if !keep_going {
                         break;
@@ -2134,10 +2158,11 @@ impl WorkspaceView {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
-                |_window, cx| {
-                    cx.new(|cx| {
+                |window, cx| {
+                    let view = cx.new(|cx| {
                         SettingsWindowView::new(ws, current_tab, preferences, theme, strings, cx)
-                    })
+                    });
+                    cx.new(|cx| gpui_component::Root::new(view, window, cx))
                 },
             );
             if let Ok(h) = handle {
@@ -2212,15 +2237,17 @@ impl WorkspaceView {
                 .filter(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
                 .map(|ext| name.len() - ext.len() - 1).unwrap_or(name.len())
         };
-        self.rename_input.update(cx, |input, _| {
-            input.title_style = !sidebar;
-            input.set_text(name);
-            input.selected_range = 0..end;
+        self.ensure_inputs(window, cx);
+        let input = self.rename_input.as_ref().unwrap().clone();
+        input.update(cx, |input, cx| {
+            input.set_value(name, window, cx);
+            input.set_selected_range(0..end, cx);
         });
         self.rename_target = Some(key);
         self.rename_in_sidebar = sidebar;
         self.is_renaming = true;
-        window.focus(&self.rename_input.read(cx).focus_handle);
+        let handle = input.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
         cx.notify();
     }
 
@@ -2228,7 +2255,7 @@ impl WorkspaceView {
         if !self.is_renaming { return; }
         self.is_renaming = false;
         let target = self.rename_target.take().or_else(|| self.state.active.clone());
-        let name = self.rename_input.read(cx).content.trim().to_owned();
+        let name = self.rename_input.as_ref().unwrap().read(cx).value().trim().to_owned();
         if commit {
             if let Some(target) = target {
                 let old = target.as_path().cloned();
@@ -2859,6 +2886,7 @@ impl WorkspaceView {
                         // blinking caret, so entering rename never shifts the layout.
                         div()
                             .id("tab_rename_box")
+                            .key_context("InlineRename")
                             .debug_selector(|| "tab_rename_box".into())
                             .min_w(px(120.))
                             .px_2()
@@ -2869,7 +2897,7 @@ impl WorkspaceView {
                             .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _window, cx| {
                                 this.finish_rename(false, cx);
                             }))
-                            .child(rename_input)
+                            .child(crate::views::drawer::render_input(rename_input.as_ref().unwrap(), true))
                             .into_any_element()
                     } else {
                         let tooltip = tooltip_text.clone();
@@ -3279,6 +3307,14 @@ impl Render for WorkspaceView {
             WindowAppearance::Dark | WindowAppearance::VibrantDark
         );
         self.state.update_appearance(is_sys_dark);
+        crate::theme::sync_component_theme(&self.state.theme, cx);
+        cx.set_reduce_motion(self.state.preferences.reduce_motion);
+        let locale = self.state.preferences.locale.resolve();
+        if let Some((_, tag, _)) = zmark_core::i18n::SupportedLocale::all().iter().find(|(candidate, _, _)| *candidate == locale) {
+            let tag = if *tag == "pt" { "pt-BR" } else { *tag };
+            if &*gpui_component::locale() != tag { gpui_component::set_locale(tag); }
+        }
+        self.ensure_inputs(window, cx);
         self.workspace_width = f32::from(window.viewport_size().width);
         self.window_handle = Some(window.window_handle());
 
@@ -3430,7 +3466,7 @@ impl Render for WorkspaceView {
         let on_click_line = Arc::new(
             move |vis_idx: usize, vis_col: usize, window: &mut Window, cx: &mut App| {
                 view_click.update(cx, |this, cx| {
-                    this.on_editor_click_line(vis_idx, vis_col, window);
+                    this.on_editor_click_line(vis_idx, vis_col, window, cx);
                     cx.notify();
                 });
             },
@@ -3768,6 +3804,10 @@ impl Render for WorkspaceView {
                 })
                 .detach();
             }))
+            .on_action(cx.listener(|this, _: &CancelRename, window, cx| {
+                window.focus(&this.focus_handle, cx);
+                this.finish_rename(false, cx);
+            }))
             .on_action(cx.listener(|this, _: &SaveFile, _window, cx| {
                 this.trigger_save(cx);
             }))
@@ -3816,46 +3856,29 @@ impl Render for WorkspaceView {
                     }
                 }
 
-                let search_is_focused = this
-                    .search_input
-                    .as_ref()
-                    .map(|si| si.read(cx).focus_handle.is_focused(window))
-                    .unwrap_or(false);
-                this.search_focused = search_is_focused;
-
-                if search_is_focused {
-                    let key = event.keystroke.key.as_str();
-                    let mods = event.keystroke.modifiers;
-                    if mods.secondary() && (key == "c" || key == "C") {
-                        if !this.state.search_query.is_empty() {
-                            cx.write_to_clipboard(ClipboardItem::new_string(this.state.search_query.clone()));
-                        }
-                        return;
-                    }
-                    if key == "enter" {
-                        this.search_focused = false;
-                        window.focus(&this.focus_handle);
-                        cx.notify();
-                        return;
-                    }
+                this.search_focused = this.search_input.as_ref()
+                    .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+                let rename_focused = this.rename_input.as_ref()
+                    .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+                if this.search_focused || rename_focused {
+                    // Native Input owns its IME, selection, clipboard and history actions.
                     return;
                 }
 
                 if this.is_renaming {
-                    // The rename input handles its own keys and IME.
                     return;
                 }
 
                 let key = event.keystroke.key.as_str();
                 let mods = event.keystroke.modifiers;
                 if key.eq_ignore_ascii_case("tab") && this.preview_focused {
-                    if this.preview_scroll_focus.is_focused(window) { window.focus(&this.focus_handle); }
-                    else { window.focus(&this.preview_scroll_focus); }
+                    if this.preview_scroll_focus.is_focused(window) { window.focus(&this.focus_handle, cx); }
+                    else { window.focus(&this.preview_scroll_focus, cx); }
                     return;
                 }
-                if this.preview_scroll_focus.is_focused(window) && !mods.secondary() { return; }
+                if this.preview_scroll_focus.is_focused(window) && !mods.secondary(cx) { return; }
 
-                if mods.secondary() {
+                if mods.secondary(cx) {
                     match key {
                         "z" => {
                             if mods.shift {
@@ -3916,8 +3939,8 @@ impl Render for WorkspaceView {
                             }
                             this.search_focused = true;
                             if let Some(ref input) = this.search_input {
-                                let handle = input.read(cx).focus_handle.clone();
-                                window.focus(&handle);
+                                let handle = input.read(cx).focus_handle(cx);
+                                window.focus(&handle, cx);
                             }
                             cx.notify();
                         }
@@ -4016,10 +4039,10 @@ impl Render for WorkspaceView {
                                     let si_clear = self.search_input.clone();
                                     let on_clear_search = {
                                         let view = view_search.clone();
-                                        Arc::new(move |_window: &mut Window, cx: &mut App| {
+                                        Arc::new(move |window: &mut Window, cx: &mut App| {
                                             if let Some(ref input) = si_clear {
                                                 input.update(cx, |inp, cx| {
-                                                    inp.clear(cx);
+                                                    inp.set_value("", window, cx);
                                                 });
                                             }
                                             view.update(cx, |this, cx| {
@@ -4033,8 +4056,8 @@ impl Render for WorkspaceView {
                                         let view = view_search;
                                         Arc::new(move |window: &mut Window, cx: &mut App| {
                                             if let Some(ref input) = si_focus {
-                                                let handle = input.read(cx).focus_handle.clone();
-                                                window.focus(&handle);
+                                                let handle = input.read(cx).focus_handle(cx);
+                                                window.focus(&handle, cx);
                                             }
                                             view.update(cx, |this, cx| {
                                                 this.search_focused = true;
@@ -4054,7 +4077,7 @@ impl Render for WorkspaceView {
                                         selected_directory: self.selected_directory.clone(),
                                         folder_values: folder_values.clone(),
                                         rename_target: if self.is_renaming && self.rename_in_sidebar { self.rename_target.clone() } else { None },
-                                        rename_input: if self.is_renaming && self.rename_in_sidebar { Some(self.rename_input.clone()) } else { None },
+                                        rename_input: self.rename_input.clone().filter(|_| self.is_renaming && self.rename_in_sidebar),
                                         on_select_directory: Some(on_select_directory),
                                         on_cancel_rename: Some(on_cancel_rename),
                                     };
@@ -4395,7 +4418,7 @@ impl Render for WorkspaceView {
                                         if is_selecting {
                                             this.preview_focused = true;
                                             this.preview_autoscroll_accum = 0.0;
-                                            window.focus(&this.focus_handle);
+                                            window.focus(&this.focus_handle, cx);
                                             this.preview_mouse_window_pos = Some(window.mouse_position());
                                             this.trigger_preview_autoscroll_if_needed(cx);
                                         } else {
@@ -4413,7 +4436,7 @@ impl Render for WorkspaceView {
                                     view.update(app, |this, cx| {
                                         this.preview_mouse_window_pos = Some(window.mouse_position());
                                         if let (Some(mouse_pos), Some(bounds)) = (this.preview_mouse_window_pos, this.preview_content_bounds) {
-                                            this.step_preview_autoscroll(velocity, mouse_pos, bounds, cx);
+                                            this.step_preview_autoscroll(velocity, mouse_pos, bounds, window.text_system(), cx);
                                         }
                                         this.trigger_preview_autoscroll_if_needed(cx);
                                     });
@@ -4535,7 +4558,7 @@ impl Render for WorkspaceView {
                                                 div()
                                                     .size_full()
                                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _event: &MouseDownEvent, window, cx| {
-                                                        window.focus(&this.focus_handle);
+                                                        window.focus(&this.focus_handle, cx);
                                                         this.search_focused = false;
                                                         cx.notify();
                                                     }))
@@ -4629,11 +4652,11 @@ impl Render for WorkspaceView {
                                                         .flex_col()
                                                         .overflow_hidden()
                                                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _event: &MouseDownEvent, window, cx| {
-                                                            window.focus(&this.focus_handle);
+                                                            window.focus(&this.focus_handle, cx);
                                                             this.search_focused = false;
                                                             cx.notify();
                                                         }))
-                                                        .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                                                        .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
                                                             this.handle_editor_scroll_wheel(event, window, cx);
                                                         }))
                                                         .child(
@@ -4760,6 +4783,7 @@ impl Render for WorkspaceView {
                         root.child(self.render_close_modal(theme, cx))
                     });
 
+        self.complete_local_image_decode(window, cx);
         if crate::views::preview::diagram_cache_has_pending_release() {
             // The current frame may have evicted diagrams while building the
             // preview. Re-render once so their textures can be released before

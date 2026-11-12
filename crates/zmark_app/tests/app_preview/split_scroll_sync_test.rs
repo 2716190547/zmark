@@ -5,7 +5,7 @@ use zmark_app::state::{AppState, ViewMode};
 use zmark_app::views::workspace::WorkspaceView;
 use zmark_core::document::Document;
 use gpui::{
-    point, px, Modifiers, Point, ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase,
+    point, px, Modifiers, Point, ScrollDelta, ScrollEvent, ScrollSource, TestAppContext, TouchPhase,
 };
 
 fn long_doc() -> String {
@@ -48,7 +48,7 @@ async fn editor_overscroll_never_sends_preview_back_to_start(cx: &mut TestAppCon
                 .borrow()
                 .base_handle
                 .max_offset()
-                .height,
+                .y,
         )
         .max(0.0);
         (ws.state.doc().parsed.blocks.len(), max)
@@ -63,11 +63,12 @@ async fn editor_overscroll_never_sends_preview_back_to_start(cx: &mut TestAppCon
     // fixed 40 events so the end-of-document echo path is still exercised. The
     // old fixed 400 iterations spent most of their time long past the end.
     for _ in 0..max_steps {
-        let wheel = ScrollWheelEvent {
+        let wheel = ScrollEvent {
             position: wheel_at,
             delta: ScrollDelta::Pixels(point(px(0.), px(-500.))),
             modifiers: Modifiers::none(),
             touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
         };
         cx.simulate_event(wheel);
         cx.update(|window, cx| {
@@ -130,11 +131,12 @@ async fn in_block_offset_uses_measured_block_height(cx: &mut TestAppContext) {
     // Scroll a little way into the document, then collect in-block offsets.
     let mut offsets = Vec::new();
     for _ in 0..40 {
-        let wheel = ScrollWheelEvent {
+        let wheel = ScrollEvent {
             position: wheel_at,
             delta: ScrollDelta::Pixels(point(px(0.), px(-37.))),
             modifiers: Modifiers::none(),
             touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
         };
         cx.simulate_event(wheel);
         cx.update(|window, cx| {
