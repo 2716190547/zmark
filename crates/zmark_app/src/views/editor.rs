@@ -12,8 +12,12 @@ pub fn calculate_line_row_height(font_size: f32, line_height: f32) -> f32 {
 mod tokenizer;
 pub use tokenizer::{spans_to_code_tokens, tokenize_inline, tokenize_markdown_line, MarkdownToken, MarkdownTokenKind};
 
-fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> impl IntoElement {
-    let mut el = div().child(tok.text.clone());
+fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors, selection: &[std::ops::Range<usize>]) -> impl IntoElement {
+    let highlights: Vec<_> = selection.iter().map(|range| (
+        char_index_to_byte_offset(&tok.text, range.start)..char_index_to_byte_offset(&tok.text, range.end),
+        HighlightStyle { background_color: Some(theme.selection_bg()), ..Default::default() },
+    )).collect();
+    let mut el = div().child(StyledText::new(tok.text.clone()).with_highlights(highlights));
     match tok.kind {
         MarkdownTokenKind::Keyword => {
             el = el.text_color(theme.syntax_keyword);
@@ -86,6 +90,33 @@ fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors) -> im
     el
 }
 
+pub fn physical_line_tokens(
+    index: usize,
+    text: &str,
+    blocks: &[zmark_core::ast::ParsedCodeBlock],
+    ast_in_sync: bool,
+    spans: &std::collections::HashMap<zmark_core::syntax::CodeKey, Arc<[zmark_core::syntax::SyntaxSpan]>>,
+) -> Vec<MarkdownToken> {
+    let Some(block) = blocks.iter().find(|block| index >= block.fence_open_line && index <= block.fence_close_line.unwrap_or_else(|| block.lines.last().map_or(block.fence_open_line, |line| line.source_line_idx))) else {
+        return tokenize_markdown_line(text);
+    };
+    let plain = |kind| vec![MarkdownToken { text: text.to_owned(), kind }];
+    if !ast_in_sync { return plain(MarkdownTokenKind::CodeText); }
+    if index == block.fence_open_line || block.fence_close_line == Some(index) { return plain(MarkdownTokenKind::CodeDelimiter); }
+    let Some(mapping) = block.lines.iter().find(|line| line.source_line_idx == index).filter(|_| block.is_valid) else { return plain(MarkdownTokenKind::CodeText); };
+    let Some(spans) = spans.get(&block.key) else { return plain(MarkdownTokenKind::CodeText); };
+    let line_spans: Vec<_> = spans.iter().filter_map(|span| {
+        let start = span.range.start.max(mapping.payload_range.start);
+        let end = span.range.end.min(mapping.payload_range.end);
+        (start < end).then_some(zmark_core::syntax::SyntaxSpan { range: start.saturating_sub(mapping.payload_range.start)..end.saturating_sub(mapping.payload_range.start), role: span.role })
+    }).collect();
+    let Some((prefix, code)) = text.get(..mapping.prefix_len).zip(text.get(mapping.prefix_len..)) else { return plain(MarkdownTokenKind::CodeText); };
+    let mut tokens = Vec::new();
+    if !prefix.is_empty() { tokens.push(MarkdownToken { text: prefix.to_owned(), kind: MarkdownTokenKind::Plain }); }
+    tokens.extend(spans_to_code_tokens(code, &line_spans));
+    tokens
+}
+
 pub const DRAWER_WIDTH: f32 = 250.0;
 pub const EDITOR_CONTAINER_PADDING_X: f32 = 28.0; // 32px total with the row inset
 pub const EDITOR_ROW_PADDING_X: f32 = 4.0;        // row px_1
@@ -128,224 +159,44 @@ pub fn token_paddings(kind: &MarkdownTokenKind) -> (f32, f32) {
     }
 }
 
-/// Computes the horizontal pixel offset where the cursor should be rendered for `char_col`
-/// within a subline comprised of `tokens`, taking into account font shaping and style paddings.
-pub fn calculate_cursor_x_offset_tokens(
-    text_system: &gpui::WindowTextSystem,
-    tokens: &[MarkdownToken],
-    char_col: usize,
-    font_size: f32,
-) -> f32 {
-    if tokens.is_empty() || char_col == 0 {
-        return 0.0;
-    }
-
-    let font = gpui::font(crate::platform::MONO_FONT);
-    let font_size_px = gpui::px(font_size);
-    let mut curr_char_idx = 0;
-    let mut curr_x = 0.0;
-
-    for (i, tok) in tokens.iter().enumerate() {
-        let tok_char_count = tok.text.chars().count();
-        let (left_pad, right_pad) = token_paddings(&tok.kind);
-        let is_last_tok = i + 1 == tokens.len();
-
-        let run = gpui::TextRun {
-            len: tok.text.len(),
-            font: font.clone(),
-            color: gpui::black(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let shaped = text_system.shape_line(
-            gpui::SharedString::from(tok.text.clone()),
-            font_size_px,
-            &[run],
-            None,
-        );
-        let text_w = f32::from(shaped.width);
-
-        if char_col < curr_char_idx + tok_char_count || is_last_tok {
-            let offset_in_tok = char_col.saturating_sub(curr_char_idx).min(tok_char_count);
-            let byte_idx = char_index_to_byte_offset(&tok.text, offset_in_tok);
-            let text_x = if offset_in_tok == tok_char_count {
-                text_w
-            } else {
-                f32::from(shaped.x_for_index(byte_idx))
-            };
-            let extra_right = if is_last_tok && char_col >= curr_char_idx + tok_char_count {
-                right_pad
-            } else {
-                0.0
-            };
-            return curr_x + left_pad + text_x + extra_right;
+/// Character boundary positions use the same font weights and pill insets as painting.
+pub fn token_char_positions(text_system: &gpui::WindowTextSystem, tokens: &[MarkdownToken], font_size: f32) -> Vec<f32> {
+    let count = tokens.iter().map(|token| token.text.chars().count()).sum::<usize>();
+    let mut positions = vec![0.0; count + 1];
+    let mut index = 0;
+    let mut x = 0.0;
+    for token in tokens {
+        let mut font = gpui::font(crate::platform::MONO_FONT);
+        if matches!(token.kind, MarkdownTokenKind::Bold | MarkdownTokenKind::HeadingText) { font.weight = FontWeight::BOLD; }
+        let run = TextRun { len: token.text.len(), font, color: gpui::black(), background_color: None, underline: None, strikethrough: None };
+        let shaped = text_system.shape_line(token.text.clone().into(), px(font_size), &[run], None);
+        let (left, right) = token_paddings(&token.kind);
+        for (byte, _) in token.text.char_indices() {
+            positions[index] = x + left + f32::from(shaped.x_for_index(byte));
+            index += 1;
         }
-
-        curr_x += left_pad + text_w + right_pad;
-        curr_char_idx += tok_char_count;
+        x += left + f32::from(shaped.width) + right;
+        positions[index] = x;
     }
-
-    curr_x
+    positions[0] = 0.0;
+    positions
 }
 
-fn closest_byte_index_in_shaped(shaped: &gpui::ShapedLine, target_x: gpui::Pixels) -> usize {
-    if shaped.len == 0 {
-        return 0;
-    }
-    let mut prev_idx = 0;
-    let mut prev_x = gpui::px(0.);
-    for run in &shaped.runs {
-        for glyph in &run.glyphs {
-            if glyph.position.x >= target_x {
-                return if glyph.position.x - target_x < target_x - prev_x {
-                    glyph.index
-                } else {
-                    prev_idx
-                };
-            }
-            prev_idx = glyph.index;
-            prev_x = glyph.position.x;
-        }
-    }
-
-    if shaped.width - target_x < target_x - prev_x {
-        shaped.len
-    } else {
-        prev_idx
-    }
+pub fn closest_char_position(positions: &[f32], x: f32) -> usize {
+    positions.iter().enumerate().min_by(|(_, a), (_, b)| (**a - x).abs().total_cmp(&(**b - x).abs())).map_or(0, |(index, _)| index)
 }
 
-/// Computes the character column index closest to `x_offset` within a subline comprised
-/// of `tokens`, taking into account font shaping and style paddings.
-pub fn calculate_click_char_col_tokens(
-    text_system: &gpui::WindowTextSystem,
-    tokens: &[MarkdownToken],
-    x_offset: f32,
-    font_size: f32,
-) -> usize {
-    if tokens.is_empty() || x_offset <= 0.0 {
-        return 0;
-    }
-
-    let font = gpui::font(crate::platform::MONO_FONT);
-    let font_size_px = gpui::px(font_size);
-    let mut curr_char_idx = 0;
-    let mut curr_x = 0.0;
-
-    for (i, tok) in tokens.iter().enumerate() {
-        let tok_char_count = tok.text.chars().count();
-        let (left_pad, right_pad) = token_paddings(&tok.kind);
-        let is_last_tok = i + 1 == tokens.len();
-
-        let run = gpui::TextRun {
-            len: tok.text.len(),
-            font: font.clone(),
-            color: gpui::black(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let shaped = text_system.shape_line(
-            gpui::SharedString::from(tok.text.clone()),
-            font_size_px,
-            &[run],
-            None,
-        );
-        let text_w = f32::from(shaped.width);
-        let total_tok_w = left_pad + text_w + right_pad;
-
-        if !is_last_tok {
-            if x_offset < curr_x + total_tok_w {
-                if x_offset <= curr_x + left_pad {
-                    return curr_char_idx;
-                } else if x_offset >= curr_x + left_pad + text_w {
-                    return curr_char_idx + tok_char_count;
-                } else {
-                    let rel_x = x_offset - (curr_x + left_pad);
-                    let byte_idx = closest_byte_index_in_shaped(&shaped, gpui::px(rel_x));
-                    let char_offset = byte_offset_to_char_index(&tok.text, byte_idx);
-                    return curr_char_idx + char_offset;
-                }
-            }
-        } else {
-            // Last token
-            if x_offset >= curr_x + total_tok_w {
-                return curr_char_idx + tok_char_count;
-            } else if x_offset <= curr_x + left_pad {
-                return curr_char_idx;
-            } else if x_offset >= curr_x + left_pad + text_w {
-                return curr_char_idx + tok_char_count;
-            } else {
-                let rel_x = x_offset - (curr_x + left_pad);
-                let byte_idx = closest_byte_index_in_shaped(&shaped, gpui::px(rel_x));
-                let char_offset = byte_offset_to_char_index(&tok.text, byte_idx);
-                return curr_char_idx + char_offset;
-            }
-        }
-
-        curr_x += total_tok_w;
-        curr_char_idx += tok_char_count;
-    }
-
-    curr_char_idx
+pub fn calculate_cursor_x_offset_tokens(text_system: &gpui::WindowTextSystem, tokens: &[MarkdownToken], char_col: usize, font_size: f32) -> f32 {
+    let positions = token_char_positions(text_system, tokens, font_size);
+    positions[char_col.min(positions.len() - 1)]
 }
 
-/// Measures actual rendered pixel width for each character in `tokens`, accounting for font
-/// shaping advances (such as `\t`) and inline code pill paddings.
-pub fn compute_char_pixel_widths(
-    text_system: &gpui::WindowTextSystem,
-    tokens: &[MarkdownToken],
-    font_size: f32,
-) -> Vec<f32> {
-    let font = gpui::font(crate::platform::MONO_FONT);
-    let font_size_px = gpui::px(font_size);
-    let mut widths = Vec::new();
+pub fn calculate_click_char_col_tokens(text_system: &gpui::WindowTextSystem, tokens: &[MarkdownToken], x_offset: f32, font_size: f32) -> usize {
+    closest_char_position(&token_char_positions(text_system, tokens, font_size), x_offset)
+}
 
-    for tok in tokens {
-        let (left_pad, right_pad) = token_paddings(&tok.kind);
-        let chars: Vec<char> = tok.text.chars().collect();
-        let char_count = chars.len();
-        if char_count == 0 {
-            continue;
-        }
-
-        let run = gpui::TextRun {
-            len: tok.text.len(),
-            font: font.clone(),
-            color: gpui::black(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let shaped = text_system.shape_line(
-            gpui::SharedString::from(tok.text.clone()),
-            font_size_px,
-            &[run],
-            None,
-        );
-
-        for (k, _) in chars.iter().enumerate() {
-            let start_byte = char_index_to_byte_offset(&tok.text, k);
-            let end_byte = char_index_to_byte_offset(&tok.text, k + 1);
-            let start_x = f32::from(shaped.x_for_index(start_byte));
-            let end_x = if k + 1 == char_count {
-                f32::from(shaped.width)
-            } else {
-                f32::from(shaped.x_for_index(end_byte))
-            };
-            let mut w = (end_x - start_x).max(0.0);
-            if k == 0 {
-                w += left_pad;
-            }
-            if k + 1 == char_count {
-                w += right_pad;
-            }
-            widths.push(w);
-        }
-    }
-
-    widths
+pub fn compute_char_pixel_widths(text_system: &gpui::WindowTextSystem, tokens: &[MarkdownToken], font_size: f32) -> Vec<f32> {
+    token_char_positions(text_system, tokens, font_size).windows(2).map(|pair| (pair[1] - pair[0]).max(0.0)).collect()
 }
 
 /// Wraps a physical line into visual lines using actual layout metrics (font advance, Tab width,
@@ -829,9 +680,12 @@ pub fn render_editor_pane(
     _is_dirty: bool,
     show_line_numbers: bool,
     scroll_handle: &UniformListScrollHandle,
-    editor_left_offset: f32,
+    _editor_left_offset: f32,
     gutter_width: f32,
     on_click_line: Arc<dyn Fn(usize, usize, &mut Window, &mut App)>,
+    source_view: Entity<crate::views::workspace::WorkspaceView>,
+    selection_ranges: Arc<Vec<std::ops::Range<usize>>>,
+    marked_range: Option<std::ops::Range<usize>>,
     failures: &[crate::syntax::VisibleSyntaxFailure],
 ) -> impl IntoElement {
     let line_count = visual_lines.len().max(1);
@@ -842,7 +696,11 @@ pub fn render_editor_pane(
 
     let list_visual_lines = visual_lines.clone();
     let list_lines = lines.clone();
-    let list_on_click_line = on_click_line.clone();
+    let list_source = source_view.clone();
+    let mut lengths = vec![0; lines.len()];
+    for visual in visual_lines.iter() { lengths[visual.physical_line_idx] = visual.char_start + visual.char_len; }
+    let mut offset = 0;
+    let line_offsets: Arc<Vec<_>> = Arc::new(lengths.into_iter().map(|len| { let current = offset; offset += len + 1; current }).collect());
 
     div()
         .flex_1()
@@ -880,12 +738,6 @@ pub fn render_editor_pane(
                         let vl = list_visual_lines.get(vis_idx);
                         let phys_idx = vl.map(|v| v.physical_line_idx).unwrap_or(0);
                         let phys_line_str = list_lines.get(phys_idx).map(String::as_str).unwrap_or("");
-                        let subline_str: String = if let Some(v) = vl {
-                            phys_line_str.chars().skip(v.char_start).take(v.char_len).collect()
-                        } else {
-                            phys_line_str.to_string()
-                        };
-
                         let is_last_subline_of_phys_line = list_visual_lines
                             .get(vis_idx + 1)
                             .map(|next| next.physical_line_idx != phys_idx)
@@ -907,89 +759,7 @@ pub fn render_editor_pane(
                             String::new()
                         };
 
-                        let phys_tokens = if !is_ast_in_sync {
-                            // During debounce, buffer leads AST: render code lines as uncolored plain text,
-                            // without synchronizing parsing or reusing stale AST tokens
-                            let is_code = code_blocks.iter().any(|b| {
-                                b.fence_open_line <= phys_idx
-                                    && phys_idx <= b.fence_close_line.unwrap_or_else(|| {
-                                        b.lines.last().map(|l| l.source_line_idx).unwrap_or(b.fence_open_line)
-                                    })
-                            });
-                            if is_code {
-                                vec![MarkdownToken {
-                                    text: phys_line_str.to_string(),
-                                    kind: MarkdownTokenKind::CodeText,
-                                }]
-                            } else {
-                                tokenize_markdown_line(phys_line_str)
-                            }
-                        } else {
-                            let matching_block = code_blocks.iter().find(|b| {
-                                b.fence_open_line <= phys_idx
-                                    && phys_idx <= b.fence_close_line.unwrap_or_else(|| {
-                                        b.lines.last().map(|l| l.source_line_idx).unwrap_or(b.fence_open_line)
-                                    })
-                            });
-
-                            if let Some(b) = matching_block {
-                                if phys_idx == b.fence_open_line
-                                    || b.fence_close_line.map_or(false, |close| phys_idx == close)
-                                {
-                                    vec![MarkdownToken {
-                                        text: phys_line_str.to_string(),
-                                        kind: MarkdownTokenKind::CodeDelimiter,
-                                    }]
-                                } else if let Some(mapping) = b.lines.iter().find(|m| m.source_line_idx == phys_idx) {
-                                    if !b.is_valid {
-                                        // "不等块两侧 Plain 且有可辨错误，不改源文本"
-                                        vec![MarkdownToken {
-                                            text: phys_line_str.to_string(),
-                                            kind: MarkdownTokenKind::CodeText,
-                                        }]
-                                    } else {
-                                        if let Some(spans) = block_spans.get(&b.key) {
-                                            let mut line_spans = Vec::new();
-                                            for span in spans.iter() {
-                                                let overlap_start = span.range.start.max(mapping.payload_range.start);
-                                                let overlap_end = span.range.end.min(mapping.payload_range.end);
-                                                if overlap_start < overlap_end {
-                                                    let rel_start = overlap_start - mapping.payload_range.start;
-                                                    let rel_end = overlap_end - mapping.payload_range.start;
-                                                    line_spans.push(zmark_core::syntax::SyntaxSpan {
-                                                        range: rel_start..rel_end,
-                                                        role: span.role,
-                                                    });
-                                                }
-                                            }
-
-                                            let mut tokens = Vec::new();
-                                            if mapping.prefix_len > 0 && mapping.prefix_len <= phys_line_str.len() {
-                                                tokens.push(MarkdownToken {
-                                                    text: phys_line_str[..mapping.prefix_len].to_string(),
-                                                    kind: MarkdownTokenKind::Plain,
-                                                });
-                                            }
-                                            let code_portion = &phys_line_str[mapping.prefix_len.min(phys_line_str.len())..];
-                                            tokens.extend(spans_to_code_tokens(code_portion, &line_spans));
-                                            tokens
-                                        } else {
-                                            vec![MarkdownToken {
-                                                text: phys_line_str.to_string(),
-                                                kind: MarkdownTokenKind::CodeText,
-                                            }]
-                                        }
-                                    }
-                                } else {
-                                    vec![MarkdownToken {
-                                        text: phys_line_str.to_string(),
-                                        kind: MarkdownTokenKind::CodeText,
-                                    }]
-                                }
-                            } else {
-                                tokenize_markdown_line(phys_line_str)
-                            }
-                        };
+                        let phys_tokens = physical_line_tokens(phys_idx, phys_line_str, &code_blocks, is_ast_in_sync, &block_spans);
                         let (sub_start, sub_len) = if let Some(v) = vl {
                             (v.char_start, v.char_len)
                         } else {
@@ -997,21 +767,30 @@ pub fn render_editor_pane(
                         };
                         let tokens = slice_tokens_for_visual_subline(&phys_tokens, sub_start, sub_len);
 
-                        let on_click_line = list_on_click_line.clone();
                         let row_h = calculate_line_row_height(font_size, sanitized_lh);
-                        let tokens_click = tokens.clone();
+                        let click_left = list_source.clone();
+                        let click_middle = list_source.clone();
+                        let click_right = list_source.clone();
 
                         let row = div()
+                            .debug_selector(move || format!("source_row_{vis_idx}"))
                             .flex()
                             .items_center()
                             .h(px(row_h))
                             .px_1()
                             .rounded_sm()
                             .cursor_text()
-                            .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
-                                let x_offset = (f32::from(event.position.x) - editor_left_offset).max(0.0);
-                                let rel_col = calculate_click_char_col_tokens(window.text_system(), &tokens_click, x_offset, font_size);
-                                on_click_line(vis_idx, rel_col, window, cx);
+                            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                                cx.stop_propagation();
+                                click_left.update(cx, |this, cx| this.source_mouse_down(event, window, cx));
+                            })
+                            .on_mouse_down(MouseButton::Middle, move |event, window, cx| {
+                                cx.stop_propagation();
+                                click_middle.update(cx, |this, cx| this.source_mouse_down(event, window, cx));
+                            })
+                            .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                                cx.stop_propagation();
+                                click_right.update(cx, |this, cx| this.source_mouse_down(event, window, cx));
                             });
 
                         #[cfg(feature = "test-observation")]
@@ -1023,26 +802,70 @@ pub fn render_editor_pane(
                             row.hover(|s| s.bg(list_theme.bg))
                         };
 
-                        let cursor_x = if is_active_subline {
-                            let char_count = subline_str.chars().count();
-                            let col = rel_cursor_col.min(char_count);
-                            calculate_cursor_x_offset_tokens(window.text_system(), &tokens, col, font_size)
-                        } else {
-                            0.0
-                        };
+                        let positions = Arc::new(token_char_positions(window.text_system(), &tokens, font_size));
+                        let cursor_x = positions[rel_cursor_col.min(positions.len() - 1)];
 
+                        let row_offset = line_offsets[phys_idx] + sub_start;
+                        let visual = vl.cloned().unwrap_or(VisualLine { physical_line_idx: phys_idx, subline_idx: 0, char_start: 0, char_len: sub_len, is_first: true });
+                        let geometry_tokens = tokens.clone();
+                        let geometry_positions = positions.clone();
+                        let geometry_source = list_source.clone();
+                        let selection_quads: Vec<_> = selection_ranges.iter().filter_map(|range| {
+                            let start = range.start.max(row_offset);
+                            let end = range.end.min(row_offset + sub_len);
+                            if start > end || (start == end && !range.is_empty()) { return None; }
+                            let x0 = positions[start - row_offset];
+                            let x1 = positions[end - row_offset];
+                            Some(div().debug_selector(move || format!("source_selection_{vis_idx}_{start}_{end}"))
+                                .absolute().top_0().left(px(x0)).w(px((x1 - x0).max(2.))).h(px(row_h))
+                                .bg(list_theme.selection_bg()).into_any_element())
+                        }).collect();
                         let mut text_container = div()
                             .debug_selector(|| format!("editor_text_{phys_idx}"))
                             .flex_1()
+                            .min_w(px(0.))
+                            .h(px(row_h))
                             .relative()
                             .text_size(px(font_size))
                             .line_height(relative(sanitized_lh))
                             .font_family(crate::platform::MONO_FONT)
                             .flex()
                             .items_center()
-                            .children(tokens.into_iter().map(|tok| {
-                                render_markdown_token_element(&tok, &list_theme).into_any_element()
-                            }));
+                            .children(selection_quads)
+                            .children({
+                                let mut token_offset = row_offset;
+                                tokens.into_iter().map(|tok| {
+                                    let length = tok.text.chars().count();
+                                    let (left, right) = token_paddings(&tok.kind);
+                                    let selected: Vec<_> = if left + right > 0.0 {
+                                        selection_ranges.iter().filter_map(|range| {
+                                            let start = range.start.max(token_offset);
+                                            let end = range.end.min(token_offset + length);
+                                            (start < end).then_some(start.saturating_sub(token_offset)..end.saturating_sub(token_offset))
+                                        }).collect()
+                                    } else { Vec::new() };
+                                    token_offset += length;
+                                    render_markdown_token_element(&tok, &list_theme, &selected).into_any_element()
+                                }).collect::<Vec<_>>()
+                            })
+                            .children(marked_range.as_ref().and_then(|range| {
+                                let start = range.start.max(row_offset);
+                                let end = range.end.min(row_offset + sub_len);
+                                if start >= end { return None; }
+                                let x0 = positions[start - row_offset];
+                                let x1 = positions[end - row_offset];
+                                Some(div().debug_selector(move || format!("source_marked_{vis_idx}_{start}_{end}"))
+                                    .absolute().bottom_0().left(px(x0.min(x1))).w(px((x1 - x0).abs().max(1.))).h(px(1.))
+                                    .bg(list_theme.text_primary).into_any_element())
+                            }))
+                            .child(canvas(move |bounds, _, cx| {
+                                let source = geometry_source.read(cx);
+                                let mut rows = source.source_rows.lock().unwrap();
+                                rows.retain(|row| row.index != vis_idx);
+                                rows.push(crate::views::workspace::SourceRow {
+                                    bounds, index: vis_idx, visual: visual.clone(), offset: row_offset, tokens: geometry_tokens.clone(), positions: geometry_positions.clone(),
+                                });
+                            }, |_, _, _, _| {}).absolute().size_full());
 
                         if is_active_subline {
                             text_container = text_container.child(
@@ -1086,6 +909,13 @@ pub fn render_editor_pane(
             .px(px(EDITOR_CONTAINER_PADDING_X))
             .py_4(),
         )
+        .child(canvas(|bounds, _, _| bounds, move |bounds, _, window, cx| {
+            let focus = source_view.read(cx).focus_handle.clone();
+            if source_view.read(cx).source_accepts_input(window, cx) {
+                window.handle_input(&focus, ElementInputHandler::new(bounds, source_view.clone()), cx);
+            }
+            source_view.update(cx, |this, cx| this.source_after_paint(window, cx));
+        }).absolute().size_full())
         .child(
             div()
                 .absolute()

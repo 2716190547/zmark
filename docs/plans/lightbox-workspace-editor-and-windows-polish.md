@@ -1,8 +1,8 @@
 # 媒体灯箱、工作区原地改名、源码选区与 Windows 顶栏优化
 
-版本：v1.3，2026-11-12。状态：用户已确认交互取舍，并明确覆盖独立审查关口，授权规划者自查后直接分期实现。
+版本：v1.4，2026-11-12。状态：用户已确认交互取舍，并明确覆盖独立审查关口，授权规划者自查后直接分期实现。
 
-代码基线：`9867abd62a0f5899339d18d346ed27c7313f320e`（`dev`）。阶段 A（`a6eb51a`）和 B（`f5583f1`）已交付；发布链路及 Windows 失败夹具修复已在 `e9b0196` 通过三平台 CI。当前先独立验收 GPUI／组件迁移，源码编辑的未完成改动保留但不混入迁移提交；C–E 未完成，不将迁移或 A／B 交付算作整个需求完成。
+代码基线：`9867abd62a0f5899339d18d346ed27c7313f320e`（`dev`）。阶段 A（`a6eb51a`）和 B（`f5583f1`）已交付；发布链路修复及 GPUI／组件迁移（`6f1f8ac`）均已通过三平台 CI。C 的源码引擎、真实窗口事件、原生输入接口和菜单 actions 已通过当前候选完整门禁，系统 IME／菜单及硬件桌面验收另列待测；D／E 尚在推进，不将自动回归或 A／B 交付算作整个需求完成。
 
 ## 1. 用户已确认的决策
 
@@ -268,4 +268,25 @@ rename 通过；H B3／B4 的 8 项与默认全量重叠，完整门禁 455 次�
 - 日志：`/tmp/zmark-gpui-0312-isolated-dev2.log`、`/tmp/zmark-gpui-0312-isolated-full-gate.log`、`/tmp/zmark-gpui-0312-isolated-probe-check.log`、`/tmp/zmark-gpui-0312-native-smoke.log`。
 - 自查不是独立审查：核对了 Input 原生范围单位、单一颜色／编辑来源、Root／资源入口、pending 解码预算／退休和窗口／弱引用生命周期。用户此前授权规划者自查并执行，不再编造独立批准。
 - API 限制：组件内置 locale 缺少日／韩／法／德／西班牙语，内置菜单相关文案可能回退英文；应用自己的十语言文案不因此被替换。多窗口主题／locale 使用应用级全局来源，不支持各窗口独立语言。
-- 尚未验证：当前候选的 Linux／Windows 原生构建、Windows 桌面、真实鼠标／触控板、原生 IME／菜单及多窗口语言切换。C 的选区绘制、拖选、源码 IME／菜单／列式编辑以及 D／E 均未完成。
+- 迁移提交 `6f1f8ac` 的 CI `43139326891`：macOS／Linux x86_64／Windows x86_64 全部成功，含原生文件安全回归及 release 构建；不覆盖之后的 C 改动，也不等于 Windows 桌面验收。
+- 尚未验证：C 的原生系统 IME／菜单点击、真实鼠标／触控板和窗外释放的硬件投递、多窗口语言切换；D／E 仍待完成。
+
+## 11. 阶段 C 当前候选（2026-11-12）
+
+- `EditorEngine` 保持唯一持久正文／revision／undo 来源；连续与按真实视觉行的中键列选统一字符范围。批量替换一次快照／revision，列式持续输入与删除保留插入位置，单行／匹配多行粘贴与末尾空行、CRLF、范围去重和输入预算均有回归；Undo／Redo 恢复正文、光标及原选区，不为每个范围复制全文。
+- 可见行登记实际 token 字形坐标，点击／拖选／高亮／复制／编辑共用边界；列拖复用已计算的坐标，普通选区移动不重排全文，保留 `uniform_list` 虚拟化及布局缓存。源码的整体批量替换仍重建缓冲区，不宣称已实现 rope 或大文档恒定时间编辑。
+- 源码注册 `ElementInputHandler<WorkspaceView>`，删除 Workspace printable 拼接及旧源码 clipboard／undo 分支；输入以 UTF-16 接口显式映射到 Unicode 字符模型，拒绝越界／半 surrogate。预编辑只替换活动范围的临时显示层，选中与 marked 下划线使用显示偏移，提交才一次写入全部原始范围。
+- 右键使用组件 `NativeMenu`，菜单 actions、实际快捷键、剪贴板共用源码命令入口。加粗可反转，编号跳过空行／AST fenced code 并支持 Enter 续号／空项退出。Cmd／Ctrl+B 为加粗，侧栏改为 Cmd／Ctrl+Shift+B；测试与主程序共用实际绑定。
+- 已证实并修复：IME 内选区不能取消组合；新挂载搜索框在形成完整焦点路径之前取焦，可能不触发旧 blur 回调，渲染时按实际编辑焦点补充清理。搜索／原生改名／切文档／模式切换／关闭确认保护通过真实路由回归。
+- 旧跨文档自动保存夹具原先在 Preview 输入隐藏源码；修正为进入 Source 并聚焦／绘制后使用原生输入，不恢复 Preview 隐藏编辑，保留两份文档的保存断言。图片恢复的 undo 夹具也明确验证 Preview 不改隐藏正文，进入 Source 才撤销，保留资源恢复断言。
+
+| 当前候选的验证 | passed | failed | ignored／skipped |
+| :--- | ---: | ---: | ---: |
+| `scripts/dev_check.sh` | 435 | 0 | 0 skipped |
+| `scripts/full_gate.sh --bundle` 内 `cargo test --workspace` | 435 | 0 | 0 ignored |
+| 同一串行命令 Phase H B1／B2／B3／B4 | 8＋5＋4＋4＝21 | 0 | 0 ignored |
+| 同一串行命令 Phase I syntax／workspace | 23＋5＝28 | 0 | 0 ignored |
+
+rename 通过；484 次执行，H B3／B4 与默认全量重叠的 8 项去重后为 476 项。源码引擎新回归 11 项、窗口事件新回归 13 项包含在默认全量内。日志 `/tmp/zmark-phase-c-delivery-dev.log`、`/tmp/zmark-phase-c-delivery-full.log`；最后候选包括语法失败 badge 点击取消预编辑和按真实焦点的清理。
+
+staging bundle 已构建且 `codesign --verify --deep --strict` 通过，二进制 SHA-256 `52374d3551b7555bc66116b799276c7976f4fa42254a0a41f640a68f1695e05c`。未安装，不改 `/Applications/ZMark.app`。本轮为用户授权的自查与自动回归，不是独立审查批准；headless 右键＋action 分发和 IME 接口调用不当作原生系统菜单点击、候选窗口或硬件 IME 验收。顶部自动滚动、失活和跨平台硬件交互仍需原生桌面矩阵，不因这些自动测试通过宣称整个 C–E 已完成。

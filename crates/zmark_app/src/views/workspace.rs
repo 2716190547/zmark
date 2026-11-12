@@ -16,6 +16,9 @@ use crate::updater::{PreparedUpdate, UpdateConfig, UpdateStatus};
 use crate::views::preview::PreviewScrollState;
 use crate::views::settings::SettingsWindowView;
 
+mod source;
+pub use source::{SourceCommand, SourceComposition, SourceDrag, SourceRow};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollOrigin {
     Editor,
@@ -97,6 +100,12 @@ pub struct WorkspaceView {
     pub preview_mouse_window_pos: Option<Point<Pixels>>,
     pub preview_content_bounds: Option<Bounds<Pixels>>,
     pub editor_content_bounds: Option<Bounds<Pixels>>,
+    pub source_rows: Arc<std::sync::Mutex<Vec<SourceRow>>>,
+    pub source_composition: Option<SourceComposition>,
+    pub source_drag: Option<SourceDrag>,
+    source_click_after_composition: Option<(MouseDownEvent, bool)>,
+    pub source_autoscroll_task: Option<Task<()>>,
+    source_focus_subscription: Option<Subscription>,
     pub document_layout_cache: crate::views::editor::DocumentLayoutCache,
     pub cached_visual_rev: usize,
     pub cached_visual_width_bits: u64,
@@ -251,6 +260,12 @@ impl WorkspaceView {
             preview_mouse_window_pos: None,
             preview_content_bounds: None,
             editor_content_bounds: None,
+            source_rows: Arc::new(std::sync::Mutex::new(Vec::new())),
+            source_composition: None,
+            source_drag: None,
+            source_click_after_composition: None,
+            source_autoscroll_task: None,
+            source_focus_subscription: None,
             document_layout_cache: crate::views::editor::DocumentLayoutCache::new(),
             cached_visual_rev: usize::MAX,
             cached_visual_width_bits: 0,
@@ -379,6 +394,9 @@ impl WorkspaceView {
 
     /// Swaps in a new document: the preview list drops cached heights and starts at the top.
     pub fn reset_preview_list(&mut self) {
+        self.cancel_source_composition();
+        self.end_source_drag();
+        self.source_rows.lock().unwrap().clear();
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
         self.preview_selection = None;
@@ -565,6 +583,8 @@ impl WorkspaceView {
 
     /// Parses immediately (manual save, explicit refresh, or switching into the preview).
     pub fn parse_now_and_refresh(&mut self) {
+        self.cancel_source_composition();
+        self.end_source_drag();
         self.parse_task = None;
         self.parse_paused = false;
         // A rename box belongs to the document it was opened on.
@@ -929,10 +949,11 @@ impl WorkspaceView {
             }
         }
 
-        let fenced_lines = self.compute_fenced_lines(self.state.editor.lines.len());
+        let display = self.source_display_lines();
+        let fenced_lines = self.compute_fenced_lines(display.len());
         let lines = self.document_layout_cache.update(
             window.text_system(),
-            &self.state.editor.lines,
+            &display,
             &fenced_lines,
             max_width_px,
             font_size,
@@ -1808,6 +1829,8 @@ impl WorkspaceView {
     }
 
     pub fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
+        self.cancel_source_composition();
+        self.end_source_drag();
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
         if mode != ViewMode::Source && self.state.parse_is_stale() {
@@ -1825,6 +1848,8 @@ impl WorkspaceView {
     }
 
     pub fn on_editor_click_line(&mut self, vis_idx: usize, vis_col: usize, window: &mut Window, cx: &mut App) {
+        self.cancel_source_composition();
+        self.end_source_drag();
         window.focus(&self.focus_handle, cx);
         self.search_focused = false;
         self.preview_focused = false;
@@ -2872,7 +2897,7 @@ impl WorkspaceView {
                     .when(!drawer_open, |el| {
                         el.child(render_icon_button(
                             "btn_expand_drawer",
-                            format!("{} ({})", strings.directory_drawer, crate::platform::shortcut_hint("B")),
+                            format!("{} ({})", strings.directory_drawer, crate::platform::shortcut_hint("Shift+B")),
                             false,
                             theme,
                             render_sidebar_icon(theme.text_muted),
@@ -3285,6 +3310,8 @@ impl Render for WorkspaceView {
         if !self.preview_scroll_activation_observed {
             cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
+                    this.cancel_source_composition();
+                    this.end_source_drag();
                     this.end_preview_scroll_drag();
                     cx.notify();
                 }
@@ -3315,6 +3342,19 @@ impl Render for WorkspaceView {
             if &*gpui_component::locale() != tag { gpui_component::set_locale(tag); }
         }
         self.ensure_inputs(window, cx);
+        // A newly mounted Input may not yet have a focus path when it takes focus.
+        if !self.source_accepts_input(window, cx) {
+            self.cancel_source_composition();
+            self.end_source_drag();
+        }
+        if self.source_focus_subscription.is_none() {
+            self.source_focus_subscription = Some(cx.on_blur(&self.focus_handle, window, |this, _, cx| {
+                this.cancel_source_composition();
+                this.end_source_drag();
+                cx.notify();
+            }));
+        }
+        self.source_rows.lock().unwrap().clear();
         self.workspace_width = f32::from(window.viewport_size().width);
         self.window_handle = Some(window.window_handle());
 
@@ -3741,7 +3781,8 @@ impl Render for WorkspaceView {
                     cx.notify();
                 }
             }))
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.source_mouse_move(event, window, cx);
                 if this.is_resizing_split {
                     let w = this.workspace_width;
                     let x = f32::from(event.position.x);
@@ -3756,7 +3797,20 @@ impl Render for WorkspaceView {
                     this.trigger_preview_autoscroll_if_needed(cx);
                 }
             }))
+            .on_mouse_up(MouseButton::Middle, cx.listener(|this, _, _, cx| {
+                this.release_source_drag(MouseButton::Middle);
+                cx.notify();
+            }))
+            .on_mouse_up_out(MouseButton::Middle, cx.listener(|this, _, _, cx| {
+                this.release_source_drag(MouseButton::Middle);
+                cx.notify();
+            }))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.release_source_drag(MouseButton::Left);
+                cx.notify();
+            }))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _window, cx| {
+                this.release_source_drag(MouseButton::Left);
                 this.release_preview_scroll_drag();
                 if this.is_resizing_split {
                     this.is_resizing_split = false;
@@ -3814,6 +3868,17 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(|this, _: &ExportHtml, window, cx| {
                 this.trigger_export_html(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &crate::actions::SourceUndo, window, cx| this.source_command(SourceCommand::Undo, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::SourceRedo, window, cx| this.source_command(SourceCommand::Redo, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::SourceCopy, window, cx| this.source_command(SourceCommand::Copy, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::SourceCut, window, cx| this.source_command(SourceCommand::Cut, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::SourcePaste, window, cx| this.source_command(SourceCommand::Paste, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::SourceSelectAll, window, cx| this.source_command(SourceCommand::SelectAll, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::SourceDelete, window, cx| this.source_command(SourceCommand::Delete, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::SourceBold, window, cx| this.source_command(SourceCommand::Bold, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::SourceNumberedList, window, cx| this.source_command(SourceCommand::NumberedList, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::SourceIndent, window, cx| this.source_command(SourceCommand::Indent, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::SourceOutdent, window, cx| this.source_command(SourceCommand::Outdent, window, cx)))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.lightbox.is_open {
                     if event.keystroke.key == "escape" {
@@ -3869,6 +3934,10 @@ impl Render for WorkspaceView {
                     return;
                 }
 
+                if this.source_key_down(event, window, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
                 let key = event.keystroke.key.as_str();
                 let mods = event.keystroke.modifiers;
                 if key.eq_ignore_ascii_case("tab") && this.preview_focused {
@@ -3880,18 +3949,6 @@ impl Render for WorkspaceView {
 
                 if mods.secondary(cx) {
                     match key {
-                        "z" => {
-                            if mods.shift {
-                                this.state.editor.redo();
-                            } else {
-                                this.state.editor.undo();
-                            }
-                            if this.state.sync_from_editor() {
-                                this.schedule_parse(cx);
-                            }
-                            this.trigger_auto_save(cx);
-                            cx.notify();
-                        }
                         "s" => {
                             this.trigger_save(cx);
                         }
@@ -3924,7 +3981,7 @@ impl Render for WorkspaceView {
                         "," => {
                             this.open_settings_window(cx);
                         }
-                        "b" => {
+                        "b" if mods.shift => {
                             this.toggle_drawer(cx);
                         }
                         "1" => {
@@ -3945,17 +4002,11 @@ impl Render for WorkspaceView {
                             cx.notify();
                         }
                         "c" | "C" => {
-                            let should_copy_preview = match this.state.view_mode {
-                                ViewMode::Preview => true,
-                                ViewMode::Split => this.preview_focused,
-                                ViewMode::Source => false,
-                            };
-                            if should_copy_preview {
-                                if let Some(sel) = this.preview_selection {
-                                    let text = crate::views::preview::serialize_preview_selection(&this.state.doc().parsed, sel);
-                                    if !text.is_empty() {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                                    }
+                            let preview = this.state.view_mode == ViewMode::Preview || (this.state.view_mode == ViewMode::Split && this.preview_focused);
+                            if preview {
+                                if let Some(selection) = this.preview_selection {
+                                    let text = crate::views::preview::serialize_preview_selection(&this.state.doc().parsed, selection);
+                                    if !text.is_empty() { cx.write_to_clipboard(ClipboardItem::new_string(text)); }
                                 }
                             }
                         }
@@ -3967,52 +4018,7 @@ impl Render for WorkspaceView {
                     return;
                 }
 
-                let revision_before = this.state.editor.revision;
-                let mut handled = true;
-                match key {
-                    "backspace" => this.state.editor.delete_backward(),
-                    "delete" => this.state.editor.delete_forward(),
-                    "enter" => this.state.editor.insert_newline(),
-                    "tab" => {
-                        let spaces = " ".repeat(this.state.preferences.tab_size);
-                        this.state.editor.insert_text(&spaces);
-                    }
-                    "left" => this.state.editor.move_left(),
-                    "right" => this.state.editor.move_right(),
-                    "up" => {
-                        let visual_lines = this.compute_visual_lines(window);
-                        this.state.editor.move_up_visual_lines(&visual_lines);
-                    }
-                    "down" => {
-                        let visual_lines = this.compute_visual_lines(window);
-                        this.state.editor.move_down_visual_lines(&visual_lines);
-                    }
-                    "home" => this.state.editor.move_to_line_start(),
-                    "end" => this.state.editor.move_to_line_end(),
-                    _ => {
-                        if let Some(key_char) = &event.keystroke.key_char {
-                            if !mods.control {
-                                this.state.editor.insert_text(key_char);
-                            } else {
-                                handled = false;
-                            }
-                        } else if key.chars().count() == 1 && !mods.control {
-                            this.state.editor.insert_text(key);
-                        } else {
-                            handled = false;
-                        }
-                    }
-                }
-
-                if handled {
-                    this.preview_focused = false;
-                    if this.state.editor.revision != revision_before {
-                        this.state.mark_editor_dirty();
-                        this.schedule_parse(cx);
-                    }
-                    this.trigger_auto_save(cx);
-                    cx.notify();
-                }
+                // Printable text and composition are delivered once by ElementInputHandler.
             }))
             .size_full()
             .flex()
@@ -4576,13 +4582,13 @@ impl Render for WorkspaceView {
                                                         .size_full(),
                                                     )
                                                     .child(render_editor_pane(
-                                                        self.state.editor.lines.clone(),
+                                                        self.source_display_lines(),
                                                         self.state.editor.char_count,
                                                         visual_lines.clone(),
                                                         self.syntax_cache.clone(),
                                                         self.source_code_blocks.clone(),
-                                                        !self.state.doc().is_parse_stale(),
-                                                        self.state.editor.cursor(),
+                                                        !self.state.doc().is_parse_stale() && self.source_composition.is_none(),
+                                                        self.source_display_cursor(),
                                                         theme,
                                                         strings,
                                                         self.state.preferences.font_size,
@@ -4593,6 +4599,9 @@ impl Render for WorkspaceView {
                                                         editor_left_offset,
                                                         gutter_width,
                                                         on_click_line.clone(),
+                                                        cx.entity().clone(),
+                                                        Arc::new(self.source_display_selection_ranges()),
+                                                        self.source_marked_range(),
                                                         &editor_failures,
                                                     ))
                                                     .into_any_element()
@@ -4672,13 +4681,13 @@ impl Render for WorkspaceView {
                                                             .size_full(),
                                                         )
                                                         .child(render_editor_pane(
-                                                            self.state.editor.lines.clone(),
+                                                            self.source_display_lines(),
                                                             self.state.editor.char_count,
                                                             visual_lines.clone(),
                                                             self.syntax_cache.clone(),
                                                             self.source_code_blocks.clone(),
-                                                            !self.state.doc().is_parse_stale(),
-                                                            self.state.editor.cursor(),
+                                                            !self.state.doc().is_parse_stale() && self.source_composition.is_none(),
+                                                            self.source_display_cursor(),
                                                             theme,
                                                             strings,
                                                             self.state.preferences.font_size,
@@ -4689,6 +4698,9 @@ impl Render for WorkspaceView {
                                                             editor_left_offset,
                                                             gutter_width,
                                                             on_click_line,
+                                                            cx.entity().clone(),
+                                                            Arc::new(self.source_display_selection_ranges()),
+                                                            self.source_marked_range(),
                                                             &editor_failures,
                                                         ))
                                                 })

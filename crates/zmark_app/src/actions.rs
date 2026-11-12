@@ -1,4 +1,4 @@
-use gpui::actions;
+use gpui::{actions, App, KeyBinding};
 
 actions!(
     zmark,
@@ -11,6 +11,112 @@ actions!(
         OpenFileDialog,
         SaveFile,
         ExportHtml,
-        CancelRename
+        CancelRename,
+        SourceUndo,
+        SourceRedo,
+        SourceCopy,
+        SourceCut,
+        SourcePaste,
+        SourceSelectAll,
+        SourceDelete,
+        SourceBold,
+        SourceNumberedList,
+        SourceIndent,
+        SourceOutdent
     ]
 );
+
+pub fn init_key_bindings(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::load(
+            "secondary-1",
+            Box::new(ToggleSourceMode),
+            None,
+            false,
+            None,
+            cx,
+        )
+        .unwrap(),
+        KeyBinding::load(
+            "secondary-2",
+            Box::new(ToggleSplitMode),
+            None,
+            false,
+            None,
+            cx,
+        )
+        .unwrap(),
+        KeyBinding::load(
+            "secondary-3",
+            Box::new(TogglePreviewMode),
+            None,
+            false,
+            None,
+            cx,
+        )
+        .unwrap(),
+        KeyBinding::load(
+            "secondary-b",
+            Box::new(SourceBold),
+            Some(
+                gpui::KeyBindingContextPredicate::parse("Workspace")
+                    .unwrap()
+                    .into(),
+            ),
+            false,
+            None,
+            cx,
+        )
+        .unwrap(),
+        KeyBinding::load(
+            "secondary-shift-7",
+            Box::new(SourceNumberedList),
+            Some(
+                gpui::KeyBindingContextPredicate::parse("Workspace")
+                    .unwrap()
+                    .into(),
+            ),
+            false,
+            None,
+            cx,
+        )
+        .unwrap(),
+        KeyBinding::load(
+            "secondary-shift-b",
+            Box::new(ToggleDrawer),
+            None,
+            false,
+            None,
+            cx,
+        )
+        .unwrap(),
+        KeyBinding::load(
+            "secondary-o",
+            Box::new(OpenFileDialog),
+            None,
+            false,
+            None,
+            cx,
+        )
+        .unwrap(),
+        KeyBinding::load(
+            "secondary-,",
+            Box::new(ToggleSettings),
+            None,
+            false,
+            None,
+            cx,
+        )
+        .unwrap(),
+        KeyBinding::load("secondary-s", Box::new(SaveFile), None, false, None, cx).unwrap(),
+        KeyBinding::load(
+            "secondary-shift-e",
+            Box::new(ExportHtml),
+            None,
+            false,
+            None,
+            cx,
+        )
+        .unwrap(),
+    ]);
+}

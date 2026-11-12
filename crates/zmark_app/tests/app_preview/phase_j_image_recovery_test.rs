@@ -249,6 +249,15 @@ async fn recovery_undo_redo_shortcuts_follow_autosave_to_disk(cx: &mut gpui::Tes
     );
     cx.simulate_keystrokes("secondary-z");
     cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).state.editor.to_text(), "![x](assets/pic.png)", "Preview focus cannot undo hidden source"));
+    cx.update(|window, cx| view.update(cx, |ws, cx| {
+        ws.set_view_mode(ViewMode::Source, cx);
+        window.focus(&ws.focus_handle, cx);
+    }));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.simulate_keystrokes("secondary-z");
+    cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(50));
     cx.run_until_parked();
     cx.update(|_, cx| assert_eq!(view.read(cx).state.editor.to_text(), original));
@@ -311,8 +320,12 @@ async fn pending_autosaves_survive_switching_and_editing_another_document(
         view.update(cx, |ws, cx| {
             ws.state.load_file(second.clone()).unwrap();
             ws.on_document_swapped(Some(window), cx);
+            ws.set_view_mode(ViewMode::Source, cx);
+            window.focus(&ws.focus_handle, cx);
         })
     });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
     cx.simulate_keystrokes("end space c h a n g e d");
     cx.executor().advance_clock(Duration::from_millis(150));
     cx.run_until_parked();

@@ -282,7 +282,7 @@ pub fn render_drawer_with_search(
                 .gap_1()
                 .child(render_icon_btn(
                     "drawer_collapse_btn",
-                    &format!("{} ({})", strings.collapse_sidebar, crate::platform::shortcut_hint("B")),
+                    &format!("{} ({})", strings.collapse_sidebar, crate::platform::shortcut_hint("Shift+B")),
                     "icons/panel-left.svg",
                     false,
                     theme,

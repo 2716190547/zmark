@@ -3,6 +3,8 @@ use std::sync::Arc;
 const MAX_UNDO_STEPS: usize = 100;
 const MAX_UNDO_BYTES: usize = 8 * 1024 * 1024;
 
+mod editing;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisualLine {
     pub physical_line_idx: usize,
@@ -204,6 +206,18 @@ pub fn visual_to_physical(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct EditorSnapshot {
+    text: String,
+    cursor: (usize, usize),
+    anchor: Option<(usize, usize)>,
+    columns: Vec<std::ops::Range<usize>>,
+}
+
+impl EditorSnapshot {
+    fn bytes(&self) -> usize { self.text.len() + self.columns.len() * std::mem::size_of::<std::ops::Range<usize>>() + std::mem::size_of::<Self>() }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorEngine {
     pub lines: Arc<Vec<String>>,
     /// Character count including line breaks, cached so the status pill does not
@@ -211,9 +225,11 @@ pub struct EditorEngine {
     pub char_count: usize,
     pub cursor_line: usize,
     pub cursor_col: usize,
+    selection_anchor: Option<(usize, usize)>,
+    column_ranges: Vec<std::ops::Range<usize>>,
     pub revision: usize,
-    undo_stack: Vec<String>,
-    redo_stack: Vec<String>,
+    undo_stack: Vec<EditorSnapshot>,
+    redo_stack: Vec<EditorSnapshot>,
     undo_bytes: usize,
     redo_bytes: usize,
 }
@@ -228,6 +244,8 @@ impl EditorEngine {
             lines: Arc::new(lines),
             cursor_line: last_line_idx,
             cursor_col: last_col,
+            selection_anchor: None,
+            column_ranges: Vec::new(),
             revision: 0,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -238,6 +256,7 @@ impl EditorEngine {
 
     pub fn reset_text(&mut self, text: &str) {
         self.lines = Arc::new(split_lines(text));
+        self.clear_selection();
         self.char_count = count_chars(&self.lines);
         self.cursor_line = self.cursor_line.min(self.lines.len() - 1);
         self.clamp_cursor();
@@ -259,17 +278,92 @@ impl EditorEngine {
     pub fn set_cursor(&mut self, line: usize, col: usize) {
         self.cursor_line = line.min(self.lines.len() - 1);
         self.cursor_col = col;
+        self.clear_selection();
         self.clamp_cursor();
     }
 
+    pub fn selection(&self) -> Option<(usize, usize)> {
+        let anchor = self.selection_anchor?;
+        let anchor = self.offset_for_position(anchor);
+        let active = self.offset_for_position(self.cursor());
+        (anchor != active).then_some((anchor.min(active), anchor.max(active)))
+    }
+
+    pub fn select_to(&mut self, line: usize, col: usize, extend: bool) {
+        self.column_ranges.clear();
+        if !extend || self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor());
+        }
+        self.cursor_line = line.min(self.lines.len() - 1);
+        self.cursor_col = col;
+        self.clamp_cursor();
+    }
+
+    pub fn select_all(&mut self) {
+        self.column_ranges.clear();
+        self.selection_anchor = Some((0, 0));
+        self.cursor_line = self.lines.len() - 1;
+        self.cursor_col = self.lines[self.cursor_line].chars().count();
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        let ranges = self.selection_ranges();
+        if ranges.is_empty() { return None; }
+        let text = self.to_text();
+        let mut chars = text.chars();
+        let mut previous_end = 0;
+        Some(ranges.iter().map(|range| {
+            for _ in previous_end..range.start { chars.next(); }
+            let selected = chars.by_ref().take(range.len()).collect::<String>();
+            previous_end = range.end;
+            selected
+        }).collect::<Vec<_>>().join(if self.is_column_selection() { "\n" } else { "" }))
+    }
+
+    pub fn delete_selection(&mut self) -> bool {
+        let ranges = self.selection_ranges();
+        if !ranges.iter().any(|range| !range.is_empty()) { return false; }
+        self.replace_ranges(&ranges, &vec![String::new(); ranges.len()]).is_ok()
+    }
+
+    pub fn offset_for_position(&self, (line, col): (usize, usize)) -> usize {
+        self.lines.iter().take(line).map(|line| line.chars().count() + 1).sum::<usize>() + col
+    }
+
+    pub fn line_len(&self, line: usize) -> usize {
+        let text = &self.lines[line];
+        text.chars().count() - usize::from(line + 1 < self.lines.len() && text.ends_with('\r'))
+    }
+
+    pub fn selection_anchor_offset(&self) -> Option<usize> {
+        self.selection_anchor.map(|position| self.offset_for_position(position))
+    }
+
     fn clamp_cursor(&mut self) {
-        let max_col = self.lines[self.cursor_line].chars().count();
+        let max_col = self.line_len(self.cursor_line);
         self.cursor_col = self.cursor_col.min(max_col);
     }
 
+    fn snapshot(&self) -> EditorSnapshot {
+        EditorSnapshot { text: self.to_text(), cursor: self.cursor(), anchor: self.selection_anchor, columns: self.column_ranges.clone() }
+    }
+
+    fn restore_snapshot(&mut self, snapshot: EditorSnapshot) {
+        self.lines = Arc::new(split_lines(&snapshot.text));
+        self.char_count = count_chars(&self.lines);
+        (self.cursor_line, self.cursor_col) = snapshot.cursor;
+        self.selection_anchor = snapshot.anchor;
+        self.column_ranges = snapshot.columns;
+        self.clamp_cursor();
+        self.revision += 1;
+    }
+
+    pub fn can_undo(&self) -> bool { !self.undo_stack.is_empty() }
+    pub fn can_redo(&self) -> bool { !self.redo_stack.is_empty() }
+
     pub fn push_snapshot(&mut self) {
-        let snapshot = self.to_text();
-        self.undo_bytes += snapshot.len();
+        let snapshot = self.snapshot();
+        self.undo_bytes += snapshot.bytes();
         self.undo_stack.push(snapshot);
         trim_stack(&mut self.undo_stack, &mut self.undo_bytes);
         self.redo_stack.clear();
@@ -302,55 +396,82 @@ impl EditorEngine {
         self.lines = Arc::new(split_lines(&updated));
         self.char_count = count_chars(&self.lines);
         self.cursor_col = cursor_col;
+        self.clear_selection();
         self.clamp_cursor();
         self.revision += 1;
         true
     }
 
-    pub fn insert_text(&mut self, text: &str) {
-        if text.is_empty() {
-            return;
+    pub fn insert_text(&mut self, inserted: &str) {
+        let mut ranges = self.selection_ranges();
+        if ranges.is_empty() {
+            let offset = self.offset_for_position(self.cursor());
+            ranges.push(offset..offset);
         }
-        self.push_snapshot();
-        for ch in text.chars() {
-            if ch == '\n' {
-                self.internal_newline();
-            } else {
-                self.internal_insert_char(ch);
-            }
-        }
-        self.char_count = count_chars(&self.lines);
-        self.revision += 1;
+        if inserted.len().checked_mul(ranges.len()).is_none_or(|bytes| bytes > MAX_UNDO_BYTES) { return; }
+        let _ = self.replace_ranges(&ranges, &vec![inserted.to_owned(); ranges.len()]);
     }
 
     pub fn insert_newline(&mut self) {
-        self.push_snapshot();
-        self.internal_newline();
-        self.char_count = count_chars(&self.lines);
-        self.revision += 1;
+        let line = &self.lines[self.cursor_line];
+        let prefix: String = line.chars().take_while(|ch| *ch == ' ' || *ch == '\t').collect();
+        let trimmed = line.trim_start().trim_end_matches('\r');
+        let eol = if self.lines.iter().any(|line| line.ends_with('\r')) { "\r\n" } else { "\n" };
+        if let Some((number, length)) = editing::ordered_marker(trimmed).filter(|_| {
+            self.cursor_col >= prefix.chars().count() && !zmark_core::ast::parse_markdown(&self.to_text()).code_blocks.iter().any(|block| {
+                self.cursor_line >= block.fence_open_line && self.cursor_line <= block.fence_close_line.unwrap_or(self.lines.len() - 1)
+            })
+        }) {
+            if !self.is_column_selection() && self.selection().is_none() && self.cursor_col == self.line_len(self.cursor_line) && trimmed.len() == length {
+                let start = self.offset_for_position((self.cursor_line, prefix.chars().count()));
+                let end = self.offset_for_position(self.cursor());
+                let _ = self.replace_ranges(&[start..end], &[String::new()]);
+                return;
+            }
+            if let Some(next) = number.checked_add(1) {
+                self.insert_text(&format!("{eol}{prefix}{next}. "));
+                return;
+            }
+        }
+        self.insert_text(&format!("{eol}{prefix}"));
     }
 
-    fn internal_insert_char(&mut self, ch: char) {
-        let line = &mut Arc::make_mut(&mut self.lines)[self.cursor_line];
-        let mut chars: Vec<char> = line.chars().collect();
-        chars.insert(self.cursor_col, ch);
-        *line = chars.into_iter().collect();
-        self.cursor_col += 1;
-    }
-
-    fn internal_newline(&mut self) {
-        let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
-        let left: String = chars[..self.cursor_col].iter().collect();
-        let right: String = chars[self.cursor_col..].iter().collect();
-
-        let lines = Arc::make_mut(&mut self.lines);
-        lines[self.cursor_line] = left;
-        lines.insert(self.cursor_line + 1, right);
-        self.cursor_line += 1;
-        self.cursor_col = 0;
+    pub fn toggle_bold(&mut self) {
+        if self.is_column_selection() { return; }
+        let source = self.to_text();
+        if let Some((start, end)) = self.selection() {
+            let a = byte_offset_for_char(&source, start).unwrap();
+            let b = byte_offset_for_char(&source, end).unwrap();
+            let selected = &source[a..b];
+            let reversed = self.selection_reversed();
+            if selected.len() >= 4 && selected.starts_with("**") && selected.ends_with("**") {
+                let text = selected[2..selected.len() - 2].to_owned();
+                if self.replace_ranges(&[start..end], &[text]).is_err() { return; }
+                self.set_selection_offsets(start, end - 4, reversed);
+            } else if source[..a].ends_with("**") && source[b..].starts_with("**") {
+                let text = selected.to_owned();
+                if self.replace_ranges(&[start - 2..end + 2], &[text]).is_err() { return; }
+                self.set_selection_offsets(start - 2, end - 2, reversed);
+            } else {
+                if self.replace_ranges(&[start..end], &[format!("**{selected}**")]).is_err() { return; }
+                self.set_selection_offsets(start + 2, end + 2, reversed);
+            }
+        } else {
+            self.insert_text("****");
+            self.cursor_col = self.cursor_col.saturating_sub(2);
+        }
     }
 
     pub fn delete_backward(&mut self) {
+        if self.delete_selection() { return; }
+        if self.is_column_selection() {
+            let ranges: Vec<_> = self.column_ranges.iter().map(|range| {
+                let (_, col) = self.position_for_offset(range.start);
+                range.start.saturating_sub(usize::from(col > 0))..range.start
+            }).collect();
+            let _ = self.replace_ranges(&ranges, &vec![String::new(); ranges.len()]);
+            return;
+        }
         if self.cursor_col > 0 {
             self.push_snapshot();
             let line = &mut Arc::make_mut(&mut self.lines)[self.cursor_line];
@@ -364,6 +485,7 @@ impl EditorEngine {
             let lines = Arc::make_mut(&mut self.lines);
             let current = lines.remove(self.cursor_line);
             let prev_line = &mut lines[self.cursor_line - 1];
+            if prev_line.ends_with('\r') { prev_line.pop(); }
             let prev_len = prev_line.chars().count();
             prev_line.push_str(&current);
             self.cursor_line -= 1;
@@ -374,7 +496,16 @@ impl EditorEngine {
     }
 
     pub fn delete_forward(&mut self) {
-        let line_len = self.lines[self.cursor_line].chars().count();
+        if self.delete_selection() { return; }
+        if self.is_column_selection() {
+            let ranges: Vec<_> = self.column_ranges.iter().map(|range| {
+                let (line, col) = self.position_for_offset(range.end);
+                range.end..range.end + usize::from(col < self.line_len(line))
+            }).collect();
+            let _ = self.replace_ranges(&ranges, &vec![String::new(); ranges.len()]);
+            return;
+        }
+        let line_len = self.line_len(self.cursor_line);
         if self.cursor_col < line_len {
             self.push_snapshot();
             let line = &mut Arc::make_mut(&mut self.lines)[self.cursor_line];
@@ -386,6 +517,7 @@ impl EditorEngine {
             self.push_snapshot();
             let lines = Arc::make_mut(&mut self.lines);
             let next = lines.remove(self.cursor_line + 1);
+            if lines[self.cursor_line].ends_with('\r') { lines[self.cursor_line].pop(); }
             lines[self.cursor_line].push_str(&next);
             self.revision += 1;
         }
@@ -393,16 +525,30 @@ impl EditorEngine {
     }
 
     pub fn move_left(&mut self) {
+        self.column_ranges.clear();
+        if let Some((start, _)) = self.selection() {
+            (self.cursor_line, self.cursor_col) = position_for_char_offset(&self.lines, start);
+            self.selection_anchor = None;
+            return;
+        }
+        self.selection_anchor = None;
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
         } else if self.cursor_line > 0 {
             self.cursor_line -= 1;
-            self.cursor_col = self.lines[self.cursor_line].chars().count();
+            self.cursor_col = self.line_len(self.cursor_line);
         }
     }
 
     pub fn move_right(&mut self) {
-        let line_len = self.lines[self.cursor_line].chars().count();
+        self.column_ranges.clear();
+        if let Some((_, end)) = self.selection() {
+            (self.cursor_line, self.cursor_col) = position_for_char_offset(&self.lines, end);
+            self.selection_anchor = None;
+            return;
+        }
+        self.selection_anchor = None;
+        let line_len = self.line_len(self.cursor_line);
         if self.cursor_col < line_len {
             self.cursor_col += 1;
         } else if self.cursor_line + 1 < self.lines.len() {
@@ -428,25 +574,23 @@ impl EditorEngine {
     }
 
     pub fn move_to_line_start(&mut self) {
+        self.clear_selection();
         self.cursor_col = 0;
     }
 
     pub fn move_to_line_end(&mut self) {
-        self.cursor_col = self.lines[self.cursor_line].chars().count();
+        self.clear_selection();
+        self.cursor_col = self.line_len(self.cursor_line);
     }
 
     pub fn undo(&mut self) -> bool {
         if let Some(prev) = self.undo_stack.pop() {
-            self.undo_bytes = self.undo_bytes.saturating_sub(prev.len());
-            let current = self.to_text();
-            self.redo_bytes += current.len();
+            self.undo_bytes = self.undo_bytes.saturating_sub(prev.bytes());
+            let current = self.snapshot();
+            self.redo_bytes += current.bytes();
             self.redo_stack.push(current);
             trim_stack(&mut self.redo_stack, &mut self.redo_bytes);
-            self.lines = Arc::new(split_lines(&prev));
-            self.char_count = count_chars(&self.lines);
-            self.cursor_line = self.cursor_line.min(self.lines.len() - 1);
-            self.clamp_cursor();
-            self.revision += 1;
+            self.restore_snapshot(prev);
             true
         } else {
             false
@@ -455,16 +599,12 @@ impl EditorEngine {
 
     pub fn redo(&mut self) -> bool {
         if let Some(next) = self.redo_stack.pop() {
-            self.redo_bytes = self.redo_bytes.saturating_sub(next.len());
-            let current = self.to_text();
-            self.undo_bytes += current.len();
+            self.redo_bytes = self.redo_bytes.saturating_sub(next.bytes());
+            let current = self.snapshot();
+            self.undo_bytes += current.bytes();
             self.undo_stack.push(current);
             trim_stack(&mut self.undo_stack, &mut self.undo_bytes);
-            self.lines = Arc::new(split_lines(&next));
-            self.char_count = count_chars(&self.lines);
-            self.cursor_line = self.cursor_line.min(self.lines.len() - 1);
-            self.clamp_cursor();
-            self.revision += 1;
+            self.restore_snapshot(next);
             true
         } else {
             false
@@ -496,6 +636,21 @@ fn count_chars(lines: &[String]) -> usize {
         + lines.len().saturating_sub(1)
 }
 
+fn byte_offset_for_char(text: &str, offset: usize) -> Option<usize> {
+    if offset == text.chars().count() { Some(text.len()) }
+    else { text.char_indices().nth(offset).map(|(byte, _)| byte) }
+}
+
+fn position_for_char_offset(lines: &[String], mut offset: usize) -> (usize, usize) {
+    for (line_idx, line) in lines.iter().enumerate() {
+        let len = line.chars().count();
+        if offset <= len { return (line_idx, offset); }
+        offset -= len + 1;
+    }
+    let line_idx = lines.len() - 1;
+    (line_idx, lines[line_idx].chars().count())
+}
+
 fn split_lines(text: &str) -> Vec<String> {
     if text.is_empty() {
         vec![String::new()]
@@ -505,10 +660,10 @@ fn split_lines(text: &str) -> Vec<String> {
 }
 
 /// Keeps undo/redo bounded by both step count and total text bytes.
-fn trim_stack(stack: &mut Vec<String>, bytes: &mut usize) {
+fn trim_stack(stack: &mut Vec<EditorSnapshot>, bytes: &mut usize) {
     while stack.len() > MAX_UNDO_STEPS || *bytes > MAX_UNDO_BYTES {
         let removed = stack.remove(0);
-        *bytes = bytes.saturating_sub(removed.len());
+        *bytes = bytes.saturating_sub(removed.bytes());
     }
 }
 
@@ -575,6 +730,70 @@ mod tests {
             assert_eq!(p_line, 0);
             assert_eq!(p_col, col);
         }
+    }
+
+    #[test]
+    fn selection_copies_and_deletes_unicode_across_lines_as_one_undo() {
+        let mut editor = EditorEngine::new("a中\n🎉z");
+        editor.set_cursor(0, 1);
+        editor.select_to(1, 1, false);
+        assert_eq!(editor.selected_text().as_deref(), Some("中\n🎉"));
+        assert!(editor.delete_selection());
+        assert_eq!(editor.to_text(), "az");
+        assert_eq!(editor.cursor(), (0, 1));
+        assert!(editor.undo());
+        assert_eq!(editor.to_text(), "a中\n🎉z");
+    }
+
+    #[test]
+    fn ordered_list_enter_continues_and_empty_item_exits_list() {
+        let mut editor = EditorEngine::new("3. alpha");
+        editor.set_cursor(0, 8);
+        editor.insert_newline();
+        assert_eq!(editor.to_text(), "3. alpha\n4. ");
+        editor.insert_text("beta");
+        editor.insert_newline();
+        assert_eq!(editor.to_text(), "3. alpha\n4. beta\n5. ");
+        editor.insert_newline();
+        assert_eq!(editor.to_text(), "3. alpha\n4. beta\n");
+        assert!(editor.undo());
+        assert_eq!(editor.to_text(), "3. alpha\n4. beta\n5. ");
+    }
+
+    #[test]
+    fn bold_wraps_selection_or_places_cursor_inside_markers() {
+        let mut editor = EditorEngine::new("word");
+        editor.set_cursor(0, 0);
+        editor.select_to(0, 4, false);
+        editor.toggle_bold();
+        assert_eq!(editor.to_text(), "**word**");
+        assert!(editor.undo());
+        editor.set_cursor(0, 0);
+        editor.toggle_bold();
+        assert_eq!(editor.to_text(), "****word");
+        assert_eq!(editor.cursor(), (0, 2));
+    }
+
+    #[test]
+    fn typing_replaces_selection_in_one_undo_step() {
+        let mut editor = EditorEngine::new("hello");
+        editor.set_cursor(0, 1);
+        editor.select_to(0, 4, false);
+        editor.insert_text("i");
+        assert_eq!(editor.to_text(), "hio");
+        assert_eq!(editor.cursor(), (0, 2));
+        assert!(editor.undo());
+        assert_eq!(editor.to_text(), "hello");
+    }
+
+    #[test]
+    fn reversed_selection_and_extension_preserve_anchor() {
+        let mut editor = EditorEngine::new("abcd\nef");
+        editor.set_cursor(1, 1);
+        editor.select_to(0, 2, false);
+        assert_eq!(editor.selected_text().as_deref(), Some("cd\ne"));
+        editor.select_to(0, 0, true);
+        assert_eq!(editor.selected_text().as_deref(), Some("abcd\ne"));
     }
 
     #[test]

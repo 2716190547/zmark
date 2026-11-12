@@ -4,7 +4,6 @@ use gpui::*;
 use std::env;
 use std::path::PathBuf;
 
-use zmark_app::actions::*;
 use zmark_app::assets::AppAssets;
 use zmark_app::state::AppState;
 use zmark_app::views::workspace::WorkspaceView;
@@ -28,17 +27,7 @@ fn main() {
         // ivar to the plain NSApplication and panic at startup.
         zmark_app::theme::init_components(cx);
         zmark_app::platform::register_application_icon();
-        // Resolve the platform's Cmd/Ctrl modifier without allocating static strings.
-        cx.bind_keys([
-            KeyBinding::load("secondary-1", Box::new(ToggleSourceMode), None, false, None, cx).unwrap(),
-            KeyBinding::load("secondary-2", Box::new(ToggleSplitMode), None, false, None, cx).unwrap(),
-            KeyBinding::load("secondary-3", Box::new(TogglePreviewMode), None, false, None, cx).unwrap(),
-            KeyBinding::load("secondary-b", Box::new(ToggleDrawer), None, false, None, cx).unwrap(),
-            KeyBinding::load("secondary-o", Box::new(OpenFileDialog), None, false, None, cx).unwrap(),
-            KeyBinding::load("secondary-,", Box::new(ToggleSettings), None, false, None, cx).unwrap(),
-            KeyBinding::load("secondary-s", Box::new(SaveFile), None, false, None, cx).unwrap(),
-            KeyBinding::load("secondary-shift-e", Box::new(ExportHtml), None, false, None, cx).unwrap(),
-        ]);
+        zmark_app::actions::init_key_bindings(cx);
 
         let window_options = WindowOptions {
             titlebar: zmark_app::platform::titlebar_options("ZMark", 12.0),

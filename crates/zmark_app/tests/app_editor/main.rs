@@ -1,4 +1,6 @@
 mod editor_engine_test;
+mod source_engine_selection_format_test;
+mod source_interaction_test;
 mod editor_reading_enhancement_test;
 mod editor_text_layout_and_hit_test;
 mod stage_a_rework_test;
