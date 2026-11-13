@@ -291,7 +291,7 @@ pub fn render_drawer_with_search(
                 .child(render_icon_btn(
                     "drawer_tab_files",
                     strings.tab_files,
-                    "icons/files.svg",
+                    "icons/folder.svg",
                     active_tab == DrawerTab::Files,
                     theme,
                     move |_, window, cx| t1(DrawerTab::Files, window, cx),
@@ -307,7 +307,7 @@ pub fn render_drawer_with_search(
                 .child(render_icon_btn(
                     "drawer_add_folder_btn",
                     strings.add_folder,
-                    "icons/folder-plus.svg",
+                    "icons/download.svg",
                     false,
                     theme,
                     move |_, window, cx| t_folder(window, cx),
@@ -490,7 +490,7 @@ pub fn render_drawer_with_search(
                                 let mut root_header = div()
                                     .id(SharedString::from(format!("drawer_root_header_{}", root_idx)))
                                     .debug_selector(move || format!("drawer_root_header_{root_idx}"))
-                                    .when(search.selected_directory.as_ref() == Some(&root.path), |el| el.bg(theme.selection_bg()))
+                                    .when(search.selected_directory.as_ref() == Some(&root.path), |el| el.bg(theme.hover_bg()))
                                     .group("drawer_root_row")
                                     .w_full()
                                     .h(px(28.))
@@ -1090,7 +1090,7 @@ fn render_file_tree_nodes(
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_muted)
                     .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
-                    .when(params.selected_directory.as_ref() == Some(&node.path), |el| el.bg(theme.selection_bg()).text_color(theme.selection_text()))
+                    .when(params.selected_directory.as_ref() == Some(&node.path), |el| el.bg(theme.hover_bg()))
                     .child(left_part)
                     .child(right_part)
                     .into_any_element(),

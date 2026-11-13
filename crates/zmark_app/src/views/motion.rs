@@ -21,7 +21,8 @@ pub struct FolderTransition {
 impl FolderTransition {
     pub fn value(&self, now: std::time::Instant) -> f32 {
         let delta = (now.saturating_duration_since(self.started).as_secs_f32() / 0.6).min(1.0);
-        self.from + ((if self.expanded { 1.0 } else { 0.0 }) - self.from) * delta
+        let eased = 1.0 - (1.0 - delta).powi(3);
+        self.from + ((if self.expanded { 1.0 } else { 0.0 }) - self.from) * eased
     }
     pub fn finished(&self, now: std::time::Instant) -> bool {
         now.saturating_duration_since(self.started) >= Duration::from_millis(600)
@@ -89,13 +90,13 @@ mod tests {
             started: start,
         };
         let halfway = start + Duration::from_millis(300);
-        assert_eq!(opening.value(halfway), 0.5);
+        assert_eq!(opening.value(halfway), 0.875);
         let closing = FolderTransition {
             from: opening.value(halfway),
             expanded: false,
             started: halfway,
         };
-        assert_eq!(closing.value(halfway), 0.5);
+        assert_eq!(closing.value(halfway), 0.875);
         assert!(!closing.finished(halfway + Duration::from_millis(599)));
         assert!(closing.finished(halfway + Duration::from_millis(600)));
         assert_eq!(closing.value(halfway + Duration::from_millis(600)), 0.0);
