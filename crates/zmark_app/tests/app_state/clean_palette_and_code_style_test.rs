@@ -52,7 +52,7 @@ fn test_default_palette_neutral_colors() {
         "Default light selection_bg must have warm saturation per Phase H"
     );
     assert!(
-        sel_light.a >= 0.10 && sel_light.a <= 0.20,
+        sel_light.a >= 0.10 && sel_light.a <= 0.45,
         "Default light selection_bg must have subtle warm opacity per Phase H"
     );
     assert_eq!(
@@ -265,7 +265,7 @@ fn test_ticket_g0_selection_tokens() {
                     "selection_bg must have warm saturation >= 0.30 for {} (is_dark={}), got {}",
                     palette.id, is_dark, sel_bg.s
                 );
-                let (lo, hi) = if is_dark { (0.20, 0.35) } else { (0.10, 0.22) };
+                let (lo, hi) = if is_dark { (0.20, 0.35) } else { (0.10, 0.45) };
                 assert!(
                     sel_bg.a >= lo && sel_bg.a <= hi,
                     "selection_bg opacity out of range for {} (is_dark={}), got {}",
@@ -275,7 +275,7 @@ fn test_ticket_g0_selection_tokens() {
                 let expected = if is_dark {
                     theme.accent.opacity(if palette.id == "solarized" { 0.26 } else { 0.30 })
                 } else {
-                    theme.text_primary.opacity(0.07)
+                    theme.accent.opacity(0.30)
                 };
                 assert_eq!(
                     sel_bg, expected,
@@ -420,6 +420,47 @@ fn over(fg: gpui::Hsla, bg: gpui::Hsla) -> gpui::Hsla {
 fn contrast(a: gpui::Hsla, b: gpui::Hsla) -> f32 {
     let (x, y) = (relative_luminance(a), relative_luminance(b));
     (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+#[test]
+fn light_selection_is_distinct_from_hover_and_keeps_body_readable() {
+    let mut failures = Vec::new();
+    for palette in ALL_PALETTES {
+        let theme = ThemeColors::resolve(palette.id, false);
+        for (name, base) in [("bg", theme.bg), ("surface", theme.surface), ("code_bg", theme.code_bg)] {
+            let selected = over(theme.selection_bg(), base);
+            let visible = contrast(selected, base);
+            let hover = contrast(over(theme.hover_bg(), base), base);
+            let readable = contrast(theme.text_primary, selected);
+            if visible < 1.3 || visible <= hover || readable < 3.0 {
+                failures.push(format!("{} {name}: selection={visible:.2}, hover={hover:.2}, body={readable:.2}", palette.id));
+            }
+        }
+        let track = over(theme.segmented_track_bg(), theme.bg);
+        let thumb = over(theme.segmented_thumb_bg(), track);
+        // The thumb is a white card on a grey track, so only its text must stay readable.
+        let readable = contrast(theme.segmented_thumb_text(), thumb);
+        if readable < 4.0 {
+            failures.push(format!("{} settings thumb: body={readable:.2}", palette.id));
+        }
+    }
+    assert!(failures.is_empty(), "Light selection failures:\n{}", failures.join("\n"));
+}
+
+#[test]
+fn light_selection_reports_each_preserved_syntax_role() {
+    use zmark_core::syntax::SyntaxRole;
+    for palette in ALL_PALETTES {
+        let theme = ThemeColors::resolve(palette.id, false);
+        for (name, base) in [("surface", theme.surface), ("code_bg", theme.code_bg)] {
+            let selected = over(theme.selection_bg(), base);
+            for role in [SyntaxRole::Plain, SyntaxRole::Keyword, SyntaxRole::Function, SyntaxRole::Attribute, SyntaxRole::String, SyntaxRole::Number, SyntaxRole::Comment] {
+                let ratio = contrast(theme.syntax_color_for_role(role), selected);
+                eprintln!("SYNTAX_SELECTION {} {name} {role:?}: {ratio:.2}:1", palette.id);
+                assert!(ratio.is_finite() && ratio > 1.0, "{} {name} {role:?} must not disappear", palette.id);
+            }
+        }
+    }
 }
 
 #[test]

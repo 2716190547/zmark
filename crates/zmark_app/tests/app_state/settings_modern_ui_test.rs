@@ -204,8 +204,8 @@ fn test_theme_colors_segmented_derived_tokens() {
                 // thumb_border opacity is 0.65
                 assert_eq!(thumb_border.a, 0.65);
             } else {
-                // In light mode: track_bg opacity is 0.06
-                assert_eq!(track_bg.a, 0.06);
+                // In light mode: track_bg opacity is 0.12
+                assert_eq!(track_bg.a, 0.12);
                 // thumb_bg is surface
                 assert_eq!(thumb_bg.l, theme.surface.l);
                 // thumb_border opacity is 0.45

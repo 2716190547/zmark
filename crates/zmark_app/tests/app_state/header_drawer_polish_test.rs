@@ -33,7 +33,7 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
 
     assert!(light_bg.h >= 25.0 / 360.0 && light_bg.h <= 45.0 / 360.0, "Default light selection_bg must have warm hue");
     assert!(light_bg.s >= 0.30, "Default light selection_bg must have warm saturation");
-    assert!(light_bg.a >= 0.10 && light_bg.a <= 0.20, "Default light selection_bg must have subtle warm opacity");
+    assert!(light_bg.a >= 0.10 && light_bg.a <= 0.45, "Default light selection_bg must have subtle warm opacity");
     assert_eq!(light_text, light_theme.text_primary);
 
     let dark_theme = ThemeColors::resolve("default", true);
@@ -62,7 +62,7 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
             assert!(d_bg.h >= 25.0 / 360.0 && d_bg.h <= 45.0 / 360.0);
             assert!(d_bg.s >= 0.30);
         } else {
-            assert_eq!(l_theme.selection_bg(), l_theme.text_primary.opacity(0.07));
+            assert_eq!(l_theme.selection_bg(), l_theme.accent.opacity(0.30));
             // Dark palettes tint with their accent so the selection stays visible.
             let alpha = if palette.id == "solarized" { 0.26 } else { 0.30 };
             assert_eq!(d_theme.selection_bg(), d_theme.accent.opacity(alpha));

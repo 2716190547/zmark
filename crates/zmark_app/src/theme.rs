@@ -110,20 +110,20 @@ impl ThemeColors {
                 if self.is_dark {
                     Hsla { h: 32.0 / 360.0, s: 0.35, l: 0.60, a: 0.26 }
                 } else {
-                    Hsla { h: 38.0 / 360.0, s: 0.45, l: 0.50, a: 0.12 }
+                    Hsla { h: 38.0 / 360.0, s: 0.70, l: 0.52, a: 0.40 }
                 }
             }
             "claude" => {
                 if self.is_dark {
                     Hsla { h: 35.0 / 360.0, s: 0.45, l: 0.60, a: 0.26 }
                 } else {
-                    Hsla { h: 35.0 / 360.0, s: 0.55, l: 0.50, a: 0.14 }
+                    Hsla { h: 35.0 / 360.0, s: 0.75, l: 0.52, a: 0.40 }
                 }
             }
             _ if self.is_dark => self
                 .accent
                 .opacity(if self.id == "solarized" { 0.26 } else { 0.30 }),
-            _ => self.text_primary.opacity(0.07),
+            _ => self.accent.opacity(0.30),
         }
     }
 
@@ -182,7 +182,7 @@ impl ThemeColors {
         if self.is_dark {
             self.surface.lighten(0.03)
         } else {
-            self.text_primary.opacity(0.06)
+            self.text_primary.opacity(0.12)
         }
     }
 

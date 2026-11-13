@@ -144,7 +144,7 @@ fn test_mermaid_zoom_button_styling_contrast() {
 
     assert!(light_bg.h >= 25.0 / 360.0 && light_bg.h <= 45.0 / 360.0, "selection_bg must have warm hue");
     assert!(light_bg.s >= 0.30, "selection_bg must have warm saturation");
-    assert!(light_bg.a >= 0.10 && light_bg.a <= 0.20, "selection_bg must have subtle warm opacity per Phase H");
+    assert!(light_bg.a >= 0.10 && light_bg.a <= 0.45, "selection_bg must have subtle warm opacity per Phase H");
     assert_eq!(light_hover, light_theme.text_primary.opacity(0.04));
     assert_eq!(light_text, light_theme.text_primary);
     assert_eq!(light_text.a, 1.0, "selection_text must be opaque");
