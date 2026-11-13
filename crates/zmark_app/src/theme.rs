@@ -127,6 +127,11 @@ impl ThemeColors {
         }
     }
 
+    /// Sidebar row selection, independent of editor and toolbar accent colors.
+    pub fn sidebar_selection_bg(&self) -> Hsla {
+        self.text_primary.opacity(if self.is_dark { 0.12 } else { 0.08 })
+    }
+
     /// Adaptive hover background: subtle translucent highlight
     pub fn hover_bg(&self) -> Hsla {
         self.text_primary.opacity(0.04)
