@@ -11,3 +11,10 @@ resolver = "2"
 # char and slices with `get`; remove once upstream fixes it.
 [patch.crates-io]
 rusty-mermaid-diagrams = { path = "vendor/rusty-mermaid-diagrams" }
+
+# Release binaries ship icons, a text renderer and a UI toolkit; keep them small.
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 4
+opt-level = "s"
