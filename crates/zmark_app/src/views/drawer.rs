@@ -432,7 +432,7 @@ pub fn render_drawer_with_search(
                                         .child(
                                             svg()
                                                 .path("icons/file.svg")
-                                                .size(px(13.))
+                                                .size(px(14.)).flex_shrink_0()
                                                 .text_color(if is_draft_active {
                                                     theme.selection_text()
                                                 } else {
@@ -529,12 +529,12 @@ pub fn render_drawer_with_search(
                                     .child(
                                         div().id(SharedString::from(format!("drawer_root_toggle_{root_idx}")))
                                             .debug_selector(move || format!("drawer_root_toggle_{root_idx}"))
-                                            .size(px(16.)).flex().items_center().justify_center()
+                                            .size(px(16.)).flex_shrink_0().flex().items_center().justify_center()
                                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                                 cx.stop_propagation();
                                                 if !is_missing { on_toggle_r(root_idx, window, cx); }
                                             })
-                                            .child(svg().path(folder_icon).size(px(14.)).text_color(theme.text_muted)),
+                                            .child(svg().path(folder_icon).size(px(14.)).flex_shrink_0().text_color(theme.text_muted)),
                                     )
                                     .child(
                                         inline_rename(&root_key, search).unwrap_or_else(|| div()
@@ -767,7 +767,7 @@ pub fn render_drawer_with_search(
                                     .child(
                                         svg()
                                             .path("icons/file.svg")
-                                            .size(px(13.))
+                                            .size(px(14.)).flex_shrink_0()
                                             .text_color(if is_active {
                                                 theme.selection_text()
                                             } else {
@@ -925,7 +925,8 @@ fn open_children_height(
             if node.is_expanded || values.get(&node.path).is_some_and(|v| *v > 0.0) {
                 let inner = open_children_height(&node.children, q_lower, values);
                 if inner > 0.0 {
-                    total += inner + TREE_ROW_GAP;
+                    let value = values.get(&node.path).copied().unwrap_or(if node.is_expanded { 1.0 } else { 0.0 });
+                    total += inner * value + TREE_ROW_GAP;
                 }
             }
         } else {
@@ -944,12 +945,13 @@ fn open_children_height(
 
 /// Children clip to `open_height * value` so rows below slide smoothly; opacity follows the same value.
 fn fading_children(children: Div, expanded: bool, value: f32, open_height: f32) -> AnyElement {
-    let animating = value > 0.0 && value < 1.0;
     div()
         .relative()
         .w_full()
-        .when(animating, |el| el.h(px(open_height * value)).overflow_hidden())
-        .child(children.opacity(value))
+        .when(value < 1.0, |el| el.h(px(open_height * value)))
+        .flex_shrink_0()
+        .overflow_hidden()
+        .child(children.flex_shrink_0().opacity(value))
         .when(!expanded, |el| {
         el.child(div().absolute().inset_0().occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1012,12 +1014,12 @@ fn render_file_tree_nodes(
                 .min_w(px(0.))
                 .child(
                     div().id(SharedString::from(toggle_selector.clone())).debug_selector(move || toggle_selector.clone())
-                        .size(px(16.)).flex().items_center().justify_center()
+                        .size(px(16.)).flex_shrink_0().flex().items_center().justify_center()
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             cx.stop_propagation();
                             on_toggle(root_idx, &p, window, cx);
                         })
-                        .child(svg().path(folder_icon).size(px(13.)).text_color(theme.text_muted)),
+                        .child(svg().path(folder_icon).size(px(14.)).flex_shrink_0().text_color(theme.text_muted)),
                 )
                 .child(
                     inline_rename(&key, params).unwrap_or_else(|| div()
@@ -1208,7 +1210,7 @@ fn render_file_tree_nodes(
             }
 
             let file_content = div().flex().items_center().gap_1p5().min_w(px(0.))
-                .child(svg().path("icons/file.svg").size(px(13.)).text_color(theme.text_muted))
+                .child(svg().path("icons/file.svg").size(px(14.)).flex_shrink_0().text_color(theme.text_muted))
                 .child(left_part);
             out.push(item.child(file_content).child(right_part).into_any_element());
         }

@@ -166,6 +166,22 @@ pub fn apply_selection_to_highlights(
     result
 }
 
+pub fn apply_system_selection_to_highlights(
+    text: &str,
+    existing: &[(std::ops::Range<usize>, HighlightStyle)],
+    range: std::ops::Range<usize>,
+    background: Hsla,
+    foreground: Hsla,
+) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    let mut highlights = apply_selection_to_highlights(text, existing, range.clone(), background);
+    for (span, style) in &mut highlights {
+        if span.start >= range.start && span.end <= range.end {
+            style.color = Some(foreground);
+        }
+    }
+    highlights
+}
+
 pub fn detect_edge_autoscroll(
     mouse_y: f32,
     container_top: f32,

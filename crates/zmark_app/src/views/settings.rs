@@ -80,6 +80,8 @@ impl Render for SettingsWindowView {
         if self.theme.is_dark != effective_dark {
             self.theme = ThemeColors::resolve(&self.preferences.palette, effective_dark);
         }
+        self.theme.refresh_native_selection(window.is_window_active());
+        crate::theme::sync_component_theme(&self.theme, cx);
         let current_tab = self.current_tab;
         let current_mode = self.preferences.theme;
         let current_palette = self.preferences.palette.clone();

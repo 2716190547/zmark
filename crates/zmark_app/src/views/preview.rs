@@ -897,7 +897,7 @@ pub fn render_styled_text_only(
 
     if let Some(char_range) = selected_char_range {
         let byte_range = char_range_to_byte_range(&text, char_range);
-        highlights = apply_selection_to_highlights(&text, &highlights, byte_range, theme.selection_bg());
+        highlights = apply_system_selection_to_highlights(&text, &highlights, byte_range, theme.selection_bg(), theme.text_selection_foreground());
     }
 
     if text.is_empty() {
@@ -1707,7 +1707,7 @@ fn render_code_block(
     let highlights = if let Some(char_range) = selected_char_range {
         let byte_range = char_range_to_byte_range(&code_text, char_range);
         if byte_range.start < byte_range.end {
-            apply_selection_to_highlights(&code_text, &syntax_highlights, byte_range, theme.selection_bg())
+            apply_system_selection_to_highlights(&code_text, &syntax_highlights, byte_range, theme.selection_bg(), theme.text_selection_foreground())
         } else {
             syntax_highlights
         }

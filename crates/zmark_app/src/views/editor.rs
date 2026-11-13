@@ -15,7 +15,7 @@ pub use tokenizer::{spans_to_code_tokens, tokenize_inline, tokenize_markdown_lin
 fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors, selection: &[std::ops::Range<usize>]) -> impl IntoElement {
     let highlights: Vec<_> = selection.iter().map(|range| (
         char_index_to_byte_offset(&tok.text, range.start)..char_index_to_byte_offset(&tok.text, range.end),
-        HighlightStyle { background_color: Some(theme.selection_bg()), ..Default::default() },
+        HighlightStyle { color: Some(theme.text_selection_foreground()), background_color: Some(theme.selection_bg()), ..Default::default() },
     )).collect();
     let mut el = div().child(StyledText::new(tok.text.clone()).with_highlights(highlights));
     match tok.kind {
@@ -827,7 +827,7 @@ pub fn render_editor_pane(
                             let x1 = positions[end - row_offset];
                             Some(div().debug_selector(move || format!("source_selection_{vis_idx}_{start}_{end}"))
                                 .absolute().top_0().left(px(x0)).w(px((x1 - x0).max(2.))).h(px(row_h))
-                                .bg(list_theme.control_selection_bg()).into_any_element())
+                                .bg(list_theme.selection_bg()).into_any_element())
                         }).collect();
                         let mut text_container = div()
                             .debug_selector(|| format!("editor_text_{phys_idx}"))
@@ -845,14 +845,11 @@ pub fn render_editor_pane(
                                 let mut token_offset = row_offset;
                                 tokens.into_iter().map(|tok| {
                                     let length = tok.text.chars().count();
-                                    let (left, right) = token_paddings(&tok.kind);
-                                    let selected: Vec<_> = if left + right > 0.0 {
-                                        selection_ranges.iter().filter_map(|range| {
+                                    let selected: Vec<_> = selection_ranges.iter().filter_map(|range| {
                                             let start = range.start.max(token_offset);
                                             let end = range.end.min(token_offset + length);
                                             (start < end).then_some(start.saturating_sub(token_offset)..end.saturating_sub(token_offset))
-                                        }).collect()
-                                    } else { Vec::new() };
+                                        }).collect();
                                     token_offset += length;
                                     render_markdown_token_element(&tok, &list_theme, &selected).into_any_element()
                                 }).collect::<Vec<_>>()

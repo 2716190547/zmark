@@ -268,3 +268,38 @@ pub fn move_file_to_trash(path: &std::path::Path) -> std::io::Result<()> {
         Err(std::io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_string()))
     }
 }
+
+/// Resolve dynamic AppKit colors on the UI thread, using the app's appearance.
+#[cfg(target_os = "macos")]
+pub fn text_selection_colors(dark: bool, active: bool) -> Option<(gpui::Hsla, gpui::Hsla)> {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSString;
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let pool: id = msg_send![class!(NSAutoreleasePool), new];
+        let previous: id = msg_send![class!(NSAppearance), currentAppearance];
+        let name = NSString::alloc(nil).init_str(if dark { "NSAppearanceNameDarkAqua" } else { "NSAppearanceNameAqua" });
+        let appearance: id = msg_send![class!(NSAppearance), appearanceNamed: name];
+        let _: () = msg_send![class!(NSAppearance), setCurrentAppearance: appearance];
+        let background: id = if active { msg_send![class!(NSColor), selectedTextBackgroundColor] }
+            else { msg_send![class!(NSColor), unemphasizedSelectedTextBackgroundColor] };
+        let foreground: id = if active { msg_send![class!(NSColor), selectedTextColor] }
+            else { msg_send![class!(NSColor), unemphasizedSelectedTextColor] };
+        let space: id = msg_send![class!(NSColorSpace), sRGBColorSpace];
+        let convert = |color: id| -> Option<gpui::Hsla> {
+            let color: id = msg_send![color, colorUsingColorSpace: space];
+            if color == nil { return None; }
+            let (mut r, mut g, mut b, mut a) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+            let _: () = msg_send![color, getRed: &mut r green: &mut g blue: &mut b alpha: &mut a];
+            Some(gpui::Rgba { r: r as f32, g: g as f32, b: b as f32, a: a as f32 }.into())
+        };
+        let result = convert(background).zip(convert(foreground));
+        let _: () = msg_send![class!(NSAppearance), setCurrentAppearance: previous];
+        let _: () = msg_send![name, release];
+        let _: () = msg_send![pool, drain];
+        result
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn text_selection_colors(_dark: bool, _active: bool) -> Option<(gpui::Hsla, gpui::Hsla)> { None }

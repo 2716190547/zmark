@@ -3420,8 +3420,9 @@ impl Render for WorkspaceView {
                     this.cancel_source_composition();
                     this.end_source_drag();
                     this.end_preview_scroll_drag();
-                    cx.notify();
                 }
+                this.state.theme.native_selection = None;
+                cx.notify();
             })
             .detach();
             self.preview_scroll_activation_observed = true;
@@ -3441,6 +3442,7 @@ impl Render for WorkspaceView {
             WindowAppearance::Dark | WindowAppearance::VibrantDark
         );
         self.state.update_appearance(is_sys_dark);
+        self.state.theme.refresh_native_selection(window.is_window_active());
         crate::theme::sync_component_theme(&self.state.theme, cx);
         cx.set_reduce_motion(self.state.preferences.reduce_motion);
         let locale = self.state.preferences.locale.resolve();
@@ -3643,7 +3645,11 @@ impl Render for WorkspaceView {
         let on_select_directory = Arc::new(move |path: &PathBuf, rename: bool, window: &mut Window, cx: &mut App| {
             view_directory.update(cx, |this, cx| {
                 this.selected_directory = Some(path.clone());
-                if rename { this.begin_rename_target(crate::state::DocKey::Path(path.clone()), true, window, cx); }
+                if rename {
+                    this.begin_rename_target(crate::state::DocKey::Path(path.clone()), true, window, cx);
+                } else if let Some(root) = this.state.workspace_roots.iter().position(|root| path.starts_with(&root.path)) {
+                    this.toggle_folder(root, path, cx);
+                }
                 cx.notify();
             });
         });

@@ -39,6 +39,7 @@ pub struct ThemeColors {
     #[allow(dead_code)]
     pub name: &'static str,
     pub is_dark: bool,
+    pub native_selection: Option<(bool, Hsla, Hsla)>,
     pub bg: Hsla,
     pub surface: Hsla,
     pub border: Hsla,
@@ -105,6 +106,7 @@ impl ThemeColors {
     /// selection with their accent: a 7% text-colour wash had only 1.1-1.4:1 contrast against
     /// the surface and was nearly invisible.
     pub fn selection_bg(&self) -> Hsla {
+        if let Some((_, background, _)) = self.native_selection { return background; }
         match self.id {
             "default" => {
                 if self.is_dark {
@@ -129,7 +131,7 @@ impl ThemeColors {
 
     /// Shared control selection, independent of document text selection.
     pub fn control_selection_bg(&self) -> Hsla {
-        self.text_primary.opacity(if self.is_dark { 0.12 } else { 0.08 })
+        if self.is_dark { rgb(0x2e2d2b).into() } else { rgb(0xefede4).into() }
     }
 
     /// Adaptive hover background: subtle translucent highlight
@@ -160,6 +162,17 @@ impl ThemeColors {
 
     pub fn heading_rule(&self) -> Hsla {
         self.text_primary.opacity(0.08)
+    }
+
+    pub fn text_selection_foreground(&self) -> Hsla {
+        self.native_selection.map(|(_, _, foreground)| foreground).unwrap_or(self.text_primary)
+    }
+
+    pub fn refresh_native_selection(&mut self, active: bool) {
+        if self.native_selection.is_none_or(|(was_active, _, _)| was_active != active) {
+            self.native_selection = crate::platform::text_selection_colors(self.is_dark, active)
+                .map(|(background, foreground)| (active, background, foreground));
+        }
     }
 
     /// Adaptive selection text color: primary foreground
@@ -265,6 +278,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x8c8c8c).into(),
                 syntax_code: rgb(0xd8d4cc).into(),
                 syntax_heading: rgb(0xb69cf0).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0xd9b45a).into(),
             }
         } else {
@@ -292,6 +306,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x8c8c8c).into(), // Markdown markers fade into the page
                 syntax_code: rgb(0x3e4a56).into(),
                 syntax_heading: rgb(0x5e3db3).into(), // violet headings
+                native_selection: None,
                 syntax_emphasis: rgb(0x7a5f12).into(), // gold bold / inline code
             }
         }
@@ -323,6 +338,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0xfbbf24).into(),
                 syntax_code: rgb(0xe5b567).into(),
                 syntax_heading: rgb(0xd2a8ff).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0xf39c6b).into(),
             }
         } else {
@@ -350,6 +366,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0xd97706).into(),
                 syntax_code: rgb(0x6b4e1b).into(),
                 syntax_heading: rgb(0x7d56b3).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0x995b2b).into(),
             }
         }
@@ -381,6 +398,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x0a84ff).into(),
                 syntax_code: rgb(0x70b0ff).into(),
                 syntax_heading: rgb(0xc76cf5).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0xff9f0a).into(),
             }
         } else {
@@ -408,6 +426,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x007aff).into(),
                 syntax_code: rgb(0x1b4d89).into(),
                 syntax_heading: rgb(0x7b1fa2).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0xbf360c).into(),
             }
         }
@@ -439,6 +458,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x7aa2f7).into(),
                 syntax_code: rgb(0x8ba4e8).into(),
                 syntax_heading: rgb(0xbb9af7).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0xff9e64).into(),
             }
         } else {
@@ -466,6 +486,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x2e7de9).into(),
                 syntax_code: rgb(0x2e4374).into(),
                 syntax_heading: rgb(0x5a32a3).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0x8a2034).into(),
             }
         }
@@ -497,6 +518,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x88c0d0).into(),
                 syntax_code: rgb(0x98c4d8).into(),
                 syntax_heading: rgb(0xcdabe1).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0xebcb8b).into(),
             }
         } else {
@@ -524,6 +546,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x5e81ac).into(),
                 syntax_code: rgb(0x3b5373).into(),
                 syntax_heading: rgb(0x7c4d7e).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0x8b4726).into(),
             }
         }
@@ -555,6 +578,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x58a6ff).into(),
                 syntax_code: rgb(0xd0d7de).into(),
                 syntax_heading: rgb(0xff7b72).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0xffa657).into(),
             }
         } else {
@@ -582,6 +606,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x0969da).into(),
                 syntax_code: rgb(0x24292f).into(),
                 syntax_heading: rgb(0xcf222e).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0x953800).into(),
             }
         }
@@ -613,6 +638,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x2aa198).into(),
                 syntax_code: rgb(0x93a1a1).into(),
                 syntax_heading: rgb(0x99ad00).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0xf279b2).into(),
             }
         } else {
@@ -640,6 +666,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x268bd2).into(),
                 syntax_code: rgb(0x475b62).into(),
                 syntax_heading: rgb(0x586e00).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0xb53900).into(),
             }
         }
@@ -671,6 +698,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x61afef).into(),
                 syntax_code: rgb(0xabb2bf).into(),
                 syntax_heading: rgb(0xc678dd).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0xd19a66).into(),
             }
         } else {
@@ -698,6 +726,7 @@ impl ThemeColors {
                 syntax_bullet: rgb(0x4078f2).into(),
                 syntax_code: rgb(0x383a42).into(),
                 syntax_heading: rgb(0xa626a4).into(),
+                native_selection: None,
                 syntax_emphasis: rgb(0x8a5b00).into(),
             }
         }
