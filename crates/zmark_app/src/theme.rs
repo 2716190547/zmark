@@ -18,7 +18,7 @@ pub fn sync_component_theme(theme: &ThemeColors, cx: &mut App) {
     colors.foreground = theme.text_primary;
     colors.muted_foreground = theme.text_muted;
     colors.muted = theme.hover_bg();
-    colors.accent = theme.selection_bg();
+    colors.accent = theme.control_selection_bg();
     colors.accent_foreground = theme.selection_text();
     colors.primary = theme.accent;
     colors.border = theme.border;
@@ -127,8 +127,8 @@ impl ThemeColors {
         }
     }
 
-    /// Sidebar row selection, independent of editor and toolbar accent colors.
-    pub fn sidebar_selection_bg(&self) -> Hsla {
+    /// Shared control selection, independent of document text selection.
+    pub fn control_selection_bg(&self) -> Hsla {
         self.text_primary.opacity(if self.is_dark { 0.12 } else { 0.08 })
     }
 

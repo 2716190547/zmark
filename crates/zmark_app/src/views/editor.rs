@@ -827,7 +827,7 @@ pub fn render_editor_pane(
                             let x1 = positions[end - row_offset];
                             Some(div().debug_selector(move || format!("source_selection_{vis_idx}_{start}_{end}"))
                                 .absolute().top_0().left(px(x0)).w(px((x1 - x0).max(2.))).h(px(row_h))
-                                .bg(list_theme.selection_bg()).into_any_element())
+                                .bg(list_theme.control_selection_bg()).into_any_element())
                         }).collect();
                         let mut text_container = div()
                             .debug_selector(|| format!("editor_text_{phys_idx}"))

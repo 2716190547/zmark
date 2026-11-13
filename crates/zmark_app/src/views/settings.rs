@@ -443,7 +443,7 @@ where
     let icon = svg().path(icon_path).size(px(18.)).text_color(icon_color);
 
     if active {
-        base.bg(theme.selection_bg())
+        base.bg(theme.control_selection_bg())
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.selection_text())
             .child(div().flex_shrink_0().child(icon))
@@ -538,7 +538,7 @@ where
     let track_bg = if active {
         theme.accent
     } else {
-        theme.selection_bg()
+        theme.control_selection_bg()
     };
     div()
         .w(px(36.))
@@ -943,7 +943,7 @@ fn render_language_tab(
                                 );
 
                             if is_active {
-                                card.bg(theme.selection_bg())
+                                card.bg(theme.control_selection_bg())
                                     .text_color(theme.selection_text())
                                     .font_weight(FontWeight::MEDIUM)
                             } else {
@@ -1117,7 +1117,7 @@ fn render_shortcut_row(
                 .px_1p5()
                 .py_0p5()
                 .rounded(px(4.))
-                .bg(theme.selection_bg())
+                .bg(theme.control_selection_bg())
                 .text_xs()
                 .font_family(crate::platform::MONO_FONT)
                 .text_color(theme.text_primary)

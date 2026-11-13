@@ -226,3 +226,45 @@ mod tests {
         }
     }
 }
+
+/// Uses the system trash service; never falls back to permanent deletion.
+#[cfg(target_os = "macos")]
+pub fn move_file_to_trash(path: &std::path::Path) -> std::io::Result<()> {
+    use cocoa::base::{id, nil, BOOL, NO};
+    use cocoa::foundation::NSString;
+    use objc::{class, msg_send, sel, sel_impl};
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    unsafe {
+        let pool: id = msg_send![class!(NSAutoreleasePool), new];
+        let url: id = msg_send![class!(NSURL), fileURLWithFileSystemRepresentation: path.as_ptr() isDirectory: NO relativeToURL: nil];
+        let manager: id = msg_send![class!(NSFileManager), defaultManager];
+        let mut error: id = nil;
+        let success: BOOL = msg_send![manager, trashItemAtURL: url resultingItemURL: std::ptr::null_mut::<id>() error: &mut error];
+        let result = if success != NO {
+            Ok(())
+        } else if error != nil {
+            let description: id = msg_send![error, localizedDescription];
+            Err(std::io::Error::other(std::ffi::CStr::from_ptr(description.UTF8String()).to_string_lossy().into_owned()))
+        } else {
+            Err(std::io::Error::other("Unable to move file to Trash"))
+        };
+        let _: () = msg_send![pool, drain];
+        result
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn move_file_to_trash(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:ZMARK_TRASH_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin')"])
+        .env("ZMARK_TRASH_PATH", path).output()?;
+    #[cfg(not(target_os = "windows"))]
+    let output = std::process::Command::new("gio").args(["trash", "--"]).arg(path).output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_string()))
+    }
+}

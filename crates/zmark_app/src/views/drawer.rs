@@ -306,8 +306,8 @@ pub fn render_drawer_with_search(
                 ))
                 .child(render_icon_btn(
                     "drawer_add_folder_btn",
-                    strings.add_folder,
-                    "icons/import.svg",
+                    strings.open_file_or_folder,
+                    "icons/folder-plus.svg",
                     false,
                     theme,
                     move |_, window, cx| t_folder(window, cx),
@@ -413,7 +413,7 @@ pub fn render_drawer_with_search(
 
                             if is_draft_active {
                                 draft_item = draft_item
-                                    .bg(theme.sidebar_selection_bg())
+                                    .bg(theme.control_selection_bg())
                                     .text_color(theme.selection_text())
                                     .font_weight(FontWeight::NORMAL);
                             } else {
@@ -431,7 +431,7 @@ pub fn render_drawer_with_search(
                                         .min_w(px(0.))
                                         .child(
                                             svg()
-                                                .path("icons/files.svg")
+                                                .path("icons/file.svg")
                                                 .size(px(13.))
                                                 .text_color(if is_draft_active {
                                                     theme.selection_text()
@@ -490,7 +490,7 @@ pub fn render_drawer_with_search(
                                 let mut root_header = div()
                                     .id(SharedString::from(format!("drawer_root_header_{}", root_idx)))
                                     .debug_selector(move || format!("drawer_root_header_{root_idx}"))
-                                    .when(search.selected_directory.as_ref() == Some(&root.path), |el| el.bg(theme.sidebar_selection_bg()))
+                                    .when(search.selected_directory.as_ref() == Some(&root.path), |el| el.bg(theme.control_selection_bg()))
                                     .group("drawer_root_row")
                                     .w_full()
                                     .h(px(28.))
@@ -527,10 +527,14 @@ pub fn render_drawer_with_search(
                                     .gap_1()
                                     .min_w(px(0.))
                                     .child(
-                                        svg()
-                                            .path(folder_icon)
-                                            .size(px(14.))
-                                            .text_color(theme.text_muted),
+                                        div().id(SharedString::from(format!("drawer_root_toggle_{root_idx}")))
+                                            .debug_selector(move || format!("drawer_root_toggle_{root_idx}"))
+                                            .size(px(16.)).flex().items_center().justify_center()
+                                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                                cx.stop_propagation();
+                                                if !is_missing { on_toggle_r(root_idx, window, cx); }
+                                            })
+                                            .child(svg().path(folder_icon).size(px(14.)).text_color(theme.text_muted)),
                                     )
                                     .child(
                                         inline_rename(&root_key, search).unwrap_or_else(|| div()
@@ -566,17 +570,6 @@ pub fn render_drawer_with_search(
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .child(
-                                        div().id(SharedString::from(format!("drawer_root_toggle_{root_idx}")))
-                                            .debug_selector(move || format!("drawer_root_toggle_{root_idx}"))
-                                            .size(px(16.)).flex().items_center().justify_center()
-                                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                                cx.stop_propagation();
-                                                if !is_missing { on_toggle_r(root_idx, window, cx); }
-                                            })
-                                            .child(svg().path("icons/chevron-right.svg").size(px(10.)).text_color(theme.text_muted)
-                                                .with_transformation(Transformation::rotate(radians(value * std::f32::consts::FRAC_PI_2)))),
-                                    )
                                     .child(
                                         div()
                                             .id(SharedString::from(format!("btn_new_file_root_{}", root_idx)))
@@ -757,7 +750,7 @@ pub fn render_drawer_with_search(
 
                                 if is_active {
                                     item = item
-                                        .bg(theme.sidebar_selection_bg())
+                                        .bg(theme.control_selection_bg())
                                         .text_color(theme.selection_text())
                                         .font_weight(FontWeight::NORMAL);
                                 } else {
@@ -773,7 +766,7 @@ pub fn render_drawer_with_search(
                                     .min_w(px(0.))
                                     .child(
                                         svg()
-                                            .path("icons/files.svg")
+                                            .path("icons/file.svg")
                                             .size(px(13.))
                                             .text_color(if is_active {
                                                 theme.selection_text()
@@ -803,6 +796,7 @@ pub fn render_drawer_with_search(
                                             .text_color(theme.text_muted)
                                             .opacity(0.0)
                                             .group_hover("drawer_loose_file_row", |s| s.opacity(1.0))
+                        .tooltip(move |_, cx| cx.new(|_| DrawerTooltipView { text: strings.trash_file.to_string() }).into())
                                             .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
                                             .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
                                                 cx.stop_propagation();
@@ -1017,10 +1011,13 @@ fn render_file_tree_nodes(
                 .gap_1()
                 .min_w(px(0.))
                 .child(
-                    svg()
-                        .path(folder_icon)
-                        .size(px(13.))
-                        .text_color(theme.text_muted),
+                    div().id(SharedString::from(toggle_selector.clone())).debug_selector(move || toggle_selector.clone())
+                        .size(px(16.)).flex().items_center().justify_center()
+                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                            cx.stop_propagation();
+                            on_toggle(root_idx, &p, window, cx);
+                        })
+                        .child(svg().path(folder_icon).size(px(13.)).text_color(theme.text_muted)),
                 )
                 .child(
                     inline_rename(&key, params).unwrap_or_else(|| div()
@@ -1038,16 +1035,6 @@ fn render_file_tree_nodes(
                 .flex()
                 .items_center()
                 .gap_1()
-                .child(
-                    div().id(SharedString::from(toggle_selector.clone())).debug_selector(move || toggle_selector.clone())
-                        .size(px(16.)).flex().items_center().justify_center()
-                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            cx.stop_propagation();
-                            on_toggle(root_idx, &p, window, cx);
-                        })
-                        .child(svg().path("icons/chevron-right.svg").size(px(10.)).text_color(theme.text_muted)
-                            .with_transformation(Transformation::rotate(radians(value * std::f32::consts::FRAC_PI_2)))),
-                )
                 .child(
                     div()
                         .id(SharedString::from(format!("btn_new_file_dir_{}_{}_{}", root_idx, depth, node_idx)))
@@ -1090,7 +1077,7 @@ fn render_file_tree_nodes(
                     .font_weight(FontWeight::NORMAL)
                     .text_color(theme.text_primary)
                     .hover(|s| s.bg(theme.hover_bg()))
-                    .when(params.selected_directory.as_ref() == Some(&node.path), |el| el.bg(theme.sidebar_selection_bg()))
+                    .when(params.selected_directory.as_ref() == Some(&node.path), |el| el.bg(theme.control_selection_bg()))
                     .child(left_part)
                     .child(right_part)
                     .into_any_element(),
@@ -1125,8 +1112,6 @@ fn render_file_tree_nodes(
             let p = node.path.clone();
             let target_key = DocKey::Path(p.clone());
             let is_active = active_key == Some(&target_key);
-            let open_doc = open_docs.iter().find(|d| d.key == target_key);
-            let is_open = open_doc.is_some();
 
             let file_name = node.name.clone();
             let tooltip_name = file_name.clone();
@@ -1168,7 +1153,7 @@ fn render_file_tree_nodes(
 
             if is_active {
                 item = item
-                    .bg(theme.sidebar_selection_bg())
+                    .bg(theme.control_selection_bg())
                     .text_color(theme.selection_text())
                     .font_weight(FontWeight::NORMAL);
             } else {
@@ -1198,7 +1183,7 @@ fn render_file_tree_nodes(
 
             let mut right_part = div().flex().items_center().gap_1();
 
-            if is_open {
+            {
                 right_part = right_part.child(
                     div()
                         .id(SharedString::from(format!("btn_close_file_{}_{}_{}", root_idx, depth, node_idx)))
@@ -1212,6 +1197,7 @@ fn render_file_tree_nodes(
                         .text_color(theme.text_muted)
                         .opacity(0.0)
                         .group_hover("drawer_file_row", |s| s.opacity(1.0))
+                        .tooltip(move |_, cx| cx.new(|_| DrawerTooltipView { text: strings.trash_file.to_string() }).into())
                         .hover(|s| s.bg(rgba(0xffffff20)).text_color(theme.text_primary))
                         .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
                             cx.stop_propagation();
@@ -1221,7 +1207,10 @@ fn render_file_tree_nodes(
                 );
             }
 
-            out.push(item.child(left_part).child(right_part).into_any_element());
+            let file_content = div().flex().items_center().gap_1p5().min_w(px(0.))
+                .child(svg().path("icons/file.svg").size(px(13.)).text_color(theme.text_muted))
+                .child(left_part);
+            out.push(item.child(file_content).child(right_part).into_any_element());
         }
     }
 }
@@ -1278,7 +1267,7 @@ where
     let icon_el = svg().path(icon_path).size(px(16.)).text_color(color);
 
     if active {
-        base.bg(theme.selection_bg())
+        base.bg(theme.control_selection_bg())
             .rounded(px(6.))
             .child(icon_el)
     } else {

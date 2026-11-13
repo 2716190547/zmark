@@ -1264,7 +1264,7 @@ fn render_mermaid_container(
             .flex()
             .items_center()
             .justify_center()
-            .bg(theme.selection_bg())
+            .bg(theme.control_selection_bg())
             .hover(|s| s.bg(theme.hover_bg()))
             .tooltip({
                 let t = strings.mermaid_zoom_hint.to_string();
@@ -1779,7 +1779,7 @@ fn render_code_block(
         .cursor_pointer()
         .opacity(if is_copied { 1.0 } else { 0.0 })
         .group_hover(group_name.clone(), |s| s.opacity(1.0))
-        .bg(theme.selection_bg())
+        .bg(theme.control_selection_bg())
         .hover(|s| s.bg(theme.hover_bg()))
         .tooltip({
             let is_copied = is_copied;

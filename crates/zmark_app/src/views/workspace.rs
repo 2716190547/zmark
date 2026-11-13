@@ -2536,6 +2536,41 @@ impl WorkspaceView {
         .detach();
     }
 
+    fn trigger_trash_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let strings = self.state.strings;
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("{}: {}", strings.trash_file, path.display()),
+            Some(strings.trash_file_detail),
+            &[PromptButton::ok(strings.trash_file), PromptButton::cancel(strings.modal_cancel)],
+            cx,
+        );
+        cx.spawn(async move |this, app| {
+            if answer.await != Ok(0) { return; }
+            let key = crate::state::DocKey::Path(path.clone());
+            if this.update(app, |this, _| { this.auto_save_tasks.remove(&key); }).is_err() { return; }
+            let result = app.background_executor().spawn(async move {
+                crate::platform::move_file_to_trash(&path)
+            }).await;
+            let _ = this.update(app, |this, cx| {
+                match result {
+                    Ok(()) => {
+                        this.auto_save_tasks.remove(&key);
+                        this.state.close_document_forced(&key);
+                        this.state.refresh_all_roots();
+                        this.on_document_swapped(None, cx);
+                        this.error_banner = None;
+                    }
+                    Err(e) => {
+                        this.error_banner = Some(e.to_string());
+                        this.trigger_auto_save_for(key, cx);
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
     pub fn trigger_close_doc(
         &mut self,
         key: &crate::state::DocKey,
@@ -3636,7 +3671,11 @@ impl Render for WorkspaceView {
         let on_close_doc = Arc::new(
             move |key: &crate::state::DocKey, window: &mut Window, cx: &mut App| {
                 view_doc_close.update(cx, |this, cx| {
-                    this.trigger_close_doc(key, Some(window), cx);
+                    if let crate::state::DocKey::Path(path) = key {
+                        this.trigger_trash_file(path.clone(), window, cx);
+                    } else {
+                        this.trigger_close_doc(key, Some(window), cx);
+                    }
                 });
             },
         );
@@ -3675,7 +3714,7 @@ impl Render for WorkspaceView {
         let view_folder = cx.entity().clone();
         let on_open_folder = Arc::new(move |_window: &mut Window, cx: &mut App| {
             let rx = cx.prompt_for_paths(PathPromptOptions {
-                files: false,
+                files: true,
                 directories: true,
                 multiple: false,
                 prompt: None,
@@ -3685,6 +3724,14 @@ impl Render for WorkspaceView {
                     if let Ok(Ok(Some(mut paths))) = rx.await {
                         if let Some(path) = paths.pop() {
                             let _ = this.update(app, |this, cx| {
+                                if path.is_file() {
+                                    match this.state.load_file(path) {
+                                        Ok(()) => this.on_document_swapped(None, cx),
+                                        Err(e) => this.error_banner = Some(e.to_string()),
+                                    }
+                                    cx.notify();
+                                    return;
+                                }
                                 match this.state.add_workspace_root(path) {
                                     Ok(_) => {
                                         this.error_banner = None;
@@ -4931,7 +4978,7 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        base.bg(theme.selection_bg()).child(icon)
+        base.bg(theme.control_selection_bg()).child(icon)
     } else {
         base.hover(|s| s.bg(theme.hover_bg())).child(icon)
     }
@@ -5109,7 +5156,7 @@ pub fn calculate_subline_scroll_fraction(
 
 /// Resolves background and text colors for view mode switcher tabs.
 ///
-/// Active tabs receive `theme.selection_bg()` and `theme.selection_text()`
+/// Active tabs receive `theme.control_selection_bg()` and `theme.selection_text()`
 /// strictly distinct from `theme.surface`.
 /// Inactive tabs receive transparent background and `theme.text_muted`.
 pub fn mode_tab_colors(
@@ -5117,7 +5164,7 @@ pub fn mode_tab_colors(
     theme: &crate::theme::ThemeColors,
 ) -> (gpui::Hsla, gpui::Hsla) {
     if active {
-        (theme.selection_bg(), theme.selection_text())
+        (theme.control_selection_bg(), theme.selection_text())
     } else {
         (gpui::transparent_black(), theme.text_muted)
     }
