@@ -968,6 +968,7 @@ pub fn render_editor_pane(
                                 cx.new(|_| crate::views::workspace::TooltipView { text: t }).into()
                             })
                             .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                                cx.stop_propagation();
                                 on_click(target_vis, 0, window, cx);
                             })
                             .child(badge_text),
