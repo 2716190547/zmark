@@ -710,6 +710,15 @@ pub fn render_editor_pane(
         .flex()
         .flex_col()
         .bg(theme.surface)
+        .cursor_text()
+        // Rows stop propagation, so this only receives presses outside any row: the side
+        // padding, the gaps and the space under the last line. They select the nearest text.
+        .on_mouse_down(MouseButton::Left, {
+            let source = list_source.clone();
+            move |event, window, cx| {
+                source.update(cx, |this, cx| this.source_mouse_down(event, window, cx));
+            }
+        })
         .child(
             uniform_list("editor_lines", line_count, move |range, window, _cx| {
                 let mut block_spans: std::collections::HashMap<zmark_core::syntax::CodeKey, Arc<[zmark_core::syntax::SyntaxSpan]>> = std::collections::HashMap::new();

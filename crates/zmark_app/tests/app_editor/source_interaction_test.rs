@@ -682,3 +682,45 @@ fn native_source_format_actions_and_hidden_source_isolation(cx: &mut gpui::TestA
     cx.simulate_keystrokes("secondary-x secondary-v secondary-b secondary-z secondary-shift-z");
     assert_eq!(view.read_with(cx, |ws, _| ws.state.editor.clone()), before);
 }
+
+#[gpui::test]
+fn source_press_in_padding_or_below_text_moves_the_caret_and_clears_the_selection(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = source_window(cx, "alpha beta\ngamma delta");
+    // Select a range by dragging inside the text.
+    let first = caret_point(&view, 0, 1, cx);
+    let last = caret_point(&view, 1, 4, cx);
+    cx.simulate_mouse_down(first, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(last, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(last, MouseButton::Left, Modifiers::none());
+    draw(cx);
+    assert!(view.read_with(cx, |ws, _| ws.state.editor.selected_text().is_some()));
+
+    // Press in the empty space far below the last line: the selection must go away.
+    let bounds = view.read_with(cx, |ws, _| ws.editor_content_bounds).expect("editor bounds");
+    let below = gpui::point(bounds.left() + gpui::px(200.), bounds.bottom() - gpui::px(6.));
+    cx.simulate_mouse_down(below, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(below, MouseButton::Left, Modifiers::none());
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |ws, _| ws.state.editor.selected_text()),
+        None,
+        "a press below the text must collapse the selection"
+    );
+}
+
+#[gpui::test]
+fn source_drag_started_in_the_left_padding_selects_text(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = source_window(cx, "alpha beta\ngamma delta");
+    let bounds = view.read_with(cx, |ws, _| ws.editor_content_bounds).expect("editor bounds");
+    let start = gpui::point(bounds.left() + gpui::px(2.), caret_point(&view, 0, 0, cx).y);
+    let end = caret_point(&view, 1, 5, cx);
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |ws, _| ws.state.editor.selected_text()),
+        Some("alpha beta\ngamma".into()),
+        "dragging out of the padding selects from the nearest text"
+    );
+}
