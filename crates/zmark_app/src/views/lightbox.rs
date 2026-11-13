@@ -291,8 +291,30 @@ fn lightbox_image_size(path: &std::path::Path) -> (f32, f32) {
     }
 }
 
+/// Physical pixel size to re-rasterize the open SVG at, or (0, 0) when no re-render applies
+/// (raster image, nothing open). Rounded to 64px steps so small zoom changes reuse the result,
+/// and capped at 4096px per side and 16 megapixels.
+pub fn sharp_target_px(state: &LightboxState, scale_factor: f32) -> (u32, u32) {
+    let is_svg = state
+        .svg_path
+        .as_ref()
+        .is_some_and(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")));
+    if !state.is_open || !is_svg || !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return (0, 0);
+    }
+    let (mut w, mut h) = (
+        state.natural_size.0 * state.zoom * scale_factor,
+        state.natural_size.1 * state.zoom * scale_factor,
+    );
+    let shrink = (4096.0 / w.max(h)).min((16_000_000.0 / (w * h)).sqrt()).min(1.0);
+    (w, h) = (w * shrink, h * shrink);
+    let step = |v: f32| ((v / 64.0).ceil() as u32 * 64).max(64);
+    (step(w), step(h))
+}
+
 pub fn render_lightbox(
     state: &mut LightboxState,
+    sharp: Option<Arc<RenderImage>>,
     viewport: Size<Pixels>,
     theme: &ThemeColors,
     strings: &'static I18nStrings,
@@ -390,8 +412,12 @@ pub fn render_lightbox(
                                 cx.notify();
                             }),
                         )
-                        .children(state.displayed_path().map(|path| {
-                            img(path.clone())
+                        .children(match (sharp, state.displayed_path()) {
+                            (Some(image), _) => Some(img(image)),
+                            (None, Some(path)) => Some(img(path.clone())),
+                            _ => None,
+                        }.map(|image| {
+                            image
                                 .w(px(image_width * zoom))
                                 .h(px(image_height * zoom))
                                 .object_fit(ObjectFit::Contain)

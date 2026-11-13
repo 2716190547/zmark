@@ -120,6 +120,10 @@ pub struct WorkspaceView {
     pub rendered_regions: Arc<crate::views::preview::RegionsRegistry>,
     pub local_images: crate::local_images::SharedImages,
     pub local_image_task: Option<gpui::Task<()>>,
+    /// Crisp re-rasterization of the open SVG lightbox at its current zoom, with its pixel size.
+    pub lightbox_sharp: Option<(Arc<gpui::RenderImage>, (u32, u32))>,
+    pub lightbox_sharp_want: (u32, u32),
+    pub lightbox_sharp_task: Option<gpui::Task<()>>,
     pub syntax_active_task: Option<gpui::Task<()>>,
     pub syntax_pending_request: Option<SyntaxBatchRequest>,
     pub syntax_cancel_flag: Arc<AtomicBool>,
@@ -277,6 +281,9 @@ impl WorkspaceView {
                 crate::local_images::LocalImages::default(),
             )),
             local_image_task: None,
+            lightbox_sharp: None,
+            lightbox_sharp_want: (0, 0),
+            lightbox_sharp_task: None,
             syntax_active_task: None,
             syntax_pending_request: None,
             syntax_cancel_flag: Arc::new(AtomicBool::new(false)),
@@ -2006,7 +2013,67 @@ impl WorkspaceView {
         &self.state.theme
     }
 
+    /// Drops the crisp re-render and cancels any pending one.
+    fn clear_lightbox_sharp(&mut self, window: &mut Window, cx: &mut App) {
+        self.lightbox_sharp_task = None;
+        self.lightbox_sharp_want = (0, 0);
+        if let Some((image, _)) = self.lightbox_sharp.take() {
+            crate::views::lightbox::drop_image_from_atlas(cx, image, window);
+        }
+    }
+
+    /// After zoom settles, re-rasterizes the SVG at zoom x screen scale so enlarged
+    /// diagrams stay sharp. The old image stays on screen until the new one is ready.
+    fn schedule_lightbox_sharp(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let want = crate::views::lightbox::sharp_target_px(&self.lightbox, window.scale_factor());
+        if want == (0, 0) {
+            if self.lightbox_sharp.is_some() || self.lightbox_sharp_task.is_some() {
+                self.clear_lightbox_sharp(window, cx);
+            }
+            return;
+        }
+        let current = self.lightbox_sharp.as_ref().map(|(_, px)| *px);
+        if want == self.lightbox_sharp_want || Some(want) == current {
+            return;
+        }
+        let Some(path) = self.lightbox.svg_path.clone() else { return };
+        self.lightbox_sharp_want = want;
+        let renderer = cx.svg_renderer();
+        self.lightbox_sharp_task = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(120)).await;
+            let image = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = std::fs::read(&path).ok()?;
+                    let svg = renderer.parse_svg(&bytes).ok()?;
+                    renderer
+                        .render_parsed(
+                            &svg,
+                            gpui::SvgSize::ExactSize(gpui::size(
+                                gpui::DevicePixels(want.0 as i32),
+                                gpui::DevicePixels(want.1 as i32),
+                            )),
+                        )
+                        .ok()
+                })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                // A newer request or a closed lightbox makes this result stale.
+                if this.lightbox_sharp_want != want || !this.lightbox.is_open {
+                    return;
+                }
+                if let Some(image) = image {
+                    if let Some((old, _)) = this.lightbox_sharp.replace((image, want)) {
+                        crate::views::lightbox::drop_image_from_atlas(cx, old, window);
+                    }
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
     pub fn close_lightbox(&mut self, window: &mut Window, cx: &mut App) {
+        self.clear_lightbox_sharp(window, cx);
         if let Some(exclusive_path) = self.lightbox.close() {
             crate::views::lightbox::release_lightbox_image(&exclusive_path, window, cx);
         }
@@ -2031,6 +2098,7 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.clear_lightbox_sharp(window, cx);
         if let Some(evicted) = self.lightbox.open(image_path, 0) {
             crate::views::lightbox::release_lightbox_image(&evicted, window, cx);
         }
@@ -2044,6 +2112,7 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.clear_lightbox_sharp(window, cx);
         if let Some(old_exclusive) = self.lightbox.close() {
             crate::views::lightbox::release_lightbox_image(&old_exclusive, window, cx);
         }
@@ -3303,6 +3372,9 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.lightbox.is_open || self.lightbox_sharp.is_some() {
+            self.schedule_lightbox_sharp(window, cx);
+        }
         if self.syntax_warm_pending {
             self.syntax_warm_pending = false;
             self.start_warm_coordination_task(cx);
@@ -4786,7 +4858,8 @@ impl Render for WorkspaceView {
                             })
                     )
                     .when(self.lightbox.is_open, |root| {
-                        root.child(render_lightbox(&mut self.lightbox, window.viewport_size(), theme, strings, reduce_motion, cx))
+                        let sharp = self.lightbox_sharp.as_ref().map(|(image, _)| image.clone());
+                        root.child(render_lightbox(&mut self.lightbox, sharp, window.viewport_size(), theme, strings, reduce_motion, cx))
                     })
                     .when(self.state.pending_remove_root.is_some(), |root| {
                         root.child(self.render_remove_root_modal(theme, cx))

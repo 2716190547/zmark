@@ -380,3 +380,60 @@ fn test_lightbox_drag_pan() {
     state.end_drag();
     assert!(!state.is_dragging);
 }
+
+#[test]
+fn sharp_target_px_follows_zoom_caps_budget_and_skips_raster() {
+    use zmark_app::views::lightbox::sharp_target_px;
+    let mut state = LightboxState::new();
+    assert_eq!(sharp_target_px(&state, 2.0), (0, 0), "closed lightbox has nothing to render");
+
+    let dir = tempfile::tempdir().unwrap();
+    let svg = dir.path().join("d.svg");
+    std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"/>"#).unwrap();
+    state.open(svg, 1);
+    state.set_zoom(1.0);
+    assert_eq!(sharp_target_px(&state, 2.0), (832, 448), "400x200 at 1x on a 2x screen, rounded up to 64px steps");
+    state.set_zoom(5.0);
+    let (w, h) = sharp_target_px(&state, 2.0);
+    assert!(w.max(h) <= 4096 + 64 && (w as u64) * (h as u64) <= 16_500_000, "capped: {w}x{h}");
+
+    let png = dir.path().join("p.png");
+    image::DynamicImage::new_rgba8(10, 10).save(&png).unwrap();
+    state.open(png, 2);
+    assert_eq!(sharp_target_px(&state, 2.0), (0, 0), "raster images are never re-rendered");
+}
+
+#[gpui::test]
+async fn zooming_an_svg_lightbox_rerenders_it_sharp_and_closing_releases_it(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("diagram.svg");
+    std::fs::write(&path, r##"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200"><rect width="400" height="200" fill="#123456"/></svg>"##).unwrap();
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut state = AppState::new_isolated(Document::new_scratch());
+        state.preferences.reduce_motion = true;
+        WorkspaceView::new(state, cx)
+    });
+    cx.simulate_resize(size(px(1200.), px(900.)));
+    cx.update(|window, cx| {
+        view.update(cx, |ws, cx| {
+            ws.open_image_lightbox(path.clone(), window, cx);
+            ws.lightbox.set_zoom(2.0);
+            cx.notify();
+        });
+        let _ = window.draw(cx);
+    });
+    cx.executor().advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        let ws = view.read(cx);
+        let (image, px_size) = ws.lightbox_sharp.as_ref().expect("a sharp image is ready after zoom settles");
+        assert_eq!(image.size(0).width.0 as u32, px_size.0, "bitmap matches the requested width");
+        assert!(px_size.0 >= 800, "2x zoom of a 400px SVG needs at least 800 physical px, got {px_size:?}");
+    });
+    cx.update(|window, cx| view.update(cx, |ws, cx| ws.close_lightbox(window, cx)));
+    cx.update(|_, cx| {
+        let ws = view.read(cx);
+        assert!(ws.lightbox_sharp.is_none() && ws.lightbox_sharp_task.is_none(), "close releases the sharp image");
+    });
+}
