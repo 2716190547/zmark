@@ -211,6 +211,9 @@ pub fn render_preview_pane_with_callbacks(
                 })
                 .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
                     if is_selecting {
+                        // This block owns the drag while the pointer is over it; the pane-level
+                        // fallback must not recompute (and overwrite) the head.
+                        cx.stop_propagation();
                         let text_system = window.text_system();
                         let offset = {
                             let reg = regions_move.lock().unwrap();
