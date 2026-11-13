@@ -82,6 +82,41 @@ pub fn render_preview_pane_with_callbacks(
                 on_sel_up(selection, false, window, cx);
             }
         });
+
+        // Blocks only handle presses inside their own box. A press anywhere else in the pane
+        // (side margins, gaps between blocks, empty space) is handled here: it clears the old
+        // selection and starts a new one from the nearest text, like a browser or Notes.
+        // Block handlers run first and call `stop_propagation`, so this never double-handles.
+        let on_sel_down = on_selection_change.clone();
+        let on_sel_move = on_selection_change.clone();
+        let regions_down = regions.clone();
+        let regions_move = regions.clone();
+        let parsed_down = parsed.clone();
+        let parsed_move = parsed.clone();
+        pane = pane
+            .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
+                let pos = {
+                    let reg = regions_down.lock().unwrap();
+                    hit_test_point_across_all_regions(&reg, window.text_system(), event.position, &parsed_down.blocks)
+                };
+                match pos {
+                    Some(pos) => on_sel_down(Some(PreviewSelection::new(pos, pos)), true, window, cx),
+                    None => on_sel_down(None, false, window, cx),
+                }
+            })
+            .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
+                if !is_selecting {
+                    return;
+                }
+                let Some(sel) = selection else { return };
+                let head = {
+                    let reg = regions_move.lock().unwrap();
+                    hit_test_point_across_all_regions(&reg, window.text_system(), event.position, &parsed_move.blocks)
+                };
+                if let Some(head) = head {
+                    on_sel_move(Some(PreviewSelection::new(sel.anchor, head)), true, window, cx);
+                }
+            });
     }
 
     let mut content = div().relative().w_full().h(px(total));
@@ -171,6 +206,7 @@ pub fn render_preview_pane_with_callbacks(
                         )
                     };
                     let pos = PreviewCharPosition::new(ix, offset);
+                    cx.stop_propagation();
                     on_sel_down(Some(PreviewSelection::new(pos, pos)), true, window, cx);
                 })
                 .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
