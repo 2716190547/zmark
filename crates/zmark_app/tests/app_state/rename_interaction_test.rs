@@ -361,8 +361,79 @@ async fn folder_transition_reverses_without_a_jump_and_collapsed_children_are_in
     });
     cx.update(|_, cx| assert!(view.read(cx).folder_transitions.is_empty()));
     // GPUI keeps old debug entries; current container geometry proves removal.
+    // Height now follows the animation, so the mid-fade height is already smaller than full.
     assert!(
-        cx.debug_bounds("drawer_roots_section").unwrap().size.height
-            < fading_height - gpui::px(30.)
+        cx.debug_bounds("drawer_roots_section").unwrap().size.height < fading_height,
+        "reduce motion removes the children immediately"
+    );
+}
+
+#[gpui::test]
+async fn folder_expand_grows_the_tree_height_smoothly_instead_of_jumping(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a.md", "b.md", "c.md", "d.md"] {
+        std::fs::write(dir.path().join(name), "x").unwrap();
+    }
+    let window = cx.add_window(|window, cx| {
+        let mut state = AppState::new_isolated(Document::new_scratch());
+        state.add_workspace_root(dir.path().to_path_buf()).unwrap();
+        state.drawer_open = true;
+        let view = WorkspaceView::new(state, cx);
+        window.focus(&view.focus_handle, cx);
+        view
+    });
+    let view = window.root(cx).unwrap();
+    let cx = &mut VisualTestContext::from_window(*window, cx);
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.executor().advance_clock(std::time::Duration::from_millis(210));
+    cx.run_until_parked();
+    let root = cx.update(|_, cx| view.read(cx).state.workspace_roots[0].path.clone());
+    let height = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        f32::from(cx.debug_bounds("drawer_roots_section").unwrap().size.height)
+    };
+    // Skips ahead in the running transition; a no-op once it has been dropped.
+    let advance = |cx: &mut VisualTestContext, ms: u64| {
+        cx.update(|_, cx| {
+            view.update(cx, |ws, _| {
+                if let Some(t) = ws.folder_transitions.get_mut(&root) {
+                    t.started -= std::time::Duration::from_millis(ms);
+                }
+            })
+        })
+    };
+    let toggle = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| view.update(cx, |ws, cx| ws.toggle_folder(0, &root, cx)))
+    };
+
+    let is_open = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| view.read(cx).state.folder_expanded(&root).unwrap())
+    };
+    // Bring the root to a known resting state of each kind, whatever it started as.
+    if is_open(cx) {
+        toggle(cx);
+    }
+    advance(cx, 700);
+    let collapsed = height(cx);
+    toggle(cx);
+    advance(cx, 700);
+    assert!(is_open(cx));
+    let expanded = height(cx);
+    assert!(
+        expanded > collapsed + 100.0,
+        "4 files must add well over 100px: collapsed {collapsed}, expanded {expanded}"
+    );
+
+    // Collapse again and sample mid-animation: strictly in between, not a jump.
+    toggle(cx);
+    advance(cx, 250);
+    let mid = height(cx);
+    assert!(
+        mid > collapsed + 1.0 && mid < expanded - 1.0,
+        "mid-animation height {mid} must lie between {collapsed} and {expanded}"
     );
 }

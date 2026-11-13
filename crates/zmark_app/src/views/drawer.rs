@@ -677,7 +677,7 @@ pub fn render_drawer_with_search(
                                         );
                                     }
 
-                                    roots_section = roots_section.child(fading_children(root_children_container, is_expanded, value));
+                                    roots_section = roots_section.child(fading_children(root_children_container, is_expanded, value, open_children_height(&root.tree, &search.search_query.to_lowercase(), &search.folder_values)));
                                 }
                             }
                         }
@@ -907,8 +907,56 @@ fn inline_rename(key: &DocKey, params: &DrawerSearchParams) -> Option<AnyElement
         }).into_any_element())
 }
 
-fn fading_children(children: Div, expanded: bool, value: f32) -> AnyElement {
-    children.relative().opacity(value).when(!expanded, |el| {
+const TREE_DIR_ROW_H: f32 = 28.0;
+const TREE_FILE_ROW_H: f32 = 44.0;
+const TREE_ROW_GAP: f32 = 2.0;
+
+/// Height of a folder's visible children when fully open (rows plus the 2px gaps between them),
+/// using the same filtering as `render_file_tree_nodes`. Drives the open/close height animation.
+fn open_children_height(
+    nodes: &[FileTreeNode],
+    q_lower: &str,
+    values: &std::collections::HashMap<PathBuf, f32>,
+) -> f32 {
+    let mut total = 0.0;
+    let mut rows = 0;
+    for node in nodes {
+        if node.is_dir {
+            if !q_lower.is_empty() && !dir_matches_search(node, q_lower) {
+                continue;
+            }
+            total += TREE_DIR_ROW_H;
+            rows += 1;
+            // Same rule as rendering: a folder that is still animating closed keeps its children laid out.
+            if node.is_expanded || values.get(&node.path).is_some_and(|v| *v > 0.0) {
+                let inner = open_children_height(&node.children, q_lower, values);
+                if inner > 0.0 {
+                    total += inner + TREE_ROW_GAP;
+                }
+            }
+        } else {
+            if !q_lower.is_empty() && !node.name.to_lowercase().contains(q_lower) {
+                continue;
+            }
+            total += TREE_FILE_ROW_H;
+            rows += 1;
+        }
+    }
+    if rows > 1 {
+        total += TREE_ROW_GAP * (rows - 1) as f32;
+    }
+    total
+}
+
+/// Children clip to `open_height * value` so rows below slide smoothly; opacity follows the same value.
+fn fading_children(children: Div, expanded: bool, value: f32, open_height: f32) -> AnyElement {
+    let animating = value > 0.0 && value < 1.0;
+    div()
+        .relative()
+        .w_full()
+        .when(animating, |el| el.h(px(open_height * value)).overflow_hidden())
+        .child(children.opacity(value))
+        .when(!expanded, |el| {
         el.child(div().absolute().inset_0().occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation()))
@@ -1067,7 +1115,8 @@ fn render_file_tree_nodes(
                     on_close_doc,
                     &mut children,
                 );
-                out.push(fading_children(div().flex().flex_col().gap_0p5().children(children), is_expanded, value));
+                let open_height = open_children_height(&node.children, &q_lower, &params.folder_values);
+                out.push(fading_children(div().flex().flex_col().gap_0p5().children(children), is_expanded, value, open_height));
             }
         } else {
             if !search_query.is_empty() && !node.name.to_lowercase().contains(&q_lower) {
