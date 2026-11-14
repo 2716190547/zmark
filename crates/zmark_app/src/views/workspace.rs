@@ -4048,8 +4048,11 @@ impl Render for WorkspaceView {
                         this.restore_sidebar_path(&path, cx);
                         if this.state.workspace_roots.iter().any(|root| path.starts_with(&root.path)) {
                             this.state.expand_to_file(&path);
-                        } else if let Err(error) = this.state.add_workspace_root(path.clone()) {
-                            errors.push(format!("{}: {}", path.display(), error));
+                        } else {
+                            match this.state.add_workspace_root(path.clone()) {
+                                Ok(_) => this.state.expand_to_file(&path),
+                                Err(error) => errors.push(format!("{}: {}", path.display(), error)),
+                            }
                         }
                     } else {
                         match this.state.load_file(path.clone()) {
@@ -4062,6 +4065,7 @@ impl Render for WorkspaceView {
                     }
                 }
                 if opened_file { this.on_document_swapped(Some(window), cx); }
+                this.drawer_closing = false;
                 this.state.drawer_open = true;
                 this.state.drawer_tab = crate::state::DrawerTab::Files;
                 this.error_banner = if errors.is_empty() { None } else { Some(errors.join("\n")) };

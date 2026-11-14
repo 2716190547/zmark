@@ -88,6 +88,8 @@ pub fn row_anchor(state: SharedSelection, key: DocKey) -> impl IntoElement {
         |_, _, _, _| {},
     )
     .absolute()
+    .top_0()
+    .left_0()
     .size_full()
 }
 
@@ -175,5 +177,7 @@ pub fn selection_layer(
         },
     )
     .absolute()
+    .top_0()
+    .left_0()
     .size_full()
 }

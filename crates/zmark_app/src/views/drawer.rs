@@ -1116,9 +1116,9 @@ fn render_file_tree_nodes(
                     })
                     .id(SharedString::from(format!("drawer_tree_dir_{}_{}_{}", root_idx, depth, node_idx)))
                     .group("drawer_dir_row")
-                    .w_full()
-                    .h(px(28.))
-                    .pl(px(depth_indent + 4.0))
+                    .ml(px(depth_indent))
+                    .h(px(TREE_DIR_ROW_H))
+                    .pl_2()
                     .pr_2()
                     .rounded(px(5.))
                     .cursor_pointer()
@@ -1181,7 +1181,7 @@ fn render_file_tree_nodes(
                 .id(SharedString::from(format!("drawer_tree_file_{}_{}_{}", root_idx, depth, node_idx)))
                 .debug_selector(move || selector.clone())
                 .group("drawer_file_row")
-                .ml(px(depth_indent + 4.0))
+                .ml(px(depth_indent))
                 .h(px(TREE_FILE_ROW_H))
                 .pl_2()
                 .pr_1p5()
@@ -1267,8 +1267,9 @@ fn render_file_tree_nodes(
             if params.on_trash_directory.is_some() {
                 right_part = path_actions(node.path.clone(), "drawer_file_row", params, strings);
             }
-            let file_content = div().flex().flex_1().items_start().gap_1p5().min_w(px(0.))
-                .child(svg().path("icons/file.svg").size(px(14.)).flex_shrink_0().mt(px(3.)).text_color(theme.text_muted))
+            let file_content = div().flex().flex_1().items_start().gap_1().min_w(px(0.))
+                .child(div().size(px(16.)).flex_shrink_0().mt(px(2.)).flex().items_center().justify_center()
+                    .child(svg().path("icons/file.svg").size(px(14.)).flex_shrink_0().text_color(theme.text_muted)))
                 .child(left_part);
             out.push(path_context_menu(item.child(file_content).child(right_part), node.path.clone(), params, theme, strings).into_any_element());
         }
