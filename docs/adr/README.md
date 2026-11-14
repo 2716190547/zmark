@@ -1,6 +1,6 @@
-# GlideMark 架构决策记录 (ADR 索引)
+# ZMark 架构决策记录 (ADR 索引)
 
-本文档是 GlideMark 架构演进与技术选型的唯一权威索引表。
+本文档是 ZMark 架构演进与技术选型的唯一权威索引表。历史 ADR 保留决策时的产品名称与源码路径，当前实现使用 `zmark_core` / `zmark_app`。
 所有技术决策遵循轻量、务实、直面根因原则，早期已被替代的中间态探索已并入下表所列去向，不保留冗余文件。
 
 ---
@@ -12,7 +12,7 @@
 | **0001** | [核心技术栈与基础架构](0001-core-tech-stack-and-architecture.md) | 已接受 (Accepted) | 采用 Rust + GPUI 渲染引擎与自研纯文本编辑核心 |
 | **0002** | [虚拟化块渲染与同步滚动架构](0002-virtualized-block-rendering-and-sync-scrolling.md) | 已接受 (Accepted) | 确立源码锚点与分块渲染模型；双向同步在 0028 落地 |
 | **0003** | [自包含 HTML 独立单文件导出](0003-self-contained-html-export.md) | 已接受 (Accepted) | 导出内联完整 CSS 样式的单文件离线 HTML，无需依赖外部浏览器 |
-| **0004** | [Core 与 App 双 Crate 解耦边界](0004-core-ui-crate-decoupling.md) | 已接受 (Accepted) | 逻辑解析（glidemark_core）与 GPU 渲染层（glidemark_app）严格隔离 |
+| **0004** | [Core 与 App 双 Crate 解耦边界](0004-core-ui-crate-decoupling.md) | 已接受 (Accepted) | 逻辑解析（zmark_core）与 GPU 渲染层（zmark_app）严格隔离 |
 | **0005** | [自研编辑引擎与多调色板体系](0005-unified-topbar-custom-editor-and-palette-system.md) | 已接受 (Accepted) | 自研轻量纯文本行光标引擎，杜绝重型外部编辑器依赖 |
 | **0006** | [异步非阻塞文件选择与拖拽集成](0006-async-file-dialog-and-external-drop-handling.md) | 已接受 (Accepted) | 原生异步对话框杜绝 AppKit 主线程借用死锁，支持拖拽即开 |
 | **0007** | [Flexbox 滚动约束与布局根因修复](0007-flexbox-scroll-constraints.md) | 已接受 (Accepted) | 明确 `min-h: 0` 与 `min-w: 0` 约束，彻底根治 Taffy 弹性盒溢出滚动卡死 |

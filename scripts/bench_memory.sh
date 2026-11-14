@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${ZMARK_BIN:-${GLIDEMARK_BIN:-$ROOT/target/release/zmark_app}}"
+BIN="${ZMARK_BIN:-$ROOT/target/release/zmark_app}"
 SETTLE_SECONDS="${SETTLE_SECONDS:-6}"
 SAMPLE_COUNT="${SAMPLE_COUNT:-8}"
 SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-0.5}"

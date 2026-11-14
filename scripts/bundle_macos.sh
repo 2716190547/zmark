@@ -135,8 +135,8 @@ if [ -x "$LSREGISTER" ]; then
     "$LSREGISTER" -f "$APP_DEST" || true
 fi
 
-# Old GlideMark bundle: move it out (rollback copy) only after the new bundle
-# is installed and verified. Never touch it while it is running.
+# Keep the legacy installation as a rollback copy only after verifying the new bundle.
+# Never move it while running or when process detection fails.
 OLD_APP="/Applications/GlideMark.app"
 if [ -d "$OLD_APP" ]; then
     set +e
@@ -145,11 +145,13 @@ if [ -d "$OLD_APP" ]; then
     set -e
     if [ "$OLD_RC" -eq 0 ]; then
         echo "warning: GlideMark is still running; leaving $OLD_APP untouched" >&2
-    else
-        OLD_BACKUP="$DIR/target/bundle/GlideMark.previous.$(date +%Y%m%d%H%M%S).app"
+    elif [ "$OLD_RC" -eq 1 ]; then
+        OLD_BACKUP="$DIR/target/bundle/legacy-app.previous.$(date +%Y%m%d%H%M%S).app"
         mv "$OLD_APP" "$OLD_BACKUP"
         if [ -x "$LSREGISTER" ]; then "$LSREGISTER" -u "$OLD_APP" || true; fi
         echo "==> Moved legacy bundle to $OLD_BACKUP"
+    else
+        echo "warning: legacy process detection failed ($OLD_RC); leaving $OLD_APP untouched" >&2
     fi
 fi
 

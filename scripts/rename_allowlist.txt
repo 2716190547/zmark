@@ -1,13 +1,31 @@
-# path-prefix<TAB>content-regex
-# Test fixtures are not product identity; crate imports are checked by rustc.
-crates/zmark_app/tests/
-crates/zmark_core/tests/
-# One-line rename provenance note.
-README.md	formerly GlideMark
-# Config migration compatibility.
-crates/zmark_core/src/config.rs	glidemark|GlideMark
-# Legacy executable env var intentionally still read for one release.
-scripts/bench_memory.sh	GLIDEMARK_BIN
-# Old bundle cleanup paths.
-scripts/bundle_macos.sh	GlideMark
-crates/zmark_app/src/updater.rs	GlideMark
+# Exact path (or historical directory prefix ending in /)<TAB>content-regex
+# Historical decisions retain the names and paths used at the time; the live index is not exempt.
+docs/adr/0001-core-tech-stack-and-architecture.md
+docs/adr/0004-core-ui-crate-decoupling.md
+docs/adr/0005-unified-topbar-custom-editor-and-palette-system.md
+docs/adr/0015-icon-composer-iconimagestack-bypass-squircle-jail.md
+docs/adr/0019-pure-rust-mermaid-rendering-engine-adoption.md
+docs/adr/0020-svg-bounding-box-normalization-and-void-elimination.md
+docs/adr/0021-multi-tab-and-workspace-directory-architecture.md
+docs/adr/0022-diagram-texture-budget-and-memory-optimization.md
+docs/adr/0024-panic-isolation-native-dialogs-and-editor-horizontal-scroll.md
+docs/adr/0027-dual-pane-seamless-canvas-and-diagram-lightbox.md
+docs/adr/0030-macos-toolchain-profiling-and-adhoc-signing.md
+docs/adr/0031-sidebar-centric-navigation-and-multi-root-workspace.md
+docs/adr/0032-canvas-header-visual-refinement-and-hidpi-lightbox.md
+docs/adr/0033-modern-settings-drawer-refinement-and-editor-reading.md
+docs/adr/0034-miaoyan-palette-apple-settings-and-visual-line-wrap.md
+docs/adr/0035-settings-layout-derived-palette-icon-stroke-and-mermaid-desugaring.md
+docs/plans/drawer-ui-polish-and-test-trim.md
+docs/plans/maintainability-architecture-refactor.md
+docs/plans/phase-h-delivery.md
+docs/plans/phase-h-interaction-and-reading.md
+docs/plans/phase-h-rework-2.md
+docs/plans/phase-i-color-and-media.md
+docs/plans/phase-i-rework-4.md
+docs/plans/phase-j-typography-scrollbar-memory-cleanup.md
+docs/plans/scroll-stability-dock-activation-and-test-speed.md
+docs/plans/zmark-rename-export-update-and-about.md
+# Necessary compatibility, not current product identity.
+crates/zmark_core/src/config.rs	^pub const LEGACY_APP_DIR: &str = "GlideMark";$|^    fn config_migrates_from_glidemark_once\(\) \{$|^        let old = root\.join\("GlideMark"\);$
+scripts/bundle_macos.sh	^OLD_APP="/Applications/GlideMark\.app"$|^    /usr/bin/pgrep -x GlideMark >/dev/null 2>&1$|^        echo "warning: GlideMark is still running; leaving \$OLD_APP untouched" >&2$
