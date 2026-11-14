@@ -130,6 +130,10 @@ impl ThemeColors {
     }
 
     /// Shared control selection, independent of document text selection.
+    pub fn destructive_text(&self) -> Hsla {
+        if self.is_dark { rgb(0xff8a80).into() } else { rgb(0xb42318).into() }
+    }
+
     pub fn control_selection_bg(&self) -> Hsla {
         if self.is_dark { rgb(0x2e2d2b).into() } else { rgb(0xefede4).into() }
     }

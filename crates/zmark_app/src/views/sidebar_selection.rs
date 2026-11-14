@@ -72,35 +72,20 @@ impl SidebarSelection {
             self.selected.insert(key.clone());
             self.anchor = Some(key.clone());
         }
-        self.focus = Some(key);
+        self.focus = if self.selected.contains(&key) {
+            Some(key)
+        } else {
+            self.selected.iter().next().cloned()
+        };
     }
 }
 
 pub fn row_anchor(state: SharedSelection, key: DocKey) -> impl IntoElement {
-    let paint_state = state.clone();
-    let paint_key = key.clone();
     canvas(
-        move |bounds, _window, _| {
+        move |bounds, _, _| {
             state.lock().unwrap().rows.insert(key.clone(), bounds);
-            bounds
         },
-        move |_, bounds, window, _| {
-            let state = paint_state.lock().unwrap();
-            if state.selected.len() > 1 && state.selected.contains(&paint_key) {
-                let mark = Bounds::new(
-                    point(bounds.right() - px(56.), bounds.top() + px(10.)),
-                    size(px(8.), px(8.)),
-                );
-                window.paint_quad(fill(mark, rgb(0x777777)).corner_radii(px(2.)));
-                let mut tick = PathBuilder::stroke(px(1.2));
-                tick.move_to(point(mark.left() + px(1.5), mark.top() + px(4.)));
-                tick.line_to(point(mark.left() + px(3.3), mark.top() + px(6.)));
-                tick.line_to(point(mark.left() + px(6.5), mark.top() + px(2.)));
-                if let Ok(path) = tick.build() {
-                    window.paint_path(path, rgb(0xffffff));
-                }
-            }
-        },
+        |_, _, _, _| {},
     )
     .absolute()
     .size_full()
@@ -120,6 +105,29 @@ pub fn selection_layer(
             state.selected.retain(|key| visible.contains(key));
             if old_len != state.selected.len() {
                 window.request_animation_frame();
+            }
+            if state.selected.len() > 1 {
+                for key in &state.selected {
+                    if let Some(bounds) = state.rows.get(key) {
+                        window.paint_quad(fill(*bounds, color).corner_radii(px(6.)));
+                    }
+                }
+                state.current = state
+                    .focus
+                    .as_ref()
+                    .and_then(|key| state.rows.get(key))
+                    .copied();
+                state.painted_key = state.focus.clone();
+                state.started = None;
+                state.from = None;
+                return;
+            }
+            if !state
+                .focus
+                .as_ref()
+                .is_some_and(|key| state.selected.contains(key))
+            {
+                state.focus = state.selected.iter().next().cloned();
             }
             let target = state
                 .focus

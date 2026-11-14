@@ -7,6 +7,7 @@ use zmark_core::i18n::I18nStrings;
 
 use crate::state::{root_label, DocKey, DrawerTab, FileTreeNode, OpenDoc, WorkspaceRoot};
 use crate::theme::ThemeColors;
+use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 
 pub use gpui_component::input::InputState as SearchInput;
 
@@ -106,7 +107,7 @@ pub fn render_drawer_with_search(
     search: &DrawerSearchParams,
     on_select_tab: Arc<dyn Fn(DrawerTab, &mut Window, &mut App)>,
     on_toggle_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
-    on_remove_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
+    _on_remove_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_refresh_root: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_toggle_folder: Arc<dyn Fn(usize, &PathBuf, &mut Window, &mut App)>,
     on_select_file: Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>,
@@ -502,7 +503,6 @@ pub fn render_drawer_with_search(
                                 let icon_handler = search.on_row.clone();
                                 let icon_key = root_key.clone();
                                 let on_refresh_r = on_refresh_root.clone();
-                                let on_remove_r = on_remove_root.clone();
 
                                 let row_handler = search.on_row.clone();
                                 let row_key = root_key.clone();
@@ -531,13 +531,6 @@ pub fn render_drawer_with_search(
                                         cx.new(|_| DrawerTooltipView { text: t }).into()
                                     });
 
-                                let on_remove_header = on_remove_r.clone();
-                                root_header = root_header
-                                    .on_mouse_down(MouseButton::Right, move |_e, window, cx| {
-                                        cx.stop_propagation();
-                                        on_remove_header(root_idx, window, cx);
-                                    });
-
                                 let folder_icon = if is_expanded {
                                     "icons/folder-open.svg"
                                 } else {
@@ -548,7 +541,7 @@ pub fn render_drawer_with_search(
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .min_w(px(0.))
+                                    .min_w(px(0.)).flex_1()
                                     .child(
                                         div().id(SharedString::from(format!("drawer_root_toggle_{root_idx}")))
                                             .debug_selector(move || format!("drawer_root_toggle_{root_idx}"))
@@ -622,7 +615,7 @@ pub fn render_drawer_with_search(
                                     );
 
                                 root_header = root_header.child(left_part).child(right_part);
-                                roots_section = roots_section.child(root_header);
+                                roots_section = roots_section.child(path_context_menu(root_header, root.path.clone(), search, theme, strings));
 
                                 if (is_expanded || value > 0.0) && !is_missing {
                                     let mut root_children_container = div().flex().flex_col().gap_0p5();
@@ -836,7 +829,7 @@ pub fn render_drawer_with_search(
                                     );
 
                                 let right_part = if search.on_trash_directory.is_some() { path_actions((*p).clone(), "drawer_loose_file_row", search, strings) } else { right_part };
-                                loose_section = loose_section.child(item.child(left_part).child(right_part));
+                                loose_section = loose_section.child(path_context_menu(item.child(left_part).child(right_part), (*p).clone(), search, theme, strings));
                             }
 
                             content = content.child(loose_section);
@@ -922,11 +915,12 @@ pub fn render_input(input: &Entity<SearchInput>, title: bool) -> gpui_component:
         .appearance(false)
         .bordered(false)
         .focus_bordered(false)
-        .h(px(24.))
+        .h(px(24.)).w_full().min_w(px(0.))
         .px_0().py_0()
+        .line_height(px(if title { 24. } else { 20. }))
         .text_size(px(if title { 18. } else { 13. }))
         .font_family(crate::platform::UI_FONT)
-        .map(|input| if title { input.font_weight(FontWeight::BOLD) } else { input })
+        .font_weight(if title { FontWeight::BOLD } else { FontWeight::NORMAL })
 }
 
 fn inline_rename(key: &DocKey, params: &DrawerSearchParams) -> Option<AnyElement> {
@@ -934,7 +928,9 @@ fn inline_rename(key: &DocKey, params: &DrawerSearchParams) -> Option<AnyElement
     let input = params.rename_input.as_ref()?;
     Some(div().id("sidebar_rename_box").debug_selector(|| "sidebar_rename_box".into())
         .key_context("InlineRename")
-        .min_w(px(0.)).w_full().child(render_input(input, false))
+        .min_w(px(0.)).w_full().flex_1()
+        .text_size(px(13.)).font_weight(FontWeight::NORMAL).line_height(px(20.))
+        .child(render_input(input, false).h(px(20.)))
         .when_some(params.on_cancel_rename.clone(), |el, cancel| {
             el.on_mouse_down_out(move |_, window, cx| cancel(window, cx))
         }).into_any_element())
@@ -1056,7 +1052,7 @@ fn render_file_tree_nodes(
                 .flex()
                 .items_center()
                 .gap_1()
-                .min_w(px(0.))
+                .min_w(px(0.)).flex_1()
                 .child(
                     div().id(SharedString::from(toggle_selector.clone())).debug_selector(move || toggle_selector.clone())
                         .size(px(16.)).flex_shrink_0().flex().items_center().justify_center()
@@ -1113,7 +1109,7 @@ fn render_file_tree_nodes(
             let row_handler = params.on_row.clone();
             let row_key = key.clone();
             out.push(
-                div().relative()
+                path_context_menu(div().relative()
                     .child(crate::views::sidebar_selection::row_anchor(params.selection.clone(), key.clone()))
                     .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                         if let Some(handler) = &row_handler { handler(&row_key, event, false, window, cx); }
@@ -1135,7 +1131,7 @@ fn render_file_tree_nodes(
 
 
                     .child(left_part)
-                    .child(right_part)
+                    .child(right_part), node.path.clone(), params, theme, strings)
                     .into_any_element(),
             );
 
@@ -1227,7 +1223,7 @@ fn render_file_tree_nodes(
                 .flex()
                 .flex_col()
                 .justify_center()
-                .min_w(px(0.))
+                .min_w(px(0.)).flex_1()
                 .child(inline_rename(&target_key, params).unwrap_or_else(|| div()
                     .min_w(px(0.)).truncate().text_size(px(13.)).child(file_name).into_any_element()));
 
@@ -1271,10 +1267,10 @@ fn render_file_tree_nodes(
             if params.on_trash_directory.is_some() {
                 right_part = path_actions(node.path.clone(), "drawer_file_row", params, strings);
             }
-            let file_content = div().flex().items_start().gap_1p5().min_w(px(0.))
+            let file_content = div().flex().flex_1().items_start().gap_1p5().min_w(px(0.))
                 .child(svg().path("icons/file.svg").size(px(14.)).flex_shrink_0().mt(px(2.)).text_color(theme.text_muted))
                 .child(left_part);
-            out.push(item.child(file_content).child(right_part).into_any_element());
+            out.push(path_context_menu(item.child(file_content).child(right_part), node.path.clone(), params, theme, strings).into_any_element());
         }
     }
 }
@@ -1345,7 +1341,6 @@ fn path_actions(path: PathBuf, group: &'static str, params: &DrawerSearchParams,
     let mut actions = div().flex().items_center().gap_1().flex_shrink_0();
     for (suffix, label, title, callback) in [
         ("remove", "−", strings.remove_from_sidebar, params.on_remove_path.clone()),
-        ("trash", "×", strings.trash_file, params.on_trash_directory.clone()),
     ] {
         if let Some(callback) = callback {
             let target = path.clone();
@@ -1357,4 +1352,25 @@ fn path_actions(path: PathBuf, group: &'static str, params: &DrawerSearchParams,
         }
     }
     actions
+}
+
+fn path_context_menu<E: InteractiveElement + ParentElement + Styled + IntoElement + 'static>(
+    element: E, path: PathBuf, params: &DrawerSearchParams, theme: &ThemeColors, strings: &'static I18nStrings,
+) -> impl IntoElement {
+    let remove = params.on_remove_path.clone();
+    let trash = params.on_trash_directory.clone();
+    let danger = theme.destructive_text();
+    element.context_menu(move |mut menu, _, _| {
+        if let Some(callback) = &remove {
+            let callback = callback.clone(); let path = path.clone();
+            menu = menu.item(PopupMenuItem::new(strings.remove_from_sidebar)
+                .on_click(move |_,window,cx| callback(&path,window,cx)));
+        }
+        if let Some(callback) = &trash {
+            let callback = callback.clone(); let path = path.clone();
+            menu = menu.item(PopupMenuItem::element(move |_,_| div().text_color(danger).child(strings.trash_file))
+                .on_click(move |_,window,cx| callback(&path,window,cx)));
+        }
+        menu
+    })
 }

@@ -3085,6 +3085,7 @@ impl WorkspaceView {
                     .items_center()
                     .gap_1p5()
                     .min_w(px(0.))
+                    .when(is_renaming, |el| el.flex_1())
                     .when(!drawer_open, |el| {
                         el.child(render_icon_button(
                             "btn_expand_drawer",
@@ -3104,7 +3105,12 @@ impl WorkspaceView {
                             .id("tab_rename_box")
                             .key_context("InlineRename")
                             .debug_selector(|| "tab_rename_box".into())
-                            .min_w(px(120.))
+                            .min_w(px(0.))
+                            .w_full()
+                            .flex_1()
+                            .text_size(px(18.))
+                            .font_weight(FontWeight::BOLD)
+                            .line_height(px(24.))
                             .px_2()
                             .py_1()
                             .flex()
@@ -3113,7 +3119,7 @@ impl WorkspaceView {
                             .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _window, cx| {
                                 this.finish_rename(false, cx);
                             }))
-                            .child(crate::views::drawer::render_input(rename_input.as_ref().unwrap(), true))
+                            .child(crate::views::drawer::render_input(rename_input.as_ref().unwrap(), true).w_full().flex_1())
                             .into_any_element()
                     } else {
                         let tooltip = tooltip_text.clone();
@@ -3176,6 +3182,7 @@ impl WorkspaceView {
                     .id("canvas_header_drag_area")
                     .debug_selector(|| "canvas_header_drag_area".into())
                     .flex_1()
+                    .when(is_renaming, |el| el.flex_none().w(px(0.)))
                     .h_full()
                     .min_w(px(20.))
                     .occlude()
@@ -3190,12 +3197,13 @@ impl WorkspaceView {
             .child(
                 if self.sidebar_selection.lock().unwrap().selected.len() > 1 {
                     div().flex().items_center().gap_2()
-                        .child(format!("{}", self.sidebar_selection.lock().unwrap().selected.len()))
+                        .child(div().text_size(px(11.)).text_color(theme.text_muted)
+                            .child(strings.selected_items.replace("{}", &self.sidebar_selection.lock().unwrap().selected.len().to_string())))
                         .child(render_icon_button("sidebar_batch_remove", strings.remove_from_sidebar, false, theme,
                             svg().path("icons/minus.svg").size(px(16.)).text_color(theme.text_muted),
                             cx.listener(|this,_,window,cx| this.sidebar_batch(false,window,cx))))
                         .child(render_icon_button("sidebar_batch_trash", strings.trash_file, false, theme,
-                            svg().path("icons/trash.svg").size(px(16.)).text_color(theme.text_muted),
+                            svg().path("icons/trash.svg").size(px(16.)).text_color(theme.destructive_text()),
                             cx.listener(|this,_,window,cx| this.sidebar_batch(true,window,cx))))
                         .child(render_icon_button("sidebar_batch_cancel", strings.modal_cancel, false, theme,
                             svg().path("icons/x.svg").size(px(16.)).text_color(theme.text_muted),
