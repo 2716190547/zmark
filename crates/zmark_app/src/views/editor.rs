@@ -102,7 +102,7 @@ pub fn physical_line_tokens(
     };
     let plain = |kind| vec![MarkdownToken { text: text.to_owned(), kind }];
     if !ast_in_sync { return plain(MarkdownTokenKind::CodeText); }
-    if index == block.fence_open_line || block.fence_close_line == Some(index) { return plain(MarkdownTokenKind::CodeDelimiter); }
+    if block.child_path != "source-file" && (index == block.fence_open_line || block.fence_close_line == Some(index)) { return plain(MarkdownTokenKind::CodeDelimiter); }
     let Some(mapping) = block.lines.iter().find(|line| line.source_line_idx == index).filter(|_| block.is_valid) else { return plain(MarkdownTokenKind::CodeText); };
     let Some(spans) = spans.get(&block.key) else { return plain(MarkdownTokenKind::CodeText); };
     let line_spans: Vec<_> = spans.iter().filter_map(|span| {
@@ -770,7 +770,7 @@ pub fn render_editor_pane(
                             String::new()
                         };
 
-                        let phys_tokens = if plain_text {
+                        let phys_tokens = if plain_text && (!is_ast_in_sync || code_blocks.is_empty()) {
                             vec![MarkdownToken { text: phys_line_str.to_owned(), kind: MarkdownTokenKind::Plain }]
                         } else {
                             physical_line_tokens(phys_idx, phys_line_str, &code_blocks, is_ast_in_sync, &block_spans)

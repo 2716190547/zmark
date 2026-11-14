@@ -59,6 +59,27 @@ fn test_file_save_and_clean_transition() {
 }
 
 #[test]
+fn source_file_highlighting_preserves_unicode_crlf_and_first_line() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("example.TS");
+    let source = "const 名称: string = '🙂';\r\nconsole.log(名称);";
+    fs::write(&path, source).unwrap();
+    let doc = Document::from_file(path).unwrap();
+    let block = &doc.parsed.code_blocks[0];
+    assert_eq!(block.child_path, "source-file");
+    assert_eq!(block.key.payload.as_ref(), source);
+    assert!(block.key.language.is_some());
+    assert_eq!(block.lines[0].source_line_idx, 0);
+    assert_eq!(block.lines[0].eol_len, 2);
+    assert_eq!(block.lines[1].eol_len, 0);
+    for line in &block.lines {
+        assert!(source.is_char_boundary(line.payload_range.start));
+        assert!(source.is_char_boundary(line.payload_range.end));
+    }
+    assert_eq!(doc.buffer, source);
+}
+
+#[test]
 fn test_external_disk_change_clean_silent_reload() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("external.md");

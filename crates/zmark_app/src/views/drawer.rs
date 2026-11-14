@@ -842,7 +842,10 @@ pub fn render_drawer_with_search(
                                 content = content.child(div().id("sidebar_undo").h(px(28.)).px_2().flex().items_center()
                                     .text_size(px(13.)).text_color(theme.text_primary).cursor_pointer()
                                     .on_mouse_down(MouseButton::Left, move |_,window,cx| undo(window,cx))
-                                    .child(strings.undo_sidebar_remove));
+                                    .gap_1p5()
+                                    .child(svg().path("icons/undo.svg").size(px(14.)).text_color(theme.text_muted))
+                                    .child(strings.undo_sidebar_remove)
+                                    .child(div().text_size(px(11.)).text_color(theme.text_muted).child(if cfg!(target_os = "macos") { "⌘⌥Z / Ctrl+Alt+Z" } else { "Ctrl+Alt+Z" })));
                             }
                         }
                         content.into_any_element()

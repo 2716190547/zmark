@@ -236,10 +236,11 @@ impl LightboxState {
     }
 
     pub fn apply_scroll_zoom(&mut self, delta_y: f32) {
-        if delta_y == 0.0 {
+        if !delta_y.is_finite() || delta_y == 0.0 {
             return;
         }
-        let factor = 1.0 + (delta_y * 0.002);
+        // Reciprocal steps avoid drift and negative factors on large wheel events.
+        let factor = 1.1_f32.powf((delta_y / 50.0).clamp(-8.0, 8.0));
         self.set_zoom(self.zoom * factor);
     }
 
@@ -368,10 +369,13 @@ pub fn render_lightbox(
         )
         .on_scroll(cx.listener(|this, event: &ScrollEvent, _window, cx| {
             let delta = match event.delta {
-                ScrollDelta::Pixels(p) => -f32::from(p.y),
-                ScrollDelta::Lines(l) => -f32::from(l.y) * 20.0,
+                ScrollDelta::Pixels(p) => f32::from(p.y),
+                ScrollDelta::Lines(l) => l.y * 20.0,
             };
+            // Windows wheel-up is positive; retain macOS's existing natural-scroll mapping.
+            let delta = if cfg!(target_os = "windows") { delta } else { -delta };
             this.lightbox.apply_scroll_zoom(delta);
+            cx.stop_propagation();
             cx.notify();
         }))
         .child(

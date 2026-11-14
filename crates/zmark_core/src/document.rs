@@ -5,6 +5,33 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{parse_markdown, ParsedDocument};
 
+/// Plain source files share the fenced-code highlighting pipeline without changing their text.
+fn parse_document(buffer: &str, path: Option<&std::path::Path>) -> ParsedDocument {
+    let Some(path) = path.filter(|path| !crate::file_ops::is_markdown(path)) else {
+        return parse_markdown(buffer);
+    };
+    let set = crate::syntax::init_syntax_set();
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    let syntax = set.find_syntax_by_extension(name)
+        .or_else(|| path.extension().and_then(|s| s.to_str()).and_then(|ext| set.find_syntax_by_extension(&ext.to_ascii_lowercase())));
+    let language = syntax.map(|syntax| syntax.name.as_str());
+    let mut offset = 0;
+    let lines = buffer.split_inclusive('\n').enumerate().map(|(source_line_idx, line)| {
+        let eol_len = if line.ends_with("\r\n") { 2 } else { usize::from(line.ends_with('\n')) };
+        let start = offset;
+        offset += line.len();
+        crate::ast::CodeLineMapping {
+            payload_range: start..offset, source_line_idx, prefix_len: 0,
+            content_len: line.len() - eol_len, eol_len, is_synthetic_lf: false,
+        }
+    }).collect();
+    ParsedDocument { code_blocks: Arc::new(vec![crate::ast::ParsedCodeBlock {
+        key: crate::syntax::CodeKey::new(language, Arc::from(buffer)),
+        raw_info: language.map(str::to_owned), fence_open_line: 0, fence_close_line: None,
+        lines, child_path: "source-file".to_owned(), is_valid: true,
+    }]), ..ParsedDocument::default() }
+}
+
 /// Document dirty and synchronization status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DocumentStatus {
@@ -53,7 +80,7 @@ impl Document {
         if buffer.contains('\0') {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Binary files cannot be edited as text"));
         }
-        let parsed = Arc::new(parse_markdown(&buffer));
+        let parsed = Arc::new(parse_document(&buffer, Some(&path)));
         Ok(Self {
             path: Some(path),
             scratch_name: None,
@@ -97,7 +124,7 @@ impl Document {
             return;
         }
         self.buffer = new_text;
-        self.parsed = Arc::new(parse_markdown(&self.buffer));
+        self.parsed = Arc::new(parse_document(&self.buffer, self.path.as_deref()));
         self.parse_stale = false;
         if self.status != DocumentStatus::ConflictOnDisk {
             if self.buffer == self.last_saved_content && self.scratch_name.is_none() {
@@ -130,7 +157,7 @@ impl Document {
         if !self.parse_stale {
             return false;
         }
-        self.parsed = Arc::new(parse_markdown(&self.buffer));
+        self.parsed = Arc::new(parse_document(&self.buffer, self.path.as_deref()));
         self.parse_stale = false;
         true
     }
@@ -183,7 +210,7 @@ impl Document {
             DocumentStatus::Clean => {
                 self.buffer = new_disk_content.clone();
                 self.last_saved_content = new_disk_content;
-                self.parsed = Arc::new(parse_markdown(&self.buffer));
+                self.parsed = Arc::new(parse_document(&self.buffer, self.path.as_deref()));
                 self.parse_stale = false;
                 self.status = DocumentStatus::Clean;
             }
@@ -202,7 +229,7 @@ impl Document {
     pub fn resolve_conflict_reload_disk(&mut self, disk_content: String) {
         self.buffer = disk_content.clone();
         self.last_saved_content = disk_content;
-        self.parsed = Arc::new(parse_markdown(&self.buffer));
+        self.parsed = Arc::new(parse_document(&self.buffer, self.path.as_deref()));
         self.parse_stale = false;
         self.status = DocumentStatus::Clean;
     }

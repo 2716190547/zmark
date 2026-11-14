@@ -12,6 +12,11 @@ actions!(
         SaveFile,
         ExportHtml,
         CancelRename,
+        FindInFile,
+        CloseFind,
+        FindNext,
+        FindPrevious,
+        UndoSidebarRemoval,
         SourceUndo,
         SourceRedo,
         SourceCopy,
@@ -27,6 +32,15 @@ actions!(
 );
 
 pub fn init_key_bindings(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new(if cfg!(target_os = "macos") { "cmd-f" } else { "ctrl-f" }, FindInFile, Some("Workspace")),
+        KeyBinding::new("escape", CloseFind, Some("FileFind")),
+        KeyBinding::new("f3", FindNext, Some("Workspace")),
+        KeyBinding::new("shift-f3", FindPrevious, Some("Workspace")),
+        KeyBinding::new(if cfg!(target_os = "macos") { "cmd-g" } else { "ctrl-g" }, FindNext, Some("Workspace")),
+        KeyBinding::new(if cfg!(target_os = "macos") { "cmd-shift-g" } else { "ctrl-shift-g" }, FindPrevious, Some("Workspace")),
+        KeyBinding::new(if cfg!(target_os = "macos") { "cmd-alt-z" } else { "ctrl-alt-z" }, UndoSidebarRemoval, Some("Workspace")),
+    ]);
     cx.bind_keys([
         KeyBinding::load(
             "secondary-1",

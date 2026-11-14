@@ -437,3 +437,16 @@ async fn zooming_an_svg_lightbox_rerenders_it_sharp_and_closing_releases_it(cx: 
         assert!(ws.lightbox_sharp.is_none() && ws.lightbox_sharp_task.is_none(), "close releases the sharp image");
     });
 }
+
+#[test]
+fn wheel_zoom_is_reversible_and_ignores_invalid_deltas() {
+    let mut state = LightboxState::new();
+    state.open(PathBuf::from("/tmp/test.svg"), 1);
+    let original = state.zoom;
+    state.apply_scroll_zoom(60.0);
+    state.apply_scroll_zoom(-60.0);
+    assert!((state.zoom - original).abs() < 0.00001);
+    state.apply_scroll_zoom(f32::NAN);
+    state.apply_scroll_zoom(f32::INFINITY);
+    assert!((state.zoom - original).abs() < 0.00001);
+}

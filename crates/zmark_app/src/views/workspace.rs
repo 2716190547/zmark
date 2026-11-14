@@ -17,6 +17,7 @@ use crate::views::preview::PreviewScrollState;
 use crate::views::settings::SettingsWindowView;
 
 mod source;
+mod find;
 pub use source::{SourceCommand, SourceComposition, SourceDrag, SourceRow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +38,7 @@ pub struct WorkspaceView {
     pub state: AppState,
     sidebar_selection: crate::views::sidebar_selection::SharedSelection,
     sidebar_busy: bool,
+    find: find::FindState,
     sidebar_undo: Option<Vec<PathBuf>>,
     sidebar_undo_task: Option<Task<()>>,
     pub focus_handle: FocusHandle,
@@ -230,6 +232,7 @@ impl WorkspaceView {
             selected_directory: None,
             sidebar_selection: Default::default(),
             sidebar_busy: false,
+            find: find::FindState::default(),
             sidebar_undo: None,
             sidebar_undo_task: None,
             folder_transitions: HashMap::new(),
@@ -652,10 +655,7 @@ impl WorkspaceView {
                         .collect::<std::collections::HashSet<_>>()
                 })
                 .unwrap_or_default();
-            for &lang in &zmark_core::syntax::SUPPORTED_CANONICAL_LANGUAGES {
-                if !languages.contains(lang) {
-                    continue;
-                }
+            for lang in languages {
                 let should_run = this
                     .read_with(app, |this, _cx| {
                         if task_id != this.syntax_warm_task_id {
@@ -1809,6 +1809,7 @@ impl WorkspaceView {
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
     /// Reclaims GPU texture memory by dropping any active HiDPI lightbox image.
     pub fn on_document_swapped(&mut self, window: Option<&mut Window>, cx: &mut App) {
+        self.find.invalidate();
         if self.state.doc().path.as_ref().is_some_and(|p| !zmark_core::file_ops::is_markdown(p)) {
             self.state.view_mode = ViewMode::Source;
         }
@@ -3322,6 +3323,12 @@ impl WorkspaceView {
                                 },
                             )
                             .child(render_animated_icon_button(
+                                "btn_find", format!("{} · {}", strings.find_in_file, crate::platform::shortcut_hint("F")), theme,
+                                svg().path("icons/search.svg").size(px(16.)).text_color(theme.text_muted),
+                                reduce_motion, 0,
+                                cx.listener(|this, _,window,cx| this.open_find(window,cx)),
+                            ))
+                            .child(render_animated_icon_button(
                                 "btn_export",
                                 format!("{} (⇧{})", strings.export_html, crate::platform::shortcut_hint("E")),
                                 theme,
@@ -3540,6 +3547,7 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refresh_find();
         if self.state.doc().path.as_ref().is_some_and(|p| !zmark_core::file_ops::is_markdown(p)) {
             self.state.view_mode = ViewMode::Source;
         }
@@ -4161,6 +4169,18 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(|this, _: &ExportHtml, window, cx| {
                 this.trigger_export_html(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &crate::actions::FindInFile, window,cx| {
+                this.open_find(window,cx);
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::CloseFind, window,cx| this.close_find(window,cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::FindNext, window,cx| this.step_find(false,window,cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::FindPrevious, window,cx| this.step_find(true,window,cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::UndoSidebarRemoval, _,cx| {
+                if !this.sidebar_busy && !this.is_renaming && !this.lightbox.is_open
+                    && this.state.pending_close.is_none() && this.state.pending_remove_root.is_none() {
+                    if let Some(paths) = this.sidebar_undo.clone() { this.persist_sidebar_hidden(paths,false,cx); }
+                }
+            }))
             .on_action(cx.listener(|this, _: &crate::actions::SourceUndo, window, cx| this.source_command(SourceCommand::Undo, window, cx)))
             .on_action(cx.listener(|this, _: &crate::actions::SourceRedo, window, cx| this.source_command(SourceCommand::Redo, window, cx)))
             .on_action(cx.listener(|this, _: &crate::actions::SourceCopy, window, cx| this.source_command(SourceCommand::Copy, window, cx)))
@@ -4215,6 +4235,22 @@ impl Render for WorkspaceView {
                     }
                 }
 
+                let mods = event.keystroke.modifiers;
+                let key = event.keystroke.key.as_str();
+                if !this.is_renaming && (mods.secondary(cx) || mods.control) && !mods.alt && !mods.shift && key.eq_ignore_ascii_case("f") {
+                    this.open_find(window,cx); cx.stop_propagation(); return;
+                }
+                if (mods.secondary(cx) || mods.control) && mods.alt && key.eq_ignore_ascii_case("z") && !this.is_renaming {
+                    if let Some(paths) = this.sidebar_undo.clone() { this.persist_sidebar_hidden(paths,false,cx); }
+                    cx.stop_propagation(); return;
+                }
+                if this.find.open {
+                    if key == "escape" { this.close_find(window,cx); cx.stop_propagation(); return; }
+                    if key == "f3" || ((mods.secondary(cx) || mods.control) && key.eq_ignore_ascii_case("g")) {
+                        this.step_find(mods.shift,window,cx); cx.stop_propagation(); return;
+                    }
+                    if this.find.input.as_ref().is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window)) { return; }
+                }
                 this.search_focused = this.search_input.as_ref()
                     .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
                 let rename_focused = this.rename_input.as_ref()
@@ -4284,17 +4320,6 @@ impl Render for WorkspaceView {
                         }
                         "2" => {
                             this.set_view_mode(ViewMode::Split, cx);
-                        }
-                        "f" | "F" => {
-                            if !this.state.drawer_open {
-                                this.state.toggle_drawer();
-                            }
-                            this.search_focused = true;
-                            if let Some(ref input) = this.search_input {
-                                let handle = input.read(cx).focus_handle(cx);
-                                window.focus(&handle, cx);
-                            }
-                            cx.notify();
                         }
                         "c" | "C" => {
                             let preview = this.state.view_mode == ViewMode::Preview || (this.state.view_mode == ViewMode::Split && this.preview_focused);
@@ -4467,6 +4492,7 @@ impl Render for WorkspaceView {
                         reduce_motion,
                         cx,
                     ))
+                    .when(self.find.open, |el| el.child(self.render_find(cx)))
                     // Error Feedback Banner
                     .when_some(self.error_banner.clone(), |el, err_msg| {
                         el.child(

@@ -4,6 +4,9 @@ use std::borrow::Cow;
 pub struct AppAssets;
 
 const ASSETS: &[(&str, &[u8])] = &[
+    ("icons/undo.svg", include_bytes!("../assets/icons/undo.svg")),
+    ("icons/arrow-up.svg", include_bytes!("../assets/icons/arrow-up.svg")),
+    ("icons/arrow-down.svg", include_bytes!("../assets/icons/arrow-down.svg")),
     ("brand/logo.png", include_bytes!("../assets/brand/logo.png")),
     ("icons/panel-left.svg", include_bytes!("../assets/icons/panel-left.svg")),
     ("icons/folder.svg", include_bytes!("../assets/icons/folder.svg")),

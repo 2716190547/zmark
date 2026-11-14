@@ -230,7 +230,7 @@ pub fn get_representative_warm_sample(canonical_lang: &str) -> Option<&'static s
         "SQL" => Some("-- SQL query\nSELECT id, name, count(*)\nFROM users\nWHERE active = 1\nGROUP BY id, name;\n"),
         "Bourne Again Shell (bash)" => Some("#!/bin/bash\n# Shell sample\nNAME=\"ZMark\"\necho \"Running $NAME\"\nexit 0\n"),
         "Rust" => Some("// Rust sample\npub fn add(a: i32, b: i32) -> i32 {\n    let sum = a + b;\n    sum\n}\n"),
-        _ => None,
+        _ => find_syntax_for_canonical(canonical_lang).map(|_| "// comment\n# comment\nname = 42\n\"value\"\nfunction example() {}\n"),
     }
 }
 
@@ -245,7 +245,7 @@ pub fn validate_language_warm(canonical_lang: &'static str) -> bool {
     };
     if !ensure_language_compiled(canonical_lang) { return false; }
     match parse_code_spans_bounded(sample, Some(canonical_lang), None) {
-        ParseResult::Ready(spans) => spans.iter().any(|s| s.role != SyntaxRole::Plain),
+        ParseResult::Ready(spans) => !SUPPORTED_CANONICAL_LANGUAGES.contains(&canonical_lang) || spans.iter().any(|s| s.role != SyntaxRole::Plain),
         _ => false,
     }
 }
@@ -259,7 +259,7 @@ fn ensure_language_compiled(canonical_lang: &'static str) -> bool {
     let mut warmed = warmed.lock().unwrap_or_else(|error| error.into_inner());
     if warmed.contains(canonical_lang) { return true; }
     let syntax_set = init_syntax_set();
-    let Some(syntax) = syntax_set.find_syntax_by_name(canonical_lang) else { return false; };
+    let Some(syntax) = find_syntax_for_canonical(canonical_lang) else { return false; };
     let mut parse_state = ParseState::new(syntax);
     for line in sample.split_inclusive('\n') {
         if parse_state.parse_line(line, syntax_set).is_err() { return false; }
@@ -268,12 +268,12 @@ fn ensure_language_compiled(canonical_lang: &'static str) -> bool {
     true
 }
 
-/// Initializes `SYNTAX_SET` with syntect defaults and returns a static reference.
+/// Initializes the bundled bat syntax set, parsed by syntect.
 pub fn init_syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(|| {
         // Regexes compile lazily when a document actually uses a syntax. The
         // workspace warms those languages in the background before highlighting.
-        SyntaxSet::load_defaults_newlines()
+        two_face::syntax::extra_newlines()
     })
 }
 
@@ -320,8 +320,9 @@ pub fn resolve_canonical_language(raw_info: Option<&str>) -> Option<&'static str
         "rust" | "rs" => Some("Rust"),
         // Unhighlighted aliases
         "" | "text" | "txt" | "plain" | "plaintext" => None,
-        // All others fallback to Plain (TS, TOML, zsh, etc. not in this batch)
-        _ => None,
+        _ => init_syntax_set().find_syntax_by_token(token)
+            .or_else(|| init_syntax_set().find_syntax_by_name(trimmed))
+            .map(|syntax| syntax.name.as_str()),
     }
 }
 
@@ -337,9 +338,9 @@ fn find_syntax_for_canonical(canonical: &str) -> Option<&'static SyntaxReference
         "JSON" => ss.find_syntax_by_name("JSON"),
         "YAML" => ss.find_syntax_by_name("YAML"),
         "SQL" => ss.find_syntax_by_name("SQL"),
-        "Bourne Again Shell (bash)" => ss.find_syntax_by_name("Bourne Again Shell (bash)"),
+        "Bourne Again Shell (bash)" => ss.find_syntax_by_name("Bourne Again Shell (bash)").or_else(|| ss.find_syntax_by_token("sh")),
         "Rust" => ss.find_syntax_by_name("Rust"),
-        _ => ss.find_syntax_by_token(canonical),
+        _ => ss.find_syntax_by_name(canonical).or_else(|| ss.find_syntax_by_token(canonical)),
     }
 }
 
@@ -865,8 +866,8 @@ mod tests {
         assert_eq!(resolve_canonical_language(Some("plain")), None);
         assert_eq!(resolve_canonical_language(Some("plaintext")), None);
         assert_eq!(resolve_canonical_language(Some("unknown_lang_xyz")), None);
-        assert_eq!(resolve_canonical_language(Some("typescript")), None);
-        assert_eq!(resolve_canonical_language(Some("toml")), None);
+        assert!(resolve_canonical_language(Some("typescript")).is_some());
+        assert!(resolve_canonical_language(Some("toml")).is_some());
     }
 
     #[test]
@@ -1086,6 +1087,15 @@ mod tests {
         let mut h2 = DefaultHasher::new();
         k2.hash(&mut h2);
         assert_eq!(h1.finish(), h2.finish(), "CodeKey hash must be content-based");
+    }
+
+    #[test]
+    fn extra_language_names_and_shell_aliases_warm() {
+        for token in ["typescript", "toml", "sh"] {
+            let canonical = resolve_canonical_language(Some(token)).expect("bundled syntax");
+            assert!(validate_language_warm(canonical), "{canonical}");
+            assert_eq!(resolve_canonical_language(Some(canonical)), Some(canonical));
+        }
     }
 
     #[test]
