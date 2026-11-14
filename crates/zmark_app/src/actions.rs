@@ -35,6 +35,8 @@ pub fn init_key_bindings(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new(if cfg!(target_os = "macos") { "cmd-f" } else { "ctrl-f" }, FindInFile, Some("Workspace")),
         KeyBinding::new("escape", CloseFind, Some("FileFind")),
+        KeyBinding::new("up", FindPrevious, Some("FileFind > Input")),
+        KeyBinding::new("down", FindNext, Some("FileFind > Input")),
         KeyBinding::new("f3", FindNext, Some("Workspace")),
         KeyBinding::new("shift-f3", FindPrevious, Some("Workspace")),
         KeyBinding::new(if cfg!(target_os = "macos") { "cmd-g" } else { "ctrl-g" }, FindNext, Some("Workspace")),

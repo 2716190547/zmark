@@ -201,13 +201,13 @@ impl WorkspaceView {
             (
                 "find_previous",
                 "icons/arrow-up.svg",
-                format!("{} · Shift+Enter", strings.find_previous),
+                format!("{} · ↑ / Shift+Enter", strings.find_previous),
                 0,
             ),
             (
                 "find_next",
                 "icons/arrow-down.svg",
-                format!("{} · Enter", strings.find_next),
+                format!("{} · ↓ / Enter", strings.find_next),
                 1,
             ),
             (

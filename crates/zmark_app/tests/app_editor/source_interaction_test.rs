@@ -35,6 +35,40 @@ fn source_window<'a>(
     (view, cx)
 }
 
+#[gpui::test]
+fn find_arrows_cycle_matches_only_while_search_input_is_focused(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = source_window(cx, "match\nmatch\nmatch");
+    cx.simulate_keystrokes("secondary-f");
+    cx.simulate_input("match");
+    draw(cx);
+    cx.update(|_, cx| assert_eq!(view.read(cx).state.editor.selection(), Some((0, 5))));
+
+    for (keys, expected) in [
+        ("down", (6, 11)),
+        ("down", (12, 17)),
+        ("down", (0, 5)),
+        ("up", (12, 17)),
+        ("enter", (0, 5)),
+        ("shift-enter", (12, 17)),
+    ] {
+        cx.simulate_keystrokes(keys);
+        draw(cx);
+        cx.update(|_, cx| assert_eq!(view.read(cx).state.editor.selection(), Some(expected), "{keys}"));
+    }
+    cx.update(|window, cx| {
+        view.update(cx, |ws, _| ws.state.editor.set_cursor(1, 2));
+        window.focus(&view.read(cx).focus_handle, cx);
+    });
+    cx.simulate_keystrokes("down");
+    draw(cx);
+    cx.update(|_, cx| {
+        let editor = &view.read(cx).state.editor;
+        assert_eq!(editor.cursor(), (2, 2), "source arrows must still move the caret");
+        assert!(editor.selection().is_none());
+        assert_eq!(editor.to_text(), "match\nmatch\nmatch");
+    });
+}
+
 fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
     cx.update(|window, cx| window.draw(cx).clear(cx));
