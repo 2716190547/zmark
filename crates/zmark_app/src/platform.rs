@@ -258,7 +258,7 @@ pub fn move_file_to_trash(path: &std::path::Path) -> std::io::Result<()> {
 pub fn move_file_to_trash(path: &std::path::Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:ZMARK_TRASH_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin')"])
+        .args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; Add-Type -AssemblyName Microsoft.VisualBasic; if (Test-Path -LiteralPath $env:ZMARK_TRASH_PATH -PathType Container) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($env:ZMARK_TRASH_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin') } else { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:ZMARK_TRASH_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin') }"])
         .env("ZMARK_TRASH_PATH", path).output()?;
     #[cfg(not(target_os = "windows"))]
     let output = std::process::Command::new("gio").args(["trash", "--"]).arg(path).output()?;

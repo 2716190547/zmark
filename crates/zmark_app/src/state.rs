@@ -1456,11 +1456,13 @@ impl AppState {
         rename_noreplace(old, &new)?;
         let mut warning = None;
         let preferences_path = map(&self.preferences_path);
-        let changes_config = root_paths.iter().zip(&self.workspace_roots).any(|(p, r)| p != &r.path)
+        let hidden_paths: Vec<_> = self.preferences.sidebar_hidden_paths.iter().map(|p| map(p)).collect();
+        let changes_config = hidden_paths != self.preferences.sidebar_hidden_paths || root_paths.iter().zip(&self.workspace_roots).any(|(p, r)| p != &r.path)
             || preferences_path != self.preferences_path;
         if changes_config {
             let mut preferences = self.preferences.clone();
             preferences.workspace_roots = root_paths.clone();
+            preferences.sidebar_hidden_paths = hidden_paths;
             if let Err(error) = preferences.save_to_path(&preferences_path) {
                 if let Err(rollback) = rename_noreplace(&new, old) {
                     warning = Some(format!("已更名到 {}，但配置未保存且回滚失败：{error}；{rollback}", new.display()));

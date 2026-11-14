@@ -5,3 +5,5 @@ pub mod motion;
 pub mod preview;
 pub mod settings;
 pub mod workspace;
+
+pub mod sidebar_selection;

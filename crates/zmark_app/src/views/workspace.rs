@@ -35,6 +35,8 @@ use crate::syntax::{VisibleSyntaxFailure, WarmState};
 
 pub struct WorkspaceView {
     pub state: AppState,
+    sidebar_selection: crate::views::sidebar_selection::SharedSelection,
+    sidebar_busy: bool,
     pub focus_handle: FocusHandle,
     pub editor_scroll_handle: UniformListScrollHandle,
     pub preview_list: PreviewScrollState,
@@ -224,6 +226,8 @@ impl WorkspaceView {
             rename_target: None,
             rename_in_sidebar: false,
             selected_directory: None,
+            sidebar_selection: Default::default(),
+            sidebar_busy: false,
             folder_transitions: HashMap::new(),
             rename_input: None,
             workspace_width: 1200.0,
@@ -2272,7 +2276,7 @@ impl WorkspaceView {
     }
 
     fn trigger_auto_save_for(&mut self, key: crate::state::DocKey, cx: &mut Context<Self>) {
-        if !self.state.preferences.auto_save { return; }
+        if !self.state.preferences.auto_save || self.sidebar_busy { return; }
         self.auto_save_tasks.remove(&key);
         self.next_auto_save_id = self.next_auto_save_id.wrapping_add(1);
         let task_id = self.next_auto_save_id;
@@ -2377,6 +2381,7 @@ impl WorkspaceView {
     }
 
     fn on_paths_renamed(&mut self, old: &Path, new: &Path, cx: &mut Context<Self>) {
+        self.sidebar_selection.lock().unwrap().remap(old, new);
         self.auto_save_tasks.retain(|key, _| !key.as_path().is_some_and(|p| p.starts_with(old)));
         let affected: Vec<_> = self.state.open_documents().iter()
             .filter(|doc| doc.key.as_path().is_some_and(|p| p.starts_with(new)))
@@ -2410,6 +2415,7 @@ impl WorkspaceView {
     }
 
     pub fn trigger_save(&mut self, cx: &mut Context<Self>) {
+        if self.sidebar_busy { return; }
         if self.state.active.is_none() {
             return;
         }
@@ -2536,39 +2542,120 @@ impl WorkspaceView {
         .detach();
     }
 
-    fn trigger_trash_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    fn sidebar_row_click(&mut self, key: &crate::state::DocKey, event: &MouseDownEvent, name: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_busy { return; }
+        let additive = if cfg!(target_os = "macos") { event.modifiers.platform } else { event.modifiers.control };
+        self.sidebar_selection.lock().unwrap().click(key.clone(), event.modifiers.shift, additive);
+        if event.modifiers.shift || additive { cx.notify(); return; }
+        match key {
+            crate::state::DocKey::Path(path) if self.state.folder_expanded(path).is_some() => {
+                self.selected_directory = Some(path.clone());
+                if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
+                else if event.click_count == 1 {
+                    if let Some(root) = self.state.workspace_roots.iter().position(|r| path.starts_with(&r.path)) { self.toggle_folder(root, path, cx); }
+                }
+            }
+            crate::state::DocKey::Path(path) => {
+                self.selected_directory = None;
+                if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
+                else {
+                    if let Err(error) = self.state.load_file(path.clone()) { self.error_banner = Some(error.to_string()); }
+                    self.on_document_swapped(Some(window), cx);
+                }
+            }
+            crate::state::DocKey::Scratch(_) => {
+                self.selected_directory = None;
+                self.state.switch_document(key);
+                if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
+                self.on_document_swapped(Some(window), cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn restore_sidebar_path(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let paths = self.state.preferences.sidebar_hidden_paths.iter().filter(|hidden| path.starts_with(hidden)).cloned().collect::<Vec<_>>();
+        if !paths.is_empty() { self.persist_sidebar_hidden(paths, false, cx); }
+    }
+
+    fn persist_sidebar_hidden(&mut self, paths: Vec<PathBuf>, hide: bool, cx: &mut Context<Self>) {
+        if self.sidebar_busy { return; }
+        let old = self.state.preferences.sidebar_hidden_paths.clone();
+        if hide {
+            for path in paths { if !self.state.preferences.sidebar_hidden_paths.contains(&path) { self.state.preferences.sidebar_hidden_paths.push(path); } }
+        } else {
+            self.state.preferences.sidebar_hidden_paths.retain(|path| !paths.contains(path));
+        }
+        match self.state.preferences.save_to_path(&self.state.preferences_path) {
+            Ok(()) => { self.sidebar_selection.lock().unwrap().clear(); self.error_banner = None; }
+            Err(error) => { self.state.preferences.sidebar_hidden_paths = old; self.error_banner = Some(error.to_string()); }
+        }
+        cx.notify();
+    }
+
+    fn sidebar_batch(&mut self, trash: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_busy { return; }
+        let keys: Vec<_> = self.sidebar_selection.lock().unwrap().selected.iter().cloned().collect();
+        let Some(paths) = keys.iter().map(|key| key.as_path().cloned()).collect::<Option<Vec<_>>>() else {
+            self.error_banner = Some(self.state.strings.save_before_batch.to_string()); cx.notify(); return;
+        };
+        if paths.is_empty() { return; }
+        if !trash { self.persist_sidebar_hidden(paths, true, cx); return; }
+        self.trash_sidebar_paths(paths, window, cx);
+    }
+
+    fn trash_sidebar_paths(&mut self, mut paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_busy { return; }
+        paths.sort(); paths.dedup();
+        // A selected parent owns its descendants; never trash a child twice.
+        let targets: Vec<_> = paths.iter().filter(|path| !paths.iter().any(|parent| parent != *path && path.starts_with(parent))).cloned().collect();
+        self.state.sync_from_editor();
         let strings = self.state.strings;
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!("{}: {}", strings.trash_file, path.display()),
-            Some(strings.trash_file_detail),
-            &[PromptButton::ok(strings.trash_file), PromptButton::cancel(strings.modal_cancel)],
-            cx,
-        );
+        let modified = self.state.open_docs.iter().filter(|doc| doc.doc.status != zmark_core::document::DocumentStatus::Clean && doc.key.as_path().is_some_and(|p| targets.iter().any(|target| p.starts_with(target)))).map(|doc| format!("* {}", doc.doc.display_name_with_fallback(strings.untitled_file))).collect::<Vec<_>>().join("\n");
+        let detail = format!("{}\n\n{}\n{}", strings.trash_file_detail, targets.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n"), modified);
+        let answer = window.prompt(PromptLevel::Warning, &format!("{} ({}/{})", strings.trash_file, targets.len(), paths.len()), Some(&detail), &[PromptButton::ok(strings.trash_file), PromptButton::cancel(strings.modal_cancel)], cx);
+        self.sidebar_busy = true;
+        cx.notify();
         cx.spawn(async move |this, app| {
-            if answer.await != Ok(0) { return; }
-            let key = crate::state::DocKey::Path(path.clone());
-            if this.update(app, |this, _| { this.auto_save_tasks.remove(&key); }).is_err() { return; }
-            let result = app.background_executor().spawn(async move {
-                crate::platform::move_file_to_trash(&path)
+            if answer.await != Ok(0) { let _ = this.update(app, |this,cx| {this.sidebar_busy=false;cx.notify();}); return; }
+            let affected = this.update(app, |this,_| {
+                this.state.sync_from_editor();
+                let affected: Vec<_> = this.state.open_docs.iter().filter(|doc| doc.key.as_path().is_some_and(|p| targets.iter().any(|target| p.starts_with(target)))).map(|doc| doc.key.clone()).collect();
+                for key in &affected { this.auto_save_tasks.remove(key); }
+                affected
+            });
+            let Ok(affected) = affected else { return; };
+            let results = app.background_executor().spawn(async move {
+                targets.into_iter().map(|path| { let result = crate::platform::move_file_to_trash(&path); (path,result) }).collect::<Vec<_>>()
             }).await;
-            let _ = this.update(app, |this, cx| {
-                match result {
-                    Ok(()) => {
+            let _ = this.update(app, |this,cx| {
+                this.sidebar_busy = false;
+                let succeeded: Vec<_> = results.iter().filter(|(_,result)| result.is_ok()).map(|(p,_)| p.clone()).collect();
+                for key in affected {
+                    if key.as_path().is_some_and(|p| succeeded.iter().any(|target| p.starts_with(target))) {
                         this.auto_save_tasks.remove(&key);
                         this.state.close_document_forced(&key);
-                        this.state.refresh_all_roots();
-                        this.on_document_swapped(None, cx);
-                        this.error_banner = None;
-                    }
-                    Err(e) => {
-                        this.error_banner = Some(e.to_string());
-                        this.trigger_auto_save_for(key, cx);
-                    }
+                    } else { this.trigger_auto_save_for(key,cx); }
                 }
+                for root in &mut this.state.workspace_roots { if succeeded.iter().any(|p| root.path.starts_with(p)) { root.is_missing = true; } }
+                this.state.refresh_all_roots();
+                let query = this.state.search_query.clone(); this.update_search_query(&query,cx);
+                {
+                    let mut selection = this.sidebar_selection.lock().unwrap();
+                    selection.selected.retain(|key| !key.as_path().is_some_and(|p| succeeded.iter().any(|target| p.starts_with(target))));
+                    selection.focus = selection.selected.iter().next().cloned();
+                }
+                this.sidebar_busy = false;
+                this.on_document_swapped(None,cx);
+                let failures: Vec<_> = results.into_iter().filter_map(|(path,result)| result.err().map(|error| format!("{}: {}",path.display(),error))).collect();
+                this.error_banner = (!failures.is_empty()).then(|| failures.join("\n"));
                 cx.notify();
             });
         }).detach();
+    }
+
+    fn trigger_trash_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.trash_sidebar_paths(vec![path], window, cx);
     }
 
     pub fn trigger_close_doc(
@@ -3101,6 +3188,20 @@ impl WorkspaceView {
             )
             // Right Group: Flat View Mode Switcher + Action Buttons (Save, Export, Settings)
             .child(
+                if self.sidebar_selection.lock().unwrap().selected.len() > 1 {
+                    div().flex().items_center().gap_2()
+                        .child(format!("{}", self.sidebar_selection.lock().unwrap().selected.len()))
+                        .child(render_icon_button("sidebar_batch_remove", strings.remove_from_sidebar, false, theme,
+                            svg().path("icons/minus.svg").size(px(16.)).text_color(theme.text_muted),
+                            cx.listener(|this,_,window,cx| this.sidebar_batch(false,window,cx))))
+                        .child(render_icon_button("sidebar_batch_trash", strings.trash_file, false, theme,
+                            svg().path("icons/trash.svg").size(px(16.)).text_color(theme.text_muted),
+                            cx.listener(|this,_,window,cx| this.sidebar_batch(true,window,cx))))
+                        .child(render_icon_button("sidebar_batch_cancel", strings.modal_cancel, false, theme,
+                            svg().path("icons/x.svg").size(px(16.)).text_color(theme.text_muted),
+                            cx.listener(|this,_,_,cx| {this.sidebar_selection.lock().unwrap().clear();cx.notify();})))
+                        .into_any_element()
+                } else {
                 div()
                     .flex()
                     .flex_shrink_0()
@@ -3214,8 +3315,8 @@ impl WorkspaceView {
                                     this.open_settings_window(cx);
                                 }),
                             )),
-                    ),
-            )
+                    ).into_any_element() }
+)
             .when(cfg!(target_os = "windows") && !is_fullscreen, |el| {
                 el.child(render_window_controls(theme))
             })
@@ -3593,6 +3694,12 @@ impl Render for WorkspaceView {
             });
             if !self.folder_transitions.is_empty() { window.request_animation_frame(); }
         }
+        if !self.sidebar_selection.lock().unwrap().initialized {
+            if let Some(key) = self.state.active.clone() {
+                let mut selection = self.sidebar_selection.lock().unwrap();
+                selection.initialized = true; selection.focus = Some(key.clone()); selection.selected.insert(key);
+            }
+        }
         let folder_values = self.folder_transitions.iter().map(|(p, t)| (p.clone(), t.value(now))).collect::<HashMap<_, _>>();
         let is_dirty = self.state.is_dirty();
         (self.dirty_pulse_generation, self.was_dirty) = crate::views::motion::advance_dirty_generation(
@@ -3730,6 +3837,11 @@ impl Render for WorkspaceView {
                     if let Ok(Ok(Some(mut paths))) = rx.await {
                         if let Some(path) = paths.pop() {
                             let _ = this.update(app, |this, cx| {
+                                let path = path.canonicalize().unwrap_or(path);
+                                this.restore_sidebar_path(&path, cx);
+                                if path.is_dir() && this.state.workspace_roots.iter().any(|root| path.starts_with(&root.path)) {
+                                    this.state.expand_to_file(&path); cx.notify(); return;
+                                }
                                 if path.is_file() {
                                     match this.state.load_file(path) {
                                         Ok(()) => this.on_document_swapped(None, cx),
@@ -3974,6 +4086,7 @@ impl Render for WorkspaceView {
                     if let Ok(Ok(Some(mut paths))) = rx.await {
                         if let Some(path) = paths.pop() {
                             let _ = this.update(app, |this, cx| {
+                                this.restore_sidebar_path(&path, cx);
                                 let _ = this.state.load_file(path);
                                 this.on_document_swapped(None, cx);
                                 cx.notify();
@@ -4005,6 +4118,7 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(|this, _: &crate::actions::SourceIndent, window, cx| this.source_command(SourceCommand::Indent, window, cx)))
             .on_action(cx.listener(|this, _: &crate::actions::SourceOutdent, window, cx| this.source_command(SourceCommand::Outdent, window, cx)))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.sidebar_busy { cx.stop_propagation(); return; }
                 if this.lightbox.is_open {
                     if event.keystroke.key == "escape" {
                         this.close_lightbox(window, cx);
@@ -4094,7 +4208,8 @@ impl Render for WorkspaceView {
                                 if let Ok(Ok(Some(mut paths))) = rx.await {
                                     if let Some(path) = paths.pop() {
                                         let _ = this.update(app, |this, cx| {
-                                            let _ = this.state.load_file(path);
+                                            this.restore_sidebar_path(&path, cx);
+                                let _ = this.state.load_file(path);
                                             this.on_document_swapped(None, cx);
                                             cx.notify();
                                         });
@@ -4196,6 +4311,22 @@ impl Render for WorkspaceView {
                                             });
                                         })
                                     };
+                                    let row_view = cx.entity().clone();
+                                    let on_row = Arc::new(move |key: &crate::state::DocKey, event: &MouseDownEvent, name: bool, window: &mut Window, cx: &mut App| {
+                                        row_view.update(cx, |this,cx| this.sidebar_row_click(key,event,name,window,cx));
+                                    });
+                                    let trash_view = cx.entity().clone();
+                                    let on_trash_directory = Arc::new(move |path: &PathBuf, window: &mut Window, cx: &mut App| {
+                                        trash_view.update(cx, |this,cx| this.trash_sidebar_paths(vec![path.clone()],window,cx));
+                                    });
+                                    let remove_view = cx.entity().clone();
+                                    let on_remove_path = Arc::new(move |path: &PathBuf, _: &mut Window, cx: &mut App| {
+                                        remove_view.update(cx, |this,cx| this.persist_sidebar_hidden(vec![path.clone()],true,cx));
+                                    });
+                                    let restore_view = cx.entity().clone();
+                                    let on_restore = Arc::new(move |path: &PathBuf, _: &mut Window, cx: &mut App| {
+                                        restore_view.update(cx, |this,cx| this.persist_sidebar_hidden(vec![path.clone()],false,cx));
+                                    });
                                     let search_params = crate::views::drawer::DrawerSearchParams {
                                         search_query: self.state.search_query.clone(),
                                         has_search_matches: self.state.has_search_matches(),
@@ -4206,6 +4337,13 @@ impl Render for WorkspaceView {
                                         search_input: self.search_input.clone(),
                                         focused: self.search_focused,
                                         selected_directory: self.selected_directory.clone(),
+                                        selection: self.sidebar_selection.clone(),
+                                        hidden_paths: self.state.preferences.sidebar_hidden_paths.clone(),
+                                        reduce_motion,
+                                        on_row: Some(on_row),
+                                        on_trash_directory: Some(on_trash_directory),
+                                        on_restore: Some(on_restore),
+                                        on_remove_path: Some(on_remove_path),
                                         folder_values: folder_values.clone(),
                                         rename_target: if self.is_renaming && self.rename_in_sidebar { self.rename_target.clone() } else { None },
                                         rename_input: self.rename_input.clone().filter(|_| self.is_renaming && self.rename_in_sidebar),

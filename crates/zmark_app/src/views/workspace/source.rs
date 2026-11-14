@@ -102,7 +102,8 @@ fn position_in_lines(lines: &[String], mut offset: usize) -> (usize, usize) {
 
 impl WorkspaceView {
     pub fn source_accepts_input(&self, window: &Window, cx: &App) -> bool {
-        self.state.active.is_some()
+        !self.sidebar_busy
+            && self.state.active.is_some()
             && self.state.view_mode != ViewMode::Preview
             && !self.preview_focused
             && !self.lightbox.is_open

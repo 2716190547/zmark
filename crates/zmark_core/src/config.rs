@@ -96,6 +96,8 @@ pub struct Preferences {
     pub config_version: u32,
     #[serde(default)]
     pub workspace_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub sidebar_hidden_paths: Vec<PathBuf>,
 }
 
 impl Default for Preferences {
@@ -116,6 +118,7 @@ impl Default for Preferences {
             show_line_numbers: true,
             config_version: CURRENT_CONFIG_VERSION,
             workspace_roots: Vec::new(),
+            sidebar_hidden_paths: Vec::new(),
         }
     }
 }

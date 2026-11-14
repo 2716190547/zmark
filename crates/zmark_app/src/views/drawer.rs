@@ -21,6 +21,14 @@ pub struct DrawerSearchParams {
     pub search_input: Option<Entity<SearchInput>>,
     pub focused: bool,
     pub selected_directory: Option<PathBuf>,
+    pub selection: crate::views::sidebar_selection::SharedSelection,
+    pub hidden_paths: Vec<PathBuf>,
+    pub reduce_motion: bool,
+    pub on_row: Option<Arc<dyn Fn(&DocKey, &MouseDownEvent, bool, &mut Window, &mut App)>>,
+    pub on_trash_directory: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
+    pub on_remove_path: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
+    pub on_restore: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
+
     pub folder_values: std::collections::HashMap<PathBuf, f32>,
     pub rename_target: Option<DocKey>,
     pub rename_input: Option<Entity<SearchInput>>,
@@ -344,7 +352,9 @@ pub fn render_drawer_with_search(
             .gap_1()
             .child(match active_tab {
                 DrawerTab::Files => {
-                    let mut content = div().flex().flex_col().gap_1();
+                    search.selection.lock().unwrap().rows.clear();
+                    let mut content = div().relative().flex().flex_col().gap_1()
+                        .child(crate::views::sidebar_selection::selection_layer(search.selection.clone(), theme.control_selection_bg(), search.reduce_motion));
 
                     // ==========================================
                     // 1. Draft Item (decentralized: rendered only when an active/open scratch doc exists)
@@ -388,7 +398,9 @@ pub fn render_drawer_with_search(
 
                             let draft_tooltip_text = format!("{} ({})", strings.draft_focus_hint, crate::platform::shortcut_hint("N"));
                             let sel_key = d_key.clone();
-                            let mut draft_item = div()
+                            let row_handler = search.on_row.clone();
+                            let mut draft_item = div().relative()
+                                .child(crate::views::sidebar_selection::row_anchor(search.selection.clone(), d_key.clone()))
                                 .id("drawer_draft_item")
                                 .debug_selector(|| "drawer_draft_item".to_string())
                                 .group("drawer_draft_row")
@@ -408,18 +420,19 @@ pub fn render_drawer_with_search(
                                 })
                                 .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
                                     if event.click_count == 2 { cx.stop_propagation(); }
-                                    t_switch_draft(&sel_key, event.click_count == 2, window, cx);
+                                    if let Some(handler) = &row_handler { handler(&sel_key, event, true, window, cx); }
+                                    else { t_switch_draft(&sel_key, event.click_count == 2, window, cx); }
                                 });
 
                             if is_draft_active {
                                 draft_item = draft_item
-                                    .bg(theme.control_selection_bg())
+
                                     .text_color(theme.selection_text())
                                     .font_weight(FontWeight::NORMAL);
                             } else {
                                 draft_item = draft_item
                                     .text_color(theme.text_primary)
-                                    .hover(|s| s.bg(theme.hover_bg()));
+                                    ;
                             }
 
                             let draft_item = draft_item
@@ -473,6 +486,7 @@ pub fn render_drawer_with_search(
                             );
                         } else {
                             for (root_idx, root) in workspace_roots.iter().enumerate() {
+                                if search.hidden_paths.iter().any(|p| root.path.starts_with(p)) { continue; }
                                 let root_path_str = root.path.to_string_lossy().to_string();
                                 let root_name = root_label(workspace_roots, root_idx);
                                 let is_missing = root.is_missing;
@@ -481,16 +495,25 @@ pub fn render_drawer_with_search(
                                 let value = search.folder_values.get(&root.path).copied().unwrap_or(if is_expanded { 1.0 } else { 0.0 });
                                 let root_key = DocKey::Path(root.path.clone());
                                 let select_directory = search.on_select_directory.clone();
+                                let name_handler = search.on_row.clone();
                                 let select_path = root.path.clone();
                                 let is_truncated = root.truncated;
                                 let on_toggle_r = on_toggle_root.clone();
+                                let icon_handler = search.on_row.clone();
+                                let icon_key = root_key.clone();
                                 let on_refresh_r = on_refresh_root.clone();
                                 let on_remove_r = on_remove_root.clone();
 
-                                let mut root_header = div()
+                                let row_handler = search.on_row.clone();
+                                let row_key = root_key.clone();
+                                let mut root_header = div().relative()
+                                    .child(crate::views::sidebar_selection::row_anchor(search.selection.clone(), root_key.clone()))
+                                    .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                                        if let Some(handler) = &row_handler { handler(&row_key, event, false, window, cx); }
+                                    })
                                     .id(SharedString::from(format!("drawer_root_header_{}", root_idx)))
                                     .debug_selector(move || format!("drawer_root_header_{root_idx}"))
-                                    .when(search.selected_directory.as_ref() == Some(&root.path), |el| el.bg(theme.control_selection_bg()))
+
                                     .group("drawer_root_row")
                                     .w_full()
                                     .h(px(28.))
@@ -502,7 +525,7 @@ pub fn render_drawer_with_search(
                                     .justify_between()
                                     .text_size(px(13.))
                                     .font_weight(FontWeight::NORMAL)
-                                    .hover(|s| s.bg(theme.hover_bg()))
+
                                     .tooltip(move |_window, cx| {
                                         let t = root_path_str.clone();
                                         cx.new(|_| DrawerTooltipView { text: t }).into()
@@ -530,9 +553,10 @@ pub fn render_drawer_with_search(
                                         div().id(SharedString::from(format!("drawer_root_toggle_{root_idx}")))
                                             .debug_selector(move || format!("drawer_root_toggle_{root_idx}"))
                                             .size(px(16.)).flex_shrink_0().flex().items_center().justify_center()
-                                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                                                 cx.stop_propagation();
-                                                if !is_missing { on_toggle_r(root_idx, window, cx); }
+                                                if let Some(handler) = &icon_handler { handler(&icon_key, event, false, window, cx); }
+                                                else if !is_missing { on_toggle_r(root_idx, window, cx); }
                                             })
                                             .child(svg().path(folder_icon).size(px(14.)).flex_shrink_0().text_color(theme.text_muted)),
                                     )
@@ -544,7 +568,8 @@ pub fn render_drawer_with_search(
                                             .text_color(if is_missing { theme.text_muted } else { theme.text_primary })
                                             .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                                                 cx.stop_propagation();
-                                                if let Some(select) = &select_directory { select(&select_path, event.click_count == 2, window, cx); }
+                                                if let Some(handler) = &name_handler { handler(&DocKey::Path(select_path.clone()), event, true, window, cx); }
+                                                else if let Some(select) = &select_directory { select(&select_path, event.click_count == 2, window, cx); }
                                             }).child(root_name).into_any_element()),
                                     )
                                     .when(is_missing, |d| {
@@ -567,6 +592,7 @@ pub fn render_drawer_with_search(
                                 let on_new_file_root = on_new_file_in_dir.clone();
                                 let root_dir_path = root.path.clone();
                                 let right_part = div()
+                                    .child(path_actions(root.path.clone(), "drawer_root_row", search, strings))
                                     .flex()
                                     .items_center()
                                     .gap_1()
@@ -645,7 +671,7 @@ pub fn render_drawer_with_search(
                                                 .flex()
                                                 .items_center()
                                                 .gap_1p5()
-                                                .hover(|s| s.bg(theme.hover_bg()))
+
                                                 .tooltip(move |_window, cx| {
                                                     let t = strings.retry_scan.to_string();
                                                     cx.new(|_| DrawerTooltipView { text: t }).into()
@@ -670,7 +696,7 @@ pub fn render_drawer_with_search(
                                         );
                                     }
 
-                                    roots_section = roots_section.child(fading_children(root_children_container, is_expanded, value, open_children_height(&root.tree, &search.search_query.to_lowercase(), &search.folder_values)));
+                                    roots_section = roots_section.child(fading_children(root_children_container, is_expanded, value, open_children_height(&root.tree, &search.search_query.to_lowercase(), &search.folder_values, &search.hidden_paths)));
                                 }
                             }
                         }
@@ -684,6 +710,7 @@ pub fn render_drawer_with_search(
                             .iter()
                             .filter_map(|k| match k {
                                 DocKey::Path(p) => {
+                                    if search.hidden_paths.iter().any(|hidden| p.starts_with(hidden)) { return None; }
                                     if !search.search_query.is_empty() {
                                         let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
                                         if !name.to_lowercase().contains(&search.search_query.to_lowercase()) {
@@ -726,7 +753,9 @@ pub fn render_drawer_with_search(
                                 let sel_key = target_key.clone();
                                 let close_key = target_key.clone();
 
-                                let mut item = div()
+                                let row_handler = search.on_row.clone();
+                                let mut item = div().relative()
+                                    .child(crate::views::sidebar_selection::row_anchor(search.selection.clone(), target_key.clone()))
                                     .id(SharedString::from(format!("drawer_loose_file_{}", idx)))
                                     .group("drawer_loose_file_row")
                                     .w_full()
@@ -745,18 +774,19 @@ pub fn render_drawer_with_search(
                                     })
                                     .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
                                         if event.click_count == 2 { cx.stop_propagation(); }
-                                        on_select(&sel_key, event.click_count == 2, window, cx);
+                                        if let Some(handler) = &row_handler { handler(&sel_key, event, true, window, cx); }
+                                        else { on_select(&sel_key, event.click_count == 2, window, cx); }
                                     });
 
                                 if is_active {
                                     item = item
-                                        .bg(theme.control_selection_bg())
+
                                         .text_color(theme.selection_text())
                                         .font_weight(FontWeight::NORMAL);
                                 } else {
                                     item = item
                                         .text_color(theme.text_primary)
-                                        .hover(|s| s.bg(theme.hover_bg()));
+                                        ;
                                 }
 
                                 let left_part = div()
@@ -805,12 +835,21 @@ pub fn render_drawer_with_search(
                                             .child("×"),
                                     );
 
+                                let right_part = if search.on_trash_directory.is_some() { path_actions((*p).clone(), "drawer_loose_file_row", search, strings) } else { right_part };
                                 loose_section = loose_section.child(item.child(left_part).child(right_part));
                             }
 
                             content = content.child(loose_section);
                         }
 
+                        if let Some(restore) = &search.on_restore {
+                            for (i, path) in search.hidden_paths.iter().enumerate() {
+                                let restore = restore.clone(); let path = path.clone();
+                                let label = format!("↶ {}: {}", strings.restore_removed, path.display());
+                                content = content.child(div().id(("restore_sidebar", i)).px_2().py_1().text_size(px(11.)).text_color(theme.text_muted).cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, move |_, window, cx| restore(&path, window, cx)).child(label));
+                            }
+                        }
                         content.into_any_element()
                     }
                     DrawerTab::Outline => {
@@ -911,10 +950,12 @@ fn open_children_height(
     nodes: &[FileTreeNode],
     q_lower: &str,
     values: &std::collections::HashMap<PathBuf, f32>,
+    hidden_paths: &[PathBuf],
 ) -> f32 {
     let mut total = 0.0;
     let mut rows = 0;
     for node in nodes {
+        if hidden_paths.iter().any(|p| node.path.starts_with(p)) { continue; }
         if node.is_dir {
             if !q_lower.is_empty() && !dir_matches_search(node, q_lower) {
                 continue;
@@ -923,7 +964,7 @@ fn open_children_height(
             rows += 1;
             // Same rule as rendering: a folder that is still animating closed keeps its children laid out.
             if node.is_expanded || values.get(&node.path).is_some_and(|v| *v > 0.0) {
-                let inner = open_children_height(&node.children, q_lower, values);
+                let inner = open_children_height(&node.children, q_lower, values, hidden_paths);
                 if inner > 0.0 {
                     let value = values.get(&node.path).copied().unwrap_or(if node.is_expanded { 1.0 } else { 0.0 });
                     total += inner * value + TREE_ROW_GAP;
@@ -985,6 +1026,7 @@ fn render_file_tree_nodes(
 ) {
     let q_lower = search_query.to_lowercase();
     for (node_idx, node) in nodes.iter().enumerate() {
+        if params.hidden_paths.iter().any(|p| node.path.starts_with(p)) { continue; }
         let depth_indent = (depth as f32 + 1.0) * 12.0;
         if node.is_dir {
             if !search_query.is_empty() && !dir_matches_search(node, &q_lower) {
@@ -992,11 +1034,14 @@ fn render_file_tree_nodes(
             }
             let p = node.path.clone();
             let on_toggle = on_toggle_folder.clone();
+            let icon_handler = params.on_row.clone();
+            let icon_key = DocKey::Path(node.path.clone());
             let is_expanded = node.is_expanded;
             let value = params.folder_values.get(&node.path).copied().unwrap_or(if is_expanded { 1.0 } else { 0.0 });
             let folder_name = node.name.clone();
             let key = DocKey::Path(node.path.clone());
             let select_directory = params.on_select_directory.clone();
+            let name_handler = params.on_row.clone();
             let select_path = node.path.clone();
             let toggle_selector = format!("drawer_dir_toggle:{}", node.path.display());
             let name_selector = format!("drawer_dir_name:{}", node.path.display());
@@ -1015,9 +1060,10 @@ fn render_file_tree_nodes(
                 .child(
                     div().id(SharedString::from(toggle_selector.clone())).debug_selector(move || toggle_selector.clone())
                         .size(px(16.)).flex_shrink_0().flex().items_center().justify_center()
-                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                             cx.stop_propagation();
-                            on_toggle(root_idx, &p, window, cx);
+                            if let Some(handler) = &icon_handler { handler(&icon_key, event, false, window, cx); }
+                            else { on_toggle(root_idx, &p, window, cx); }
                         })
                         .child(svg().path(folder_icon).size(px(14.)).flex_shrink_0().text_color(theme.text_muted)),
                 )
@@ -1027,13 +1073,15 @@ fn render_file_tree_nodes(
                         .min_w(px(0.)).truncate()
                         .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                             cx.stop_propagation();
-                            if let Some(select) = &select_directory { select(&select_path, event.click_count == 2, window, cx); }
+                            if let Some(handler) = &name_handler { handler(&DocKey::Path(select_path.clone()), event, true, window, cx); }
+                                                else if let Some(select) = &select_directory { select(&select_path, event.click_count == 2, window, cx); }
                         }).child(folder_name).into_any_element()),
                 );
 
             let on_new_file_dir = on_new_file_in_dir.clone();
             let dir_path = node.path.clone();
             let right_part = div()
+                .child(path_actions(node.path.clone(), "drawer_dir_row", params, strings))
                 .flex()
                 .items_center()
                 .gap_1()
@@ -1062,8 +1110,14 @@ fn render_file_tree_nodes(
                         .child("+"),
                 );
 
+            let row_handler = params.on_row.clone();
+            let row_key = key.clone();
             out.push(
-                div()
+                div().relative()
+                    .child(crate::views::sidebar_selection::row_anchor(params.selection.clone(), key.clone()))
+                    .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                        if let Some(handler) = &row_handler { handler(&row_key, event, false, window, cx); }
+                    })
                     .id(SharedString::from(format!("drawer_tree_dir_{}_{}_{}", root_idx, depth, node_idx)))
                     .group("drawer_dir_row")
                     .w_full()
@@ -1078,8 +1132,8 @@ fn render_file_tree_nodes(
                     .text_size(px(13.))
                     .font_weight(FontWeight::NORMAL)
                     .text_color(theme.text_primary)
-                    .hover(|s| s.bg(theme.hover_bg()))
-                    .when(params.selected_directory.as_ref() == Some(&node.path), |el| el.bg(theme.control_selection_bg()))
+
+
                     .child(left_part)
                     .child(right_part)
                     .into_any_element(),
@@ -1104,7 +1158,7 @@ fn render_file_tree_nodes(
                     on_close_doc,
                     &mut children,
                 );
-                let open_height = open_children_height(&node.children, &q_lower, &params.folder_values);
+                let open_height = open_children_height(&node.children, &q_lower, &params.folder_values, &params.hidden_paths);
                 out.push(fading_children(div().flex().flex_col().gap_0p5().children(children), is_expanded, value, open_height));
             }
         } else {
@@ -1124,13 +1178,16 @@ fn render_file_tree_nodes(
             let selector = format!("drawer_file:{}", p.display());
             let close_key = target_key.clone();
 
-            let mut item = div()
+            let row_handler = params.on_row.clone();
+            let row_key = target_key.clone();
+            let mut item = div().relative()
+                .child(crate::views::sidebar_selection::row_anchor(params.selection.clone(), target_key.clone()))
                 .id(SharedString::from(format!("drawer_tree_file_{}_{}_{}", root_idx, depth, node_idx)))
                 .debug_selector(move || selector.clone())
                 .group("drawer_file_row")
-                .w_full()
+                .ml(px(depth_indent + 4.0))
                 .h(px(44.))
-                .pl(px(depth_indent + 18.0))
+                .pl_2()
                 .pr_1p5()
                 .py_1()
                 .rounded(px(5.))
@@ -1145,7 +1202,9 @@ fn render_file_tree_nodes(
                     cx.new(|_| DrawerTooltipView { text: t }).into()
                 })
                 .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                    if event.click_count == 2 {
+                    if let Some(handler) = &row_handler {
+                        handler(&row_key, event, true, window, cx);
+                    } else if event.click_count == 2 {
                         cx.stop_propagation();
                         on_rename(&rename_path, window, cx);
                     } else {
@@ -1155,13 +1214,13 @@ fn render_file_tree_nodes(
 
             if is_active {
                 item = item
-                    .bg(theme.control_selection_bg())
+
                     .text_color(theme.selection_text())
                     .font_weight(FontWeight::NORMAL);
             } else {
                 item = item
                     .text_color(theme.text_primary)
-                    .hover(|s| s.bg(theme.hover_bg()));
+                    ;
             }
 
             let mut left_part = div()
@@ -1209,8 +1268,11 @@ fn render_file_tree_nodes(
                 );
             }
 
-            let file_content = div().flex().items_center().gap_1p5().min_w(px(0.))
-                .child(svg().path("icons/file.svg").size(px(14.)).flex_shrink_0().text_color(theme.text_muted))
+            if params.on_trash_directory.is_some() {
+                right_part = path_actions(node.path.clone(), "drawer_file_row", params, strings);
+            }
+            let file_content = div().flex().items_start().gap_1p5().min_w(px(0.))
+                .child(svg().path("icons/file.svg").size(px(14.)).flex_shrink_0().mt(px(2.)).text_color(theme.text_muted))
                 .child(left_part);
             out.push(item.child(file_content).child(right_part).into_any_element());
         }
@@ -1274,7 +1336,25 @@ where
             .child(icon_el)
     } else {
         base.rounded(px(6.))
-            .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
+
             .child(icon_el)
     }
+}
+
+fn path_actions(path: PathBuf, group: &'static str, params: &DrawerSearchParams, strings: &'static I18nStrings) -> Div {
+    let mut actions = div().flex().items_center().gap_1().flex_shrink_0();
+    for (suffix, label, title, callback) in [
+        ("remove", "−", strings.remove_from_sidebar, params.on_remove_path.clone()),
+        ("trash", "×", strings.trash_file, params.on_trash_directory.clone()),
+    ] {
+        if let Some(callback) = callback {
+            let target = path.clone();
+            actions = actions.child(div().id(SharedString::from(format!("sidebar_{suffix}:{}", path.display())))
+                .size(px(16.)).flex().items_center().justify_center().rounded(px(3.)).cursor_pointer().text_size(px(12.))
+                .opacity(0.0).group_hover(group, |s| s.opacity(1.0))
+                .tooltip(move |_,cx| cx.new(|_| DrawerTooltipView { text: title.to_string() }).into())
+                .on_mouse_down(MouseButton::Left,move |_,window,cx| {cx.stop_propagation();callback(&target,window,cx);}).child(label));
+        }
+    }
+    actions
 }
