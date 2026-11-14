@@ -139,6 +139,10 @@ fn render_inline_group(group: &InlineGroup, out: &mut String) {
                 out.push_str("</code>");
             }
             InlineItem::Link { text, url, title } => {
+                if !safe_link_url(url) {
+                    out.push_str(&escape_html(text));
+                    continue;
+                }
                 out.push_str(&format!("<a href=\"{}\"", escape_html(url)));
                 if let Some(t) = title {
                     out.push_str(&format!(" title=\"{}\"", escape_html(t)));
@@ -160,6 +164,15 @@ fn render_inline_group(group: &InlineGroup, out: &mut String) {
             }
         }
     }
+}
+
+fn safe_link_url(url: &str) -> bool {
+    let url = url.trim();
+    if url.chars().any(char::is_control) { return false; }
+    let Some(colon) = url.find(':') else { return true; };
+    let before_colon = &url[..colon];
+    if before_colon.contains(['/', '?', '#']) { return true; }
+    matches!(before_colon.to_ascii_lowercase().as_str(), "http" | "https" | "mailto")
 }
 
 fn escape_html(input: &str) -> String {

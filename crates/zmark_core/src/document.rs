@@ -49,6 +49,7 @@ pub struct Document {
     pub status: DocumentStatus,
     pub parsed: Arc<ParsedDocument>,
     last_saved_content: String,
+    observed_disk_content: Option<String>,
     parse_stale: bool,
 }
 
@@ -67,6 +68,7 @@ impl Document {
             path: None,
             scratch_name: None,
             last_saved_content: buffer.clone(),
+            observed_disk_content: None,
             buffer,
             status: DocumentStatus::Clean,
             parsed,
@@ -85,6 +87,7 @@ impl Document {
             path: Some(path),
             scratch_name: None,
             last_saved_content: buffer.clone(),
+            observed_disk_content: None,
             buffer,
             status: DocumentStatus::Clean,
             parsed,
@@ -173,35 +176,57 @@ impl Document {
         self.parse_stale = true;
     }
 
-    /// Saves the current buffer to the existing file path.
-    pub fn save(&mut self) -> Result<(), std::io::Error> {
-        if let Some(ref path) = self.path {
-            fs::write(path, &self.buffer)?;
-            self.last_saved_content = self.buffer.clone();
-            self.status = DocumentStatus::Clean;
-            Ok(())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Cannot save untitled document without destination path",
-            ))
+    /// Checks the current disk version while keeping unsaved local edits intact.
+    pub fn check_disk_change(&mut self) -> std::io::Result<bool> {
+        let Some(path) = &self.path else { return Ok(false); };
+        let disk = fs::read_to_string(path)?;
+        if disk.contains('\0') {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Disk file is no longer text"));
         }
+        let expected = self.observed_disk_content.as_ref().unwrap_or(&self.last_saved_content);
+        if &disk == expected { return Ok(false); }
+        let reload = self.status == DocumentStatus::Clean && disk != self.buffer;
+        self.handle_disk_change(disk);
+        Ok(reload)
     }
 
-    /// Saves the document to a specific path and tracks it.
+    /// Save must not replace or recreate an external version it did not validate.
+    pub fn save(&mut self) -> Result<(), std::io::Error> {
+        let path = self.path.clone().ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::NotFound, "Cannot save untitled document without destination path",
+        ))?;
+        if self.check_disk_change()? { return Ok(()); }
+        if self.status == DocumentStatus::ConflictOnDisk {
+            return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "File changed on disk; resolve the conflict before saving"));
+        }
+        // Save must never silently recreate a deleted file.
+        crate::file_ops::atomic_write(&path.canonicalize()?, self.buffer.as_bytes())?;
+        self.last_saved_content.clone_from(&self.buffer);
+        self.observed_disk_content = None;
+        self.status = DocumentStatus::Clean;
+        Ok(())
+    }
+
+    /// Updates draft identity only after the destination was written completely.
     pub fn save_to(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
-        fs::write(&path, &self.buffer)?;
+        if self.path.as_ref().is_some_and(|old| old == &path || old.canonicalize().ok().zip(path.canonicalize().ok()).is_some_and(|(a, b)| a == b)) {
+            return self.save();
+        }
+        crate::file_ops::atomic_write(&path, self.buffer.as_bytes())?;
         self.path = Some(path);
         self.scratch_name = None;
-        self.last_saved_content = self.buffer.clone();
+        self.last_saved_content.clone_from(&self.buffer);
+        self.observed_disk_content = None;
         self.status = DocumentStatus::Clean;
         Ok(())
     }
 
     /// Handles external disk modification signals.
     pub fn handle_disk_change(&mut self, new_disk_content: String) {
+        self.observed_disk_content = Some(new_disk_content.clone());
         if self.buffer == new_disk_content {
             self.last_saved_content = new_disk_content;
+            self.observed_disk_content = None;
             self.status = DocumentStatus::Clean;
             return;
         }
@@ -210,6 +235,7 @@ impl Document {
             DocumentStatus::Clean => {
                 self.buffer = new_disk_content.clone();
                 self.last_saved_content = new_disk_content;
+                self.observed_disk_content = None;
                 self.parsed = Arc::new(parse_document(&self.buffer, self.path.as_deref()));
                 self.parse_stale = false;
                 self.status = DocumentStatus::Clean;
@@ -229,6 +255,7 @@ impl Document {
     pub fn resolve_conflict_reload_disk(&mut self, disk_content: String) {
         self.buffer = disk_content.clone();
         self.last_saved_content = disk_content;
+        self.observed_disk_content = None;
         self.parsed = Arc::new(parse_document(&self.buffer, self.path.as_deref()));
         self.parse_stale = false;
         self.status = DocumentStatus::Clean;

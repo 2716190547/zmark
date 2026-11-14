@@ -663,6 +663,42 @@ impl AppState {
         changed
     }
 
+    pub fn reload_active_document(&mut self) -> std::io::Result<()> {
+        let path = self.doc().path.as_ref().ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::NotFound, "Draft has no disk file",
+        ))?;
+        let text = fs::read_to_string(path)?;
+        if text.contains('\0') {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Disk file is no longer text"));
+        }
+        self.doc_mut().resolve_conflict_reload_disk(text);
+        let buffer = &self.open_docs.iter().find(|open| self.active.as_ref() == Some(&open.key)).unwrap().doc.buffer;
+        self.editor.reset_text(buffer);
+        self.editor_dirty = false;
+        Ok(())
+    }
+
+    /// Called only at activation/save boundaries; inactive documents keep their AST unloaded.
+    pub fn check_disk_changes(&mut self) -> std::io::Result<bool> {
+        self.sync_from_editor();
+        let mut active_reloaded = false;
+        let mut failure = None;
+        for open in &mut self.open_docs {
+            match open.doc.check_disk_change() {
+                Ok(true) if self.active.as_ref() == Some(&open.key) => active_reloaded = true,
+                Ok(true) => open.doc.unload_parsed(),
+                Ok(false) => {}
+                Err(error) => { failure.get_or_insert(error); }
+            }
+        }
+        if active_reloaded {
+            let buffer = &self.open_docs.iter().find(|open| self.active.as_ref() == Some(&open.key)).unwrap().doc.buffer;
+            self.editor.reset_text(buffer);
+        }
+        if let Some(error) = failure { return Err(error); }
+        Ok(active_reloaded)
+    }
+
     /// Parses the buffer now, ignoring the debounce tier.
     pub fn parse_now(&mut self) -> bool {
         self.doc_mut().reparse()
@@ -1339,6 +1375,7 @@ impl AppState {
     }
 
     pub fn confirm_close_save(&mut self, key: &DocKey) -> Result<bool, std::io::Error> {
+        if self.active.as_ref() == Some(key) { self.sync_from_editor(); }
         if let Some(od) = self.open_docs.iter_mut().find(|d| &d.key == key) {
             if od.doc.path.is_some() {
                 od.doc.save()?;
@@ -1398,12 +1435,16 @@ impl AppState {
 
         let mut candidate = dir.join("Untitled.md");
         let mut counter = 1;
-        while candidate.exists() {
-            candidate = dir.join(format!("Untitled {}.md", counter));
-            counter += 1;
+        loop {
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+                Ok(_) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    candidate = dir.join(format!("Untitled {}.md", counter));
+                    counter += 1;
+                }
+                Err(error) => return Err(error),
+            }
         }
-
-        std::fs::write(&candidate, "")?;
         self.open_file(candidate.clone())?;
         Ok(candidate)
     }
@@ -1524,7 +1565,12 @@ impl AppState {
             return Ok(());
         }
         self.sync_from_editor();
-        self.doc_mut().save()
+        let result = self.doc_mut().save();
+        if result.is_ok() && self.editor.to_text() != self.doc().buffer {
+            let buffer = &self.open_docs.iter().find(|open| self.active.as_ref() == Some(&open.key)).unwrap().doc.buffer;
+            self.editor.reset_text(buffer);
+        }
+        result
     }
 
     pub fn save_doc(&mut self, key: &DocKey) -> Result<(), std::io::Error> {

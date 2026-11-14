@@ -116,6 +116,86 @@ fn test_external_disk_change_dirty_causes_conflict() {
     assert_eq!(doc.status, DocumentStatus::Modified);
 }
 
+#[test]
+fn saving_refuses_external_changes_until_the_exact_disk_version_is_confirmed() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("conflict.md");
+    fs::write(&path, "original").unwrap();
+    let mut doc = Document::from_file(path.clone()).unwrap();
+    doc.set_buffer("local edit".into());
+    fs::write(&path, "external edit").unwrap();
+    assert!(doc.save().is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "external edit");
+    assert_eq!(doc.buffer, "local edit");
+    assert_eq!(doc.status, DocumentStatus::ConflictOnDisk);
+    doc.resolve_conflict_keep_local();
+    fs::write(&path, "newer external edit").unwrap();
+    assert!(doc.save().is_err(), "confirmation must not authorize a later external version");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "newer external edit");
+    doc.resolve_conflict_keep_local();
+    doc.save().unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "local edit");
+    assert_eq!(doc.status, DocumentStatus::Clean);
+}
+
+#[test]
+fn saving_a_deleted_file_does_not_recreate_it_or_clear_local_changes() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("deleted.md");
+    fs::write(&path, "original").unwrap();
+    let mut doc = Document::from_file(path.clone()).unwrap();
+    doc.set_buffer("local".into());
+    fs::remove_file(&path).unwrap();
+    assert!(doc.save().is_err());
+    assert!(!path.exists());
+    assert_eq!(doc.buffer, "local");
+    assert_eq!(doc.status, DocumentStatus::Modified);
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_save_preserves_permissions_and_symlink_but_refuses_hardlinks() {
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let link = dir.path().join("link.md");
+    fs::write(&path, "original").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+    let inode = fs::metadata(&path).unwrap().ino();
+    symlink(&path, &link).unwrap();
+    let mut doc = Document::from_file(link.clone()).unwrap();
+    doc.set_buffer("saved".into());
+    doc.save().unwrap();
+    assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert_ne!(fs::metadata(&path).unwrap().ino(), inode, "save must replace, not truncate, the original inode");
+    assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
+    let hardlink = dir.path().join("hard.md");
+    fs::hard_link(&path, &hardlink).unwrap();
+    doc.set_buffer("must not write".into());
+    assert!(doc.save().is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "saved");
+    assert_eq!(fs::read_to_string(&hardlink).unwrap(), "saved");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3, "failed save must remove its temporary file");
+}
+
+#[test]
+fn save_as_failure_keeps_draft_identity_and_rejects_readonly_targets() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("readonly.md");
+    fs::write(&path, "original").unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    let restore = permissions.clone();
+    permissions.set_readonly(true);
+    fs::set_permissions(&path, permissions).unwrap();
+    let mut doc = Document::new_scratch_with_text("draft".into());
+    doc.rename_scratch("named").unwrap();
+    let before = doc.clone();
+    assert!(doc.save_to(path.clone()).is_err());
+    assert_eq!(doc, before);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+    fs::set_permissions(&path, restore).unwrap();
+}
+
 use zmark_core::watcher::{FileWatcher, WatcherEvent};
 use std::time::Duration;
 

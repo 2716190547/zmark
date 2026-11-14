@@ -2309,7 +2309,9 @@ impl WorkspaceView {
                         && doc.doc.status == zmark_core::document::DocumentStatus::Modified
                 });
                 if dirty {
-                    let _ = this.state.save_doc(&save_key);
+                    if let Err(error) = this.state.save_doc(&save_key) {
+                        this.error_banner = Some(format!("保存失败：{error}"));
+                    }
                     cx.notify();
                 }
                 let cleanup_key = save_key.clone();
@@ -2434,9 +2436,12 @@ impl WorkspaceView {
         }
         self.parse_now_and_refresh();
         if self.state.doc().path.is_some() {
-            let _ = self.state.save();
+            if let Err(error) = self.state.save() {
+                self.error_banner = Some(format!("保存失败：{error}"));
+            }
             cx.notify();
         } else {
+            let save_key = self.state.active.clone().unwrap();
             let suggested_dir = self
                 .state
                 .workspace_roots
@@ -2448,11 +2453,11 @@ impl WorkspaceView {
             cx.spawn(async move |this, app| {
                 if let Ok(Ok(Some(path))) = rx.await {
                     let _ = this.update(app, |this, cx| {
-                        if let Some(key) = this.state.active.clone() {
-                            let _ = this.state.save_doc_as(&key, path);
-                            this.on_document_swapped(None, cx);
-                            cx.notify();
+                        match this.state.save_doc_as(&save_key, path) {
+                            Ok(()) => this.on_document_swapped(None, cx),
+                            Err(error) => this.error_banner = Some(format!("另存为失败：{error}")),
                         }
+                        cx.notify();
                     });
                 }
             })
@@ -2762,7 +2767,7 @@ impl WorkspaceView {
                 self.prompt_save_as_and_close(key.clone(), cx);
             }
             Err(e) => {
-                eprintln!("Save error during close: {}", e);
+                self.error_banner = Some(format!("保存失败：{e}"));
                 cx.notify();
             }
         }
@@ -2792,15 +2797,15 @@ impl WorkspaceView {
         cx.spawn(async move |this, app| {
             if let Ok(Ok(Some(path))) = rx.await {
                 let _ = this.update(app, |this, cx| {
-                    match this.state.save_doc_as(&close_key, path) {
+                    match this.state.save_doc_as(&close_key, path.clone()) {
                         Ok(()) => {
-                            this.state.close_document_forced(&close_key);
+                            this.state.close_document_forced(&crate::state::DocKey::Path(path));
                             this.on_document_swapped(None, cx);
                             this.state.is_quitting = was_quitting;
                             this.after_dirty_doc_resolved(None, cx);
                         }
                         Err(e) => {
-                            eprintln!("Save As failed: {}", e);
+                            this.error_banner = Some(format!("另存为失败：{e}"));
                             this.state.is_quitting = was_quitting;
                             let title = this
                                 .state
@@ -3019,8 +3024,17 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let subscription = cx.observe_window_activation(window, |this, window, _cx| {
+        let subscription = cx.observe_window_activation(window, |this, window, cx| {
             let active = window.is_window_active();
+            if active && !this.window_was_active {
+                this.cancel_source_composition();
+                match this.state.check_disk_changes() {
+                    Ok(true) => this.on_document_swapped(Some(window), cx),
+                    Ok(false) => {}
+                    Err(error) => this.error_banner = Some(format!("检查磁盘文件失败：{error}")),
+                }
+                cx.notify();
+            }
             if cfg!(target_os = "macos")
                 && crate::platform::should_front_window(this.window_was_active, active)
             {
@@ -4685,9 +4699,9 @@ impl Render for WorkspaceView {
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     cx.listener(|this, _, window, cx| {
-                                                        if let Some(path) = &this.state.doc().path.clone() {
-                                                            let _ = this.state.load_file(path.clone());
-                                                            this.on_document_swapped(Some(window), cx);
+                                                        match this.state.reload_active_document() {
+                                                            Ok(()) => this.on_document_swapped(Some(window), cx),
+                                                            Err(error) => this.error_banner = Some(format!("重载失败：{error}")),
                                                         }
                                                         cx.notify();
                                                     }),

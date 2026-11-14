@@ -71,6 +71,58 @@ pub fn remap_path(path: &Path, old: &Path, new: &Path) -> Option<PathBuf> {
     })
 }
 
+/// Write completely before replacing the destination; a failed write leaves the old file intact.
+pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    let target = match std::fs::symlink_metadata(path) {
+        Ok(_) => path.canonicalize()?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => path.to_path_buf(),
+        Err(error) => return Err(error),
+    };
+    let metadata = match std::fs::metadata(&target) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.permissions().readonly() {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Destination is not a writable file"));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if metadata.nlink() > 1 {
+                    return Err(io::Error::new(io::ErrorKind::Unsupported, "Hard-linked files require Save As to a new path"));
+                }
+            }
+            Some(metadata)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let parent = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    if let Some(metadata) = &metadata { temporary.as_file().set_permissions(metadata.permissions())?; }
+    temporary.write_all(contents)?;
+    temporary.as_file().sync_all()?;
+    match (&metadata, std::fs::metadata(&target)) {
+        (Some(expected), Ok(current)) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if current.dev() != expected.dev() || current.ino() != expected.ino() || current.nlink() > 1 {
+                    return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Destination changed while saving"));
+                }
+            }
+        }
+        (Some(_), Err(error)) => return Err(error),
+        (None, _) => {}
+    }
+    if metadata.is_some() {
+        temporary.persist(&target).map_err(|error| error.error)?;
+    } else {
+        // A newly created destination must not overwrite another process's file.
+        temporary.persist_noclobber(&target).map_err(|error| error.error)?;
+    }
+    Ok(())
+}
+
 /// The OS checks destination occupancy in the rename itself, not in a racy exists() check.
 pub fn rename_noreplace(old: &Path, new: &Path) -> io::Result<()> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
