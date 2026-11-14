@@ -37,6 +37,8 @@ pub struct WorkspaceView {
     pub state: AppState,
     sidebar_selection: crate::views::sidebar_selection::SharedSelection,
     sidebar_busy: bool,
+    sidebar_undo: Option<Vec<PathBuf>>,
+    sidebar_undo_task: Option<Task<()>>,
     pub focus_handle: FocusHandle,
     pub editor_scroll_handle: UniformListScrollHandle,
     pub preview_list: PreviewScrollState,
@@ -228,6 +230,8 @@ impl WorkspaceView {
             selected_directory: None,
             sidebar_selection: Default::default(),
             sidebar_busy: false,
+            sidebar_undo: None,
+            sidebar_undo_task: None,
             folder_transitions: HashMap::new(),
             rename_input: None,
             workspace_width: 1200.0,
@@ -1805,6 +1809,9 @@ impl WorkspaceView {
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
     /// Reclaims GPU texture memory by dropping any active HiDPI lightbox image.
     pub fn on_document_swapped(&mut self, window: Option<&mut Window>, cx: &mut App) {
+        if self.state.doc().path.as_ref().is_some_and(|p| !zmark_core::file_ops::is_markdown(p)) {
+            self.state.view_mode = ViewMode::Source;
+        }
         self.is_renaming = false;
         self.rename_target = None;
         self.parse_task = None;
@@ -1840,6 +1847,9 @@ impl WorkspaceView {
     }
 
     pub fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
+        let mode = if self.state.doc().path.as_ref().is_some_and(|p| !zmark_core::file_ops::is_markdown(p)) {
+            ViewMode::Source
+        } else { mode };
         self.cancel_source_composition();
         self.end_source_drag();
         self.cancel_pending_preview_seek();
@@ -2344,8 +2354,10 @@ impl WorkspaceView {
         self.rename_target = Some(key);
         self.rename_in_sidebar = sidebar;
         self.is_renaming = true;
-        let handle = input.read(cx).focus_handle(cx);
-        window.focus(&handle, cx);
+        input.update(cx, |input,cx| {
+            input.set_selection_focus(None, cx);
+            input.focus(window,cx);
+        });
         cx.notify();
     }
 
@@ -2587,7 +2599,17 @@ impl WorkspaceView {
             self.state.preferences.sidebar_hidden_paths.retain(|path| !paths.contains(path));
         }
         match self.state.preferences.save_to_path(&self.state.preferences_path) {
-            Ok(()) => { self.sidebar_selection.lock().unwrap().clear(); self.error_banner = None; }
+            Ok(()) => {
+                self.sidebar_selection.lock().unwrap().clear(); self.error_banner = None;
+                self.sidebar_undo_task = None;
+                self.sidebar_undo = if hide { Some(self.state.preferences.sidebar_hidden_paths.iter().filter(|path| !old.contains(path)).cloned().collect()) } else { None };
+                if self.sidebar_undo.as_ref().is_some_and(|paths| !paths.is_empty()) {
+                    self.sidebar_undo_task = Some(cx.spawn(async move |this, app| {
+                        app.background_executor().timer(std::time::Duration::from_secs(5)).await;
+                        let _ = this.update(app, |this,cx| { this.sidebar_undo = None; cx.notify(); });
+                    }));
+                }
+            }
             Err(error) => { self.state.preferences.sidebar_hidden_paths = old; self.error_banner = Some(error.to_string()); }
         }
         cx.notify();
@@ -3232,6 +3254,7 @@ impl WorkspaceView {
                                     this.set_view_mode(ViewMode::Source, cx);
                                 }),
                             ))
+                            .when(self.state.doc().path.as_ref().is_none_or(|p| zmark_core::file_ops::is_markdown(p)), |el| { el
                             .child(render_mode_icon_tab(
                                 "btn_mode_split",
                                 format!("{} ({})", strings.split_mode, crate::platform::shortcut_hint("2")),
@@ -3255,7 +3278,8 @@ impl WorkspaceView {
                                 cx.listener(|this, _, _window, cx| {
                                     this.set_view_mode(ViewMode::Preview, cx);
                                 }),
-                            )),
+                            ))
+                            }),
                     )
                     .child(
                         div()
@@ -3516,6 +3540,9 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.state.doc().path.as_ref().is_some_and(|p| !zmark_core::file_ops::is_markdown(p)) {
+            self.state.view_mode = ViewMode::Source;
+        }
         if self.lightbox.is_open || self.lightbox_sharp.is_some() {
             self.schedule_lightbox_sharp(window, cx);
         }
@@ -4009,22 +4036,36 @@ impl Render for WorkspaceView {
             .key_context("Workspace")
             .track_focus(&self.focus_handle)
             .can_drop(|item, _window, _cx| {
-                if let Some(paths) = item.downcast_ref::<ExternalPaths>() {
-                    paths.paths().iter().any(|p| {
-                        p.extension().map_or(false, |ext| ext == "md" || ext == "markdown" || ext == "txt")
-                    })
-                } else {
-                    false
-                }
+                item.downcast_ref::<ExternalPaths>().is_some_and(|paths| paths.paths().iter().any(|p|
+                    p.is_dir() || zmark_core::file_ops::is_supported_text(p)))
             })
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                if let Some(path) = paths.paths().iter().find(|p| {
-                    p.extension().map_or(false, |ext| ext == "md" || ext == "markdown" || ext == "txt")
-                }) {
-                    let _ = this.state.load_file(path.clone());
-                    this.on_document_swapped(Some(window), cx);
-                    cx.notify();
+                let mut errors = Vec::new();
+                let mut opened_file = false;
+                for path in paths.paths() {
+                    let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    if path.is_dir() {
+                        this.restore_sidebar_path(&path, cx);
+                        if this.state.workspace_roots.iter().any(|root| path.starts_with(&root.path)) {
+                            this.state.expand_to_file(&path);
+                        } else if let Err(error) = this.state.add_workspace_root(path.clone()) {
+                            errors.push(format!("{}: {}", path.display(), error));
+                        }
+                    } else {
+                        match this.state.load_file(path.clone()) {
+                            Ok(()) => {
+                                this.restore_sidebar_path(&path, cx);
+                                opened_file = true;
+                            }
+                            Err(error) => errors.push(format!("{}: {}", path.display(), error)),
+                        }
+                    }
                 }
+                if opened_file { this.on_document_swapped(Some(window), cx); }
+                this.state.drawer_open = true;
+                this.state.drawer_tab = crate::state::DrawerTab::Files;
+                this.error_banner = if errors.is_empty() { None } else { Some(errors.join("\n")) };
+                cx.notify();
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.source_mouse_move(event, window, cx);
@@ -4095,8 +4136,10 @@ impl Render for WorkspaceView {
                         if let Some(path) = paths.pop() {
                             let _ = this.update(app, |this, cx| {
                                 this.restore_sidebar_path(&path, cx);
-                                let _ = this.state.load_file(path);
-                                this.on_document_swapped(None, cx);
+                                match this.state.load_file(path) {
+                                    Ok(()) => this.on_document_swapped(None, cx),
+                                    Err(error) => this.error_banner = Some(error.to_string()),
+                                }
                                 cx.notify();
                             });
                         }
@@ -4331,9 +4374,11 @@ impl Render for WorkspaceView {
                                     let on_remove_path = Arc::new(move |path: &PathBuf, _: &mut Window, cx: &mut App| {
                                         remove_view.update(cx, |this,cx| this.persist_sidebar_hidden(vec![path.clone()],true,cx));
                                     });
-                                    let restore_view = cx.entity().clone();
-                                    let on_restore = Arc::new(move |path: &PathBuf, _: &mut Window, cx: &mut App| {
-                                        restore_view.update(cx, |this,cx| this.persist_sidebar_hidden(vec![path.clone()],false,cx));
+                                    let undo_view = cx.entity().clone();
+                                    let on_undo = Arc::new(move |_: &mut Window, cx: &mut App| {
+                                        undo_view.update(cx, |this,cx| {
+                                            if let Some(paths) = this.sidebar_undo.clone() { this.persist_sidebar_hidden(paths,false,cx); }
+                                        });
                                     });
                                     let search_params = crate::views::drawer::DrawerSearchParams {
                                         search_query: self.state.search_query.clone(),
@@ -4350,7 +4395,8 @@ impl Render for WorkspaceView {
                                         reduce_motion,
                                         on_row: Some(on_row),
                                         on_trash_directory: Some(on_trash_directory),
-                                        on_restore: Some(on_restore),
+                                        undo_available: self.sidebar_undo.as_ref().is_some_and(|paths| !paths.is_empty()),
+                                        on_undo: Some(on_undo),
                                         on_remove_path: Some(on_remove_path),
                                         folder_values: folder_values.clone(),
                                         rename_target: if self.is_renaming && self.rename_in_sidebar { self.rename_target.clone() } else { None },

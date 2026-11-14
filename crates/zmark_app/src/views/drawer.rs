@@ -28,7 +28,8 @@ pub struct DrawerSearchParams {
     pub on_row: Option<Arc<dyn Fn(&DocKey, &MouseDownEvent, bool, &mut Window, &mut App)>>,
     pub on_trash_directory: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
     pub on_remove_path: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
-    pub on_restore: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
+    pub undo_available: bool,
+    pub on_undo: Option<Arc<dyn Fn(&mut Window, &mut App)>>,
 
     pub folder_values: std::collections::HashMap<PathBuf, f32>,
     pub rename_target: Option<DocKey>,
@@ -835,12 +836,13 @@ pub fn render_drawer_with_search(
                             content = content.child(loose_section);
                         }
 
-                        if let Some(restore) = &search.on_restore {
-                            for (i, path) in search.hidden_paths.iter().enumerate() {
-                                let restore = restore.clone(); let path = path.clone();
-                                let label = format!("↶ {}: {}", strings.restore_removed, path.display());
-                                content = content.child(div().id(("restore_sidebar", i)).px_2().py_1().text_size(px(11.)).text_color(theme.text_muted).cursor_pointer()
-                                    .on_mouse_down(MouseButton::Left, move |_, window, cx| restore(&path, window, cx)).child(label));
+                        if search.undo_available {
+                            if let Some(undo) = &search.on_undo {
+                                let undo = undo.clone();
+                                content = content.child(div().id("sidebar_undo").h(px(28.)).px_2().flex().items_center()
+                                    .text_size(px(13.)).text_color(theme.text_primary).cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, move |_,window,cx| undo(window,cx))
+                                    .child(strings.undo_sidebar_remove));
                             }
                         }
                         content.into_any_element()
@@ -911,12 +913,10 @@ pub fn render_drawer_with_search(
 }
 
 pub fn render_input(input: &Entity<SearchInput>, title: bool) -> gpui_component::input::Input {
-    gpui_component::input::Input::new(input)
-        .appearance(false)
-        .bordered(false)
-        .focus_bordered(false)
-        .h(px(24.)).w_full().min_w(px(0.))
-        .px_0().py_0()
+    // Input::h only configures multiline editors; single-line frames need Styled::h.
+    Styled::h(gpui_component::input::Input::new(input), px(24.))
+        .appearance(false).bordered(false).focus_bordered(false)
+        .w_full().min_w(px(0.)).px_0().py_0()
         .line_height(px(if title { 24. } else { 20. }))
         .text_size(px(if title { 18. } else { 13. }))
         .font_family(crate::platform::UI_FONT)
@@ -928,16 +928,16 @@ fn inline_rename(key: &DocKey, params: &DrawerSearchParams) -> Option<AnyElement
     let input = params.rename_input.as_ref()?;
     Some(div().id("sidebar_rename_box").debug_selector(|| "sidebar_rename_box".into())
         .key_context("InlineRename")
-        .min_w(px(0.)).w_full().flex_1()
+        .min_w(px(0.)).w_full().h(px(20.))
         .text_size(px(13.)).font_weight(FontWeight::NORMAL).line_height(px(20.))
-        .child(render_input(input, false).h(px(20.)))
+        .child(Styled::h(render_input(input, false), px(20.)))
         .when_some(params.on_cancel_rename.clone(), |el, cancel| {
             el.on_mouse_down_out(move |_, window, cx| cancel(window, cx))
         }).into_any_element())
 }
 
 const TREE_DIR_ROW_H: f32 = 28.0;
-const TREE_FILE_ROW_H: f32 = 44.0;
+const TREE_FILE_ROW_H: f32 = 48.0;
 const TREE_ROW_GAP: f32 = 2.0;
 
 /// Height of a folder's visible children when fully open (rows plus the 2px gaps between them),
@@ -1182,10 +1182,10 @@ fn render_file_tree_nodes(
                 .debug_selector(move || selector.clone())
                 .group("drawer_file_row")
                 .ml(px(depth_indent + 4.0))
-                .h(px(44.))
+                .h(px(TREE_FILE_ROW_H))
                 .pl_2()
                 .pr_1p5()
-                .py_1()
+                .py(px(6.))
                 .rounded(px(5.))
                 .cursor_pointer()
                 .flex()
@@ -1225,14 +1225,14 @@ fn render_file_tree_nodes(
                 .justify_center()
                 .min_w(px(0.)).flex_1()
                 .child(inline_rename(&target_key, params).unwrap_or_else(|| div()
-                    .min_w(px(0.)).truncate().text_size(px(13.)).child(file_name).into_any_element()));
+                    .min_w(px(0.)).h(px(20.)).line_height(px(20.)).truncate().text_size(px(13.)).child(file_name).into_any_element()));
 
             if let Some(ref mtime_str) = node.mtime {
                 left_part = left_part.child(
                     div()
                         .min_w(px(0.))
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(px(11.)).line_height(px(16.))
                         .text_color(theme.text_muted)
                         .child(mtime_str.clone()),
                 );
@@ -1268,7 +1268,7 @@ fn render_file_tree_nodes(
                 right_part = path_actions(node.path.clone(), "drawer_file_row", params, strings);
             }
             let file_content = div().flex().flex_1().items_start().gap_1p5().min_w(px(0.))
-                .child(svg().path("icons/file.svg").size(px(14.)).flex_shrink_0().mt(px(2.)).text_color(theme.text_muted))
+                .child(svg().path("icons/file.svg").size(px(14.)).flex_shrink_0().mt(px(3.)).text_color(theme.text_muted))
                 .child(left_part);
             out.push(path_context_menu(item.child(file_content).child(right_part), node.path.clone(), params, theme, strings).into_any_element());
         }

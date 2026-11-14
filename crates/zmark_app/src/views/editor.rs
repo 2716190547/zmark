@@ -721,6 +721,8 @@ pub fn render_editor_pane(
         })
         .child(
             uniform_list("editor_lines", line_count, move |range, window, _cx| {
+                let plain_text = list_source.read(_cx).state.doc().path.as_ref()
+                    .is_some_and(|p| !zmark_core::file_ops::is_markdown(p));
                 let mut block_spans: std::collections::HashMap<zmark_core::syntax::CodeKey, Arc<[zmark_core::syntax::SyntaxSpan]>> = std::collections::HashMap::new();
                 if is_ast_in_sync && !code_blocks.is_empty() {
                     let min_idx = range.start.min(list_visual_lines.len().saturating_sub(1));
@@ -768,7 +770,11 @@ pub fn render_editor_pane(
                             String::new()
                         };
 
-                        let phys_tokens = physical_line_tokens(phys_idx, phys_line_str, &code_blocks, is_ast_in_sync, &block_spans);
+                        let phys_tokens = if plain_text {
+                            vec![MarkdownToken { text: phys_line_str.to_owned(), kind: MarkdownTokenKind::Plain }]
+                        } else {
+                            physical_line_tokens(phys_idx, phys_line_str, &code_blocks, is_ast_in_sync, &block_spans)
+                        };
                         let (sub_start, sub_len) = if let Some(v) = vl {
                             (v.char_start, v.char_len)
                         } else {

@@ -1163,6 +1163,10 @@ impl AppState {
     }
 
     pub fn open_file(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
+        if !zmark_core::file_ops::is_supported_text(&path) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Unsupported text file type"));
+        }
+        let path = path.canonicalize()?;
         self.sync_from_editor();
 
         let target_key = DocKey::Path(path.clone());
@@ -1429,7 +1433,9 @@ impl AppState {
         let is_dir = metadata.is_dir();
         let parent = old.parent().filter(|_| old.file_name().is_some())
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "Cannot rename a filesystem root"))?;
-        let new = parent.join(if is_dir { name.to_owned() } else { markdown_name(name) });
+        let new = parent.join(if is_dir || !zmark_core::file_ops::is_markdown(old) {
+            name.to_owned()
+        } else { markdown_name(name) });
         if new == old { return Ok(None); }
         let map = |p: &Path| remap_path(p, old, &new).unwrap_or_else(|| p.to_path_buf());
         let map_key = |key: &DocKey| match key {
@@ -1997,12 +2003,7 @@ pub fn scan_dir_for_search(
                 mtime: None,
             });
         } else if file_type.is_file() {
-            let is_markdown = p.extension()
-                .and_then(|e| e.to_str())
-                .map(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
-                .unwrap_or(false);
-
-            if is_markdown {
+            if zmark_core::file_ops::is_supported_text(&p) {
                 if !budget.consume_file() {
                     *is_truncated = true;
                     break;
@@ -2278,12 +2279,7 @@ pub fn scan_root_layer(
                 mtime: None,
             });
         } else if file_type.is_file() {
-            let is_markdown = p.extension()
-                .and_then(|e| e.to_str())
-                .map(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
-                .unwrap_or(false);
-
-            if is_markdown {
+            if zmark_core::file_ops::is_supported_text(&p) {
                 if !budget.consume_file() {
                     truncated = true;
                     break;

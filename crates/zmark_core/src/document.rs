@@ -50,6 +50,9 @@ impl Document {
     /// Loads a document from the local filesystem.
     pub fn from_file(path: PathBuf) -> Result<Self, std::io::Error> {
         let buffer = fs::read_to_string(&path)?;
+        if buffer.contains('\0') {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Binary files cannot be edited as text"));
+        }
         let parsed = Arc::new(parse_markdown(&buffer));
         Ok(Self {
             path: Some(path),

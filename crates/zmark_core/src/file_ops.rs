@@ -1,6 +1,26 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// File types supported by the sidebar and external file drops.
+pub fn is_supported_text(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
+    if matches!(name.as_str(), "dockerfile" | "makefile" | "justfile" | ".gitignore" | ".gitattributes" | ".editorconfig" | ".env") {
+        return true;
+    }
+    matches!(path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str(),
+        "md" | "markdown" | "txt" | "rs" | "py" | "pyi" | "js" | "jsx" | "ts" | "tsx" |
+        "c" | "h" | "cpp" | "hpp" | "cc" | "cs" | "go" | "java" | "kt" | "kts" | "swift" |
+        "rb" | "php" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "sql" | "lua" | "r" |
+        "html" | "htm" | "css" | "scss" | "sass" | "less" | "vue" | "svelte" |
+        "json" | "jsonc" | "toml" | "yaml" | "yml" | "xml" | "ini" | "conf" | "cfg" |
+        "csv" | "tsv" | "log" | "env")
+}
+
+pub fn is_markdown(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e|
+        e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+}
+
 pub fn validate_name(name: &str) -> io::Result<()> {
     if name.is_empty()
         || name == "."
