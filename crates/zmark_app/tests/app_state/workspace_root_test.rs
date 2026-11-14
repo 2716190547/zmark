@@ -800,7 +800,7 @@ fn test_remove_workspace_root_preserves_open_docs_in_loose_docs() {
 
     // 2. Open doc_a inside root_a
     state.open_file(file_a.clone()).unwrap();
-    let doc_a_key = DocKey::Path(file_a.clone());
+    let doc_a_key = DocKey::Path(file_a.canonicalize().unwrap());
     assert_eq!(state.active_key().cloned(), Some(doc_a_key.clone()));
 
     // Make doc_a dirty
@@ -836,7 +836,7 @@ fn test_remove_workspace_root_preserves_open_docs_in_loose_docs() {
         .expect("doc_a preserved");
     assert!(open_doc_a.doc.buffer.contains("Dirty edit in doc_a"));
     assert_eq!(open_doc_a.doc.status, DocumentStatus::Modified);
-    assert_eq!(open_doc_a.doc.path.as_ref(), Some(&file_a));
+    assert_eq!(open_doc_a.doc.path, Some(file_a.canonicalize().unwrap()));
 
     let open_scratch = state
         .open_documents()
@@ -894,7 +894,7 @@ fn test_open_external_file_does_not_pollute_roots_and_enters_loose_docs() {
     assert_eq!(state.workspace_roots[0].path, canonical_root_a);
 
     // 4. Verify: state.active_key().cloned() switched to external.md
-    let external_key = DocKey::Path(external_file.clone());
+    let external_key = DocKey::Path(external_file.canonicalize().unwrap());
     assert_eq!(state.active_key().cloned(), Some(external_key.clone()));
 
     // 5. Verify: state.loose_docs() contains external.md
@@ -1215,6 +1215,8 @@ fn inactive_file_rename_never_switches_or_reloads_the_active_editor() {
     let b = tmp.path().join("b.md");
     fs::write(&a, "alpha").unwrap();
     fs::write(&b, "beta").unwrap();
+    let a = a.canonicalize().unwrap();
+    let b = b.canonicalize().unwrap();
     let mut state = clean_test_state(&tmp);
     state.open_file(b.clone()).unwrap();
     state.open_file(a.clone()).unwrap();

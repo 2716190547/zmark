@@ -91,7 +91,7 @@ fn open(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut d = Document::new_scratch();
         d.update_buffer(String::new());
-        let mut state = AppState::new(d);
+        let mut state = AppState::new_isolated(d);
         state.set_view_mode(ViewMode::Preview);
         WorkspaceView::new(state, cx)
     });

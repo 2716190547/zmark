@@ -78,22 +78,25 @@ async fn test_search_to_editor_focus_transition_and_typing(cx: &mut TestAppConte
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer("initial line\nsecond line".to_string());
-        let state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
+        state.drawer_open = true;
+        state.preferences.reduce_motion = true;
         WorkspaceView::new(state, cx)
     });
     cx.run_until_parked();
 
-    // 1. Focus WorkspaceView then press Cmd+F to focus search
+    // File-name search is a separate input; Cmd+F opens file-content find.
+    cx.update(|window, cx| window.draw(cx).clear(cx));
     cx.update(|window, cx| {
-        let handle = view.read(cx).focus_handle.clone();
-        window.focus(&handle, cx);
+        let input = view.read(cx).search_input.clone().unwrap();
+        let focus = input.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
     });
     cx.run_until_parked();
-
-    cx.simulate_keystrokes("cmd-f");
-    cx.update(|_window, cx| {
+    cx.update(|window, cx| {
         let ws = view.read(cx);
-        assert!(ws.search_focused, "Cmd+F must activate search_focused");
+        assert!(ws.search_input.as_ref().unwrap().read(cx).focus_handle(cx).is_focused(window),
+            "the real sidebar input must own focus before typing");
     });
 
     // 2. Type "foo" into search
@@ -155,7 +158,7 @@ async fn test_preview_scroll_reverse_mapping_with_soft_wrap(cx: &mut TestAppCont
         // handler has a real scroll range to move within.
         let filler = "Filler paragraph with enough words to extend the document beyond the preview viewport. ".repeat(80);
         doc.update_buffer(format!("{}\n\n{}\n\n{}", long_line_0, line_1, filler));
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Split);
         WorkspaceView::new(state, cx)
     });
@@ -235,7 +238,7 @@ async fn test_layout_cache_incremental_performance_and_fence_propagation(cx: &mu
             ));
         }
         doc.update_buffer(lines.join("\n"));
-        let state = AppState::new(doc);
+        let state = AppState::new_isolated(doc);
         WorkspaceView::new(state, cx)
     });
     cx.run_until_parked();

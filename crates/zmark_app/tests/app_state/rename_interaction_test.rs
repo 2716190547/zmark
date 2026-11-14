@@ -111,6 +111,7 @@ async fn double_click_draft_title_or_sidebar_starts_rename(cx: &mut TestAppConte
         let window = cx.add_window(|window, cx| {
             let mut state = AppState::new_isolated(Document::new_scratch());
             state.drawer_open = true;
+            state.preferences.reduce_motion = true;
             let view = WorkspaceView::new(state, cx);
             window.focus(&view.focus_handle, cx);
             view
@@ -247,6 +248,7 @@ async fn folder_name_selects_and_renames_in_the_sidebar_without_switching_docume
         let mut state = AppState::new_isolated(Document::new_scratch());
         state.add_workspace_root(root).unwrap();
         state.drawer_open = true;
+        state.preferences.reduce_motion = true;
         let view = WorkspaceView::new(state, cx);
         window.focus(&view.focus_handle, cx);
         view

@@ -35,7 +35,7 @@ fn test_h3_title_header_padding_matrix() {
 #[gpui::test]
 async fn test_workspace_search_and_selection_integration(cx: &mut TestAppContext) {
     let (view, cx) = cx.add_window_view(|_window, cx| {
-        let state = AppState::new(zmark_core::document::Document::new_scratch());
+        let state = AppState::new_isolated(zmark_core::document::Document::new_scratch());
         WorkspaceView::new(state, cx)
     });
     cx.run_until_parked();

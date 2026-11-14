@@ -7,7 +7,7 @@ use zmark_app::views::preview::{
 use zmark_app::views::workspace::WorkspaceView;
 use zmark_core::ast::parse_markdown;
 use zmark_core::document::Document;
-use gpui::{div, IntoElement, Render, TestAppContext, Window};
+use gpui::{div, Focusable, IntoElement, Render, TestAppContext, Window};
 use std::time::Instant;
 
 struct EmptyTestView;
@@ -89,22 +89,25 @@ async fn test_focus_transfer_discriminator_without_on_editor_click(cx: &mut Test
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer("initial line text\nsecond line".to_string());
-        let state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
+        state.drawer_open = true;
+        state.preferences.reduce_motion = true;
         WorkspaceView::new(state, cx)
     });
     cx.run_until_parked();
 
-    // 1. Focus workspace view and activate search via Cmd+F
+    // Focus the sidebar's file-name input, not the separate Cmd+F find panel.
+    cx.update(|window, cx| window.draw(cx).clear(cx));
     cx.update(|window, cx| {
-        let handle = view.read(cx).focus_handle.clone();
-        window.focus(&handle, cx);
+        let input = view.read(cx).search_input.clone().unwrap();
+        let focus = input.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
     });
     cx.run_until_parked();
-
-    cx.simulate_keystrokes("cmd-f");
-    cx.update(|_window, cx| {
+    cx.update(|window, cx| {
         let ws = view.read(cx);
-        assert!(ws.search_focused, "Cmd+F must activate search_focused");
+        assert!(ws.search_input.as_ref().unwrap().read(cx).focus_handle(cx).is_focused(window),
+            "the real sidebar input must own focus before typing");
     });
 
     // Type "foo" into search
@@ -131,7 +134,6 @@ async fn test_focus_transfer_discriminator_without_on_editor_click(cx: &mut Test
         // Search input must NOT receive 'q'
         let si = ws.search_input.as_ref().unwrap().read(cx);
         assert_eq!(si.value().as_ref(), "foo", "Search input must remain 'foo'");
-        // Editor must have received 'q'
         // Editor must have received 'q'
         assert!(
             ws.state.editor.lines[1].ends_with('q'),
@@ -198,7 +200,7 @@ async fn test_view_mode_switch_clears_preview_selection_and_source_mode_no_previ
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer("First line\nSecond line".to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Preview);
         WorkspaceView::new(state, cx)
     });

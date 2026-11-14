@@ -69,16 +69,15 @@ fn test_phase_i_canonical_language_aliases_and_plain_fallbacks() {
     assert_eq!(resolve_canonical_language(Some("plain")), None);
     assert_eq!(resolve_canonical_language(Some("plaintext")), None);
 
-    // 4. Unknown languages (e.g. typescript, toml, zsh) return None / Plain per Phase I boundary
-    assert_eq!(resolve_canonical_language(Some("typescript")), None);
-    assert_eq!(resolve_canonical_language(Some("ts")), None);
-    assert_eq!(resolve_canonical_language(Some("toml")), None);
-    assert_eq!(resolve_canonical_language(Some("zsh")), None);
+    // Bundled extra languages are now supported; truly unknown tokens remain plain.
+    for (token, canonical) in [("typescript", "TypeScript"), ("ts", "TypeScript"), ("toml", "TOML"), ("zsh", "Bourne Again Shell (bash)")] {
+        assert_eq!(resolve_canonical_language(Some(token)), Some(canonical));
+    }
     assert_eq!(resolve_canonical_language(Some("unknown_lang")), None);
 
     // Unknown language code block parses to single Plain span covering entire text
     let code = "const x: number = 42;\nconsole.log(x);";
-    let spans = parse_code_spans(code, Some("typescript"));
+    let spans = parse_code_spans(code, Some("unknown_lang"));
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].role, SyntaxRole::Plain);
     assert_eq!(spans[0].range, 0..code.len());
@@ -399,7 +398,7 @@ async fn test_phase_i_real_preview_render_and_selection_overlay(cx: &mut TestApp
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(xml_doc.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.parse_now();
         state.set_view_mode(ViewMode::Preview);
         WorkspaceView::new(state, cx)
@@ -461,8 +460,11 @@ async fn test_phase_i_real_preview_render_and_selection_overlay(cx: &mut TestApp
     let selected_highlights = obs::last_code_highlights().expect("Must record highlights after selection");
     let selected_xmlns = selected_highlights.iter().find(|(r, _)| r.start == 9 && r.end == 14);
     let (_sel_range, sel_style) = selected_xmlns.expect("xmlns highlight must exist under selection");
-    assert_eq!(sel_style.background_color, Some(theme.selection_bg()), "Selection background must overlay on highlighted span");
-    assert_eq!(sel_style.color, Some(attribute_color), "Selection background must NOT wipe syntax foreground color");
+    let actual_theme = view.read_with(cx, |workspace, _| workspace.state.theme.clone());
+    assert_eq!(sel_style.background_color, Some(actual_theme.selection_bg()),
+        "Selection background must follow the current native selection token");
+    assert_eq!(sel_style.color, Some(actual_theme.text_selection_foreground()),
+        "Selected code must use the native foreground while keeping its exact range");
 }
 
 /// Test 9: Real Workspace Editor Render & Token Kind Observation
@@ -474,7 +476,7 @@ async fn test_phase_i_real_editor_render_tokens(cx: &mut TestAppContext) {
     let (_view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(rust_doc.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });
@@ -526,7 +528,7 @@ async fn test_phase_i_cold_start_nonblocking_and_async_refresh(cx: &mut TestAppC
     let (_view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(doc_str.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Preview);
         WorkspaceView::new(state, cx)
     });
@@ -558,7 +560,7 @@ async fn test_phase_i_scroll_and_cursor_reuse_without_reparsing(cx: &mut TestApp
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(doc_str.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });
@@ -601,7 +603,7 @@ async fn test_phase_i_stale_doc_rejection_does_not_pollute_cache(cx: &mut TestAp
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(doc_str.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });
@@ -683,7 +685,7 @@ async fn test_phase_i_stale_revision_rejection_does_not_pollute_cache(cx: &mut T
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(doc_str.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });
@@ -790,7 +792,7 @@ async fn test_phase_i_cancellation_does_not_enter_cache_and_not_permanent_plain(
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(doc_str.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });
@@ -867,7 +869,7 @@ async fn test_phase_i_latest_pending_request_is_executed_and_admitted(cx: &mut T
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(doc_str.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });
@@ -1011,7 +1013,7 @@ async fn test_phase_i_33_blocks_cache_thrashing_infinite_render_loop(cx: &mut Te
         let (view, cx) = cx.add_window_view(|_window, cx| {
             let mut doc = Document::new_scratch();
             doc.update_buffer(doc_str);
-            let mut state = AppState::new(doc);
+            let mut state = AppState::new_isolated(doc);
             state.set_view_mode(ViewMode::Split);
             WorkspaceView::new(state, cx)
         });
@@ -1087,7 +1089,7 @@ async fn test_phase_i_small_blocks_eviction_and_scroll_recovery(cx: &mut TestApp
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(doc_str);
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });
@@ -1270,7 +1272,7 @@ async fn test_phase_i_real_ui_failure_reason_presentation(cx: &mut TestAppContex
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(doc_str);
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });
@@ -1374,7 +1376,7 @@ async fn test_phase_i_warm_gating_and_failure_recovery(cx: &mut TestAppContext) 
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(doc_str.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });
@@ -1520,7 +1522,7 @@ async fn test_phase_i_reading_order_admission_split_mode(cx: &mut TestAppContext
     let (view, cx) = cx.add_window_view(|_, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer("```rust\nfn first() {}\n```\n\n```rust\nfn second() {}\n```\n".into());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Split);
         WorkspaceView::new(state, cx)
     });
@@ -1584,7 +1586,7 @@ async fn test_phase_i_preview_mapping_invalid_occurrence(cx: &mut TestAppContext
     let (view, cx) = cx.add_window_view(|_, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer("```rust\n  fn a() {}\n```\n\n- y\n\n  ```rust\n\tfn a() {}\n  ```\n".into());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Split);
         WorkspaceView::new(state, cx)
     });
@@ -1633,7 +1635,7 @@ async fn test_phase_i_preview_mapping_invalid_occurrence(cx: &mut TestAppContext
 async fn test_phase_i_late_completion_after_viewport_empties(cx: &mut TestAppContext) {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (view, cx) = cx.add_window_view(|_, cx| {
-        WorkspaceView::new(AppState::new(Document::new_scratch()), cx)
+        WorkspaceView::new(AppState::new_isolated(Document::new_scratch()), cx)
     });
     cx.run_until_parked();
     let key = CodeKey::from_raw(Some("rust"), Arc::from("fn no_longer_visible() {}\n"));

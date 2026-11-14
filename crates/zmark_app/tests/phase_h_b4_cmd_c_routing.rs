@@ -10,7 +10,7 @@ use zmark_app::state::{AppState, ViewMode};
 use zmark_app::views::preview::{PreviewCharPosition, PreviewSelection, serialize_preview_selection};
 use zmark_app::views::workspace::WorkspaceView;
 use zmark_core::document::Document;
-use gpui::{ClipboardItem, TestAppContext, VisualTestContext};
+use gpui::{ClipboardItem, Focusable, TestAppContext, VisualTestContext};
 
 const SENTINEL: &str = "SENTINEL-NOT-COPIED";
 const MD: &str = "# Title one\n\nSecond paragraph text\n";
@@ -23,8 +23,9 @@ fn open(cx: &mut TestAppContext, mode: ViewMode) -> (Harness, &mut VisualTestCon
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut d = Document::new_scratch();
         d.update_buffer(MD.to_string());
-        let mut state = AppState::new(d);
+        let mut state = AppState::new_isolated(d);
         state.set_view_mode(mode);
+        state.drawer_open = true;
         WorkspaceView::new(state, cx)
     });
     cx.run_until_parked();
@@ -139,16 +140,25 @@ async fn green_source_mode_never_copies_preview_selection(cx: &mut TestAppContex
 async fn green_search_focus_copies_query(cx: &mut TestAppContext) {
     let (h, cx) = open(cx, ViewMode::Split);
     h.focus_workspace(cx);
-    cx.simulate_keystrokes("cmd-f");
+    cx.update(|window, cx| {
+        let input = h.view.read(cx).search_input.clone().unwrap();
+        let focus = input.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+    });
     cx.run_until_parked();
+    cx.simulate_input("query中文");
+    cx.simulate_keystrokes("secondary-a");
+    cx.update(|window, cx| {
+        let ws = h.view.read(cx);
+        let input = ws.search_input.as_ref().unwrap().read(cx);
+        assert!(ws.search_focused);
+        assert!(input.focus_handle(cx).is_focused(window));
+        assert_eq!(input.value().as_ref(), "query中文");
+        assert_eq!(input.selected_range(), 0.."query中文".len());
+    });
     h.seed_clipboard(cx);
     cx.simulate_keystrokes("secondary-c");
     cx.run_until_parked();
-    let got = h.clipboard(cx);
-    let search_focused = cx.update(|_w, cx| h.view.read(cx).search_focused);
-    println!("B4-GREEN search focused: clipboard={:?} search_focused={}", got, search_focused);
-    assert!(
-        !(search_focused && got.as_deref() == Some("Title")),
-        "with the search box focused Cmd+C must not copy the preview selection"
-    );
+    assert_eq!(h.clipboard(cx).as_deref(), Some("query中文"),
+        "the focused file-name input must copy its query, never the stale preview selection");
 }

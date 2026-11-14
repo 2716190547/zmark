@@ -65,7 +65,6 @@ impl WorkspaceView {
                         this.refresh_find();
                         this.jump_find(0, window, cx);
                     }
-                    InputEvent::PressEnter { shift, .. } => this.step_find(*shift, window, cx),
                     _ => {}
                 },
             )

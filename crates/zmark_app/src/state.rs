@@ -402,6 +402,7 @@ pub fn root_label(roots: &[WorkspaceRoot], idx: usize) -> String {
 
 pub struct AppState {
     empty_doc: Document,
+    _isolated_preferences_dir: Option<tempfile::TempDir>,
     pub(crate) open_docs: Vec<OpenDoc>,
     pub(crate) active: Option<DocKey>,
     pub next_scratch_id: u64,
@@ -462,16 +463,12 @@ impl AppState {
 
     #[allow(dead_code)]
     pub fn new_isolated(doc: Document) -> Self {
-        let tmp_dir = std::env::temp_dir();
-        let file_name = format!(
-            "zmark_test_{}_{}.toml",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+        let directory = tempfile::tempdir().expect("create isolated preferences directory");
+        let mut state = Self::new_with_preferences_at(
+            doc, Preferences::default(), directory.path().join("config.toml"),
         );
-        Self::new_with_preferences_at(doc, Preferences::default(), tmp_dir.join(file_name))
+        state._isolated_preferences_dir = Some(directory);
+        state
     }
 
     #[allow(dead_code)]
@@ -524,6 +521,7 @@ impl AppState {
             discarded_roots,
             preferences_path,
             empty_doc: Document::new_scratch(),
+            _isolated_preferences_dir: None,
             editor,
             view_mode: ViewMode::Split,
             drawer_open: false,
@@ -2609,12 +2607,12 @@ fn test_matching_across_roots_loose_and_drafts() {
         "Filename search must NOT match scratch draft first heading"
     );
 
-    // Match scratch draft by display title (e.g. Untitled fallback)
-    state.set_search_query("Untitled");
-    assert!(
-        state.has_search_matches(),
-        "Should match scratch draft display title"
-    );
+    // A named draft is searchable by filename, never by its first heading.
+    state.focus_or_create_draft();
+    let draft = state.active_key().cloned().unwrap();
+    state.rename_document(&draft, "Daily notes").unwrap();
+    state.set_search_query("Daily notes");
+    assert!(state.has_search_matches(), "Should match the draft filename");
 
     // 4. Non-matching query
     state.set_search_query("completely_nonexistent_token_98765");

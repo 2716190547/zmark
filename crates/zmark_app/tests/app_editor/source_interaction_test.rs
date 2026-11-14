@@ -57,7 +57,8 @@ fn find_arrows_cycle_matches_only_while_search_input_is_focused(cx: &mut gpui::T
     }
     cx.update(|window, cx| {
         view.update(cx, |ws, _| ws.state.editor.set_cursor(1, 2));
-        window.focus(&view.read(cx).focus_handle, cx);
+        let focus = view.read(cx).focus_handle.clone();
+        window.focus(&focus, cx);
     });
     cx.simulate_keystrokes("down");
     draw(cx);

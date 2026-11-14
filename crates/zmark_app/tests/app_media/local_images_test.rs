@@ -241,7 +241,7 @@ async fn preview_elements_load_private_snapshots_and_remeasure(cx: &mut TestAppC
     )
     .unwrap();
     let window = cx.add_window(|window, cx| {
-        let mut state = AppState::new(Document::from_file(docpath.clone()).unwrap());
+        let mut state = AppState::new_isolated(Document::from_file(docpath.clone()).unwrap());
         state.set_view_mode(ViewMode::Preview);
         let ws = WorkspaceView::new(state, cx);
         window.focus(&ws.focus_handle, cx);
@@ -389,7 +389,7 @@ async fn switching_documents_with_an_image_in_flight_uses_current_base(cx: &mut 
         std::fs::write(base.join("note.md"), "![same](same.png)").unwrap();
     }
     let window = cx.add_window(|_, cx| {
-        let mut state = AppState::new(Document::from_file(dir.path().join("a/note.md")).unwrap());
+        let mut state = AppState::new_isolated(Document::from_file(dir.path().join("a/note.md")).unwrap());
         state.set_view_mode(ViewMode::Preview);
         WorkspaceView::new(state, cx)
     });

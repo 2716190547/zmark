@@ -17,7 +17,7 @@ async fn test_workspace_single_cache_entry_shared_across_editor_and_preview(cx: 
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(md.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Split);
         WorkspaceView::new(state, cx)
     });
@@ -69,7 +69,7 @@ async fn test_workspace_bash_block_highlighted_not_plain(cx: &mut TestAppContext
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(md.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Split);
         WorkspaceView::new(state, cx)
     });
@@ -108,7 +108,7 @@ async fn test_workspace_edit_then_draw_buffer_leads_ast(cx: &mut TestAppContext)
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(md.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });
@@ -189,7 +189,7 @@ async fn test_workspace_preview_only_highlight_and_single_entry(cx: &mut TestApp
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(md.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Preview);
         WorkspaceView::new(state, cx)
     });
@@ -233,7 +233,7 @@ async fn test_workspace_cache_isolation_and_no_global_leak(cx: &mut TestAppConte
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
         doc.update_buffer(md.to_string());
-        let mut state = AppState::new(doc);
+        let mut state = AppState::new_isolated(doc);
         state.set_view_mode(ViewMode::Source);
         WorkspaceView::new(state, cx)
     });

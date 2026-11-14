@@ -15,7 +15,7 @@ async fn test_workspace_real_layout_visual_lines_and_navigation(cx: &mut TestApp
         // Column estimation would wrap 26 cols into 2 lines!
         // But real layout at 120.0px width fits 100.4px in 1 line!
         doc.update_buffer("\t\t\t\t\t`code`\nShort second line".to_string());
-        let state = AppState::new(doc);
+        let state = AppState::new_isolated(doc);
         WorkspaceView::new(state, cx)
     });
     cx.run_until_parked();

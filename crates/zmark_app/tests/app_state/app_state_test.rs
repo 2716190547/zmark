@@ -7,6 +7,21 @@ use std::fs;
 use std::path::PathBuf;
 
 #[test]
+fn isolated_preferences_are_unique_and_removed_with_the_state() {
+    let mut first = AppState::new_isolated(Document::new_scratch());
+    let second = AppState::new_isolated(Document::new_scratch());
+    let path = first.preferences_path.clone();
+    let directory = path.parent().unwrap().to_path_buf();
+    assert_ne!(path, second.preferences_path);
+    assert!(first.workspace_roots.is_empty());
+    first.set_tab_size(8);
+    assert_eq!(zmark_core::config::Preferences::load_from_path(&path).unwrap().tab_size, 8);
+    drop(first);
+    assert!(!directory.exists(), "isolated settings must not leave temporary files behind");
+    assert!(second.preferences_path.parent().unwrap().exists());
+}
+
+#[test]
 fn test_app_state_initialization_and_mode_switching() {
     let doc = Document::new_scratch();
     let mut state = AppState::new_isolated(doc);
@@ -49,10 +64,10 @@ fn test_drawer_and_sibling_files_detection() {
     // Add workspace root and verify file tree is loaded correctly
     let idx = state.add_workspace_root(dir.path().to_path_buf()).unwrap();
     assert_eq!(idx, 0);
-    assert_eq!(state.workspace_roots[0].tree.len(), 2);
-    assert!(state.workspace_roots[0].tree.iter().any(|node| node.name == "doc1.md"));
-    assert!(state.workspace_roots[0].tree.iter().any(|node| node.name == "doc2.md"));
-    assert!(!state.workspace_roots[0].tree.iter().any(|node| node.name == "ignored.txt"));
+    assert_eq!(state.workspace_roots[0].tree.len(), 3);
+    for name in ["doc1.md", "doc2.md", "ignored.txt"] {
+        assert!(state.workspace_roots[0].tree.iter().any(|node| node.name == name));
+    }
 
     // Toggle drawer
     state.toggle_drawer();
@@ -223,6 +238,8 @@ fn test_document_lifecycle_and_switching() {
     let file2 = dir.path().join("second.md");
     fs::write(&file1, "# First Document").unwrap();
     fs::write(&file2, "# Second Document").unwrap();
+    let file1 = file1.canonicalize().unwrap();
+    let file2 = file2.canonicalize().unwrap();
 
     let doc = Document::from_file(file1.clone()).unwrap();
     let mut state = AppState::new_isolated(doc);
@@ -293,6 +310,9 @@ fn test_document_transitions_and_buffer_sync() {
     fs::write(&file_a, "# Doc A").unwrap();
     fs::write(&file_b, "# Doc B").unwrap();
     fs::write(&file_c, "# Doc C").unwrap();
+    let file_a = file_a.canonicalize().unwrap();
+    let file_b = file_b.canonicalize().unwrap();
+    let file_c = file_c.canonicalize().unwrap();
 
     let doc_a = Document::from_file(file_a.clone()).unwrap();
     let mut state = AppState::new_isolated(doc_a);
@@ -349,6 +369,8 @@ fn test_dockey_stable_switching() {
     let file2 = dir.path().join("d2.md");
     fs::write(&file1, "Doc 1").unwrap();
     fs::write(&file2, "Doc 2").unwrap();
+    let file1 = file1.canonicalize().unwrap();
+    let file2 = file2.canonicalize().unwrap();
 
     let doc = Document::from_file(file1.clone()).unwrap();
     let mut state = AppState::new_isolated(doc);
@@ -416,6 +438,7 @@ fn test_confirm_close_save_and_discard() {
     let dir = tempdir().unwrap();
     let file = dir.path().join("save_discard.md");
     fs::write(&file, "Base text").unwrap();
+    let file = file.canonicalize().unwrap();
 
     let doc = Document::from_file(file.clone()).unwrap();
     let mut state = AppState::new_isolated(doc);
@@ -499,6 +522,7 @@ fn test_single_draft_slot_constraint() {
     let dir = tempdir().unwrap();
     let file = dir.path().join("other.md");
     fs::write(&file, "Other").unwrap();
+    let file = file.canonicalize().unwrap();
 
     state.open_file(file.clone()).unwrap();
     assert_eq!(state.open_documents().len(), 2);
@@ -569,6 +593,8 @@ fn test_background_dirty_document_switches_on_close_request() {
     let f2 = dir.path().join("doc2.md");
     fs::write(&f1, "Doc 1").unwrap();
     fs::write(&f2, "Doc 2").unwrap();
+    let f1 = f1.canonicalize().unwrap();
+    let f2 = f2.canonicalize().unwrap();
 
     let doc1 = Document::from_file(f1.clone()).unwrap();
     let mut state = AppState::new_isolated(doc1);
@@ -935,6 +961,7 @@ fn test_single_file_open_parent_fallback() {
     let f_other = nested.join("spec.md");
     fs::write(&f_single, "# Sample Readme").unwrap();
     fs::write(&f_other, "# Spec").unwrap();
+    let f_single = f_single.canonicalize().unwrap();
 
     // Start with empty scratch doc with no workspace roots
     let mut state = AppState::new_isolated(Document::new_scratch());

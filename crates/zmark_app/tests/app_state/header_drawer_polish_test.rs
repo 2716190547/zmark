@@ -78,11 +78,11 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
         let (active_bg, active_text) = mode_tab_colors(true, &theme);
         let (_inactive_bg, inactive_text) = mode_tab_colors(false, &theme);
 
-        // Active background MUST be selection_bg, NOT theme.surface
+        // Active controls use their own selection token, not document text selection.
         assert_eq!(
             active_bg,
-            theme.selection_bg(),
-            "Active mode tab background must equal selection_bg"
+            theme.control_selection_bg(),
+            "Active mode tab background must equal control_selection_bg"
         );
         assert_ne!(
             active_bg,

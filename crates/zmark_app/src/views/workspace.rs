@@ -2564,7 +2564,7 @@ impl WorkspaceView {
             crate::state::DocKey::Path(path) if self.state.folder_expanded(path).is_some() => {
                 self.selected_directory = Some(path.clone());
                 if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
-                else if event.click_count == 1 {
+                else if !name && event.click_count == 1 {
                     if let Some(root) = self.state.workspace_roots.iter().position(|r| path.starts_with(&r.path)) { self.toggle_folder(root, path, cx); }
                 }
             }
@@ -2579,8 +2579,8 @@ impl WorkspaceView {
             crate::state::DocKey::Scratch(_) => {
                 self.selected_directory = None;
                 self.state.switch_document(key);
-                if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
                 self.on_document_swapped(Some(window), cx);
+                if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
             }
         }
         cx.notify();

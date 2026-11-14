@@ -207,7 +207,7 @@ fn test_app_state_create_file_in_dir_lifecycle() {
     // Assert state.active_key().cloned() is Some(DocKey::Path(...))
     assert_eq!(
         state.active_key().cloned(),
-        Some(DocKey::Path(expected_path1.clone())),
+        Some(DocKey::Path(expected_path1.canonicalize().unwrap())),
         "Active doc must point to the newly created file path"
     );
 
@@ -216,7 +216,7 @@ fn test_app_state_create_file_in_dir_lifecycle() {
         state
             .open_documents()
             .iter()
-            .any(|d| d.key == DocKey::Path(expected_path1.clone())),
+            .any(|d| d.key == DocKey::Path(expected_path1.canonicalize().unwrap())),
         "open_docs must contain the new document"
     );
 
@@ -236,14 +236,14 @@ fn test_app_state_create_file_in_dir_lifecycle() {
     );
     assert_eq!(
         state.active_key().cloned(),
-        Some(DocKey::Path(expected_path2.clone())),
+        Some(DocKey::Path(expected_path2.canonicalize().unwrap())),
         "Active doc must point to the second created file path"
     );
     assert!(
         state
             .open_documents()
             .iter()
-            .any(|d| d.key == DocKey::Path(expected_path2.clone())),
+            .any(|d| d.key == DocKey::Path(expected_path2.canonicalize().unwrap())),
         "open_docs must contain the second document"
     );
 
