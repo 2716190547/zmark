@@ -876,10 +876,10 @@ pub fn render_styled_text_only(
                 let end = text.len();
                 if start < end {
                     highlights.push((start..end, HighlightStyle {
-                        color: Some(theme.accent),
+                        color: Some(theme.syntax_link),
                         underline: Some(UnderlineStyle {
                             thickness: px(1.),
-                            color: Some(theme.accent),
+                            color: Some(theme.syntax_link),
                             wavy: false,
                         }),
                         ..Default::default()
