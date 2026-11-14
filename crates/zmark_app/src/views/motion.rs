@@ -39,14 +39,6 @@ pub fn advance_dirty_generation(was_dirty: bool, is_dirty: bool, generation: u64
     (generation, is_dirty)
 }
 
-pub fn motion_delta(reduce_motion: bool, delta: f32) -> f32 {
-    if reduce_motion {
-        1.0
-    } else {
-        delta
-    }
-}
-
 /// Applies a one-shot `ease_out_quint` animation, or returns the element as-is
 /// when reduced motion is requested.
 pub fn animated<E: IntoElement + 'static>(
@@ -72,14 +64,6 @@ pub fn animated<E: IntoElement + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reduce_motion_returns_the_end_state() {
-        assert_eq!(motion_delta(true, 0.0), 1.0);
-        assert_eq!(motion_delta(true, 0.4), 1.0);
-        assert_eq!(motion_delta(false, 0.0), 0.0);
-        assert_eq!(motion_delta(false, 0.4), 0.4);
-    }
 
     #[test]
     fn folder_reversal_starts_at_the_current_value_and_finishes_in_600ms() {

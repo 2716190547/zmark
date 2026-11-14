@@ -196,26 +196,3 @@ fn save_as_failure_keeps_draft_identity_and_rejects_readonly_targets() {
     fs::set_permissions(&path, restore).unwrap();
 }
 
-use zmark_core::watcher::{FileWatcher, WatcherEvent};
-use std::time::Duration;
-
-#[test]
-fn test_file_watcher_detects_modification() {
-    let dir = tempdir().unwrap();
-    let file_path = dir.path().join("watched.md");
-    fs::write(&file_path, "initial content").unwrap();
-
-    let watcher = FileWatcher::watch(&file_path).expect("Should start watch");
-
-    // Give watcher time to attach on macOS FSEvents
-    std::thread::sleep(Duration::from_millis(50));
-
-    fs::write(&file_path, "modified content").unwrap();
-
-    let event = watcher.rx.recv_timeout(Duration::from_secs(3));
-    assert!(event.is_ok(), "Expected modification event within 3 seconds");
-    match event.unwrap() {
-        WatcherEvent::Modified(p) => assert_eq!(p, file_path.canonicalize().unwrap()),
-        WatcherEvent::Removed(_) => panic!("Expected Modified event"),
-    }
-}

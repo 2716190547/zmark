@@ -9,4 +9,3 @@ pub mod file_ops;
 pub mod i18n;
 pub mod mermaid;
 pub mod syntax;
-pub mod watcher;

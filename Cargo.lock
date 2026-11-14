@@ -9049,7 +9049,6 @@ name = "zmark_core"
 version = "0.2.8"
 dependencies = [
  "dirs 6.0.0",
- "notify",
  "pulldown-cmark",
  "rusty-mermaid",
  "serde",
