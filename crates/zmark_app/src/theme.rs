@@ -135,15 +135,14 @@ impl ThemeColors {
     }
 
     pub fn control_selection_bg(&self) -> Hsla {
-        // Neutral contrast over each palette's own surface; accent is for actions, not selection.
-        let tint = self.text_primary.to_rgb();
-        let neutral = 0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b;
+        // Warm neutral selection, matching the reference paper while retaining each palette's surface.
+        let tint = if self.is_dark { rgb(0xb5b2a5) } else { rgb(0xd4cfb7) };
         let base = self.surface.to_rgb();
-        let weight = if self.is_dark { 0.16 } else { 0.07 };
+        let weight = if self.is_dark { 0.16 } else { 0.24 };
         let mut weighted = base;
-        weighted.r += (neutral - base.r) * weight;
-        weighted.g += (neutral - base.g) * weight;
-        weighted.b += (neutral - base.b) * weight;
+        weighted.r += (tint.r - base.r) * weight;
+        weighted.g += (tint.g - base.g) * weight;
+        weighted.b += (tint.b - base.b) * weight;
         weighted.a = 1.0;
         weighted.into()
     }

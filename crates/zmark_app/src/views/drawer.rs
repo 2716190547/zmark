@@ -898,10 +898,12 @@ const TREE_FILE_ROW_H: f32 = 48.0;
 
 /// Native measured reveal owns height; settled closed children are not built.
 fn fading_children(children: Div, expanded: bool, value: f32, path: PathBuf) -> AnyElement {
+    // Settled content must participate in normal layout, without nested reveal masks.
+    if expanded && value >= 1.0 { return children.w_full().into_any_element(); }
     div().relative().w_full().flex_shrink_0().overflow_hidden()
-        .child(gpui_base::Collapsible::new().open(expanded)
+        .child(gpui_base::Collapsible::new().w_full().open(expanded)
             .reveal(SharedString::from(format!("folder-reveal:{}", path.display())), value)
-            .content(children.flex_shrink_0().opacity(value)))
+            .content(children.w_full().flex_shrink_0().opacity(value)))
         .when(!expanded, |el| {
             el.child(div().absolute().inset_0().occlude()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1166,9 +1168,9 @@ fn render_file_tree_nodes(
                 .flex()
                 .flex_col()
                 .justify_center()
-                .min_w(px(0.)).flex_1()
+                .min_w(px(0.)).w(px(0.)).flex_1()
                 .child(inline_rename(&target_key, params).unwrap_or_else(|| div()
-                    .min_w(px(0.)).h(px(20.)).line_height(px(20.)).truncate().text_size(px(13.)).child(file_name).into_any_element()));
+                    .w_full().min_w(px(0.)).h(px(20.)).line_height(px(20.)).truncate().text_size(px(13.)).child(file_name).into_any_element()));
 
             if let Some(ref mtime_str) = node.mtime {
                 left_part = left_part.child(
@@ -1210,7 +1212,7 @@ fn render_file_tree_nodes(
             if params.on_trash_directory.is_some() {
                 right_part = path_actions(node.path.clone(), "drawer_file_row", params, strings);
             }
-            let file_content = div().flex().flex_1().items_start().gap_1().min_w(px(0.))
+            let file_content = div().flex().flex_1().items_start().gap_1().min_w(px(0.)).overflow_hidden()
                 .child(div().size(px(16.)).flex_shrink_0().mt(px(2.)).flex().items_center().justify_center()
                     .child(svg().path("icons/file.svg").size(px(14.)).flex_shrink_0().text_color(theme.text_muted)))
                 .child(left_part);
