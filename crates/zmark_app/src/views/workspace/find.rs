@@ -174,10 +174,16 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    pub(super) fn render_find(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_find(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = &self.state.theme;
         let strings = self.state.strings;
         let count = self.find.matches.len();
+        let text_start = if self.state.view_mode == ViewMode::Preview {
+            calculate_title_header_padding(cfg!(target_os = "macos"), window.is_fullscreen(), self.state.drawer_open,
+                self.state.view_mode, f32::from(window.viewport_size().width), self.state.preferences.max_column_width,
+                self.editor_text_start_offset(window)) + 8.0
+        } else { self.editor_text_start_offset(window) };
+        let gutter = (text_start - 16.0).max(0.0);
         let mut panel = div()
             .key_context("FileFind")
             .flex()
@@ -188,7 +194,7 @@ impl WorkspaceView {
             .bg(theme.surface)
             .border_b_1()
             .border_color(theme.text_muted.opacity(0.2));
-        let mut bar = div().flex().items_center().gap_2();
+        let mut bar = div().pl(px(gutter)).flex().items_center().gap_2();
         if let Some(input) = &self.find.input {
             bar = bar.child(
                 div()
@@ -272,15 +278,16 @@ impl WorkspaceView {
                         let view = view.clone();
                         div().id(("find_result", index))
                             .debug_selector(move || format!("find_result_{index}"))
-                            .h(px(28.)).px_2().py_1().rounded(px(4.))
-                            .text_size(px(12.)).truncate().cursor_pointer()
+                            .h(px(28.)).pr_0().py_1().rounded(px(4.)).flex().items_center()
+                            .text_size(px(12.)).cursor_pointer()
                             .text_color(foreground)
                             .when(index == current, |el| el.bg(selected))
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                 cx.stop_propagation();
                                 view.update(cx, |this, cx| this.jump_find(index, window, cx));
                             })
-                            .child(format!("{}: {}", line + 1, snippet))
+                            .child(div().w(px(gutter)).flex_shrink_0().pr_2().text_right().text_color(foreground.opacity(0.65)).child((line + 1).to_string()))
+                            .child(div().min_w(px(0.)).flex_1().truncate().child(snippet))
                     }).collect()
                 }).h(px(28. * count.min(5) as f32)).w_full()
                     .track_scroll(&self.find.scroll),

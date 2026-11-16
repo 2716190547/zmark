@@ -2590,19 +2590,36 @@ impl WorkspaceView {
         .detach();
     }
 
+    fn exit_sidebar_multiselect(&mut self, cx: &mut Context<Self>) {
+        let mut selection = self.sidebar_selection.lock().unwrap();
+        if selection.selected.len() <= 1 { return; }
+        selection.clear();
+        if let Some(key) = self.state.active.clone() { selection.click(key, false, false); }
+        drop(selection);
+        cx.notify();
+    }
+
     fn sidebar_row_click(&mut self, key: &crate::state::DocKey, event: &MouseDownEvent, name: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.sidebar_busy { return; }
+        if let crate::state::DocKey::Path(path) = key {
+            if self.state.folder_expanded(path).is_some() {
+                self.exit_sidebar_multiselect(cx);
+                self.selected_directory = Some(path.clone());
+                if name && event.click_count == 2 {
+                    self.begin_rename_target(key.clone(), true, window, cx);
+                } else if event.click_count == 1 {
+                    if let Some(root) = self.state.workspace_roots.iter().position(|r| path.starts_with(&r.path)) {
+                        self.toggle_folder(root, path, cx);
+                    }
+                }
+                cx.notify();
+                return;
+            }
+        }
         let additive = if cfg!(target_os = "macos") { event.modifiers.platform } else { event.modifiers.control };
         self.sidebar_selection.lock().unwrap().click(key.clone(), event.modifiers.shift, additive);
-        if event.modifiers.shift || additive { cx.notify(); return; }
+        if matches!(key, crate::state::DocKey::Path(_)) && (event.modifiers.shift || additive) { cx.notify(); return; }
         match key {
-            crate::state::DocKey::Path(path) if self.state.folder_expanded(path).is_some() => {
-                self.selected_directory = Some(path.clone());
-                if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
-                else if !name && event.click_count == 1 {
-                    if let Some(root) = self.state.workspace_roots.iter().position(|r| path.starts_with(&r.path)) { self.toggle_folder(root, path, cx); }
-                }
-            }
             crate::state::DocKey::Path(path) => {
                 self.selected_directory = None;
                 if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
@@ -3263,7 +3280,12 @@ impl WorkspaceView {
             // Right Group: Flat View Mode Switcher + Action Buttons (Save, Export, Settings)
             .child(
                 if self.sidebar_selection.lock().unwrap().selected.len() > 1 {
-                    div().flex().items_center().gap_2()
+                    div().relative().flex().items_center().gap_2()
+                        .child({
+                            let selection = self.sidebar_selection.clone();
+                            canvas(move |bounds, _, _| selection.lock().unwrap().batch_bounds = Some(bounds), |_, _, _, _| {})
+                                .absolute().top_0().left_0().size_full()
+                        })
                         .child(div().text_size(px(11.)).text_color(theme.text_muted)
                             .child(strings.selected_items.replace("{}", &self.sidebar_selection.lock().unwrap().selected.len().to_string())))
                         .child(render_icon_button("sidebar_batch_remove", strings.remove_from_sidebar, false, theme,
@@ -4109,6 +4131,17 @@ impl Render for WorkspaceView {
 
         let root = div()
             .key_context("Workspace")
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                if this.sidebar_busy { return; }
+                let selection = this.sidebar_selection.lock().unwrap();
+                if selection.selected.len() <= 1 { return; }
+                let batch = selection.batch_bounds.is_some_and(|bounds| bounds.contains(&event.position));
+                let additive = if cfg!(target_os = "macos") { event.modifiers.platform } else { event.modifiers.control };
+                let selecting_file = event.button == MouseButton::Left && (event.modifiers.shift || additive)
+                    && selection.rows.iter().any(|(key, bounds)| matches!(key, crate::state::DocKey::Path(_)) && bounds.contains(&event.position));
+                drop(selection);
+                if !batch && !selecting_file { this.exit_sidebar_multiselect(cx); }
+            }))
             .track_focus(&self.focus_handle)
             .can_drop(|item, _window, _cx| {
                 item.downcast_ref::<ExternalPaths>().is_some_and(|paths| paths.paths().iter().any(|p|
@@ -4562,7 +4595,7 @@ impl Render for WorkspaceView {
                         reduce_motion,
                         cx,
                     ))
-                    .when(self.find.open, |el| el.child(self.render_find(cx)))
+                    .when(self.find.open, |el| el.child(self.render_find(window, cx)))
                     // Error Feedback Banner
                     .when_some(self.error_banner.clone(), |el, err_msg| {
                         el.child(

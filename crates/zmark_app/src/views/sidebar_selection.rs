@@ -13,6 +13,7 @@ pub struct SidebarSelection {
     pub focus: Option<DocKey>,
     anchor: Option<DocKey>,
     pub rows: HashMap<DocKey, Bounds<Pixels>>,
+    pub batch_bounds: Option<Bounds<Pixels>>,
     painted_key: Option<DocKey>,
     current: Option<Bounds<Pixels>>,
     from: Option<Bounds<Pixels>>,
@@ -39,9 +40,16 @@ impl SidebarSelection {
     }
     pub fn click(&mut self, key: DocKey, shift: bool, additive: bool) {
         self.initialized = true;
+        let is_file = matches!(key, DocKey::Path(_));
+        let shift = shift && is_file;
+        let additive = additive && is_file;
+        if shift || additive {
+            self.selected.retain(|key| matches!(key, DocKey::Path(_)));
+        }
         let mut visible: Vec<_> = self
             .rows
             .iter()
+            .filter(|(key, _)| matches!(key, DocKey::Path(_)))
             .map(|(k, b)| (k.clone(), b.origin.y))
             .collect();
         visible.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -180,4 +188,27 @@ pub fn selection_layer(
     .top_0()
     .left_0()
     .size_full()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modifier_selection_excludes_drafts_and_shift_uses_file_rows() {
+        let mut state = SidebarSelection::default();
+        let draft = DocKey::Scratch(1);
+        let a = DocKey::Path("a.md".into());
+        let b = DocKey::Path("b.md".into());
+        for (index, key) in [a.clone(), draft.clone(), b.clone()].into_iter().enumerate() {
+            state.rows.insert(key, Bounds::new(point(px(0.), px(index as f32 * 30.)), size(px(100.), px(28.))));
+        }
+        state.click(a.clone(), false, false);
+        state.click(b.clone(), true, false);
+        assert_eq!(state.selected, HashSet::from([a.clone(), b]));
+        state.click(draft.clone(), false, true);
+        assert_eq!(state.selected, HashSet::from([draft]));
+        state.click(a.clone(), false, true);
+        assert_eq!(state.selected, HashSet::from([a]));
+    }
 }

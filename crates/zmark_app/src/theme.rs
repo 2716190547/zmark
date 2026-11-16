@@ -135,14 +135,15 @@ impl ThemeColors {
     }
 
     pub fn control_selection_bg(&self) -> Hsla {
-        // Opaque palette-local tint: controls must not inherit another palette's warm paper.
-        let tint = self.accent.to_rgb();
+        // Neutral contrast over each palette's own surface; accent is for actions, not selection.
+        let tint = self.text_primary.to_rgb();
+        let neutral = 0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b;
         let base = self.surface.to_rgb();
-        let weight = if self.is_dark { 0.20 } else { 0.12 };
+        let weight = if self.is_dark { 0.16 } else { 0.07 };
         let mut weighted = base;
-        weighted.r += (tint.r - base.r) * weight;
-        weighted.g += (tint.g - base.g) * weight;
-        weighted.b += (tint.b - base.b) * weight;
+        weighted.r += (neutral - base.r) * weight;
+        weighted.g += (neutral - base.g) * weight;
+        weighted.b += (neutral - base.b) * weight;
         weighted.a = 1.0;
         weighted.into()
     }

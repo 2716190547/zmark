@@ -452,7 +452,6 @@ pub fn render_drawer_with_search(
                                 let row_handler = search.on_row.clone();
                                 let row_key = root_key.clone();
                                 let mut root_header = div().relative()
-                                    .child(crate::views::sidebar_selection::row_anchor(search.selection.clone(), root_key.clone()))
                                     .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                                         if let Some(handler) = &row_handler { handler(&row_key, event, false, window, cx); }
                                     })
@@ -562,6 +561,17 @@ pub fn render_drawer_with_search(
                                 root_header = root_header.child(left_part).child(right_part);
                                 roots_section = roots_section.child(path_context_menu(root_header, root.path.clone(), search, theme, strings));
 
+                                let mut closing_search = search.clone();
+                                if !is_expanded && !is_missing {
+                                    if let Some(file) = retained_file(&root.tree, &root.path, search) {
+                                        let mut retained = Vec::new();
+                                        render_file_tree_nodes(std::slice::from_ref(&file), 0, root_idx, open_docs, active_key,
+                                            theme, strings, &search.search_query, search, &on_toggle_folder, &on_new_file_in_dir,
+                                            &on_select_file, &on_rename_file, &on_close_doc, &mut retained);
+                                        roots_section = roots_section.children(retained);
+                                        closing_search.hidden_paths.push(file.path);
+                                    }
+                                }
                                 if (is_expanded || value > 0.0) && !is_missing {
                                     let mut root_children_container = div().flex().flex_col().gap_0p5();
 
@@ -585,7 +595,7 @@ pub fn render_drawer_with_search(
                                             theme,
                                             strings,
                                             &search.search_query,
-                                            search,
+                                            &closing_search,
                                             &on_toggle_folder,
                                             &on_new_file_in_dir,
                                             &on_select_file,
@@ -899,6 +909,29 @@ fn fading_children(children: Div, expanded: bool, value: f32, path: PathBuf) -> 
         }).into_any_element()
 }
 
+/// A collapsed folder keeps only the singly selected file, with its real relative path.
+/// The projection is display-only: the tree, file identity and rename target stay intact.
+fn retained_file(nodes: &[FileTreeNode], parent: &std::path::Path, params: &DrawerSearchParams) -> Option<FileTreeNode> {
+    let selected = {
+        let selection = params.selection.lock().unwrap();
+        if selection.selected.len() != 1 { return None; }
+        selection.selected.iter().next()?.as_path()?.clone()
+    };
+    if !selected.starts_with(parent) || params.hidden_paths.iter().any(|path| selected.starts_with(path)) { return None; }
+    fn find(nodes: &[FileTreeNode], path: &std::path::Path) -> Option<FileTreeNode> {
+        for node in nodes {
+            if !node.is_dir && node.path == path { return Some(node.clone()); }
+            if node.is_dir && path.starts_with(&node.path) {
+                if let Some(file) = find(&node.children, path) { return Some(file); }
+            }
+        }
+        None
+    }
+    let mut node = find(nodes, &selected)?;
+    node.name = selected.strip_prefix(parent).ok()?.to_string_lossy().into_owned();
+    Some(node)
+}
+
 fn dir_matches_search(node: &FileTreeNode, q_lower: &str) -> bool {
     if node.name.to_lowercase().contains(q_lower) {
         return true;
@@ -1013,7 +1046,6 @@ fn render_file_tree_nodes(
             let row_key = key.clone();
             out.push(
                 path_context_menu(div().relative()
-                    .child(crate::views::sidebar_selection::row_anchor(params.selection.clone(), key.clone()))
                     .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                         if let Some(handler) = &row_handler { handler(&row_key, event, false, window, cx); }
                     })
@@ -1038,6 +1070,15 @@ fn render_file_tree_nodes(
                     .into_any_element(),
             );
 
+            let mut closing_params = params.clone();
+            if !is_expanded {
+                if let Some(file) = retained_file(&node.children, &node.path, params) {
+                    render_file_tree_nodes(std::slice::from_ref(&file), depth + 1, root_idx, open_docs, active_key,
+                        theme, strings, search_query, params, on_toggle_folder, on_new_file_in_dir,
+                        on_select_file, on_rename_file, on_close_doc, out);
+                    closing_params.hidden_paths.push(file.path);
+                }
+            }
             if is_expanded || value > 0.0 {
                 let mut children = Vec::new();
                 render_file_tree_nodes(
@@ -1049,7 +1090,7 @@ fn render_file_tree_nodes(
                     theme,
                     strings,
                     search_query,
-                    params,
+                    &closing_params,
                     on_toggle_folder,
                     on_new_file_in_dir,
                     on_select_file,
@@ -1080,7 +1121,7 @@ fn render_file_tree_nodes(
             let row_key = target_key.clone();
             let mut item = div().relative()
                 .child(crate::views::sidebar_selection::row_anchor(params.selection.clone(), target_key.clone()))
-                .id(SharedString::from(format!("drawer_tree_file_{}_{}_{}", root_idx, depth, node_idx)))
+                .id(SharedString::from(format!("drawer_tree_file:{}", p.display())))
                 .debug_selector(move || selector.clone())
                 .group("drawer_file_row")
                 .ml(px(depth_indent))
@@ -1145,7 +1186,7 @@ fn render_file_tree_nodes(
             {
                 right_part = right_part.child(
                     div()
-                        .id(SharedString::from(format!("btn_close_file_{}_{}_{}", root_idx, depth, node_idx)))
+                        .id(SharedString::from(format!("btn_close_file:{}", node.path.display())))
                         .w(px(16.))
                         .h(px(16.))
                         .rounded(px(3.))
@@ -1276,4 +1317,33 @@ fn path_context_menu<E: InteractiveElement + ParentElement + Styled + IntoElemen
         }
         menu
     })
+}
+
+#[cfg(test)]
+mod collapsed_selection_tests {
+    use super::*;
+
+    #[test]
+    fn collapsed_projection_preserves_identity_and_respects_selection_and_hidden_paths() {
+        let file = FileTreeNode {
+            path: PathBuf::from("root/nested/note.md"), name: "note.md".into(),
+            is_dir: false, is_expanded: false, children: vec![], mtime: Some("today".into()),
+        };
+        let tree = vec![FileTreeNode {
+            path: PathBuf::from("root/nested"), name: "nested".into(),
+            is_dir: true, is_expanded: false, children: vec![file.clone()], mtime: None,
+        }];
+        let mut params = DrawerSearchParams::default();
+        params.selection.lock().unwrap().click(DocKey::Path(file.path.clone()), false, false);
+        let projected = retained_file(&tree, std::path::Path::new("root"), &params).unwrap();
+        assert_eq!(projected.name, PathBuf::from("nested").join("note.md").to_string_lossy());
+        assert_eq!(projected.path, file.path);
+        assert_eq!(projected.mtime, file.mtime);
+        assert_eq!(tree[0].children[0], file);
+        params.hidden_paths.push(PathBuf::from("root/nested"));
+        assert!(retained_file(&tree, std::path::Path::new("root"), &params).is_none());
+        params.hidden_paths.clear();
+        params.selection.lock().unwrap().click(DocKey::Path("other.md".into()), false, true);
+        assert!(retained_file(&tree, std::path::Path::new("root"), &params).is_none());
+    }
 }
