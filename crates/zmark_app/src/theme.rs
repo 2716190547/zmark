@@ -138,7 +138,7 @@ impl ThemeColors {
         // Warm neutral selection, matching the reference paper while retaining each palette's surface.
         let tint = if self.is_dark { rgb(0xb5b2a5) } else { rgb(0xd4cfb7) };
         let base = self.surface.to_rgb();
-        let weight = if self.is_dark { 0.16 } else { 0.24 };
+        let weight = if self.is_dark { 0.24 } else { 0.52 };
         let mut weighted = base;
         weighted.r += (tint.r - base.r) * weight;
         weighted.g += (tint.g - base.g) * weight;

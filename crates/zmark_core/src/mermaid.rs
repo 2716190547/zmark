@@ -345,9 +345,10 @@ fn stitch_lines(code: &str) -> Vec<String> {
             let prev_trimmed = result[prev_idx].trim();
             if !is_whitelisted(prev_trimmed) {
                 let starts_with_amp = trimmed.starts_with('&');
+                let starts_with_edge = try_match_edge(trimmed).is_some();
                 let prev_ends_with_arrow = is_line_ending_with_edge_operator(&result[prev_idx]);
 
-                if starts_with_amp || prev_ends_with_arrow {
+                if starts_with_amp || starts_with_edge || prev_ends_with_arrow {
                     let prev_trimmed_end = result[prev_idx].trim_end();
                     result[prev_idx] = format!("{} {}", prev_trimmed_end, trimmed);
                     stitched = true;

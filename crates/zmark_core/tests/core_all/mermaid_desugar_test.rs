@@ -257,3 +257,21 @@ fn non_ascii_sequence_and_state_diagrams_render_instead_of_panicking() {
         assert!(svg.contains("<svg"));
     }
 }
+
+#[test]
+fn leading_edge_continuations_render_with_classes_and_unicode_labels() {
+    let diagram = r#"flowchart LR
+    classDef code fill:#E3F2FD,stroke:#1E88E5
+    classDef llm fill:#FFF3E0,stroke:#FB8C00
+    N5["6. add_context (加日期版本)"]:::code
+    --> N6["7. generate_sql (生成SQL)"]:::llm
+    --> N7{"8. validate_sql (EXPLAIN)"}:::code
+    N7 -- "预检通过" --> N9["10. execute_sql (查数仓)"]:::code
+    N7 -- "语法报错" --> N8["9. correct_sql (自愈重写)"]:::code
+    N8 --> N9
+"#;
+    let svg = render_to_svg(diagram).expect("leading arrows continue the preceding node");
+    for label in ["add_context", "generate_sql", "validate_sql", "execute_sql", "correct_sql"] {
+        assert!(svg.contains(label), "missing node: {label}");
+    }
+}
