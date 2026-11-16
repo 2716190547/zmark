@@ -200,7 +200,7 @@ impl Document {
             return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "File changed on disk; resolve the conflict before saving"));
         }
         // Save must never silently recreate a deleted file.
-        crate::file_ops::atomic_write(&path.canonicalize()?, self.buffer.as_bytes())?;
+        crate::file_ops::atomic_write(&path.canonicalize()?, self.buffer.as_bytes(), true)?;
         self.last_saved_content.clone_from(&self.buffer);
         self.observed_disk_content = None;
         self.status = DocumentStatus::Clean;
@@ -212,7 +212,7 @@ impl Document {
         if self.path.as_ref().is_some_and(|old| old == &path || old.canonicalize().ok().zip(path.canonicalize().ok()).is_some_and(|(a, b)| a == b)) {
             return self.save();
         }
-        crate::file_ops::atomic_write(&path, self.buffer.as_bytes())?;
+        crate::file_ops::atomic_write(&path, self.buffer.as_bytes(), false)?;
         self.path = Some(path);
         self.scratch_name = None;
         self.last_saved_content.clone_from(&self.buffer);

@@ -72,7 +72,7 @@ pub fn remap_path(path: &Path, old: &Path, new: &Path) -> Option<PathBuf> {
 }
 
 /// Write completely before replacing the destination; a failed write leaves the old file intact.
-pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, contents: &[u8], require_existing: bool) -> io::Result<()> {
     use std::io::Write;
     let target = match std::fs::symlink_metadata(path) {
         Ok(_) => path.canonicalize()?,
@@ -93,7 +93,7 @@ pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
             }
             Some(metadata)
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !require_existing => None,
         Err(error) => return Err(error),
     };
     let parent = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
@@ -102,11 +102,11 @@ pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
     temporary.write_all(contents)?;
     temporary.as_file().sync_all()?;
     match (&metadata, std::fs::metadata(&target)) {
-        (Some(expected), Ok(current)) => {
+        (Some(_expected), Ok(_current)) => {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
-                if current.dev() != expected.dev() || current.ino() != expected.ino() || current.nlink() > 1 {
+                if _current.dev() != _expected.dev() || _current.ino() != _expected.ino() || _current.nlink() > 1 {
                     return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Destination changed while saving"));
                 }
             }
@@ -193,6 +193,17 @@ pub fn rename_noreplace(old: &Path, new: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_save_requires_a_destination_but_save_as_can_create_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.md");
+        assert!(atomic_write(&path, b"local", true).is_err());
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        atomic_write(&path, b"local", false).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"local");
+    }
 
     #[test]
     fn exclusive_rename_keeps_existing_files_and_directories() {

@@ -120,7 +120,6 @@ impl Render for SettingsWindowView {
                     ThemeMode::Auto => is_sys_dark,
                 };
                 this.theme = ThemeColors::resolve(&this.preferences.palette, dark);
-                let _ = this.preferences.save();
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_theme_mode(mode);
@@ -141,7 +140,6 @@ impl Render for SettingsWindowView {
                     ThemeMode::Auto => is_sys_dark,
                 };
                 this.theme = ThemeColors::resolve(palette, dark);
-                let _ = this.preferences.save();
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_palette(palette);
@@ -157,7 +155,6 @@ impl Render for SettingsWindowView {
             view_loc.update(cx, |this, cx| {
                 this.preferences.locale = locale;
                 this.strings = zmark_core::i18n::get_strings(locale);
-                let _ = this.preferences.save();
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_locale(locale);
@@ -172,7 +169,6 @@ impl Render for SettingsWindowView {
         let on_toggle_auto_save = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
             view_as.update(cx, |this, cx| {
                 this.preferences.auto_save = enabled;
-                let _ = this.preferences.save();
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_auto_save(enabled);
@@ -187,7 +183,6 @@ impl Render for SettingsWindowView {
         let on_toggle_auto_save_on_blur = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
             view_asb.update(cx, |this, cx| {
                 this.preferences.auto_save_on_blur = enabled;
-                let _ = this.preferences.save();
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_auto_save_on_blur(enabled);
@@ -202,7 +197,6 @@ impl Render for SettingsWindowView {
         let on_toggle_line_numbers = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
             view_ln.update(cx, |this, cx| {
                 this.preferences.show_line_numbers = enabled;
-                let _ = this.preferences.save();
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_show_line_numbers(enabled);
@@ -217,7 +211,6 @@ impl Render for SettingsWindowView {
         let on_toggle_reduce_motion = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
             view_rm.update(cx, |this, cx| {
                 this.preferences.reduce_motion = enabled;
-                let _ = this.preferences.save();
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_reduce_motion(enabled);
@@ -232,7 +225,6 @@ impl Render for SettingsWindowView {
         let on_set_tab_size = Arc::new(move |size: usize, _window: &mut Window, cx: &mut App| {
             view_ts.update(cx, |this, cx| {
                 this.preferences.tab_size = size;
-                let _ = this.preferences.save();
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_tab_size(size);
@@ -248,7 +240,6 @@ impl Render for SettingsWindowView {
             view_lh.update(cx, |this, cx| {
                 let clamped = Preferences::sanitize_line_height(lh);
                 this.preferences.line_height = clamped;
-                let _ = this.preferences.save();
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_line_height(clamped);
@@ -1137,6 +1128,8 @@ where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
     let base = div()
+        .id(SharedString::from(label))
+        .debug_selector(move || label.to_owned())
         .flex_1()
         .py_1p5()
         .rounded_md()
