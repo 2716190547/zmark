@@ -163,6 +163,13 @@ stateDiagram-v2
     }
 
     #[test]
+    fn small_lightbox_targets_follow_dpi_without_filling_the_budget() {
+        assert_eq!(calculate_hidpi_dimensions(500.0, 500.0, 1.0), (250.0, 250.0));
+        assert_eq!(calculate_hidpi_dimensions(500.0, 500.0, 2.0), (500.0, 500.0));
+        assert_eq!(calculate_hidpi_dimensions(500.0, 500.0, 3.0), (750.0, 750.0));
+    }
+
+    #[test]
     fn test_calculate_hidpi_dimensions_invalid_and_edge_inputs() {
         // Negative / zero / NaN dimensions fallback safely to (1000.0, 600.0)
         let (tw, th) = calculate_hidpi_dimensions(-100.0, 500.0, 2.0);
@@ -1119,37 +1126,18 @@ pub fn calculate_hidpi_dimensions(orig_w: f64, orig_h: f64, scale_factor: f32) -
         (orig_w, orig_h)
     };
 
-    let scale_bucket = scale_factor_to_bucket(sf);
-    let effective_scale = (scale_bucket as f64) / 2.0;
-    let total_scale = effective_scale * GPUI_SVG_DECODER_SCALE;
-
+    let effective_scale = scale_factor_to_bucket(sf) as f64 / 2.0;
+    // The budget is a ceiling, not a target. GPUI decodes this SVG at a fixed 2x.
+    let wanted_w = w * effective_scale;
+    let wanted_h = h * effective_scale;
     const MAX_PHYSICAL_PIXELS: f64 = 16_000_000.0;
     const MAX_PHYSICAL_SIDE: f64 = 4000.0;
-
-    let area_ratio = (MAX_PHYSICAL_PIXELS / (w * h * total_scale.powi(2))).sqrt();
-    let side_ratio = MAX_PHYSICAL_SIDE / (w.max(h) * total_scale);
-    let final_ratio = area_ratio.min(side_ratio);
-
-    let mut target_w = (w * final_ratio).floor().max(1.0);
-    let mut target_h = (h * final_ratio).floor().max(1.0);
-
-    let mut decoded_w = target_w * GPUI_SVG_DECODER_SCALE;
-    let mut decoded_h = target_h * GPUI_SVG_DECODER_SCALE;
-
-    if decoded_w.max(decoded_h) > MAX_PHYSICAL_SIDE {
-        let scale = MAX_PHYSICAL_SIDE / decoded_w.max(decoded_h);
-        target_w = (target_w * scale).floor().max(1.0);
-        target_h = (target_h * scale).floor().max(1.0);
-        decoded_w = target_w * GPUI_SVG_DECODER_SCALE;
-        decoded_h = target_h * GPUI_SVG_DECODER_SCALE;
-    }
-    if decoded_w * decoded_h > MAX_PHYSICAL_PIXELS {
-        let scale = (MAX_PHYSICAL_PIXELS / (decoded_w * decoded_h)).sqrt();
-        target_w = (target_w * scale).floor().max(1.0);
-        target_h = (target_h * scale).floor().max(1.0);
-        decoded_w = target_w * GPUI_SVG_DECODER_SCALE;
-        decoded_h = target_h * GPUI_SVG_DECODER_SCALE;
-    }
+    let ratio = (MAX_PHYSICAL_PIXELS / (wanted_w * wanted_h)).sqrt()
+        .min(MAX_PHYSICAL_SIDE / wanted_w.max(wanted_h)).min(1.0);
+    let target_w = (wanted_w * ratio / GPUI_SVG_DECODER_SCALE).floor().max(1.0);
+    let target_h = (wanted_h * ratio / GPUI_SVG_DECODER_SCALE).floor().max(1.0);
+    let decoded_w = target_w * GPUI_SVG_DECODER_SCALE;
+    let decoded_h = target_h * GPUI_SVG_DECODER_SCALE;
 
     assert!(
         decoded_w * decoded_h <= MAX_PHYSICAL_PIXELS + 1e-4,

@@ -23,6 +23,7 @@ fn test_diagram_cache_lru_cap_and_eviction() {
 
     // Insert 3 -> 2 should be evicted and file2 deleted
     cache.insert((3, false), file3.clone());
+    cache.finish_frame(None);
     assert_eq!(cache.len(), 2);
     assert_eq!(cache.get(&(2, false)), None);
     assert!(!file2.exists(), "Evicted file should be removed from disk");
@@ -60,6 +61,7 @@ fn diagram_cache_enforces_a_texture_byte_budget() {
     cache.begin_frame();
     cache.get(&(2, false));
     cache.insert((3, false), files[2].clone());
+    cache.finish_frame(None);
     assert_eq!(cache.len(), 2);
     assert_eq!(cache.get(&(1, false)), None);
     assert!(!files[0].exists());
@@ -97,23 +99,41 @@ fn visible_diagrams_over_budget_are_kept_and_not_rerendered_every_frame() {
                 cache.insert(key, file.clone());
             }
         }
+        cache.finish_frame(None);
     }
     assert_eq!(renders, 3, "each visible diagram renders once, not once per frame");
     assert!(files.iter().all(|f| f.exists()), "visible diagram files must survive");
 
-    // Once the third scrolls out of view, the cache shrinks back under budget.
+    // No insertion is needed: a completed frame that no longer uses the third
+    // diagram must bring the cache back under budget.
     cache.begin_frame();
-    for i in 0..2 {
-        cache.get(&(i as u64 + 1, false));
-    }
-    cache.insert((4, false), {
-        let f = temp_dir.join("t4.svg");
-        std::fs::write(&f, svg).unwrap();
-        f
-    });
-    cache.begin_frame();
-    cache.insert((4, false), temp_dir.join("t4.svg"));
-    assert!(cache.len() <= 2, "offscreen entries are evicted, got {}", cache.len());
+    for i in 0..2 { cache.get(&(i as u64 + 1, false)); }
+    cache.finish_frame(None);
+    assert_eq!(cache.len(), 2);
+    assert_eq!(cache.take_evicted(), vec![files[2].clone()]);
+    assert!(!files[2].exists());
 
     let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn offscreen_lightbox_source_stays_pinned_until_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let svg = r#"<svg width="500" height="500"></svg>"#;
+    let paths: Vec<_> = (0..2).map(|i| dir.path().join(format!("{i}.svg"))).collect();
+    let mut cache = DiagramCache::with_byte_budget(10, 1);
+    for (i, path) in paths.iter().enumerate() {
+        std::fs::write(path, svg).unwrap();
+        cache.insert((i as u64, false), path.clone());
+    }
+    cache.finish_frame(None); // both are visible, even over budget
+    assert!(cache.take_evicted().is_empty());
+    cache.begin_frame();
+    cache.finish_frame(Some(&paths[0]));
+    assert!(paths[0].exists());
+    assert_eq!(cache.take_evicted(), vec![paths[1].clone()]);
+    cache.begin_frame();
+    cache.finish_frame(None); // lightbox closed; source is now reclaimable
+    assert_eq!(cache.take_evicted(), vec![paths[0].clone()]);
+    assert_eq!(cache.len(), 0);
 }

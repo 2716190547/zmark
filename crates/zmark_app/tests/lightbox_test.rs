@@ -395,7 +395,7 @@ fn sharp_target_px_follows_zoom_caps_budget_and_skips_raster() {
     assert_eq!(sharp_target_px(&state, 2.0), (832, 448), "400x200 at 1x on a 2x screen, rounded up to 64px steps");
     state.set_zoom(5.0);
     let (w, h) = sharp_target_px(&state, 2.0);
-    assert!(w.max(h) <= 4096 + 64 && (w as u64) * (h as u64) <= 16_500_000, "capped: {w}x{h}");
+    assert!(w.max(h) <= 4000 && (w as u64) * (h as u64) <= 16_000_000, "capped: {w}x{h}");
 
     let png = dir.path().join("p.png");
     image::DynamicImage::new_rgba8(10, 10).save(&png).unwrap();

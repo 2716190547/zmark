@@ -314,7 +314,7 @@ pub fn sharp_target_px(state: &LightboxState, scale_factor: f32) -> (u32, u32) {
     );
     let shrink = (4096.0 / w.max(h)).min((16_000_000.0 / (w * h)).sqrt()).min(1.0);
     (w, h) = (w * shrink, h * shrink);
-    let step = |v: f32| ((v / 64.0).ceil() as u32 * 64).max(64);
+    let step = |v: f32| (((v / 64.0).ceil() as u32).saturating_mul(64)).clamp(64, 4000);
     (step(w), step(h))
 }
 

@@ -608,7 +608,12 @@ async fn test_fallback_shared_asset_not_dropped_on_lightbox_close(cx: &mut TestA
     cx.update(|window, app| {
         let _ = window.draw(app);
         let hidpi_res = Resource::Path(Arc::from(hidpi_candidate.as_path()));
-        assert!(window.get_asset::<ImgResourceLoader>(&hidpi_res, app).is_some());
+        if view.read(app).lightbox_sharp.is_some() {
+            assert!(view.read(app).lightbox.hidpi_svg_path.is_none(), "sharp pixels replace the exclusive fallback");
+            assert!(window.get_asset::<ImgResourceLoader>(&hidpi_res, app).is_none(), "replaced fallback must not retain a second texture");
+        } else {
+            assert!(window.get_asset::<ImgResourceLoader>(&hidpi_res, app).is_some(), "fallback stays until sharp pixels are ready");
+        }
 
         let drops_before_close = TEST_DROP_IMAGE_COUNT.load(Ordering::SeqCst);
         view.update(app, |ws, cx| {

@@ -1150,6 +1150,16 @@ impl DiagramCache {
             self.order.push_back(key);
             self.bytes += bytes;
         }
+    }
+
+    /// Called after layout/paint has marked every visible diagram. The lightbox
+    /// may still need an offscreen preview SVG as its source for sharp re-renders.
+    pub fn finish_frame(&mut self, pinned: Option<&std::path::Path>) {
+        if let Some(path) = pinned {
+            for entry in self.entries.values_mut().filter(|entry| entry.path == path) {
+                entry.used_frame = self.frame;
+            }
+        }
         self.evict_overflow();
     }
 
@@ -1231,6 +1241,13 @@ pub fn themed_diagram_path(code_hash: u64, is_dark: bool, window: &mut Window, c
 
 pub fn cached_diagram_path(code_hash: u64, is_dark: bool) -> Option<std::path::PathBuf> {
     DIAGRAM_CACHE.lock().unwrap().get(&(code_hash, is_dark))
+}
+
+/// Use GPUI's post-frame callback: RenderOnce marks visibility after Workspace::render.
+pub fn finish_diagram_frame(pinned: Option<&std::path::Path>) -> bool {
+    let mut cache = DIAGRAM_CACHE.lock().unwrap();
+    cache.finish_frame(pinned);
+    cache.has_pending_release()
 }
 
 pub fn diagram_cache_has_pending_release() -> bool {

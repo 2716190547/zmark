@@ -2093,6 +2093,9 @@ impl WorkspaceView {
                     if let Some((old, _)) = this.lightbox_sharp.replace((image, want)) {
                         crate::views::lightbox::drop_image_from_atlas(cx, old, window);
                     }
+                    if let Some(fallback) = this.lightbox.hidpi_svg_path.take() {
+                        crate::views::lightbox::release_lightbox_image(&fallback, window, cx);
+                    }
                     cx.notify();
                 }
             });
@@ -2172,29 +2175,31 @@ impl WorkspaceView {
 
         let actual_svg_path = resolve_lightbox_svg_path(&svg_path, code_hash, is_dark);
 
-        let cached_path = {
-            let mut cache = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE
-                .lock()
-                .unwrap();
-            cache.get(&(code_hash, is_dark, scale_bucket))
-        };
+        let orig_svg = std::fs::read_to_string(&actual_svg_path).ok();
+        let targets = orig_svg.as_ref().map(|svg| {
+            let (w, h) = zmark_core::mermaid::extract_svg_dimensions(svg);
+            let mut fitted = LightboxState::new();
+            fitted.open_with_size(actual_svg_path.clone(), code_hash, (w as f32, h as f32));
+            fitted.update_viewport(window.viewport_size());
+            zmark_core::mermaid::calculate_hidpi_dimensions(w * fitted.zoom as f64, h * fitted.zoom as f64, scale_factor)
+        });
+        let cached_path = crate::views::lightbox::LIGHTBOX_DIAGRAM_CACHE.lock().unwrap()
+            .get(&(code_hash, is_dark, scale_bucket));
+        let cached_path = cached_path.filter(|path| {
+            std::fs::read_to_string(path).ok().is_some_and(|svg|
+                Some(zmark_core::mermaid::extract_svg_dimensions(&svg)) == targets)
+        });
 
-        let hidpi_path = if let Some(path) = cached_path.filter(|p| p.exists()) {
+        let hidpi_path = if let Some(path) = cached_path {
             Some(path)
         } else {
-            if let Ok(orig_svg) = std::fs::read_to_string(&actual_svg_path) {
-                let (orig_w, orig_h) = zmark_core::mermaid::extract_svg_dimensions(&orig_svg);
-                let (target_w, target_h) = zmark_core::mermaid::calculate_hidpi_dimensions(
-                    orig_w,
-                    orig_h,
-                    scale_factor,
-                );
+            if let (Some(orig_svg), Some((target_w, target_h))) = (orig_svg, targets) {
                 let hidpi_svg = zmark_core::mermaid::apply_texture_pixel_budget(
                     &orig_svg, target_w, target_h,
                 );
                 let cache_dir = std::env::temp_dir().join("zmark").join("mermaid_hidpi");
                 let filename = format!(
-                    "{:016x}_{}_{}_v2.svg",
+                    "{:016x}_{}_{}_v3.svg",
                     code_hash,
                     if is_dark { "dark" } else { "light" },
                     scale_bucket
@@ -3618,6 +3623,7 @@ impl Render for WorkspaceView {
             self.state.view_mode = ViewMode::Source;
         }
         if self.lightbox.is_open || self.lightbox_sharp.is_some() {
+            self.lightbox.update_viewport(window.viewport_size());
             self.schedule_lightbox_sharp(window, cx);
         }
         if self.syntax_warm_pending {
@@ -5250,6 +5256,12 @@ impl Render for WorkspaceView {
                     });
 
         self.complete_local_image_decode(window, cx);
+        let pinned_diagram = self.lightbox.svg_path.clone();
+        window.on_next_frame(move |window, _| {
+            if crate::views::preview::finish_diagram_frame(pinned_diagram.as_deref()) {
+                window.refresh();
+            }
+        });
         if crate::views::preview::diagram_cache_has_pending_release() {
             // The current frame may have evicted diagrams while building the
             // preview. Re-render once so their textures can be released before
