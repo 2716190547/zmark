@@ -7,8 +7,9 @@ pub fn is_supported_text(path: &Path) -> bool {
     if matches!(name.as_str(), "dockerfile" | "makefile" | "justfile" | ".gitignore" | ".gitattributes" | ".editorconfig" | ".env") {
         return true;
     }
+    if path.extension().is_none() { return true; }
     matches!(path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str(),
-        "md" | "markdown" | "txt" | "rs" | "py" | "pyi" | "js" | "jsx" | "ts" | "tsx" |
+        "md" | "markdown" | "txt" | "text" | "rst" | "adoc" | "properties" | "rs" | "py" | "pyi" | "js" | "jsx" | "ts" | "tsx" |
         "c" | "h" | "cpp" | "hpp" | "cc" | "cs" | "go" | "java" | "kt" | "kts" | "swift" |
         "rb" | "php" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "sql" | "lua" | "r" |
         "html" | "htm" | "css" | "scss" | "sass" | "less" | "vue" | "svelte" |

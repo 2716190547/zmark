@@ -1197,9 +1197,6 @@ impl AppState {
     }
 
     pub fn open_file(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
-        if !zmark_core::file_ops::is_supported_text(&path) {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Unsupported text file type"));
-        }
         let path = path.canonicalize()?;
         self.sync_from_editor();
 

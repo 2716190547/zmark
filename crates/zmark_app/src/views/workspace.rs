@@ -63,7 +63,7 @@ pub struct WorkspaceView {
     pub rename_target: Option<crate::state::DocKey>,
     pub rename_in_sidebar: bool,
     pub selected_directory: Option<PathBuf>,
-    pub folder_transitions: HashMap<PathBuf, crate::views::motion::FolderTransition>,
+    pub folder_transitions: HashMap<PathBuf, gpui_base::motion::TransitionState<f32>>,
     /// Native input states are created when this view is first mounted in a window.
     pub rename_input: Option<Entity<crate::views::drawer::SearchInput>>,
     pub workspace_width: f32,
@@ -130,12 +130,14 @@ pub struct WorkspaceView {
     /// Crisp re-rasterization of the open SVG lightbox at its current zoom, with its pixel size.
     pub lightbox_sharp: Option<(Arc<gpui::RenderImage>, (u32, u32))>,
     pub lightbox_sharp_want: (u32, u32),
+    pub lightbox_local_image: Option<Arc<crate::local_images::LocalImage>>,
     pub lightbox_sharp_task: Option<gpui::Task<()>>,
     pub syntax_active_task: Option<gpui::Task<()>>,
     pub syntax_pending_request: Option<SyntaxBatchRequest>,
     pub syntax_cancel_flag: Arc<AtomicBool>,
     pub syntax_request_counter: u64,
     pub syntax_cache: Arc<std::sync::Mutex<zmark_core::syntax::SyntaxCache>>,
+    source_syntax_session: Arc<std::sync::Mutex<crate::syntax::SourceSyntaxSession>>,
     pub syntax_attempts: std::collections::HashMap<zmark_core::syntax::CodeKey, (u8, u8)>,
     pub syntax_block_states:
         std::collections::HashMap<zmark_core::syntax::CodeKey, SyntaxBlockState>,
@@ -296,6 +298,7 @@ impl WorkspaceView {
             local_image_task: None,
             lightbox_sharp: None,
             lightbox_sharp_want: (0, 0),
+            lightbox_local_image: None,
             lightbox_sharp_task: None,
             syntax_active_task: None,
             syntax_pending_request: None,
@@ -304,6 +307,7 @@ impl WorkspaceView {
             syntax_cache: Arc::new(std::sync::Mutex::new(
                 zmark_core::syntax::SyntaxCache::new(),
             )),
+            source_syntax_session: Default::default(),
             syntax_attempts: std::collections::HashMap::new(),
             syntax_block_states: std::collections::HashMap::new(),
             syntax_defer_armed: false,
@@ -337,16 +341,15 @@ impl WorkspaceView {
             if let Some((_, _, image)) = images.loading.take() {
                 images.retired.push(image);
             }
+            if let Some(image) = view.lightbox_local_image.take() { images.retired.push(image); }
+            let mut released = std::collections::HashSet::new();
             for image in images.retired.drain(..) {
-                let path = image.snapshot.path().to_path_buf();
+                if !released.insert(Arc::as_ptr(&image)) { continue; }
+                let path = image.path().to_path_buf();
                 if let Some(handle) = view.window_handle {
-                    let _ = handle.update(cx, |_, window, cx| {
-                        crate::views::lightbox::release_lightbox_image(&path, window, cx);
-                    });
-                }
-                cx.remove_asset::<gpui::ImgResourceLoader>(&gpui::Resource::Path(Arc::from(
-                    path.as_path(),
-                )));
+                    let _ = handle.update(cx, |_, window, cx| image.release(window, cx));
+                } else if let Some(render) = &image.render { cx.drop_image(render.clone(), None); }
+                cx.remove_asset::<gpui::ImgResourceLoader>(&gpui::Resource::Path(Arc::from(path.as_path())));
             }
         })
         .detach();
@@ -502,6 +505,7 @@ impl WorkspaceView {
                             result = Err(format!("可见图片缓存超过 {}MiB，请减少同时显示的图片", crate::local_images::MAX_CACHE_BYTES / (1024 * 1024)));
                         }
                         match result {
+                            Ok(image) if image.render.is_some() => images.complete(generation, url.clone(), Ok(image)),
                             Ok(image) => {
                                 images.loading = Some((generation, url.clone(), image));
                                 true
@@ -536,7 +540,7 @@ impl WorkspaceView {
             }
             (generation, url, image)
         };
-        let resource = gpui::Resource::Path(Arc::from(image.snapshot.path()));
+        let resource = gpui::Resource::Path(Arc::from(image.path()));
         // Pending is not failure: GPUI caches the decode and notifies this view when ready.
         let Some(render) = window.use_asset::<gpui::ImgResourceLoader>(&resource, cx) else { return; };
         let result = match render {
@@ -1216,6 +1220,10 @@ impl WorkspaceView {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self.syntax_cancel_flag = cancel_flag.clone();
         let cancel = cancel_flag.clone();
+        let source_blocks = if self.state.doc().path.as_ref().is_some_and(|path| !zmark_core::file_ops::is_markdown(path)) {
+            Some(self.source_code_blocks.clone())
+        } else { None };
+        let source_session = self.source_syntax_session.clone();
         let blocks = request.blocks.clone();
 
         self.syntax_active_task = Some(cx.spawn(async move |this, app| {
@@ -1226,15 +1234,14 @@ impl WorkspaceView {
                         zmark_core::syntax::CodeKey,
                         zmark_core::syntax::ParseResult,
                     )> = Vec::with_capacity(blocks.len());
+                    if let Some(source_blocks) = source_blocks {
+                        return source_session.lock().unwrap().parse_visible(&source_blocks, &blocks, &cancel);
+                    }
                     for key in blocks {
                         if cancel.load(Ordering::Relaxed) {
                             break;
                         }
-                        let res = zmark_core::syntax::parse_code_spans_bounded(
-                            &key.payload,
-                            key.language,
-                            Some(&cancel),
-                        );
+                        let res = zmark_core::syntax::parse_code_spans_bounded(&key.payload, key.language, Some(&cancel));
                         results.push((key, res));
                     }
                     results
@@ -1810,7 +1817,10 @@ impl WorkspaceView {
 
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
     /// Reclaims GPU texture memory by dropping any active HiDPI lightbox image.
-    pub fn on_document_swapped(&mut self, window: Option<&mut Window>, cx: &mut App) {
+    pub fn on_document_swapped(&mut self, mut window: Option<&mut Window>, cx: &mut App) {
+        if let Some(image) = self.lightbox_local_image.take() {
+            if let Some(render) = &image.render { cx.drop_image(render.clone(), window.as_deref_mut()); }
+        }
         self.find.invalidate();
         if self.state.doc().path.as_ref().is_some_and(|p| !zmark_core::file_ops::is_markdown(p)) {
             self.state.view_mode = ViewMode::Source;
@@ -2091,6 +2101,11 @@ impl WorkspaceView {
 
     pub fn close_lightbox(&mut self, window: &mut Window, cx: &mut App) {
         self.clear_lightbox_sharp(window, cx);
+        if let Some(image) = self.lightbox_local_image.take() {
+            let shared = self.local_images.lock().unwrap().entries.values().any(|state| matches!(state,
+                crate::local_images::ImageState::Ready(other) if Arc::ptr_eq(other, &image)));
+            if !shared { image.release(window, cx); }
+        }
         if let Some(exclusive_path) = self.lightbox.close() {
             crate::views::lightbox::release_lightbox_image(&exclusive_path, window, cx);
         }
@@ -2115,8 +2130,22 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.clear_lightbox_sharp(window, cx);
-        if let Some(evicted) = self.lightbox.open(image_path, 0) {
+        let target = self
+            .local_images
+            .lock()
+            .unwrap()
+            .entries
+            .values()
+            .find_map(|state| match state {
+                crate::local_images::ImageState::Ready(image) if image.path() == image_path => Some(image.clone()),
+                _ => None,
+            });
+        self.close_lightbox(window, cx);
+        self.lightbox_local_image = target;
+        let evicted = if let Some(image) = &self.lightbox_local_image {
+            self.lightbox.open_with_size(image_path, 0, image.natural_size)
+        } else { self.lightbox.open(image_path, 0) };
+        if let Some(evicted) = evicted {
             crate::views::lightbox::release_lightbox_image(&evicted, window, cx);
         }
     }
@@ -2129,10 +2158,7 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.clear_lightbox_sharp(window, cx);
-        if let Some(old_exclusive) = self.lightbox.close() {
-            crate::views::lightbox::release_lightbox_image(&old_exclusive, window, cx);
-        }
+        self.close_lightbox(window, cx);
 
         let is_sys_dark = matches!(
             window.appearance(),
@@ -2423,13 +2449,9 @@ impl WorkspaceView {
     }
 
     pub fn toggle_folder(&mut self, root: usize, path: &Path, cx: &mut Context<Self>) {
-        let now = std::time::Instant::now();
         let Some(expanded) = self.state.folder_expanded(path) else { return; };
-        let from = self.folder_transitions.get(path).map(|t| t.value(now)).unwrap_or(if expanded { 1.0 } else { 0.0 });
+        self.folder_transitions.entry(path.to_path_buf()).or_default();
         if self.state.toggle_root_folder(root, path) {
-            if !self.state.preferences.reduce_motion {
-                self.folder_transitions.insert(path.to_path_buf(), crate::views::motion::FolderTransition { from, expanded: !expanded, started: now });
-            }
             if expanded && self.rename_target.as_ref().and_then(|k| k.as_path()).is_some_and(|p| p != path && p.starts_with(path)) {
                 self.finish_rename(false, cx);
             }
@@ -3597,7 +3619,9 @@ impl Render for WorkspaceView {
             let mut images = self.local_images.lock().unwrap();
             images.begin_frame(self.state.active.clone(), self.state.doc().path.clone());
             for image in images.retired.drain(..) {
-                crate::views::lightbox::release_lightbox_image(image.snapshot.path(), window, cx);
+                if !self.lightbox_local_image.as_ref().is_some_and(|active| Arc::ptr_eq(active, &image)) {
+                    image.release(window, cx);
+                }
             }
         }
         crate::views::preview::release_evicted_diagram_images(window, cx);
@@ -3697,17 +3721,22 @@ impl Render for WorkspaceView {
             && self.lightbox.is_dark.is_some()
             && self.lightbox.is_dark != Some(current_is_dark)
         {
-            if let (Some(code_hash), Some(svg_path)) =
-                (self.lightbox.code_hash, self.lightbox.svg_path.clone())
-            {
-                let scale_factor = window.scale_factor();
-                let saved_zoom = self.lightbox.zoom;
-                let saved_pan_x = self.lightbox.pan_x;
-                let saved_pan_y = self.lightbox.pan_y;
-                self.open_lightbox_with_scale(svg_path, code_hash, scale_factor, window, cx);
-                self.lightbox.zoom = saved_zoom;
-                self.lightbox.pan_x = saved_pan_x;
-                self.lightbox.pan_y = saved_pan_y;
+            if let Some(code_hash) = self.lightbox.code_hash {
+                let themed = crate::views::preview::themed_diagram_path(code_hash, current_is_dark, window, cx)
+                    .or_else(|| self.lightbox.svg_path.as_ref().and_then(|old| {
+                        let path = resolve_lightbox_svg_path(old, code_hash, current_is_dark);
+                        (path != *old && path.is_file()).then_some(path)
+                    }));
+                if let Some(svg_path) = themed {
+                    let scale_factor = window.scale_factor();
+                    let saved_zoom = self.lightbox.zoom;
+                    let saved_pan_x = self.lightbox.pan_x;
+                    let saved_pan_y = self.lightbox.pan_y;
+                    self.open_lightbox_with_scale(svg_path, code_hash, scale_factor, window, cx);
+                    self.lightbox.zoom = saved_zoom;
+                    self.lightbox.pan_x = saved_pan_x;
+                    self.lightbox.pan_y = saved_pan_y;
+                }
             }
         }
 
@@ -3757,14 +3786,21 @@ impl Render for WorkspaceView {
             });
         }
 
-        let now = std::time::Instant::now();
-        if self.state.preferences.reduce_motion { self.folder_transitions.clear(); }
-        else {
-            let state = &self.state;
-            self.folder_transitions.retain(|path, transition| {
-                !transition.finished(now) && state.folder_expanded(path) == Some(transition.expanded)
-            });
-            if !self.folder_transitions.is_empty() { window.request_animation_frame(); }
+        let folder_targets = self.state.workspace_roots.iter().flat_map(|root| {
+            fn paths(nodes: &[crate::state::FileTreeNode], out: &mut Vec<(PathBuf, bool)>) {
+                for node in nodes.iter().filter(|node| node.is_dir) { out.push((node.path.clone(), node.is_expanded)); paths(&node.children, out); }
+            }
+            let mut out = vec![(root.path.clone(), root.is_expanded)];
+            paths(&root.tree, &mut out);
+            out
+        }).collect::<HashMap<_, _>>();
+        self.folder_transitions.retain(|path, _| folder_targets.contains_key(path));
+        let mut folder_values = HashMap::new();
+        for (path, expanded) in folder_targets {
+            let transition = self.folder_transitions.entry(path.clone()).or_default();
+            let target = if expanded { 1.0 } else { 0.0 };
+            let value = transition.sample(target, gpui_base::motion::Transition::new(std::time::Duration::from_millis(600)), window, cx);
+            folder_values.insert(path, value.value);
         }
         if !self.sidebar_selection.lock().unwrap().initialized {
             if let Some(key) = self.state.active.clone() {
@@ -3772,7 +3808,7 @@ impl Render for WorkspaceView {
                 selection.initialized = true; selection.focus = Some(key.clone()); selection.selected.insert(key);
             }
         }
-        let folder_values = self.folder_transitions.iter().map(|(p, t)| (p.clone(), t.value(now))).collect::<HashMap<_, _>>();
+
         let is_dirty = self.state.is_dirty();
         (self.dirty_pulse_generation, self.was_dirty) = crate::views::motion::advance_dirty_generation(
             self.was_dirty,
@@ -3804,9 +3840,11 @@ impl Render for WorkspaceView {
         let on_select_file = Arc::new(
             move |path: &std::path::PathBuf, window: &mut Window, cx: &mut App| {
                 view_drawer.update(cx, |this, cx| {
-                    let _ = this.state.load_file(path.clone());
-                    this.on_document_swapped(Some(window), cx);
-                    cx.notify();
+                                    match this.state.load_file(path.clone()) {
+                                        Ok(()) => this.on_document_swapped(Some(window), cx),
+                                        Err(error) => this.error_banner = Some(format!("打开失败：{error}")),
+                                    }
+                                    cx.notify();
                 });
             },
         );
@@ -4330,8 +4368,10 @@ impl Render for WorkspaceView {
                                     if let Some(path) = paths.pop() {
                                         let _ = this.update(app, |this, cx| {
                                             this.restore_sidebar_path(&path, cx);
-                                let _ = this.state.load_file(path);
-                                            this.on_document_swapped(None, cx);
+                                            match this.state.load_file(path) {
+                                                Ok(()) => this.on_document_swapped(None, cx),
+                                                Err(error) => this.error_banner = Some(format!("打开失败：{error}")),
+                                            }
                                             cx.notify();
                                         });
                                     }
@@ -5160,7 +5200,8 @@ impl Render for WorkspaceView {
                             })
                     )
                     .when(self.lightbox.is_open, |root| {
-                        let sharp = self.lightbox_sharp.as_ref().map(|(image, _)| image.clone());
+                        let sharp = self.lightbox_sharp.as_ref().map(|(image, _)| image.clone())
+                            .or_else(|| self.lightbox_local_image.as_ref().and_then(|image| image.render.clone()));
                         root.child(render_lightbox(&mut self.lightbox, sharp, window.viewport_size(), theme, strings, reduce_motion, cx))
                     })
                     .when(self.state.pending_remove_root.is_some(), |root| {
@@ -5246,6 +5287,9 @@ pub fn resolve_lightbox_svg_path(
     code_hash: u64,
     is_dark: bool,
 ) -> std::path::PathBuf {
+    if let Some(path) = crate::views::preview::cached_diagram_path(code_hash, is_dark) {
+        if path.is_file() { return path; }
+    }
     let expected_variant = if is_dark { "dark" } else { "light" };
     let filename = format!("{:016x}_{}.svg", code_hash, expected_variant);
 

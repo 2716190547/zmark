@@ -75,12 +75,27 @@ fn fit_within(width: u32, height: u32, max_side: u32) -> (u32, u32) {
 
 #[derive(Debug)]
 pub struct LocalImage {
-    pub snapshot: NamedTempFile,
+    pub snapshot: Option<NamedTempFile>,
+    pub render: Option<Arc<gpui::RenderImage>>,
+    pub source_path: PathBuf,
     pub width: u32,
     pub height: u32,
     /// Logical source dimensions, before snapshot resampling or SVG 2x rasterization.
     pub natural_size: (f32, f32),
     pub decoded_bytes: u64,
+}
+
+impl LocalImage {
+    pub fn path(&self) -> &Path {
+        self.snapshot.as_ref().map_or(self.source_path.as_path(), |snapshot| snapshot.path())
+    }
+    pub fn image_source(&self) -> gpui::ImageSource {
+        self.render.as_ref().map_or_else(|| self.path().to_path_buf().into(), |render| render.clone().into())
+    }
+    pub fn release(&self, window: &mut gpui::Window, cx: &mut gpui::App) {
+        if let Some(render) = &self.render { cx.drop_image(render.clone(), Some(window)); }
+        else { crate::views::lightbox::release_lightbox_image(self.path(), window, cx); }
+    }
 }
 
 pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalImage>, String> {
@@ -114,14 +129,16 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
             limits.max_alloc = Some(MAX_DECODED_BYTES);
             let mut reader = ImageReader::with_format(Cursor::new(&bytes), format);
             reader.limits(limits);
-            let decoder = reader
+            let mut decoder = reader
                 .into_decoder()
                 .map_err(|e| format!("图片损坏或解码超限：{e}"))?;
             let (w, h) = decoder.dimensions();
             check_dimensions(w, h)?;
             // ImageDecoder reads the static first frame, never collects animation frames.
+            let orientation = decoder.orientation().map_err(|e| format!("图片方向读取失败：{e}"))?;
             let mut decoded =
                 DynamicImage::from_decoder(decoder).map_err(|e| format!("图片解码失败：{e}"))?;
+            decoded.apply_orientation(orientation);
             natural_size = (decoded.width() as f32, decoded.height() as f32);
             let (out_w, out_h) = fit_within(decoded.width(), decoded.height(), MAX_TEXTURE_SIDE);
             let resized = (out_w, out_h) != (decoded.width(), decoded.height());
@@ -133,36 +150,11 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
             // decoder-size check and cache budget stay accurate.
             let (out_w, out_h) = (decoded.width(), decoded.height());
             let used = check_dimensions(out_w, out_h)?;
-            if resized || matches!(format, ImageFormat::Gif | ImageFormat::WebP) {
-                let encode_as = if format == ImageFormat::Jpeg {
-                    ImageFormat::Jpeg
-                } else {
-                    ImageFormat::Png
-                };
-                let mut encoded = Cursor::new(Vec::new());
-                decoded
-                    .write_to(&mut encoded, encode_as)
-                    .map_err(|e| e.to_string())?;
-                (
-                    out_w,
-                    out_h,
-                    used,
-                    if encode_as == ImageFormat::Png { ".png" } else { ".jpg" },
-                    encoded.into_inner(),
-                )
-            } else {
-                (
-                    out_w,
-                    out_h,
-                    used,
-                    if format == ImageFormat::Png {
-                        ".png"
-                    } else {
-                        ".jpg"
-                    },
-                    bytes,
-                )
-            }
+            let mut pixels = decoded.into_rgba8();
+            for pixel in pixels.pixels_mut() { pixel.0.swap(0, 2); }
+            let render = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)]));
+            return Ok(Arc::new(LocalImage { snapshot: None, render: Some(render), source_path: path,
+                width: out_w, height: out_h, natural_size, decoded_bytes: used }));
         }
         Ok(_) => return Err("不支持此图片格式".into()),
         Err(_) => {
@@ -205,7 +197,9 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
         .write_all(&output)
         .map_err(|e| format!("图片快照写入失败：{e}"))?;
     Ok(Arc::new(LocalImage {
-        snapshot,
+        snapshot: Some(snapshot),
+        render: None,
+        source_path: path,
         width,
         height,
         natural_size,

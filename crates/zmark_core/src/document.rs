@@ -16,20 +16,40 @@ fn parse_document(buffer: &str, path: Option<&std::path::Path>) -> ParsedDocumen
         .or_else(|| path.extension().and_then(|s| s.to_str()).and_then(|ext| set.find_syntax_by_extension(&ext.to_ascii_lowercase())));
     let language = syntax.map(|syntax| syntax.name.as_str());
     let mut offset = 0;
-    let lines = buffer.split_inclusive('\n').enumerate().map(|(source_line_idx, line)| {
-        let eol_len = if line.ends_with("\r\n") { 2 } else { usize::from(line.ends_with('\n')) };
-        let start = offset;
-        offset += line.len();
-        crate::ast::CodeLineMapping {
-            payload_range: start..offset, source_line_idx, prefix_len: 0,
-            content_len: line.len() - eol_len, eol_len, is_synthetic_lf: false,
+    let mut blocks = Vec::new();
+    let mut start = 0;
+    let mut first_line = 0;
+    let mut mappings = Vec::new();
+    for (source_line_idx, line) in buffer.split_inclusive('\n').enumerate() {
+        if !mappings.is_empty() && (offset - start + line.len() > 32 * 1024 || mappings.len() >= 32) {
+            blocks.push(crate::ast::ParsedCodeBlock {
+                key: crate::syntax::CodeKey::new(language, Arc::from(&buffer[start..offset])),
+                raw_info: language.map(str::to_owned), fence_open_line: first_line,
+                fence_close_line: None, lines: std::mem::take(&mut mappings),
+                child_path: "source-file".into(), is_valid: true,
+            });
+            start = offset;
+            first_line = source_line_idx;
         }
-    }).collect();
-    ParsedDocument { code_blocks: Arc::new(vec![crate::ast::ParsedCodeBlock {
-        key: crate::syntax::CodeKey::new(language, Arc::from(buffer)),
-        raw_info: language.map(str::to_owned), fence_open_line: 0, fence_close_line: None,
-        lines, child_path: "source-file".to_owned(), is_valid: true,
-    }]), ..ParsedDocument::default() }
+        let eol_len = if line.ends_with("\r\n") { 2 } else { usize::from(line.ends_with('\n')) };
+        let local = offset - start;
+        offset += line.len();
+        mappings.push(crate::ast::CodeLineMapping {
+            payload_range: local..offset - start, source_line_idx, prefix_len: 0,
+            content_len: line.len() - eol_len, eol_len, is_synthetic_lf: false,
+        });
+    }
+    blocks.push(crate::ast::ParsedCodeBlock {
+        key: crate::syntax::CodeKey::new(language, Arc::from(&buffer[start..])),
+        raw_info: language.map(str::to_owned), fence_open_line: first_line, fence_close_line: None,
+        lines: mappings, child_path: "source-file".into(), is_valid: true,
+    });
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    buffer.hash(&mut hash);
+    let context = hash.finish();
+    for block in &mut blocks { block.key.source_context = Some((context, block.fence_open_line)); }
+    ParsedDocument { code_blocks: Arc::new(blocks), ..ParsedDocument::default() }
 }
 
 /// Document dirty and synchronization status.
@@ -78,7 +98,17 @@ impl Document {
 
     /// Loads a document from the local filesystem.
     pub fn from_file(path: PathBuf) -> Result<Self, std::io::Error> {
-        let buffer = fs::read_to_string(&path)?;
+        use std::io::Read;
+        const MAX_TEXT_BYTES: u64 = 32 * 1024 * 1024;
+        let file = fs::File::open(&path)?;
+        if !file.metadata()?.is_file() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Text path must be a regular file"));
+        }
+        let mut buffer = String::new();
+        file.take(MAX_TEXT_BYTES + 1).read_to_string(&mut buffer)?;
+        if buffer.len() as u64 > MAX_TEXT_BYTES {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Text file exceeds 32MiB"));
+        }
         if buffer.contains('\0') {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Binary files cannot be edited as text"));
         }

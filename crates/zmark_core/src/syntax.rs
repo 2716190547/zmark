@@ -56,11 +56,13 @@ pub fn reset_test_clock() {
 pub struct CodeKey {
     pub language: Option<&'static str>,
     pub payload: Arc<str>,
+    /// Source chunks depend on the preceding document grammar, not just their local bytes.
+    pub source_context: Option<(u64, usize)>,
 }
 
 impl PartialEq for CodeKey {
     fn eq(&self, other: &Self) -> bool {
-        self.language == other.language && *self.payload == *other.payload
+        self.language == other.language && self.source_context == other.source_context && *self.payload == *other.payload
     }
 }
 
@@ -69,18 +71,19 @@ impl Eq for CodeKey {}
 impl std::hash::Hash for CodeKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.language.hash(state);
+        self.source_context.hash(state);
         (*self.payload).hash(state);
     }
 }
 
 impl CodeKey {
     pub fn new(language: Option<&'static str>, payload: Arc<str>) -> Self {
-        Self { language, payload }
+        Self { language, payload, source_context: None }
     }
 
     pub fn from_raw(raw_info: Option<&str>, payload: Arc<str>) -> Self {
         let language = resolve_canonical_language(raw_info);
-        Self { language, payload }
+        Self { language, payload, source_context: None }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -528,6 +531,25 @@ pub fn parse_code_spans_bounded(
     raw_lang: Option<&str>,
     cancel_flag: Option<&AtomicBool>,
 ) -> ParseResult {
+    parse_spans(code, raw_lang, cancel_flag, None)
+}
+
+/// Retains multiline grammar state between bounded code-file chunks.
+pub struct SourceSyntax { language: &'static str, state: ParseState, stack: ScopeStack }
+impl SourceSyntax {
+    pub fn new(language: Option<&str>) -> Option<Self> {
+        let language = resolve_canonical_language(language)?;
+        if !ensure_language_compiled(language) { return None; }
+        Some(Self { language, state: ParseState::new(find_syntax_for_canonical(language)?), stack: ScopeStack::new() })
+    }
+    pub fn parse_chunk(&mut self, code: &str, cancel: Option<&AtomicBool>) -> ParseResult {
+        parse_spans(code, Some(self.language), cancel, Some((&mut self.state, &mut self.stack)))
+    }
+}
+
+fn parse_spans(code: &str, raw_lang: Option<&str>, cancel_flag: Option<&AtomicBool>,
+    source: Option<(&mut ParseState, &mut ScopeStack)>) -> ParseResult {
+    let is_source = source.is_some();
     if code.is_empty() {
         return ParseResult::Ready(Arc::from([]));
     }
@@ -537,7 +559,7 @@ pub fn parse_code_spans_bounded(
     }
 
     // Threshold check 1: byte length
-    if code.len() > MAX_CODE_BLOCK_BYTES {
+    if !is_source && code.len() > MAX_CODE_BLOCK_BYTES {
         return ParseResult::HardLimit;
     }
 
@@ -545,7 +567,7 @@ pub fn parse_code_spans_bounded(
     let mut line_count = 0;
     for line in code.split('\n') {
         let stripped = line.strip_suffix('\r').unwrap_or(line);
-        if stripped.chars().count() > MAX_LINE_UNICODE_SCALARS {
+        if !is_source && stripped.chars().count() > MAX_LINE_UNICODE_SCALARS {
             return ParseResult::HardLimit;
         }
         line_count += 1;
@@ -554,6 +576,16 @@ pub fn parse_code_spans_bounded(
         }
     }
 
+    // Bound bytes sent to regexes; skipped oversize physical lines do not consume that budget.
+    if is_source {
+        let mut regex_bytes = 0;
+        for line in code.split_inclusive('\n') {
+            if line.trim_end_matches(['\r', '\n']).chars().take(MAX_LINE_UNICODE_SCALARS + 1).count() <= MAX_LINE_UNICODE_SCALARS {
+                regex_bytes += line.len();
+                if regex_bytes > MAX_CODE_BLOCK_BYTES { return ParseResult::HardLimit; }
+            }
+        }
+    }
     // Canonical language resolution
     let canonical = match resolve_canonical_language(raw_lang) {
         Some(c) => c,
@@ -577,8 +609,9 @@ pub fn parse_code_spans_bounded(
         }
     }
 
-    let mut state = ParseState::new(syntax);
-    let mut stack = ScopeStack::new();
+    let mut fresh_state = ParseState::new(syntax);
+    let mut fresh_stack = ScopeStack::new();
+    let (state, stack) = source.unwrap_or((&mut fresh_state, &mut fresh_stack));
     let mut raw_spans: Vec<SyntaxSpan> = Vec::new();
 
     let mut line_start_byte = 0;
@@ -603,6 +636,15 @@ pub fn parse_code_spans_bounded(
             None => (remaining, ""),
         };
 
+        if is_source && line_with_end.trim_end_matches(['\r', '\n']).chars().take(MAX_LINE_UNICODE_SCALARS + 1).count() > MAX_LINE_UNICODE_SCALARS {
+            raw_spans.push(SyntaxSpan { range: line_start_byte..line_start_byte + line_with_end.len(), role: SyntaxRole::Plain });
+            // Unknown syntax inside an oversized line cannot safely update the grammar.
+            *state = ParseState::new(syntax);
+            *stack = ScopeStack::new();
+            line_start_byte += line_with_end.len();
+            remaining = next_remaining;
+            continue;
+        }
         let ops = match state.parse_line(line_with_end, ss) {
             Ok(ops) => ops,
             Err(_) => return ParseResult::InitFailed,
@@ -656,6 +698,14 @@ pub fn parse_code_spans_bounded(
     }
 
     ParseResult::Ready(Arc::from(normalize_and_fill_spans(code, raw_spans)))
+}
+
+/// Code-file chunks keep bounded regex work; an oversized physical line alone stays plain.
+pub fn parse_source_spans_bounded(code: &str, language: Option<&str>, cancel: Option<&AtomicBool>) -> ParseResult {
+    match SourceSyntax::new(language) {
+        Some(mut source) => source.parse_chunk(code, cancel),
+        None => ParseResult::UnsupportedLanguage,
+    }
 }
 
 /// Parses the code payload into semantic `SyntaxSpan`s using syntect.

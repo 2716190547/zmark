@@ -9029,6 +9029,7 @@ version = "0.2.8"
 dependencies = [
  "cocoa 0.26.0",
  "embed-resource",
+ "gpui-base",
  "gpui-component",
  "gpui-kit-assets",
  "gpui-pre",

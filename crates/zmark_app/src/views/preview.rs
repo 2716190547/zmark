@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::theme::ThemeColors;
 
 mod selection;
+mod mermaid;
 mod virtual_list;
 pub use selection::*;
 pub use virtual_list::*;
@@ -729,13 +730,13 @@ fn render_styled_inlines(
                             // (it made the preview blocks huge and left big empty gaps).
                             let max_display_width = (MAX_IMAGE_DISPLAY_HEIGHT * ratio)
                                 .min(image.width as f32);
-                            let element = img(image.snapshot.path().to_path_buf())
+                            let element = img(image.image_source())
                                 .absolute().inset_0().size_full()
                                 .object_fit(ObjectFit::Contain)
                                 .debug_selector(|| format!("local_image:{url}"))
                                 .with_fallback(move || div().child(format!("图片显示失败 · {reference}")).into_any_element());
                             let description = if alt.is_empty() { url.clone() } else { format!("{alt} · {url}") };
-                            let snapshot = image.snapshot.path().to_path_buf();
+                            let snapshot = image.path().to_path_buf();
                             let natural_size = image.natural_size;
                             let mut container = div().id(SharedString::from(format!("local_image_container:{url}")))
                                 .debug_selector(|| format!("local_image_container:{url}"))
@@ -1125,6 +1126,10 @@ impl DiagramCache {
 
     pub fn insert(&mut self, key: (u64, bool), path: std::path::PathBuf) {
         let bytes = diagram_texture_bytes(&path);
+        self.insert_sized(key, path, bytes);
+    }
+
+    fn insert_sized(&mut self, key: (u64, bool), path: std::path::PathBuf, bytes: usize) {
         let frame = self.frame;
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.used_frame = frame;
@@ -1210,6 +1215,7 @@ pub fn release_evicted_diagram_images(window: &mut Window, cx: &mut App) -> bool
         cache.begin_frame();
         cache.take_evicted()
     };
+    mermaid::retire(&paths, cx);
     if paths.is_empty() {
         return false;
     }
@@ -1217,6 +1223,14 @@ pub fn release_evicted_diagram_images(window: &mut Window, cx: &mut App) -> bool
         crate::views::lightbox::release_lightbox_image(&path, window, cx);
     }
     true
+}
+
+pub fn themed_diagram_path(code_hash: u64, is_dark: bool, window: &mut Window, cx: &mut App) -> Option<std::path::PathBuf> {
+    mermaid::themed_path(code_hash, is_dark, window, cx)
+}
+
+pub fn cached_diagram_path(code_hash: u64, is_dark: bool) -> Option<std::path::PathBuf> {
+    DIAGRAM_CACHE.lock().unwrap().get(&(code_hash, is_dark))
 }
 
 pub fn diagram_cache_has_pending_release() -> bool {
@@ -1316,72 +1330,8 @@ fn render_mermaid_diagram(
     _base_font_size: f32,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
 ) -> AnyElement {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    code.hash(&mut hasher);
-    let code_hash = hasher.finish();
-    let is_dark = theme.is_dark;
-
-    // Check in-memory memoized cache first (zero-cost on scroll)
-    let cached_path = {
-        let mut cache = DIAGRAM_CACHE.lock().unwrap();
-        cache.get(&(code_hash, is_dark))
-    };
-
-    if let Some(path) = cached_path {
-        if path.exists() {
-            return render_mermaid_container(path, code_hash, theme, strings, on_open_lightbox);
-        }
-    }
-
-    let result = zmark_core::mermaid::render_to_svg_themed(code, is_dark);
-    match result {
-        Ok(svg_content) => {
-            let cache_dir = std::env::temp_dir()
-                .join("zmark")
-                .join("mermaid");
-            let _ = std::fs::create_dir_all(&cache_dir);
-            let filename = format!("{:016x}_{}.svg", code_hash, if is_dark { "dark" } else { "light" });
-            let path = cache_dir.join(filename);
-            let _ = std::fs::write(&path, svg_content);
-
-            {
-                let mut cache = DIAGRAM_CACHE.lock().unwrap();
-                cache.insert((code_hash, is_dark), path.clone());
-            }
-
-            render_mermaid_container(path, code_hash, theme, strings, on_open_lightbox)
-        }
-        Err(err) => {
-            div()
-                .w_full()
-                .min_w(px(0.))
-                .my_3()
-                .rounded_lg()
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.bg)
-                .p_3()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.accent)
-                        .child("Mermaid Syntax Error"),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .font_family(crate::platform::MONO_FONT)
-                        .text_color(theme.text_muted)
-                        .child(err),
-                )
-                .into_any_element()
-        }
-    }
+    mermaid::Mermaid { code: Arc::from(code), theme: theme.clone(), strings,
+        open: on_open_lightbox.cloned() }.into_any_element()
 }
 
 struct CodeTooltipView {

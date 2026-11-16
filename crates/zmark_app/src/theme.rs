@@ -135,7 +135,16 @@ impl ThemeColors {
     }
 
     pub fn control_selection_bg(&self) -> Hsla {
-        if self.is_dark { rgb(0x2e2d2b).into() } else { rgb(0xefede4).into() }
+        // Opaque palette-local tint: controls must not inherit another palette's warm paper.
+        let tint = self.accent.to_rgb();
+        let base = self.surface.to_rgb();
+        let weight = if self.is_dark { 0.20 } else { 0.12 };
+        let mut weighted = base;
+        weighted.r += (tint.r - base.r) * weight;
+        weighted.g += (tint.g - base.g) * weight;
+        weighted.b += (tint.b - base.b) * weight;
+        weighted.a = 1.0;
+        weighted.into()
     }
 
     /// Adaptive hover background: subtle translucent highlight
@@ -181,7 +190,9 @@ impl ThemeColors {
 
     /// Adaptive selection text color: primary foreground
     pub fn selection_text(&self) -> Hsla {
-        self.text_primary
+        if self.id == "solarized" {
+            if self.is_dark { rgb(0xeee8d5).into() } else { rgb(0x073642).into() }
+        } else { self.text_primary }
     }
 
     /// Resolves semantic color for a syntax role in code blocks and editor.
@@ -233,7 +244,7 @@ impl ThemeColors {
     /// Adaptive segmented control active thumb text color:
     /// High-contrast primary text color.
     pub fn segmented_thumb_text(&self) -> Hsla {
-        self.text_primary
+        self.selection_text()
     }
 
     /// Adaptive segmented control inactive option text color:

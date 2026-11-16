@@ -1,6 +1,58 @@
 use zmark_app::views::settings::shortcut_rows;
 use zmark_core::i18n::{get_strings, SupportedLocale};
 
+#[test]
+fn source_session_keeps_context_across_scroll_and_does_not_reuse_other_documents() {
+    use zmark_app::syntax::SourceSyntaxSession;
+    use zmark_core::syntax::{CodeKey, ParseResult, SyntaxRole};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("context.rs");
+    let source = format!("/*\n{}*/\nfn tail() {{}}", "inside comment\n".repeat(90));
+    std::fs::write(&path, &source).unwrap();
+    let doc = zmark_core::document::Document::from_file(path.clone()).unwrap();
+    let blocks = &doc.parsed.code_blocks;
+    let mut session = SourceSyntaxSession::default();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    for block in blocks.iter() {
+        let result = session.parse_visible(blocks, &[block.key.clone()], &cancel);
+        assert_eq!(result.len(), 1);
+        let ParseResult::Ready(spans) = &result[0].1 else { panic!("visible chunk should highlight"); };
+        assert_eq!(spans[0].role, SyntaxRole::Comment);
+    }
+    // Backward scrolling can rebuild grammar, while identical local bytes in another document cannot share cached tokens.
+    let back = session.parse_visible(blocks, &[blocks[1].key.clone()], &cancel);
+    assert!(back[0].1.is_ready());
+    std::fs::write(&path, source.replacen("/*", "//", 1)).unwrap();
+    let other = zmark_core::document::Document::from_file(path).unwrap();
+    assert_ne!(blocks[1].key, other.parsed.code_blocks[1].key);
+    let other_result = session.parse_visible(&other.parsed.code_blocks, &[other.parsed.code_blocks[1].key.clone()], &cancel);
+    assert!(other_result[0].1.is_ready());
+    assert_eq!(CodeKey::new(Some("Rust"), "x".into()), CodeKey::new(Some("Rust"), "x".into()));
+}
+
+#[test]
+fn explicit_open_accepts_utf8_text_and_unknown_extensions_but_not_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = zmark_app::state::AppState::new_isolated(zmark_core::document::Document::new_scratch());
+    for name in ["notes.text", "LICENSE", "notes.custom"] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, "中文🙂\r\ntext").unwrap();
+        state.open_file(path.clone()).unwrap();
+        assert_eq!(state.editor.to_text(), "中文🙂\r\ntext");
+        state.editor.set_cursor(1, 4);
+        state.editor.insert_text("!");
+        state.save().unwrap();
+        assert!(std::fs::read_to_string(path).unwrap().ends_with('!'));
+    }
+    for data in [b"binary\0data".as_slice(), &[255, 254, 253]] {
+        let path = dir.path().join("bad.bin");
+        std::fs::write(&path, data).unwrap();
+        let before = state.editor.clone();
+        assert!(state.open_file(path).is_err());
+        assert_eq!(state.editor, before);
+    }
+}
+
 #[gpui::test]
 fn settings_click_persists_only_the_workspace_owned_preferences(cx: &mut gpui::TestAppContext) {
     use gpui::{AppContext, Modifiers};

@@ -153,8 +153,13 @@ impl LightboxState {
     /// If an exclusive HiDPI image was active, returns it for reclamation.
     /// The shared path itself is NOT returned, protecting preview assets from being dropped on close.
     pub fn open(&mut self, svg_path: PathBuf, code_hash: u64) -> Option<PathBuf> {
+        let size = lightbox_image_size(&svg_path);
+        self.open_with_size(svg_path, code_hash, size)
+    }
+
+    pub fn open_with_size(&mut self, svg_path: PathBuf, code_hash: u64, size: (f32, f32)) -> Option<PathBuf> {
         let old_exclusive = self.hidpi_svg_path.take();
-        self.natural_size = lightbox_image_size(&svg_path);
+        self.natural_size = size;
         self.is_open = true;
         self.svg_path = Some(svg_path);
         self.code_hash = Some(code_hash);

@@ -67,8 +67,10 @@ fn test_header_view_mode_states_and_warm_pill_palette() {
             let alpha = if palette.id == "solarized" { 0.26 } else { 0.30 };
             assert_eq!(d_theme.selection_bg(), d_theme.accent.opacity(alpha));
         }
-        assert_eq!(l_theme.selection_text(), l_theme.text_primary);
-        assert_eq!(d_theme.selection_text(), d_theme.text_primary);
+            let text = if palette.id == "solarized" { gpui::rgb(0x073642).into() } else { l_theme.text_primary };
+            assert_eq!(l_theme.selection_text(), text);
+            let text = if palette.id == "solarized" { gpui::rgb(0xeee8d5).into() } else { d_theme.text_primary };
+            assert_eq!(d_theme.selection_text(), text);
     }
 
     // Direct verification of mode_tab_colors production function (P1 requirement)

@@ -4,6 +4,44 @@ use tempfile::tempdir;
 use zmark_core::document::{Document, DocumentStatus};
 
 #[test]
+fn large_source_files_are_bounded_chunks_and_long_lines_degrade_locally() {
+    use zmark_core::syntax::{parse_source_spans_bounded, ParseResult, SyntaxRole};
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("large.rs");
+    let source = format!("{}{}\nfn tail() {{ let 中文 = 1; }}\r\n", "fn f() { let x = 42; }\r\n".repeat(3100), "x".repeat(1100));
+    fs::write(&path, &source).unwrap();
+    let doc = Document::from_file(path).unwrap();
+    assert!(doc.parsed.code_blocks.len() > 10);
+    assert_eq!(doc.parsed.code_blocks.iter().map(|block| block.key.payload.as_ref()).collect::<String>(), source);
+    for block in doc.parsed.code_blocks.iter() {
+        assert!(block.key.payload.len() <= 32 * 1024);
+        assert!(block.lines.len() <= 256);
+        let parsed = parse_source_spans_bounded(&block.key.payload, block.key.language, None);
+        let ParseResult::Ready(spans) = parsed else { panic!("chunk {} did not highlight: {:?}", block.fence_open_line, parsed); };
+        assert!(spans.iter().any(|span| span.role != SyntaxRole::Plain));
+        assert_eq!(spans.first().unwrap().range.start, 0);
+        assert_eq!(spans.last().unwrap().range.end, block.key.payload.len());
+        for pair in spans.windows(2) { assert_eq!(pair[0].range.end, pair[1].range.start); }
+    }
+    let huge_line = format!("{}\nfn ok() {{}}", "🙂".repeat(20_000));
+    let ParseResult::Ready(spans) = parse_source_spans_bounded(&huge_line, Some("Rust"), None) else { panic!("only long line should be plain"); };
+    assert_eq!(spans[0].role, SyntaxRole::Plain);
+    assert!(spans.iter().any(|span| span.role != SyntaxRole::Plain));
+}
+
+#[test]
+fn source_chunks_preserve_multiline_grammar_and_cancellation() {
+    use zmark_core::syntax::{SourceSyntax, ParseResult, SyntaxRole};
+    let mut parser = SourceSyntax::new(Some("Rust")).unwrap();
+    assert!(parser.parse_chunk("/* opening\n", None).is_ready());
+    let ParseResult::Ready(spans) = parser.parse_chunk("inside comment\n*/\nfn real() {}\n", None) else { panic!("continuation failed"); };
+    assert_eq!(spans[0].role, SyntaxRole::Comment);
+    assert!(spans.iter().any(|span| span.role == SyntaxRole::Function));
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    assert_eq!(parser.parse_chunk("fn next() {}", Some(&cancel)), ParseResult::Cancelled);
+}
+
+#[test]
 fn test_scratch_document_lifecycle() {
     let mut doc = Document::new_scratch();
     assert_eq!(doc.status, DocumentStatus::Clean);

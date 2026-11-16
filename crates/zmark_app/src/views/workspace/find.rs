@@ -9,6 +9,8 @@ pub(super) struct FindState {
     query: String,
     revision: Option<usize>,
     matches: Vec<Range<usize>>,
+    lines: Vec<usize>,
+    scroll: UniformListScrollHandle,
     current: usize,
 }
 
@@ -36,6 +38,7 @@ impl FindState {
         self.revision = None;
         self.current = 0;
         self.matches.clear();
+        self.lines.clear();
     }
 }
 
@@ -89,6 +92,13 @@ impl WorkspaceView {
             return;
         }
         self.find.matches = find_ranges(&self.state.editor.to_text(), &self.find.query);
+        let mut offsets = Vec::with_capacity(self.state.editor.lines.len());
+        let mut offset = 0;
+        for line in self.state.editor.lines.iter() {
+            offsets.push(offset);
+            offset += line.chars().count() + 1;
+        }
+        self.find.lines = self.find.matches.iter().map(|range| offsets.partition_point(|&offset| offset <= range.start).saturating_sub(1)).collect();
         self.find.current = self
             .find
             .current
@@ -143,6 +153,7 @@ impl WorkspaceView {
             self.set_view_mode(ViewMode::Split, cx);
         }
         self.find.current = index;
+        self.find.scroll.scroll_to_item(index, ScrollStrategy::Center);
         self.preview_focused = false;
         self.state
             .editor
@@ -246,44 +257,33 @@ impl WorkspaceView {
             );
         }
         panel = panel.child(bar);
-        // Keep the panel compact even when a document contains thousands of matches.
-        let first = self
-            .find
-            .current
-            .saturating_sub(2)
-            .min(count.saturating_sub(5));
-        for index in first..(first + 5).min(count) {
-            let (line, _) = self
-                .state
-                .editor
-                .position_for_offset(self.find.matches[index].start);
-            let snippet = self
-                .state
-                .editor
-                .lines
-                .get(line)
-                .map(|s| s.trim())
-                .unwrap_or("");
+        let lines = self.state.editor.lines.clone();
+        let match_lines = self.find.lines.clone();
+        let current = self.find.current;
+        let selected = theme.control_selection_bg();
+        let foreground = theme.selection_text();
+        let view = cx.entity().clone();
+        if count > 0 {
             panel = panel.child(
-                div()
-                    .id(("find_result", index))
-                    .px_2()
-                    .py_1()
-                    .rounded(px(4.))
-                    .text_size(px(12.))
-                    .truncate()
-                    .cursor_pointer()
-                    .when(index == self.find.current, |el| {
-                        el.bg(theme.control_selection_bg())
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.jump_find(index, window, cx);
-                        }),
-                    )
-                    .child(format!("{}: {}", line + 1, snippet)),
+                uniform_list("find_results", count, move |range, _, _| {
+                    range.map(|index| {
+                        let line = match_lines[index];
+                        let snippet: String = lines[line].trim().chars().take(240).collect();
+                        let view = view.clone();
+                        div().id(("find_result", index))
+                            .debug_selector(move || format!("find_result_{index}"))
+                            .h(px(28.)).px_2().py_1().rounded(px(4.))
+                            .text_size(px(12.)).truncate().cursor_pointer()
+                            .text_color(foreground)
+                            .when(index == current, |el| el.bg(selected))
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                cx.stop_propagation();
+                                view.update(cx, |this, cx| this.jump_find(index, window, cx));
+                            })
+                            .child(format!("{}: {}", line + 1, snippet))
+                    }).collect()
+                }).h(px(28. * count.min(5) as f32)).w_full()
+                    .track_scroll(&self.find.scroll),
             );
         }
         panel.into_any_element()

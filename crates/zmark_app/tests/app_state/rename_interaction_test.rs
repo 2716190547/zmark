@@ -333,15 +333,18 @@ async fn folder_transition_reverses_without_a_jump_and_collapsed_children_are_in
         let _ = window.draw(cx);
     });
     let root = cx.update(|_, cx| view.read(cx).state.workspace_roots[0].path.clone());
+    cx.update(|_, cx| view.update(cx, |ws, cx| ws.toggle_folder(0, &root, cx)));
+    cx.update(|window, cx| { window.draw(cx).clear(cx); });
+    cx.executor().advance_clock(std::time::Duration::from_millis(300));
+    cx.update(|window, cx| { window.draw(cx).clear(cx); });
+    let before_reverse = cx.debug_bounds("drawer_roots_section").unwrap().size.height;
+    cx.update(|_, cx| view.update(cx, |ws, cx| ws.toggle_folder(0, &root, cx)));
+    cx.update(|window, cx| { window.draw(cx).clear(cx); });
+    assert!((f32::from(cx.debug_bounds("drawer_roots_section").unwrap().size.height - before_reverse)).abs() < 1.0,
+        "native reversal preserves current measured height");
     cx.update(|_, cx| {
-        view.update(cx, |ws, cx| {
-            ws.toggle_folder(0, &root, cx);
-            ws.folder_transitions.get_mut(&root).unwrap().started -=
-                std::time::Duration::from_millis(300);
-            let current = ws.folder_transitions[&root].value(std::time::Instant::now());
-            ws.toggle_folder(0, &root, cx);
-            assert!((ws.folder_transitions[&root].from - current).abs() < 0.01);
-        })
+        let open = view.read(cx).state.folder_expanded(&root).unwrap();
+        if open { view.update(cx, |ws, cx| ws.toggle_folder(0, &root, cx)); }
     });
     cx.update(|window, cx| {
         let _ = window.draw(cx);
@@ -361,7 +364,7 @@ async fn folder_transition_reverses_without_a_jump_and_collapsed_children_are_in
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
-    cx.update(|_, cx| assert!(view.read(cx).folder_transitions.is_empty()));
+    cx.update(|_, cx| assert_eq!(view.read(cx).state.folder_expanded(&root), Some(false)));
     // GPUI keeps old debug entries; current container geometry proves removal.
     // Height now follows the animation, so the mid-fade height is already smaller than full.
     assert!(
@@ -398,15 +401,9 @@ async fn folder_expand_grows_the_tree_height_smoothly_instead_of_jumping(cx: &mu
         });
         f32::from(cx.debug_bounds("drawer_roots_section").unwrap().size.height)
     };
-    // Skips ahead in the running transition; a no-op once it has been dropped.
     let advance = |cx: &mut VisualTestContext, ms: u64| {
-        cx.update(|_, cx| {
-            view.update(cx, |ws, _| {
-                if let Some(t) = ws.folder_transitions.get_mut(&root) {
-                    t.started -= std::time::Duration::from_millis(ms);
-                }
-            })
-        })
+        cx.update(|window, cx| { window.draw(cx).clear(cx); });
+        cx.executor().advance_clock(std::time::Duration::from_millis(ms));
     };
     let toggle = |cx: &mut VisualTestContext| {
         cx.update(|_, cx| view.update(cx, |ws, cx| ws.toggle_folder(0, &root, cx)))

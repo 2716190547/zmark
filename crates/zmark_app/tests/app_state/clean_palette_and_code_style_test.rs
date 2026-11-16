@@ -289,12 +289,10 @@ fn test_ticket_g0_selection_tokens() {
                 "hover_bg must derive text_primary.opacity(0.04) for {} (is_dark={})",
                 palette.id, is_dark
             );
-            assert_eq!(
-                sel_txt,
-                theme.text_primary,
-                "selection_text must match text_primary for {} (is_dark={})",
-                palette.id, is_dark
-            );
+            let control_text = if palette.id == "solarized" {
+                gpui::rgb(if is_dark { 0xeee8d5 } else { 0x073642 }).into()
+            } else { theme.text_primary };
+            assert_eq!(sel_txt, control_text, "control text follows palette contrast for {}", palette.id);
         }
     }
 }
@@ -420,6 +418,28 @@ fn over(fg: gpui::Hsla, bg: gpui::Hsla) -> gpui::Hsla {
 fn contrast(a: gpui::Hsla, b: gpui::Hsla) -> f32 {
     let (x, y) = (relative_luminance(a), relative_luminance(b));
     (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+#[test]
+fn controls_follow_each_palette_while_native_text_selection_is_preserved() {
+    for palette in ALL_PALETTES {
+        for dark in [false, true] {
+            let mut theme = ThemeColors::resolve(palette.id, dark);
+            let control = theme.control_selection_bg();
+            let native = gpui::rgb(0x91baff).into();
+            theme.native_selection = Some((true, native, gpui::white()));
+            assert_eq!(theme.selection_bg(), native, "native text selection stays native");
+            assert_eq!(theme.text_selection_foreground(), gpui::white());
+            assert_eq!(theme.control_selection_bg(), control, "control selection is independent of system selection");
+            assert_eq!(control.a, 1.0);
+            assert!(contrast(theme.selection_text(), control) >= 4.5, "{} dark={dark}: control text needs 4.5:1", palette.id);
+            assert!(contrast(theme.segmented_thumb_text(), theme.segmented_thumb_bg()) >= 4.5,
+                "{} dark={dark}: segmented control text needs 4.5:1", palette.id);
+            let active_distance = contrast(control, theme.surface);
+            let hover_distance = contrast(over(theme.hover_bg(), theme.surface), theme.surface);
+            assert!(active_distance > hover_distance, "{} dark={dark}: selected control must differ from hover", palette.id);
+        }
+    }
 }
 
 #[test]

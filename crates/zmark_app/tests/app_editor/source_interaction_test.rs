@@ -36,6 +36,26 @@ fn source_window<'a>(
 }
 
 #[gpui::test]
+fn find_results_scroll_independently_and_click_keeps_the_selected_match(cx: &mut gpui::TestAppContext) {
+    let text = (0..80).map(|index| format!("match {index}")).collect::<Vec<_>>().join("\n");
+    let (view, cx) = source_window(cx, &text);
+    cx.simulate_keystrokes("secondary-f");
+    cx.simulate_input("match");
+    draw(cx);
+    let first = cx.debug_bounds("find_result_0").unwrap();
+    let before = view.read_with(cx, |ws, _| ws.state.editor.cursor());
+    cx.simulate_event(gpui::ScrollEvent { position: first.center(), delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-100.))),
+        modifiers: Modifiers::none(), touch_phase: gpui::TouchPhase::Moved, source: gpui::ScrollSource::Pointer });
+    draw(cx);
+    assert_eq!(view.read_with(cx, |ws, _| ws.state.editor.cursor()), before, "wheel on results must not edit or jump source");
+    let later = cx.debug_bounds("find_result_6").expect("scroll exposes later result");
+    cx.simulate_click(later.center(), Modifiers::none());
+    draw(cx);
+    assert_eq!(view.read_with(cx, |ws, _| ws.state.editor.cursor().0), 6);
+    assert_eq!(view.read_with(cx, |ws, _| ws.state.editor.selected_text().unwrap()), "match");
+}
+
+#[gpui::test]
 fn find_arrows_cycle_matches_only_while_search_input_is_focused(cx: &mut gpui::TestAppContext) {
     let (view, cx) = source_window(cx, "match\nmatch\nmatch");
     cx.simulate_keystrokes("secondary-f");

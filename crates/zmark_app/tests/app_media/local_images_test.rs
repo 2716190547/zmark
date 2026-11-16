@@ -7,6 +7,15 @@ use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use std::path::Path;
 use std::sync::Arc;
 
+fn bitmap(image: &LocalImage) -> RgbaImage {
+    let render = image.render.as_ref().expect("raster bypasses the resource loader");
+    assert!(image.snapshot.is_none(), "raster writes no snapshot");
+    assert_eq!(render.frame_count(), 1);
+    let mut pixels = render.as_bytes(0).unwrap().to_vec();
+    for pixel in pixels.chunks_exact_mut(4) { pixel.swap(0, 2); }
+    RgbaImage::from_raw(image.width, image.height, pixels).unwrap()
+}
+
 fn write_image(path: &Path, format: ImageFormat, color: [u8; 4]) {
     DynamicImage::ImageRgba8(RgbaImage::from_pixel(8, 4, Rgba(color)))
         .save_with_format(path, format)
@@ -57,10 +66,10 @@ fn raster_snapshots_are_immutable_and_animations_are_static() {
         write_image(&path, format, [219, 112, 147, 255]);
         let image = load_image(path.to_str().unwrap(), None).unwrap();
         std::fs::write(&path, b"replaced original after validation").unwrap();
-        let decoded = image::open(image.snapshot.path()).unwrap();
+        let decoded = bitmap(&image);
         assert_eq!((decoded.width(), decoded.height()), (8, 4));
         if format != ImageFormat::Jpeg {
-            assert_eq!(decoded.to_rgba8().get_pixel(0, 0).0, [219, 112, 147, 255]);
+            assert_eq!(decoded.get_pixel(0, 0).0, [219, 112, 147, 255]);
         }
     }
     let webp = dir.path().join("animated.webp");
@@ -72,15 +81,7 @@ fn raster_snapshots_are_immutable_and_animations_are_static() {
             .has_animation()
     );
     let first = load_image(webp.to_str().unwrap(), None).unwrap();
-    assert_eq!(first.snapshot.path().extension().unwrap(), "png");
-    assert_eq!(
-        image::open(first.snapshot.path())
-            .unwrap()
-            .to_rgba8()
-            .get_pixel(0, 0)
-            .0,
-        [255, 0, 0, 255]
-    );
+    assert_eq!(bitmap(&first).get_pixel(0, 0).0, [255, 0, 0, 255]);
     let path = dir.path().join("animated.gif");
     let mut encoder = image::codecs::gif::GifEncoder::new(std::fs::File::create(&path).unwrap());
     encoder
@@ -91,15 +92,17 @@ fn raster_snapshots_are_immutable_and_animations_are_static() {
         .unwrap();
     drop(encoder);
     let image = load_image(path.to_str().unwrap(), None).unwrap();
-    assert_eq!(image.snapshot.path().extension().unwrap(), "png");
-    assert_eq!(
-        image::open(image.snapshot.path())
-            .unwrap()
-            .to_rgba8()
-            .get_pixel(0, 0)
-            .0,
-        [255, 0, 0, 255]
-    );
+    assert_eq!(bitmap(&image).get_pixel(0, 0).0, [255, 0, 0, 255]);
+}
+
+#[test]
+fn raster_direct_pixels_preserve_transparency_without_premultiplying() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("alpha.png");
+    write_image(&path, ImageFormat::Png, [240, 80, 20, 128]);
+    let image = load_image(path.to_str().unwrap(), None).unwrap();
+    assert_eq!(&image.render.as_ref().unwrap().as_bytes(0).unwrap()[..4], &[20, 80, 240, 128]);
+    assert_eq!(bitmap(&image).get_pixel(0, 0).0, [240, 80, 20, 128]);
 }
 
 #[test]
@@ -111,7 +114,7 @@ fn raster_snapshots_are_downscaled_to_the_texture_budget() {
     assert_eq!(image.natural_size, (3000.0, 1000.0));
     assert!(image.width <= 1600 && image.height <= 1600);
     assert_eq!(image.height, 533);
-    let decoded = image::open(image.snapshot.path()).unwrap();
+    let decoded = bitmap(&image);
     assert_eq!((decoded.width(), decoded.height()), (image.width, image.height));
     assert_eq!(
         image.decoded_bytes,
@@ -174,7 +177,7 @@ fn input_decode_and_svg_budgets_fail_with_reasons() {
         if let Ok(image) = loaded {
             assert_eq!((image.width, image.height), (4000, 4000));
             assert_eq!(
-                std::fs::read(image.snapshot.path()).unwrap(),
+                std::fs::read(image.path()).unwrap(),
                 body.as_bytes()
             );
         }
@@ -275,20 +278,20 @@ async fn preview_elements_load_private_snapshots_and_remeasure(cx: &mut TestAppC
     cx.update(|window, cx| {
         let ws = view.read(cx);
         assert_eq!(ws.state.doc().parsed.blocks[0].to_plain_text(), "before alt after");
-        let images = ws.local_images.lock().unwrap();
+        let shared = ws.local_images.clone();
+        let images = shared.lock().unwrap();
         assert!(matches!(images.entries.get("missing.png"), Some(ImageState::Failed(reason)) if reason.contains("无法读取")));
-        let sources = [("中文%20图.png", 8, 4), ("vector.svg", 24, 16), ("animated.webp", 8, 4)].map(|(url, w, h)| {
+        for (url, width, height) in [("中文%20图.png", 8, 4), ("vector.svg", 24, 16), ("animated.webp", 8, 4)] {
             let Some(ImageState::Ready(image)) = images.entries.get(url) else { panic!("{url} was not loaded"); };
-            (url, w, h, gpui::Resource::Path(Arc::from(image.snapshot.path())))
-        });
-        drop(images);
-        for (url, width, height, resource) in sources {
-            // Query the same private resource the actual image element displays.
-            let render = window.get_asset::<gpui::ImgResourceLoader>(&resource, cx).expect("Production loader completed").unwrap();
+            let render = if let Some(render) = &image.render { render.clone() } else {
+                window.get_asset::<gpui::ImgResourceLoader>(&gpui::Resource::Path(Arc::from(image.path())), cx).unwrap().unwrap()
+            };
             assert_eq!(render.frame_count(), 1);
             assert_eq!((render.size(0).width.0, render.size(0).height.0), (width, height));
-            assert!(render.size(0).width.0 <= 4000 && render.size(0).height.0 <= 4000);
-            if url.ends_with("png") { assert_eq!(&render.as_bytes(0).unwrap()[..4], &[147, 112, 219, 255]); }
+            if url.ends_with("png") {
+                assert_eq!(&render.as_bytes(0).unwrap()[..4], &[147, 112, 219, 255]);
+                assert!(!cx.has_asset::<gpui::ImgResourceLoader>(&gpui::Resource::Path(Arc::from(image.path()))));
+            }
         }
     });
     let before = cx.debug_bounds("local_image:中文%20图.png").unwrap();
@@ -303,7 +306,7 @@ async fn preview_elements_load_private_snapshots_and_remeasure(cx: &mut TestAppC
             .get("中文%20图.png")
             .unwrap()
         {
-            ImageState::Ready(i) => i.snapshot.path().to_path_buf(),
+            ImageState::Ready(i) => i.render.as_ref().unwrap().id,
             _ => unreachable!(),
         }
     });
@@ -322,7 +325,7 @@ async fn preview_elements_load_private_snapshots_and_remeasure(cx: &mut TestAppC
             panic!("Image lost during ordinary edit");
         };
         assert_eq!(
-            image.snapshot.path(),
+            image.render.as_ref().unwrap().id,
             same_snapshot,
             "Typing must reuse decoded images"
         );
@@ -342,7 +345,7 @@ async fn preview_elements_load_private_snapshots_and_remeasure(cx: &mut TestAppC
         let ws = view.read(cx);
         let images = ws.local_images.lock().unwrap();
         match images.entries.get("中文%20图.png").unwrap() {
-            ImageState::Ready(i) => i.snapshot.path().to_path_buf(),
+            ImageState::Ready(i) => Arc::downgrade(i),
             _ => unreachable!(),
         }
     });
@@ -362,19 +365,14 @@ async fn preview_elements_load_private_snapshots_and_remeasure(cx: &mut TestAppC
         })
     });
     draw(cx);
-    assert!(!old_path.exists(), "Old document snapshot must be released");
-    cx.update(|window, cx| {
+    assert!(old_path.upgrade().is_none(), "old bitmap must be released");
+    cx.update(|_, cx| {
         let ws = view.read(cx);
         let images = ws.local_images.lock().unwrap();
         let Some(ImageState::Ready(i)) = images.entries.get("中文%20图.png") else {
             panic!("new doc not loaded");
         };
-        let resource = gpui::Resource::Path(Arc::from(i.snapshot.path()));
-        drop(images);
-        let render = window
-            .get_asset::<gpui::ImgResourceLoader>(&resource, cx)
-            .unwrap()
-            .unwrap();
+        let render = i.render.as_ref().unwrap();
         assert_eq!(&render.as_bytes(0).unwrap()[..4], &[0, 255, 0, 255]);
     });
 }
@@ -424,23 +422,10 @@ async fn switching_documents_with_an_image_in_flight_uses_current_base(cx: &mut 
         let Some(ImageState::Ready(image)) = images.entries.get("same.png") else {
             panic!("current image not ready");
         };
-        assert_eq!(
-            image::open(image.snapshot.path())
-                .unwrap()
-                .to_rgba8()
-                .get_pixel(0, 0)
-                .0,
-            [0, 255, 0, 255]
-        );
-        gpui::Resource::Path(Arc::from(image.snapshot.path()))
+        assert_eq!(bitmap(image).get_pixel(0, 0).0, [0, 255, 0, 255]);
+        image.render.as_ref().unwrap().clone()
     });
-    cx.update(|w, cx| {
-        let rendered = w
-            .get_asset::<gpui::ImgResourceLoader>(&source, cx)
-            .unwrap()
-            .unwrap();
-        assert_eq!(&rendered.as_bytes(0).unwrap()[..4], &[0, 255, 0, 255]);
-    });
+    assert_eq!(&source.as_bytes(0).unwrap()[..4], &[0, 255, 0, 255]);
 }
 
 #[gpui::test]
@@ -478,7 +463,9 @@ async fn clicking_a_preview_image_opens_the_lightbox_and_escape_closes_it(cx: &m
             assert_eq!(ws.lightbox.natural_size, natural_size, "100% must use source dimensions, not the resized snapshot");
             let shown = ws.lightbox.displayed_path().expect("lightbox shows an image");
             if wanted_ext == "png" {
-                assert_eq!(image::image_dimensions(shown).unwrap(), (1600, 400), "the texture budget must remain unchanged");
+                let image = ws.lightbox_local_image.as_ref().unwrap();
+                assert_eq!((image.width, image.height), (1600, 400), "texture budget stays unchanged");
+                assert!(image.snapshot.is_none());
             }
             assert!(
                 shown.extension().is_some_and(|e| e.eq_ignore_ascii_case(wanted_ext)),
@@ -486,10 +473,58 @@ async fn clicking_a_preview_image_opens_the_lightbox_and_escape_closes_it(cx: &m
             );
         });
         cx.simulate_keystrokes("escape");
-        cx.update(|_, cx| assert!(!view.read(cx).lightbox.is_open, "escape closes the lightbox"));
+        cx.update(|_, cx| {
+            let ws = view.read(cx);
+            assert!(!ws.lightbox.is_open, "escape closes the lightbox");
+            assert!(ws.lightbox_local_image.is_none());
+            if name.ends_with("png") {
+                let images = ws.local_images.lock().unwrap();
+                let Some(ImageState::Ready(image)) = images.entries.get(name) else { panic!("preview image must remain ready"); };
+                assert!(image.render.is_some());
+            }
+        });
         draw(cx);
         assert!(cx.debug_bounds("diagram_lightbox_backdrop").is_none());
     }
+}
+
+#[gpui::test]
+fn direct_bitmap_is_pinned_by_lightbox_then_released_when_hidden(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image.png");
+    write_image(&path, ImageFormat::Png, [240, 80, 20, 128]);
+    let doc = dir.path().join("note.md");
+    std::fs::write(&doc, "![pic](image.png)").unwrap();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let mut state = AppState::new_isolated(Document::from_file(doc).unwrap());
+        state.view_mode = ViewMode::Preview;
+        state.preferences.reduce_motion = true;
+        let view = WorkspaceView::new(state, cx);
+        window.focus(&view.focus_handle, cx);
+        view
+    });
+    draw(cx);
+    let weak = cx.update(|window, cx| view.update(cx, |ws, cx| {
+        let image = match ws.local_images.lock().unwrap().entries.get("image.png").unwrap() {
+            ImageState::Ready(image) => image.clone(), _ => panic!("bitmap ready"),
+        };
+        assert!(window.has_image_atlas_entry(image.render.as_ref().unwrap()));
+        ws.open_image_lightbox(path.clone(), window, cx);
+        assert!(Arc::ptr_eq(ws.lightbox_local_image.as_ref().unwrap(), &image));
+        ws.state.editor.select_all();
+        ws.state.editor.insert_text("image removed");
+        ws.parse_now_and_refresh();
+        Arc::downgrade(&image)
+    }));
+    draw(cx);
+    assert!(weak.upgrade().is_some(), "lightbox pins a removed preview image");
+    cx.update(|window, cx| view.update(cx, |ws, cx| {
+        let image = ws.lightbox_local_image.as_ref().unwrap().clone();
+        ws.close_lightbox(window, cx);
+        assert!(!window.has_image_atlas_entry(image.render.as_ref().unwrap()));
+    }));
+    draw(cx);
+    assert!(weak.upgrade().is_none(), "last CPU owner disappears after closing lightbox");
 }
 
 #[test]

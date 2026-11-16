@@ -212,7 +212,8 @@ fn test_theme_colors_segmented_derived_tokens() {
                 assert_eq!(thumb_border.a, 0.45);
             }
 
-            assert_eq!(thumb_text, theme.text_primary);
+            let expected = if pal == "solarized" { gpui::rgb(if is_dark { 0xeee8d5 } else { 0x073642 }).into() } else { theme.text_primary };
+            assert_eq!(thumb_text, expected);
             assert_eq!(inactive_text, theme.text_muted);
         }
     }
