@@ -1,6 +1,53 @@
 use zmark_app::editor_engine::EditorEngine;
 
 #[test]
+fn single_line_replacements_reuse_other_lines_and_preserve_unicode_history() {
+    let original = "first untouched\na中🙂z\r\nlast untouched";
+    let mut editor = EditorEngine::new(original);
+    let pointer = editor.lines[0].as_ptr();
+    editor.set_selection_offsets(17, 19, true);
+    editor.insert_text("文");
+    assert_eq!(editor.to_text(), "first untouched\na文z\r\nlast untouched");
+    assert_eq!(editor.lines[0].as_ptr(), pointer, "a local edit must not rebuild every unmodified line");
+    assert_eq!(editor.char_count, editor.to_text().chars().count());
+    assert!(editor.undo());
+    assert_eq!(editor.to_text(), original);
+    assert_eq!(editor.selected_text().as_deref(), Some("中🙂"));
+    assert!(editor.selection_reversed());
+    assert!(editor.redo());
+    assert_eq!(editor.to_text(), "first untouched\na文z\r\nlast untouched");
+}
+
+#[test]
+fn local_edits_match_the_general_transaction_with_shared_lines_and_crlf() {
+    for original in ["a中🙂z\r\nnext", "\r\n", "first\n中🙂\nlast", "", "🙂"] {
+        for start in 0..=original.chars().count() {
+            for end in start..=original.chars().count() {
+                for replacement in ["", "中", "🙂", "\r", "x\ny"] {
+                    let mut local = EditorEngine::new(original);
+                    let mut general = local.clone();
+                    let shared = local.lines.clone();
+                    general.set_column_ranges(vec![start..end]);
+                    local.replace_ranges(&[start..end], &[replacement.into()]).unwrap();
+                    general.replace_ranges(&[start..end], &[replacement.into()]).unwrap();
+                    assert_eq!(local.to_text(), general.to_text(), "{original:?} {start}..{end} {replacement:?}");
+                    assert_eq!(local.cursor(), general.cursor());
+                    assert_eq!(local.char_count, general.char_count);
+                    assert_eq!(local.revision, general.revision);
+                    assert_eq!(shared.as_ref(), &original.split('\n').map(str::to_owned).collect::<Vec<_>>());
+                    if local.can_undo() {
+                        local.undo();
+                        assert_eq!(local.to_text(), original);
+                        local.redo();
+                        assert_eq!(local.to_text(), general.to_text());
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn columns_keep_carets_for_repeated_unicode_edits_and_one_undo() {
     let original = "a中z\n\nb🎉z";
     let mut editor = EditorEngine::new(original);

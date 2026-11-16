@@ -285,6 +285,7 @@ pub struct DocumentLayoutCache {
     pub cached_width_bits: u32,
     pub cached_font_bits: u32,
     pub entries: Vec<CachedLineEntry>,
+    pub line_offsets: Arc<Vec<usize>>,
     pub metrics: VisualLayoutMetrics,
 }
 
@@ -543,6 +544,12 @@ impl DocumentLayoutCache {
         self.entries = new_entries;
 
         let mut visual_lines = Vec::new();
+        let mut offset = 0;
+        self.line_offsets = Arc::new(self.entries.iter().map(|entry| {
+            let start = offset;
+            offset += entry.spans.last().map_or(0, |span| span.char_start + span.char_len) + 1;
+            start
+        }).collect());
         for (phys_idx, entry) in self.entries.iter().enumerate() {
             for (subline_idx, span) in entry.spans.iter().enumerate() {
                 visual_lines.push(VisualLine {
@@ -567,22 +574,6 @@ impl DocumentLayoutCache {
     }
 }
 
-/// Computes the character column index closest to `x_offset` within `subline_str`
-/// using GPUI's text system and actual font metrics.
-#[allow(dead_code)]
-pub fn calculate_click_char_col_layout(
-    text_system: &gpui::WindowTextSystem,
-    subline_str: &str,
-    x_offset: f32,
-    font_size: f32,
-) -> usize {
-    let tokens = [MarkdownToken {
-        text: subline_str.to_string(),
-        kind: MarkdownTokenKind::Plain,
-    }];
-    calculate_click_char_col_tokens(text_system, &tokens, x_offset, font_size)
-}
-
 /// Computes the horizontal pixel offset where the cursor should be rendered for `char_col`
 /// within `subline_str` using GPUI's text system and actual font metrics.
 #[allow(dead_code)]
@@ -597,24 +588,6 @@ pub fn calculate_cursor_x_offset_layout(
         kind: MarkdownTokenKind::Plain,
     }];
     calculate_cursor_x_offset_tokens(text_system, &tokens, char_col, font_size)
-}
-
-#[allow(dead_code)]
-pub fn calculate_click_char_col(subline_str: &str, x_offset: f32, font_size: f32) -> usize {
-    let base_unit_w = (font_size * 0.6).max(1.0);
-    let mut current_x = 0.0;
-    for (idx, ch) in subline_str.chars().enumerate() {
-        let w = (crate::editor_engine::char_unit_width(ch) as f32) * base_unit_w;
-        if current_x + w * 0.5 >= x_offset {
-            return idx;
-        }
-        current_x += w;
-    }
-    subline_str.chars().count()
-}
-
-pub fn calculate_editor_left_offset(drawer_open: bool, text_start: f32) -> f32 {
-    (if drawer_open { DRAWER_WIDTH } else { 0.0 }) + text_start
 }
 
 pub fn slice_tokens_for_visual_subline(
@@ -669,6 +642,7 @@ pub fn render_editor_pane(
     lines: Arc<Vec<String>>,
     char_count: usize,
     visual_lines: Arc<Vec<VisualLine>>,
+    line_offsets: Arc<Vec<usize>>,
     syntax_cache: Arc<std::sync::Mutex<zmark_core::syntax::SyntaxCache>>,
     code_blocks: Arc<Vec<zmark_core::ast::ParsedCodeBlock>>,
     is_ast_in_sync: bool,
@@ -677,10 +651,8 @@ pub fn render_editor_pane(
     strings: &'static zmark_core::i18n::I18nStrings,
     font_size: f32,
     line_height: f32,
-    _is_dirty: bool,
     show_line_numbers: bool,
     scroll_handle: &UniformListScrollHandle,
-    _editor_left_offset: f32,
     gutter_width: f32,
     on_click_line: Arc<dyn Fn(usize, usize, &mut Window, &mut App)>,
     source_view: Entity<crate::views::workspace::WorkspaceView>,
@@ -697,10 +669,6 @@ pub fn render_editor_pane(
     let list_visual_lines = visual_lines.clone();
     let list_lines = lines.clone();
     let list_source = source_view.clone();
-    let mut lengths = vec![0; lines.len()];
-    for visual in visual_lines.iter() { lengths[visual.physical_line_idx] = visual.char_start + visual.char_len; }
-    let mut offset = 0;
-    let line_offsets: Arc<Vec<_>> = Arc::new(lengths.into_iter().map(|len| { let current = offset; offset += len + 1; current }).collect());
 
     div()
         .flex_1()

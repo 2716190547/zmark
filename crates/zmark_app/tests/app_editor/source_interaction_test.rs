@@ -103,6 +103,62 @@ fn caret_point(
 }
 
 #[gpui::test]
+fn native_source_utf16_queries_match_the_display_across_crlf_and_emoji(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = source_window(cx, "中🙂\r\n\nend🎉");
+    cx.update(|window, cx| view.update(cx, |ws, cx| {
+        for composing in [false, true] {
+            if composing {
+                ws.state.editor.set_cursor(2, 1);
+                ws.replace_and_mark_text_in_range(None, "字🙂", Some(1..1), window, cx);
+            }
+            let display = ws.source_display_lines().join("\n");
+            let mut boundaries = vec![(0, 0)];
+            let mut units = 0;
+            for (byte, ch) in display.char_indices() {
+                units += ch.len_utf16();
+                boundaries.push((units, byte + ch.len_utf8()));
+            }
+            assert_eq!(ws.text_length_utf16(window, cx), Some(units));
+            for &(start, a) in &boundaries {
+                for &(end, b) in &boundaries {
+                    let mut adjusted = None;
+                    let got = ws.text_for_range(start..end, &mut adjusted, window, cx);
+                    if start <= end {
+                        assert_eq!(got.as_deref(), Some(&display[a..b]));
+                        assert_eq!(adjusted, Some(start..end));
+                    } else {
+                        assert!(got.is_none());
+                    }
+                }
+            }
+            for offset in 0..=units + 1 {
+                if !boundaries.iter().any(|&(unit, _)| unit == offset) {
+                    assert!(ws.text_for_range(offset..offset, &mut None, window, cx).is_none());
+                }
+            }
+        }
+    }));
+}
+
+#[gpui::test]
+fn native_source_hit_testing_uses_actual_rows_with_open_and_closed_drawer(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = source_window(cx, "abcdef\n你好世界\n🦀Rust\nabc `code` end");
+    for open in [true, false] {
+        cx.update(|_, cx| view.update(cx, |ws, cx| { ws.state.drawer_open = open; cx.notify(); }));
+        draw(cx);
+        for (line, text) in ["abcdef", "你好世界", "🦀Rust", "abc `code` end"].iter().enumerate() {
+            for col in 0..=text.chars().count() {
+                let pos = caret_point(&view, line, col, cx);
+                cx.simulate_mouse_down(pos, MouseButton::Left, Modifiers::none());
+                cx.simulate_mouse_up(pos, MouseButton::Left, Modifiers::none());
+                draw(cx);
+                assert_eq!(view.read_with(cx, |ws, _| ws.state.editor.cursor()), (line, col), "drawer={open} {text:?}");
+            }
+        }
+    }
+}
+
+#[gpui::test]
 fn native_source_drag_highlight_copy_replace_and_undo(cx: &mut gpui::TestAppContext) {
     let (view, cx) = source_window(cx, "a中文\n🎉beta");
     let first = caret_point(&view, 0, 1, cx);

@@ -291,19 +291,3 @@ fn test_file_tree_scan_populates_mtime_cached() {
     assert_eq!(dir_node.name, "SubFolder");
     assert!(dir_node.mtime.is_none(), "Directory node must have None mtime");
 }
-
-#[test]
-fn test_format_mtime_format_and_civil_calculation() {
-    let now = std::time::SystemTime::now();
-    let formatted = zmark_app::state::format_mtime(Some(now), now).expect("format_mtime should succeed");
-    assert_eq!(formatted.len(), 16, "formatted now must be 16 characters");
-    assert_eq!(&formatted[4..5], "/");
-    assert_eq!(&formatted[7..8], "/");
-    assert_eq!(&formatted[10..11], " ");
-    assert_eq!(&formatted[13..14], ":");
-
-    // Epoch timestamp
-    let epoch = std::time::SystemTime::UNIX_EPOCH;
-    let epoch_formatted = zmark_app::state::format_mtime(Some(epoch), now).expect("format epoch");
-    assert_eq!(epoch_formatted.len(), 16);
-}

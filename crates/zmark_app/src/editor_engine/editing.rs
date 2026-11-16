@@ -86,8 +86,28 @@ impl EditorEngine {
         if inserted_bytes.is_none_or(|bytes| bytes > MAX_UNDO_BYTES) {
             return Err("Edit exceeds the input budget");
         }
+        if ranges.len() == 1 && !self.is_column_selection() && !replacements[0].contains('\n') {
+            let range = &ranges[0];
+            let start = self.position_for_offset(range.start);
+            let end = self.position_for_offset(range.end);
+            if start.0 == end.0 {
+                let replacement = &replacements[0];
+                let line = &self.lines[start.0];
+                let a = byte_offset_for_char(line, start.1).ok_or("Invalid start")?;
+                let b = byte_offset_for_char(line, end.1).ok_or("Invalid end")?;
+                if &line[a..b] != replacement {
+                    self.push_snapshot();
+                    Arc::make_mut(&mut self.lines)[start.0].replace_range(a..b, replacement);
+                    self.char_count = self.char_count - range.len() + replacement.chars().count();
+                    self.revision += 1;
+                }
+                self.clear_selection();
+                (self.cursor_line, self.cursor_col) = (start.0, start.1 + replacement.chars().count());
+                return Ok(());
+            }
+        }
         let source = self.to_text();
-        let mut updated = String::new();
+        let mut updated = String::with_capacity(source.len().saturating_add(inserted_bytes.unwrap()));
         let mut previous_byte = 0;
         let mut carets = Vec::with_capacity(ranges.len());
         let mut delta: isize = 0;

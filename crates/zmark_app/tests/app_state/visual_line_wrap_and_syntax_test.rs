@@ -4,7 +4,6 @@ use zmark_app::editor_engine::{
 };
 use zmark_app::theme::{ThemeColors, ALL_PALETTES};
 use zmark_app::views::editor::{
-    calculate_click_char_col, calculate_editor_left_offset,
     slice_tokens_for_visual_subline, spans_to_code_tokens, tokenize_markdown_line,
     MarkdownTokenKind,
 };
@@ -279,46 +278,6 @@ fn test_split_view_scroll_wheel_physical_line_lookup() {
     assert_eq!(lookup_physical_line(999), 1);
 }
 
-
-#[test]
-fn test_cjk_emoji_click_char_col_and_drawer_offset() {
-    let font_size = 14.0;
-
-    // 1. Drawer offset contract:
-    // When drawer is open: 250px drawer + 54px measured gutter/padding = 304px
-    assert_eq!(calculate_editor_left_offset(true, 54.0), 304.0);
-    // When drawer is collapsed: measured 54px
-    assert_eq!(calculate_editor_left_offset(false, 54.0), 54.0);
-    // Wider line numbers change the text origin in both layouts
-    assert_eq!(calculate_editor_left_offset(true, 72.0), 322.0);
-    assert_eq!(calculate_editor_left_offset(false, 72.0), 72.0);
-
-    // 2. ASCII click hit test:
-    let ascii_str = "abcdef";
-    assert_eq!(calculate_click_char_col(ascii_str, 0.0, font_size), 0);
-    assert_eq!(calculate_click_char_col(ascii_str, 4.0, font_size), 0);
-    assert_eq!(calculate_click_char_col(ascii_str, 5.0, font_size), 1);
-    assert_eq!(calculate_click_char_col(ascii_str, 200.0, font_size), 6);
-
-    // 3. CJK click hit test: each CJK char has unit width 2 (16.8px)
-    let cjk_str = "你好世界";
-    assert_eq!(calculate_click_char_col(cjk_str, 5.0, font_size), 0);
-    assert_eq!(calculate_click_char_col(cjk_str, 10.0, font_size), 1);
-    assert_eq!(calculate_click_char_col(cjk_str, 20.0, font_size), 1);
-    assert_eq!(calculate_click_char_col(cjk_str, 30.0, font_size), 2);
-    assert_eq!(calculate_click_char_col(cjk_str, 40.0, font_size), 2);
-    assert_eq!(calculate_click_char_col(cjk_str, 50.0, font_size), 3);
-    assert_eq!(calculate_click_char_col(cjk_str, 60.0, font_size), 4);
-    assert_eq!(calculate_click_char_col(cjk_str, 100.0, font_size), 4);
-
-    // 4. Emoji click hit test: 🦀 is 2 units, 'R', 'u', 's', 't' are 1 unit each
-    let emoji_str = "🦀Rust";
-    assert_eq!(calculate_click_char_col(emoji_str, 0.0, font_size), 0);
-    assert_eq!(calculate_click_char_col(emoji_str, 8.0, font_size), 0);
-    assert_eq!(calculate_click_char_col(emoji_str, 9.0, font_size), 1);
-    assert_eq!(calculate_click_char_col(emoji_str, 18.0, font_size), 1);
-    assert_eq!(calculate_click_char_col(emoji_str, 22.0, font_size), 2);
-}
 
 #[test]
 fn test_cross_visual_line_syntax_inheritance_and_subline_scroll() {

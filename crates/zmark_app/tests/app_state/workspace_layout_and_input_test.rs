@@ -4,6 +4,40 @@ use zmark_core::document::Document;
 use gpui::TestAppContext;
 
 #[gpui::test]
+fn hidden_panes_defer_layout_until_they_are_shown(cx: &mut gpui::TestAppContext) {
+    use zmark_app::state::ViewMode;
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut state = AppState::new_isolated(Document::new_scratch_with_text("# Title\n\n中文🙂\n".into()));
+        state.view_mode = ViewMode::Preview;
+        state.preferences.reduce_motion = true;
+        WorkspaceView::new(state, cx)
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|_, cx| assert!(view.read(cx).cached_visual_lines.is_empty(), "hidden source must not shape text"));
+    cx.update(|_, cx| view.update(cx, |ws, cx| ws.set_view_mode(ViewMode::Source, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|_, cx| view.update(cx, |ws, _| {
+        assert!(!ws.cached_visual_lines.is_empty());
+        ws.preview_list.invalidate_layout();
+        ws.state.preferences.max_column_width += 10.0;
+    }));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| view.update(cx, |ws, _| {
+        assert!(ws.preview_list.ensure_layout(&ws.state.doc().parsed, ws.state.preferences.max_column_width,
+            ws.state.preferences.font_size, ws.state.preferences.line_height, f32::from(window.rem_size())),
+            "hidden preview layout must remain invalid until actually requested");
+        ws.state.editor.insert_text("追加");
+        ws.state.mark_editor_dirty();
+    }));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|_, cx| {
+        let ws = view.read(cx);
+        assert_eq!(ws.cached_visual_rev, ws.state.editor.revision);
+        assert_eq!(ws.document_layout_cache.line_offsets.len(), ws.state.editor.lines.len());
+    });
+}
+
+#[gpui::test]
 async fn test_workspace_real_layout_visual_lines_and_navigation(cx: &mut TestAppContext) {
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let mut doc = Document::new_scratch();
@@ -35,6 +69,33 @@ async fn test_workspace_real_layout_visual_lines_and_navigation(cx: &mut TestApp
             workspace.state.editor.move_up_visual_lines(&vis_lines);
             assert_eq!(workspace.state.editor.cursor().0, 0);
         });
+    });
+}
+
+#[gpui::test]
+fn drawer_reversal_does_not_allow_an_old_close_to_finish_the_new_animation(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut state = AppState::new_isolated(Document::new_scratch());
+        state.drawer_open = true;
+        WorkspaceView::new(state, cx)
+    });
+    let toggle = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, cx| view.update(cx, |ws, cx| ws.toggle_drawer(cx)));
+        cx.run_until_parked();
+    };
+    toggle(cx);
+    cx.executor().advance_clock(std::time::Duration::from_millis(50));
+    toggle(cx);
+    cx.executor().advance_clock(std::time::Duration::from_millis(50));
+    toggle(cx);
+    cx.executor().advance_clock(std::time::Duration::from_millis(81));
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(view.read(cx).drawer_closing, "first close must not interrupt the second close"));
+    cx.executor().advance_clock(std::time::Duration::from_millis(100));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert!(!view.read(cx).drawer_closing);
+        assert!(!view.read(cx).state.drawer_open);
     });
 }
 

@@ -79,7 +79,7 @@ fn reactivation_detects_disk_changes_without_overwriting_editor_input(cx: &mut g
         ws.install_window_activation_observer(window, cx);
         ws
     });
-    cx.update(|window, cx| window.activate_window());
+    cx.update(|window, _| window.activate_window());
     cx.run_until_parked();
     cx.update(|window, _| assert!(window.is_window_active()));
     cx.deactivate_window();
@@ -89,7 +89,7 @@ fn reactivation_detects_disk_changes_without_overwriting_editor_input(cx: &mut g
         ws.state.mark_editor_dirty();
     }));
     fs::write(&path, "external").unwrap();
-    cx.update(|window, cx| window.activate_window());
+    cx.update(|window, _| window.activate_window());
     cx.run_until_parked();
     cx.update(|_, cx| {
         assert!(view.read(cx).state.has_conflict());

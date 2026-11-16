@@ -27,22 +27,27 @@ fn main() {
     for size in [10_000, 1_500_000] {
         let line = "日常编辑🙂 paragraph with **text** and `code`.\n";
         let text = line.repeat(size / line.len() + 1);
+    for operation in ["insert", "insert_shared"] {
         let mut editor = EditorEngine::new(&text);
         editor.set_cursor(editor.lines.len() / 2, 3);
         let mut samples = Vec::with_capacity(100);
         BYTES.store(0, Ordering::Relaxed);
         for _ in 0..100 {
+            let shared = (operation == "insert_shared").then(|| editor.lines.clone());
             let start = Instant::now();
             TRACK.store(true, Ordering::Relaxed);
             editor.insert_text("中");
             TRACK.store(false, Ordering::Relaxed);
             samples.push(start.elapsed().as_nanos());
+            drop(shared);
             assert!(editor.undo());
             assert_eq!(editor.to_text(), text);
         }
         samples.sort_unstable();
-        println!("{},insert,{},{},{}", text.len(), BYTES.load(Ordering::Relaxed) / 100, samples[49], samples[94]);
+        println!("{},{operation},{},{},{}", text.len(), BYTES.load(Ordering::Relaxed) / 100, samples[49], samples[94]);
+        }
 
+        let mut samples = Vec::with_capacity(100);
         let mut state = AppState::new_isolated(Document::new_scratch_with_text(text.clone()));
         state.editor.set_cursor(state.editor.lines.len() / 2, 3);
         samples.clear();

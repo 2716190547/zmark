@@ -72,6 +72,7 @@ pub struct WorkspaceView {
     pub parse_task: Option<Task<()>>,
     pub parse_paused: bool,
     pub drawer_closing: bool,
+    drawer_close_task: Option<Task<()>>,
     pub settings_window: Option<WindowHandle<gpui_component::Root>>,
     pub copied_code_hash: Option<(u64, std::time::Instant)>,
     pub last_scroll_origin: Option<(ScrollOrigin, std::time::Instant)>,
@@ -243,6 +244,7 @@ impl WorkspaceView {
             parse_task: None,
             parse_paused: false,
             drawer_closing: false,
+            drawer_close_task: None,
             settings_window: None,
             copied_code_hash: None,
             last_scroll_origin: None,
@@ -2207,6 +2209,13 @@ impl WorkspaceView {
     }
 
     pub fn toggle_drawer(&mut self, cx: &mut Context<Self>) {
+        self.drawer_close_task = None;
+        if self.state.preferences.reduce_motion {
+            self.state.drawer_open = !self.state.drawer_open;
+            self.drawer_closing = false;
+            cx.notify();
+            return;
+        }
         if self.drawer_closing {
             self.drawer_closing = false;
             self.state.drawer_open = true;
@@ -2217,7 +2226,7 @@ impl WorkspaceView {
         if self.state.drawer_open {
             self.drawer_closing = true;
             cx.notify();
-            cx.spawn(async move |this, app| {
+            self.drawer_close_task = Some(cx.spawn(async move |this, app| {
                 app.background_executor()
                     .timer(std::time::Duration::from_millis(180))
                     .await;
@@ -2228,8 +2237,7 @@ impl WorkspaceView {
                         cx.notify();
                     }
                 });
-            })
-            .detach();
+            }));
         } else {
             self.state.drawer_open = true;
             self.drawer_closing = false;
@@ -3644,11 +3652,14 @@ impl Render for WorkspaceView {
             self.preview_drag_ratio_until = None;
             None
         };
-        let measured_changed = self.preview_list.apply_measured(drag_ratio);
-        let layout_changed =
-            self.preview_list
-                .ensure_layout(&parsed, max_width, font_size, line_height, rem);
-        let (visible_range, range_changed) = self.preview_list.visible_range(32.0);
+        let (visible_range, measured_changed, layout_changed, range_changed) = if self.state.view_mode != ViewMode::Source {
+            let measured_changed = self.preview_list.apply_measured(drag_ratio);
+            let layout_changed = self.preview_list.ensure_layout(&parsed, max_width, font_size, line_height, rem);
+            let (range, range_changed) = self.preview_list.visible_range(32.0);
+            (range, measured_changed, layout_changed, range_changed)
+        } else {
+            (0..0, false, false, false)
+        };
         // Measurement/layout rewrites are programmatic: record the new offset so
         // the reconciliation below cannot mistake them for user scrolling and
         // echo them into the editor.
@@ -3713,6 +3724,11 @@ impl Render for WorkspaceView {
             self.current_reading_pane = None;
         }
 
+        let visual_lines = if self.state.view_mode != ViewMode::Preview {
+            self.compute_visual_lines(window)
+        } else {
+            self.cached_visual_lines.clone()
+        };
         let editor_failures = self.collect_visible_editor_failures();
         let preview_failures = self.collect_visible_preview_failures();
 
@@ -3722,7 +3738,6 @@ impl Render for WorkspaceView {
             self.preview_mouse_window_pos = None;
         }
 
-        let visual_lines = self.compute_visual_lines(window);
         if !self.state.doc().is_parse_stale() {
             if self.source_code_blocks_rev != self.state.editor.revision
                 || self.source_code_blocks.is_empty()
@@ -4087,6 +4102,7 @@ impl Render for WorkspaceView {
                     }
                 }
                 if opened_file { this.on_document_swapped(Some(window), cx); }
+                this.drawer_close_task = None;
                 this.drawer_closing = false;
                 this.state.drawer_open = true;
                 this.state.drawer_tab = crate::state::DrawerTab::Files;
@@ -4918,7 +4934,6 @@ impl Render for WorkspaceView {
                                     } else {
                                         let text_start = self.editor_text_start_offset(window);
                                         let gutter_width = text_start - crate::views::editor::EDITOR_CONTAINER_PADDING_X - crate::views::editor::EDITOR_ROW_PADDING_X - crate::views::editor::EDITOR_GUTTER_MARGIN_RIGHT;
-                                        let editor_left_offset = crate::views::editor::calculate_editor_left_offset(self.state.drawer_open, text_start);
                                         match view_mode {
                                             ViewMode::Source => {
                                                 let view_bounds = cx.entity().clone();
@@ -4946,6 +4961,7 @@ impl Render for WorkspaceView {
                                                         self.source_display_lines(),
                                                         self.state.editor.char_count,
                                                         visual_lines.clone(),
+                                                        self.document_layout_cache.line_offsets.clone(),
                                                         self.syntax_cache.clone(),
                                                         self.source_code_blocks.clone(),
                                                         !self.state.doc().is_parse_stale() && self.source_composition.is_none(),
@@ -4954,10 +4970,8 @@ impl Render for WorkspaceView {
                                                         strings,
                                                         self.state.preferences.font_size,
                                                         self.state.preferences.line_height,
-                                                        is_dirty,
                                                         self.state.preferences.show_line_numbers,
                                                         &self.editor_scroll_handle,
-                                                        editor_left_offset,
                                                         gutter_width,
                                                         on_click_line.clone(),
                                                         cx.entity().clone(),
@@ -5045,6 +5059,7 @@ impl Render for WorkspaceView {
                                                             self.source_display_lines(),
                                                             self.state.editor.char_count,
                                                             visual_lines.clone(),
+                                                            self.document_layout_cache.line_offsets.clone(),
                                                             self.syntax_cache.clone(),
                                                             self.source_code_blocks.clone(),
                                                             !self.state.doc().is_parse_stale() && self.source_composition.is_none(),
@@ -5053,10 +5068,8 @@ impl Render for WorkspaceView {
                                                             strings,
                                                             self.state.preferences.font_size,
                                                             self.state.preferences.line_height,
-                                                            is_dirty,
                                                             self.state.preferences.show_line_numbers,
                                                             &self.editor_scroll_handle,
-                                                            editor_left_offset,
                                                             gutter_width,
                                                             on_click_line,
                                                             cx.entity().clone(),

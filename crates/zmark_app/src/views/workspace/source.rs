@@ -62,22 +62,30 @@ pub enum SourceCommand {
     Outdent,
 }
 
-pub fn char_to_utf16(text: &str, offset: usize) -> usize {
-    text.chars().take(offset).map(char::len_utf16).sum()
+fn chars_in_lines(lines: &[String]) -> impl Iterator<Item = char> + '_ {
+    lines.iter().enumerate().flat_map(move |(index, line)| {
+        line.chars().chain((index + 1 < lines.len()).then_some('\n'))
+    })
 }
 
-pub fn utf16_to_char(text: &str, offset: usize) -> Option<usize> {
+fn char_to_utf16(chars: impl Iterator<Item = char>, offset: usize) -> usize {
+    chars.take(offset).map(char::len_utf16).sum()
+}
+
+fn utf16_to_char(chars: impl Iterator<Item = char>, offset: usize) -> Option<usize> {
     let mut units = 0;
-    for (index, ch) in text.chars().enumerate() {
+    let mut count = 0;
+    for ch in chars {
         if units == offset {
-            return Some(index);
+            return Some(count);
         }
         units += ch.len_utf16();
         if units > offset {
             return None;
         }
+        count += 1;
     }
-    (units == offset).then_some(text.chars().count())
+    (units == offset).then_some(count)
 }
 
 fn byte_for_char(text: &str, offset: usize) -> Option<usize> {
@@ -143,10 +151,10 @@ impl WorkspaceView {
                 0,
             ));
         };
-        let display = self.source_display_lines().join("\n");
+        let display = self.source_display_lines();
         let (a, b) = (
-            utf16_to_char(&display, range.start)?,
-            utf16_to_char(&display, range.end)?,
+            utf16_to_char(chars_in_lines(&display), range.start)?,
+            utf16_to_char(chars_in_lines(&display), range.end)?,
         );
         if a > b {
             return None;
@@ -164,7 +172,7 @@ impl WorkspaceView {
                 return Some((
                     composition.ranges.clone(),
                     updated,
-                    char_to_utf16(&composition.text, start),
+                    char_to_utf16(composition.text.chars(), start),
                 ));
             }
             return Some((
@@ -196,8 +204,8 @@ impl WorkspaceView {
         };
         let mut ranges = composition.ranges[..composition.ranges.len() - 1].to_vec();
         if composition.selected.start != composition.selected.end {
-            let start = utf16_to_char(&composition.text, composition.selected.start).unwrap();
-            let end = utf16_to_char(&composition.text, composition.selected.end).unwrap();
+            let start = utf16_to_char(composition.text.chars(), composition.selected.start).unwrap();
+            let end = utf16_to_char(composition.text.chars(), composition.selected.end).unwrap();
             ranges.push(composition.active.start + start..composition.active.start + end);
         }
         ranges
@@ -999,14 +1007,14 @@ impl EntityInputHandler for WorkspaceView {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
-        let text = self.source_display_lines().join("\n");
-        let a = utf16_to_char(&text, range.start)?;
-        let b = utf16_to_char(&text, range.end)?;
+        let lines = self.source_display_lines();
+        let a = utf16_to_char(chars_in_lines(&lines), range.start)?;
+        let b = utf16_to_char(chars_in_lines(&lines), range.end)?;
         if a > b {
             return None;
         }
         *adjusted = Some(range);
-        Some(text[byte_for_char(&text, a)?..byte_for_char(&text, b)?].to_owned())
+        Some(chars_in_lines(&lines).skip(a).take(b - a).collect())
     }
 
     fn selected_text_range(
@@ -1018,9 +1026,9 @@ impl EntityInputHandler for WorkspaceView {
         if !self.source_accepts_input(window, cx) {
             return None;
         }
-        let text = self.source_display_lines().join("\n");
+        let lines = self.source_display_lines();
         if let Some(composition) = &self.source_composition {
-            let start = char_to_utf16(&text, composition.active.start);
+            let start = char_to_utf16(chars_in_lines(&lines), composition.active.start);
             return Some(UTF16Selection {
                 range: start + composition.selected.start..start + composition.selected.end,
                 reversed: false,
@@ -1036,14 +1044,14 @@ impl EntityInputHandler for WorkspaceView {
             .selection()
             .map_or(cursor..cursor, |(start, end)| start..end);
         Some(UTF16Selection {
-            range: char_to_utf16(&text, range.start)..char_to_utf16(&text, range.end),
+            range: char_to_utf16(chars_in_lines(&lines), range.start)..char_to_utf16(chars_in_lines(&lines), range.end),
             reversed: self.state.editor.selection_reversed(),
         })
     }
 
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
         let composition = self.source_composition.as_ref()?;
-        let start = char_to_utf16(&composition.display.join("\n"), composition.active.start);
+        let start = char_to_utf16(chars_in_lines(&composition.display), composition.active.start);
         Some(start..start + composition.text.encode_utf16().count())
     }
 
@@ -1054,12 +1062,8 @@ impl EntityInputHandler for WorkspaceView {
     }
 
     fn text_length_utf16(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
-        Some(
-            self.source_display_lines()
-                .join("\n")
-                .encode_utf16()
-                .count(),
-        )
+        let lines = self.source_display_lines();
+        Some(chars_in_lines(&lines).map(char::len_utf16).sum())
     }
 
     fn set_selected_text_range(
@@ -1071,10 +1075,10 @@ impl EntityInputHandler for WorkspaceView {
         if !self.source_accepts_input(window, cx) {
             return;
         }
-        let text = self.source_display_lines().join("\n");
+        let lines = self.source_display_lines();
         let (Some(mut a), Some(mut b)) = (
-            utf16_to_char(&text, range.start),
-            utf16_to_char(&text, range.end),
+            utf16_to_char(chars_in_lines(&lines), range.start),
+            utf16_to_char(chars_in_lines(&lines), range.end),
         ) else {
             return;
         };
@@ -1085,8 +1089,8 @@ impl EntityInputHandler for WorkspaceView {
             let end = composition.active.start + composition.text.chars().count();
             if a >= composition.active.start && b <= end {
                 composition.selected =
-                    char_to_utf16(&composition.text, a - composition.active.start)
-                        ..char_to_utf16(&composition.text, b - composition.active.start);
+                    char_to_utf16(composition.text.chars(), a - composition.active.start)
+                        ..char_to_utf16(composition.text.chars(), b - composition.active.start);
                 composition.cursor = position_in_lines(&composition.display, b);
                 window.notify_text_selection_changed(&self.focus_handle);
                 cx.notify();
@@ -1171,12 +1175,12 @@ impl EntityInputHandler for WorkspaceView {
         let selected = selected.unwrap_or(length..length);
         if selected.start > selected.end
             || selected.end > length
-            || utf16_to_char(text, selected.start).is_none()
+            || utf16_to_char(text.chars(), selected.start).is_none()
         {
             return;
         }
         let selected = selected_base + selected.start..selected_base + selected.end;
-        let Some(cursor_char) = utf16_to_char(&replacement, selected.end) else {
+        let Some(cursor_char) = utf16_to_char(replacement.chars(), selected.end) else {
             return;
         };
         let mut display = original;
@@ -1203,10 +1207,10 @@ impl EntityInputHandler for WorkspaceView {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Vec<Bounds<Pixels>> {
-        let text = self.source_display_lines().join("\n");
+        let lines = self.source_display_lines();
         let (Some(start), Some(end)) = (
-            utf16_to_char(&text, range.start),
-            utf16_to_char(&text, range.end),
+            utf16_to_char(chars_in_lines(&lines), range.start),
+            utf16_to_char(chars_in_lines(&lines), range.end),
         ) else {
             return Vec::new();
         };
@@ -1259,6 +1263,6 @@ impl EntityInputHandler for WorkspaceView {
             .map(|line| line.chars().count() + 1)
             .sum::<usize>()
             + col;
-        Some(char_to_utf16(&lines.join("\n"), offset))
+        Some(char_to_utf16(chars_in_lines(&lines), offset))
     }
 }

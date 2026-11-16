@@ -164,26 +164,16 @@ pub fn physical_to_visual(
     phys_col: usize,
     visual_lines: &[VisualLine],
 ) -> (usize, usize) {
-    let sublines: Vec<(usize, &VisualLine)> = visual_lines
-        .iter()
-        .enumerate()
-        .filter(|(_, vl)| vl.physical_line_idx == phys_line)
-        .collect();
-
-    if sublines.is_empty() {
-        return (0, 0);
-    }
-
-    for (idx, &(vis_idx, vl)) in sublines.iter().enumerate() {
-        let is_last = idx + 1 == sublines.len();
-        if phys_col >= vl.char_start && (phys_col < vl.char_start + vl.char_len || is_last) {
-            let rel_col = phys_col.saturating_sub(vl.char_start);
-            return (vis_idx, rel_col);
+    let start = visual_lines.partition_point(|line| line.physical_line_idx < phys_line);
+    let end = visual_lines.partition_point(|line| line.physical_line_idx <= phys_line);
+    let sublines = &visual_lines[start..end];
+    if sublines.is_empty() { return (0, 0); }
+    for (index, line) in sublines.iter().enumerate() {
+        if phys_col >= line.char_start && (phys_col < line.char_start + line.char_len || index + 1 == sublines.len()) {
+            return (start + index, phys_col.saturating_sub(line.char_start));
         }
     }
-
-    let (last_vis_idx, last_vl) = sublines.last().unwrap();
-    (*last_vis_idx, last_vl.char_len)
+    (end - 1, sublines.last().unwrap().char_len)
 }
 
 pub fn visual_to_physical(
