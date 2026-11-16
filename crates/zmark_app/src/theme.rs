@@ -135,10 +135,14 @@ impl ThemeColors {
     }
 
     pub fn control_selection_bg(&self) -> Hsla {
-        // Warm neutral selection, matching the reference paper while retaining each palette's surface.
-        let tint = if self.is_dark { rgb(0xb5b2a5) } else { rgb(0xd4cfb7) };
+        // Only Default uses warm gray; other palettes retain their own accent tint.
+        let (tint, weight) = if self.id == "default" {
+            (if self.is_dark { rgb(0xb5b2a5) } else { rgb(0xd4cfb7) },
+             if self.is_dark { 0.24 } else { 0.52 })
+        } else {
+            (self.accent.to_rgb(), if self.is_dark { 0.20 } else { 0.12 })
+        };
         let base = self.surface.to_rgb();
-        let weight = if self.is_dark { 0.24 } else { 0.52 };
         let mut weighted = base;
         weighted.r += (tint.r - base.r) * weight;
         weighted.g += (tint.g - base.g) * weight;

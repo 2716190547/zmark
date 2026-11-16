@@ -1,5 +1,7 @@
 # Phase J 独立规划审查记录
 
+> 当前代理约定（2026-11-16）：herdr-triad 已弃用；由当前代理自行审查，不向其他 pane 派任务。本文跨窗格与独立代理审查要求仅作历史记录，现行规则见 [代理工作约定](../agent-workflow.md)。
+
 - 被审文件：`phase-j-typography-scrollbar-memory-cleanup.md`
 - 被审版本 SHA-256：`6dd51d743e34399e9e8f1777391447d4fcfab3a8faab5ddc2827d48bf650e024`
 - 结论：**无未决实质异议**；用户明确确认最终方案后可实施。此结论不代表代码或内存优化已经完成和验收。
