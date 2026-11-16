@@ -4338,6 +4338,11 @@ impl Render for WorkspaceView {
 
                 let mods = event.keystroke.modifiers;
                 let key = event.keystroke.key.as_str();
+                if key == "escape" && !this.is_renaming && this.sidebar_selection.lock().unwrap().selected.len() > 1 {
+                    this.exit_sidebar_multiselect(cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 if !this.is_renaming && (mods.secondary(cx) || mods.control) && !mods.alt && !mods.shift && key.eq_ignore_ascii_case("f") {
                     this.open_find(window,cx); cx.stop_propagation(); return;
                 }
