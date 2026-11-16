@@ -1,6 +1,6 @@
 # 主题选中色恢复与内存审视
 
-版本 R7，2026-11-16（隐藏图表纹理回收、搜索索引内存优化已落地并安装）。用户已确认：Default 保留当前加深暖灰；其他主题恢复 6dfdab3 的主题适配（accent 混合 surface，浅色 12%、深色 20%）；正文系统原生选区不变。R2/R3 的内存范围为分析和测量方案；R4 已由用户扩展授权为工程落地及本机操作验证。无新增架构决策。
+版本 R8，2026-11-16（补齐浏览后的资源回落、剩余优化排序及 Rust 1.100.0 本机升级）。用户已确认：Default 保留当前加深暖灰；其他主题恢复 6dfdab3 的主题适配（accent 混合 surface，浅色 12%、深色 20%）；正文系统原生选区不变。R2/R3 的内存范围为分析和测量方案；R4 已由用户扩展授权为工程落地及本机操作验证。无新增架构决策。
 
 ## 实施和验收
 
@@ -293,3 +293,60 @@ macOS 可优先对照原生 Image I/O：`CGImageSourceCreateThumbnailAtIndex` �
 `./scripts/bundle_macos.sh --install` 初次 release 构建成功（26.61 秒），因旧程序运行而安装中止；用户确认保存退出后再次执行成功（hc t46，热构建 0.63 秒）。安装路径 `/Applications/ZMark.app`；签名验证、安装与暂存 bundle 可执行文件比较通过。现有 33 条 app warning，未推送。**自动测试全部未运行（按用户要求），没有通过/失败数量可报。**
 
 新版 PID 52991，20:14:44 起始 RSS 125,056KiB（122.1MiB），footprint 69.4M、peak 79.3M。这是重新启动后的起始值，不是隐藏预览后已节省多少的对照。后台继续采集浏览/切纯源码后的指标；整应用本批收益、切回预览的视觉体验、真实搜索点击与键盘跳转仍待用户操作验收。未跟踪 `luna.svg` 保持原样。
+
+
+## R8：浏览后回落、剩余内存大户与工具链升级
+
+本轮复核 R7 安装版的真实浏览样本、阅读 pi 已有的 Rust 升级结论并自行审查；没有给其他 pane 派任务。生产内存行为沿用 `860c910`，本轮新增工程改动仅为工具链版本及 CI 同步。未跟踪 `luna.svg`、`pelican_bicycle.svg` 均保持原样。
+
+### R7 安装版确实出现回落，但浏览峰值仍需优化
+
+以下都来自 **Rust 1.99.1 构建的 R7 版，PID 52991**。不能将其归因于随后安装的 Rust 1.100.0，也不能将不同进程的任意两个值直接作为 A/B 收益。
+
+| 时刻与阶段 | RSS | Physical footprint | graphics resident | IOSurface resident | malloc 实际分配 |
+| --- | --- | --- | --- | --- | --- |
+| 20:17:51，浏览活动中 | 308,080KiB（300.9MiB） | 308.2M，历史 peak 318.3M | 86.8M | 74.5M | 94.7M |
+| 20:24:21，浏览后空闲 | 212,368KiB（207.4MiB） | 184.8M | 22.8M | 74.5M | 本时刻未单独摘录 |
+| 20:28:12，后续审视 | 218,176KiB（213.1MiB） | 185.2M，历史 peak 318.3M | 22.8M | 74.5M | 41.4M |
+
+采样原件：`/tmp/zmark-memory-session/watch.jsonl`、`watch-2026-11-16T20-17-51.vmmap.txt`、`watch-2026-11-16T20-24-21.vmmap.txt` 和 `upgrade_audit.vmmap.txt`。vmmap 的 M 保留其原始显示单位，RSS 明确换算为 MiB；不同统计口径不相加。
+
+同进程中，308.2M 的活动样本随后降到约 185M，graphics 从 86.8M 降到 22.8M，说明资源并非一直累积不释放。但没有逐次记录用户操作、文档和视口，不能将全部回落逐项归因于 R7，也不能用历史峰值减空闲值宣称确定节省量。峰值仍为 318.3M，与 R6 的 317.4M 不是受控对照；**接下来应优先减少加载时的像素分配和临时副本，而不仅是增加空闲清理。**
+
+20:28:12 的 malloc zone 实际分配 41.4M、dirty 62.4M，报告 fragmentation 21.0M。这部分不能当作仍被业务持有的对象，释放对象也不保证 RSS 立即下降。IOSurface 74.5M 在资源回落后仍存在，尚无逐资源归因；不能将其全称为图表泄漏。当前证据不足以支持替换全局分配器或直接修改 GPUI Metal 渲染器。
+
+### 值得继续实施的三项
+
+1. **优先：预览 SVG 按显示尺寸与 DPR 栅格化。** R6 的 P2 仍有效。`views/preview.rs` 的 `img(path).max_w_full()` 限制展示宽度，未限制 GPUI 加载 SVG 时生成的像素；当前加载器走固定 2× 路径。小预览可持有较大的 CPU 位图与 GPU 纹理。复用 `views/workspace.rs` 灯箱已有的 `SvgRenderer::render_parsed` / `SvgSize::ExactSize`，以可见宽度、DPR 和有限尺寸桶决定栅格尺寸，放大灯箱继续独立取高清源。缓存 key 需包含尺寸/密度，不随滚动逐帧重栅格化。先以同一 SVG、相同窗口对比实际像素、峰值和字体清晰度；400px 预览与 1000px 原栅格的面积差只是理论示例，不是已测收益。
+2. **其次：避免大图先完整解码再缩小的峰值。** `local_images.rs:139–155` 先 `DynamicImage::from_decoder`，之后才 resize；4000×4000 RGBA 单份约 64,000,000 B，解码、方向变换、缩图及上传可能短暂共存。现有串行加载和尺寸限制保留。macOS 优先测原生 Image I/O 缩略图 API，使用已有 R6 官方参考；逐格式验证是否真能减少峰值，保留 EXIF、首帧与错误处理。不要把输出尺寸限制误认为所有 codec 都避免完整解码，也不为尚未确认的跨平台收益替换全部解码器。
+3. **多文档负载：消除干净文档的重复正文。** 新核实 `zmark_core/src/document.rs:71–72,119`：每个 Document 不仅有 `buffer: String`，还保存完整 `last_saved_content: String`；`from_file` 直接 clone。`unload_parsed:204` 只释放 AST，两份正文均继续驻留。因此 R2/R6 的“非活动文档保留正文”应细化为干净文档也保留两份原始文本。10 份各 8MiB 的干净文档仅这两类文本可达约 160MiB，是容量算术，不是当前进程已测占用。活动编辑器、搜索修订快照和撤销记录另算；外部冲突的 `observed_disk_content` 还可能保留第三份内容。
+
+第三项的最小方向是干净正文与保存基线共享不可变文本，编辑时才分离，或给干净非活动文档设置可重载预算。修改前必须保护撤销到原文后的 dirty 判定、外部修改/冲突基线、保存失败与未保存文档；不能直接清空基线或用普通 hash 替代精确比较。其公共 buffer API 影响面比图像尺寸调整更大，先记录各文档实际字节，再决定共享方式。`handle_disk_change:256` 还会先 clone 一份磁盘文本，在干净分支很快清除；可顺带消除该瞬时副本，但不要将它误称为永久三份驻留。
+
+本轮不新增缓存框架、不改文本引擎、不更换分配器。已有 4MiB token cache、受限撤销栈和 R7 的稀疏搜索索引继续保留；它们不是本次纯浏览负载中最有证据的大头。上述三项是后续实施候选，**尚未修改或验证其内存收益**。
+
+### pi 的升级结论与采纳范围
+
+读取 t13 已有结论后，自查接受“只升级 Rust/Cargo 至 1.100.0”。这不是独立审查批准，也不是 GPUI 依赖升级。旧 Quiet.md 调研中已被后续代码解决的保存问题不重新列为本轮 bug。
+
+官方 [Rust 1.100.0 release notes](https://doc.rust-lang.org/releases.html#version-11000-2026-11-12) 确认发布日期为 **2026-11-12**。本次不改 Edition 2021、Cargo.lock、Syntect/GPUI 等依赖或 release 优化参数。Allocator API 稳定本身不会自动消除全文副本、位图或纹理；本轮不把升级记作内存优化收益。sample PGO 和 unused-dependency lint 可另行评估，当前不为它们新增构建步骤。
+
+已审视升级风险：never type / Infallible 及类型推导、闭包捕获变化；Cargo 中间产物目录布局也变化。现有安装脚本使用最终 `target/release` 可执行文件，本机实际构建及打包成功，不能据此推出所有外部构建工具、所有平台及测试都已兼容。
+
+### 已完成的工具链改动与验证
+
+- 安装 Homebrew `rustup` 1.29.3（keg-only），再安装 `1.100.0-aarch64-apple-darwin`，minimal profile 加 rustfmt。`rustc 1.100.0 (0ef1bc386 2026-11-09)`、`cargo 1.100.0 (3acc79c0c 2026-11-05)` 已实际核对。
+- 增加标准 `rust-toolchain.toml`，pin 为 1.100.0；`.github/workflows/build-desktop.yml` 的三平台 job 同步 pin，且将工具链文件加入 push paths。没有派发 CI、推送或修改现有 CI 测试范围。
+- 保留 Homebrew Rust 1.99.1 作为回退，不改全局 shell 配置。**本机调用需把 rustup proxy 放在 PATH 前面**；标准工具链文件由 rustup 解释，直接调用旧 Homebrew cargo 不会自动切换。参见 [rustup overrides](https://rust-lang.github.io/rustup/overrides.html)。本轮实际构建命令：
+
+  ```sh
+  PATH="/opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:$PATH" ./scripts/bundle_macos.sh --install
+  ```
+
+- 首次 Rust 1.100.0 release 构建 1m35s 成功，生成并签名 bundle；因旧 ZMark 运行而拒绝安装。用户保存退出后，hc t4f 热构建 0.72s 并安装到 `/Applications/ZMark.app`，exit 0；`codesign --verify --deep --strict` 和安装文件与暂存 bundle 的可执行文件比较均通过。
+- `cargo build --release -p release_tool --locked`（hc t4d）成功，app 构建同时覆盖 core。`cargo nextest --version` 仅确认已安装命令能启动，**没有运行 nextest 测试，也没有验证新目录布局下的全套回归**。
+- 自查确认 rustup pin 与 CI 一致，远端 `dtolnay/rust-toolchain` 确实存在 `1.100.0` ref，构建脚本的产物路径可用；未发现值得新增包装层或进一步简化的地方。
+- app 保留现有 33 条 warning，以及上游 `block 0.1.6` future-incompatibility 提示；没有放宽 lint 或隐藏警告。Cargo.lock 未改变。
+- 新版已重新启动，PID 60631。20:50:37 的启动样本为 RSS 166,352KiB、footprint 170.4M、peak 174.2M；只是启动存活检查，非相同浏览路径对照，**不与 PID 52991 的空闲值比较以宣称升级节省内存**。原件 `rust1100_startup.vmmap.txt`。
+
+**自动测试未运行（按用户要求）；macOS 已构建、安装并启动，Windows/Linux 编译和正式门禁尚未执行。** 准备推送构建更新时，在最终候选上再运行 `scripts/full_gate.sh` 并核实三平台 CI；本轮没有推送或创建 PR。

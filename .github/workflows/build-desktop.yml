@@ -8,6 +8,7 @@ on:
       - ".github/workflows/build-desktop.yml"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "crates/**"
       - "packaging/**"
       - "scripts/bundle_macos.sh"
@@ -35,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: dtolnay/rust-toolchain@1.100.0
 
       - uses: Swatinem/rust-cache@v2
 
