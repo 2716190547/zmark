@@ -137,3 +137,30 @@ fn offscreen_lightbox_source_stays_pinned_until_close() {
     assert_eq!(cache.take_evicted(), vec![paths[0].clone()]);
     assert_eq!(cache.len(), 0);
 }
+
+#[test]
+fn hidden_decoded_assets_are_released_once_without_deleting_svg_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths: Vec<_> = (0..3).map(|i| dir.path().join(format!("{i}.svg"))).collect();
+    let mut cache = DiagramCache::new(16);
+    for (index, path) in paths.iter().enumerate() {
+        std::fs::write(path, r#"<svg width="20" height="20"></svg>"#).unwrap();
+        cache.insert((index as u64, false), path.clone());
+    }
+    cache.begin_frame();
+    cache.get(&(0, false)); // visible in the new document
+    cache.finish_frame(Some(&paths[1])); // the lightbox still owns this one
+    assert_eq!(cache.take_hidden_images(Some(&paths[1])), vec![paths[2].clone()]);
+    assert!(cache.take_hidden_images(Some(&paths[1])).is_empty());
+    assert!(paths.iter().all(|path| path.exists()));
+    assert!(cache.take_evicted().is_empty(), "keep SVG assets and Mermaid layout results");
+
+    cache.begin_frame(); // pure source, no lightbox or preview
+    let mut released = cache.take_hidden_images(None);
+    released.sort();
+    assert_eq!(released, paths[..2]);
+    assert!(cache.take_hidden_images(None).is_empty());
+    assert_eq!(cache.get(&(2, false)), Some(paths[2].clone()), "returning to preview reuses the same SVG");
+    cache.begin_frame();
+    assert_eq!(cache.take_hidden_images(None), vec![paths[2].clone()], "a reloaded bitmap may be released again");
+}

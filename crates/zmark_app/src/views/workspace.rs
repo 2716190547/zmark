@@ -126,6 +126,7 @@ pub struct WorkspaceView {
     )>,
     pub rendered_regions: Arc<crate::views::preview::RegionsRegistry>,
     pub local_images: crate::local_images::SharedImages,
+    release_hidden_diagrams: bool,
     pub local_image_task: Option<gpui::Task<()>>,
     /// Crisp re-rasterization of the open SVG lightbox at its current zoom, with its pixel size.
     pub lightbox_sharp: Option<(Arc<gpui::RenderImage>, (u32, u32))>,
@@ -295,6 +296,7 @@ impl WorkspaceView {
             cached_visual_lines: Arc::new(Vec::new()),
             sync_map_cache: None,
             rendered_regions: Arc::new(std::sync::Mutex::new(Vec::new())),
+            release_hidden_diagrams: false,
             local_images: Arc::new(std::sync::Mutex::new(
                 crate::local_images::LocalImages::default(),
             )),
@@ -1824,6 +1826,7 @@ impl WorkspaceView {
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
     /// Reclaims GPU texture memory by dropping any active HiDPI lightbox image.
     pub fn on_document_swapped(&mut self, mut window: Option<&mut Window>, cx: &mut App) {
+        self.release_hidden_diagrams = true;
         if let Some(image) = self.lightbox_local_image.take() {
             if let Some(render) = &image.render { cx.drop_image(render.clone(), window.as_deref_mut()); }
         }
@@ -5263,8 +5266,14 @@ impl Render for WorkspaceView {
 
         self.complete_local_image_decode(window, cx);
         let pinned_diagram = self.lightbox.svg_path.clone();
-        window.on_next_frame(move |window, _| {
-            if crate::views::preview::finish_diagram_frame(pinned_diagram.as_deref()) {
+        let release_hidden = std::mem::take(&mut self.release_hidden_diagrams)
+            || self.state.view_mode == ViewMode::Source;
+        window.on_next_frame(move |window, cx| {
+            let evicted = crate::views::preview::finish_diagram_frame(pinned_diagram.as_deref());
+            let released = release_hidden && crate::views::preview::release_hidden_diagram_images(
+                pinned_diagram.as_deref(), window, cx,
+            );
+            if evicted || released {
                 window.refresh();
             }
         });

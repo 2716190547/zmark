@@ -1077,6 +1077,7 @@ struct DiagramCacheEntry {
     bytes: usize,
     /// Frame in which the preview last asked for this diagram.
     used_frame: u64,
+    image_requested: bool,
 }
 
 pub struct DiagramCache {
@@ -1116,6 +1117,7 @@ impl DiagramCache {
         let frame = self.frame;
         let entry = self.entries.get_mut(key)?;
         entry.used_frame = frame;
+        entry.image_requested = true;
         let path = entry.path.clone();
         if let Some(pos) = self.order.iter().position(|k| k == key) {
             self.order.remove(pos);
@@ -1133,6 +1135,7 @@ impl DiagramCache {
         let frame = self.frame;
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.used_frame = frame;
+            entry.image_requested = true;
             if entry.path != path {
                 let old_path = std::mem::replace(&mut entry.path, path);
                 let _ = std::fs::remove_file(&old_path);
@@ -1146,7 +1149,7 @@ impl DiagramCache {
             }
             self.order.push_back(key);
         } else {
-            self.entries.insert(key, DiagramCacheEntry { path, bytes, used_frame: frame });
+            self.entries.insert(key, DiagramCacheEntry { path, bytes, used_frame: frame, image_requested: true });
             self.order.push_back(key);
             self.bytes += bytes;
         }
@@ -1161,6 +1164,18 @@ impl DiagramCache {
             }
         }
         self.evict_overflow();
+    }
+
+    /// Release decoded assets once, retaining the cheaper SVG and its layout cache.
+    pub fn take_hidden_images(&mut self, pinned: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
+        let frame = self.frame;
+        self.entries.values_mut().filter_map(|entry| {
+            if !entry.image_requested || entry.used_frame == frame || pinned == Some(entry.path.as_path()) {
+                return None;
+            }
+            entry.image_requested = false;
+            Some(entry.path.clone())
+        }).collect()
     }
 
     fn evict_overflow(&mut self) {
@@ -1248,6 +1263,16 @@ pub fn finish_diagram_frame(pinned: Option<&std::path::Path>) -> bool {
     let mut cache = DIAGRAM_CACHE.lock().unwrap();
     cache.finish_frame(pinned);
     cache.has_pending_release()
+}
+
+/// Call after paint has marked visible diagrams, including a pinned lightbox source.
+pub fn release_hidden_diagram_images(pinned: Option<&std::path::Path>, window: &mut Window, cx: &mut App) -> bool {
+    let paths = DIAGRAM_CACHE.lock().unwrap().take_hidden_images(pinned);
+    let released = !paths.is_empty();
+    for path in paths {
+        crate::views::lightbox::release_lightbox_image(&path, window, cx);
+    }
+    released
 }
 
 pub fn diagram_cache_has_pending_release() -> bool {
