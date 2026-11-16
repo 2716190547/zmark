@@ -70,3 +70,67 @@ impl SourceSyntaxSession {
         results
     }
 }
+
+// Oniguruma capture regions are not Send. Keep the resumable parser on one
+// thread; only immutable requests and owned token results cross the channel.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+pub struct SourceSyntaxWorker {
+    sender: std::sync::OnceLock<Option<std::sync::mpsc::Sender<SourceSyntaxJob>>>,
+}
+#[cfg(target_os = "macos")]
+struct SourceSyntaxJob {
+    blocks: std::sync::Arc<Vec<zmark_core::ast::ParsedCodeBlock>>,
+    wanted: Vec<zmark_core::syntax::CodeKey>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    reply: std::sync::mpsc::Sender<
+        Vec<(zmark_core::syntax::CodeKey, zmark_core::syntax::ParseResult)>,
+    >,
+}
+#[cfg(target_os = "macos")]
+impl SourceSyntaxWorker {
+    pub fn parse_visible(
+        &self,
+        blocks: std::sync::Arc<Vec<zmark_core::ast::ParsedCodeBlock>>,
+        wanted: Vec<zmark_core::syntax::CodeKey>,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Vec<(zmark_core::syntax::CodeKey, zmark_core::syntax::ParseResult)> {
+        let sender = self.sender.get_or_init(|| {
+            let (sender, receiver) = std::sync::mpsc::channel::<SourceSyntaxJob>();
+            std::thread::Builder::new()
+                .name("zmark-source-syntax".into())
+                .spawn(move || {
+                    let mut session = SourceSyntaxSession::default();
+                    for job in receiver {
+                        let results = session.parse_visible(&job.blocks, &job.wanted, &job.cancel);
+                        let _ = job.reply.send(results);
+                    }
+                })
+                .ok()
+                .map(|_| sender)
+        });
+        let failure = || {
+            wanted
+                .iter()
+                .cloned()
+                .map(|key| (key, zmark_core::syntax::ParseResult::InitFailed))
+                .collect()
+        };
+        let Some(sender) = sender else {
+            return failure();
+        };
+        let (reply, receiver) = std::sync::mpsc::channel();
+        if sender
+            .send(SourceSyntaxJob {
+                blocks,
+                wanted: wanted.clone(),
+                cancel,
+                reply,
+            })
+            .is_err()
+        {
+            return failure();
+        }
+        receiver.recv().unwrap_or_else(|_| failure())
+    }
+}

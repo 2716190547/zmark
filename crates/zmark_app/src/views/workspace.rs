@@ -137,6 +137,9 @@ pub struct WorkspaceView {
     pub syntax_cancel_flag: Arc<AtomicBool>,
     pub syntax_request_counter: u64,
     pub syntax_cache: Arc<std::sync::Mutex<zmark_core::syntax::SyntaxCache>>,
+    #[cfg(target_os = "macos")]
+    source_syntax_session: Arc<crate::syntax::SourceSyntaxWorker>,
+    #[cfg(not(target_os = "macos"))]
     source_syntax_session: Arc<std::sync::Mutex<crate::syntax::SourceSyntaxSession>>,
     pub syntax_attempts: std::collections::HashMap<zmark_core::syntax::CodeKey, (u8, u8)>,
     pub syntax_block_states:
@@ -1235,6 +1238,9 @@ impl WorkspaceView {
                         zmark_core::syntax::ParseResult,
                     )> = Vec::with_capacity(blocks.len());
                     if let Some(source_blocks) = source_blocks {
+                        #[cfg(target_os = "macos")]
+                        return source_session.parse_visible(source_blocks, blocks, cancel);
+                        #[cfg(not(target_os = "macos"))]
                         return source_session.lock().unwrap().parse_visible(&source_blocks, &blocks, &cancel);
                     }
                     for key in blocks {

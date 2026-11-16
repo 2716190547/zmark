@@ -96,3 +96,43 @@ fn shortcut_guide_has_the_six_canonical_entries() {
         assert_eq!(rows[0].0, "Ctrl+O");
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_source_worker_keeps_multiline_state_across_calling_threads() {
+    use std::sync::{Arc, atomic::AtomicBool};
+    use zmark_app::syntax::SourceSyntaxWorker;
+    use zmark_core::syntax::{ParseResult, SyntaxRole};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("worker.rs");
+    std::fs::write(
+        &path,
+        format!("/*\n{}*/\nfn tail() {{}}", "inside comment\n".repeat(90)),
+    )
+    .unwrap();
+    let doc = zmark_core::document::Document::from_file(path).unwrap();
+    let worker = Arc::new(SourceSyntaxWorker::default());
+    for block in doc.parsed.code_blocks.iter() {
+        let worker = worker.clone();
+        let blocks = doc.parsed.code_blocks.clone();
+        let wanted = vec![block.key.clone()];
+        let results = std::thread::spawn(move || {
+            worker.parse_visible(blocks, wanted, Arc::new(AtomicBool::new(false)))
+        })
+        .join()
+        .unwrap();
+        let ParseResult::Ready(spans) = &results[0].1 else {
+            panic!("native worker must return highlighted spans");
+        };
+        assert_eq!(spans[0].role, SyntaxRole::Comment);
+    }
+    let cancelled = worker.parse_visible(
+        doc.parsed.code_blocks.clone(),
+        vec![doc.parsed.code_blocks[0].key.clone()],
+        Arc::new(AtomicBool::new(true)),
+    );
+    assert!(
+        cancelled.is_empty(),
+        "cancelled work must not produce stale tokens"
+    );
+}

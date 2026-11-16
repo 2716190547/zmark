@@ -14,5 +14,15 @@ thiserror = "2.0"
 dirs = "6.0"
 tempfile = "3.17"
 rusty-mermaid = { version = "0.2.0", features = ["svg"] }
+two-face = { version = "0.5.2", default-features = false }
+syntect = { version = "5.3", default-features = false, features = ["parsing", "default-syntaxes"] }
+
+# Native Syntect backend avoids the larger fancy-regex cache on macOS.
+# Keep the existing pure-Rust backend on Windows/Linux for unchanged builds.
+[target.'cfg(target_os = "macos")'.dependencies]
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-onig"] }
+syntect = { version = "5.3", default-features = false, features = ["regex-onig"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
-syntect = { version = "5.3", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
+syntect = { version = "5.3", default-features = false, features = ["regex-fancy"] }
