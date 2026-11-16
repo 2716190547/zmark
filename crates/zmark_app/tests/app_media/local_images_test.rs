@@ -548,3 +548,53 @@ fn lightbox_caches_natural_image_size_and_falls_back_for_missing_files() {
     state.update_viewport(gpui::size(gpui::px(640.), gpui::px(480.)));
     assert!(state.zoom.is_finite() && state.zoom > 0.0);
 }
+
+
+#[test]
+fn large_opaque_images_keep_corner_order_and_alpha_images_keep_precision() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("opaque.png");
+    let pixels = image::RgbImage::from_fn(3000, 1000, |x, y| image::Rgb(match (x < 1500, y < 500) {
+        (true, true) => [255, 0, 0], (false, true) => [0, 255, 0],
+        (true, false) => [0, 0, 255], (false, false) => [255, 255, 0],
+    }));
+    pixels.save(&path).unwrap();
+    let loaded = load_image(path.to_str().unwrap(), None).unwrap();
+    assert_eq!(loaded.natural_size, (3000.0, 1000.0));
+    assert!(loaded.width <= 1600 && loaded.height <= 534);
+    let pixels = bitmap(&loaded);
+    for (x, y, color) in [(10, 10, [255, 0, 0, 255]), (loaded.width-11, 10, [0, 255, 0, 255]),
+        (10, loaded.height-11, [0, 0, 255, 255]), (loaded.width-11, loaded.height-11, [255, 255, 0, 255])] {
+        assert_eq!(pixels.get_pixel(x, y).0, color);
+    }
+    let path = dir.path().join("large-alpha.png");
+    RgbaImage::from_pixel(3000, 10, Rgba([240, 80, 20, 128])).save(&path).unwrap();
+    let loaded = load_image(path.to_str().unwrap(), None).unwrap();
+    assert_eq!(bitmap(&loaded).get_pixel(5, 2).0, [240, 80, 20, 128]);
+}
+
+
+#[cfg(target_os = "macos")]
+#[test]
+fn large_jpeg_thumbnail_applies_exif_orientation_to_pixels_and_natural_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rotated.jpg");
+    image::RgbImage::from_fn(2000, 60, |x, _| image::Rgb(if x < 1000 { [255, 0, 0] } else { [0, 255, 0] }))
+        .save(&path).unwrap();
+    let original = std::fs::read(&path).unwrap();
+    let exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0";
+    let mut bytes = original[..2].to_vec();
+    bytes.extend_from_slice(&[0xff, 0xe1]);
+    bytes.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+    bytes.extend_from_slice(exif);
+    bytes.extend_from_slice(&original[2..]);
+    std::fs::write(&path, bytes).unwrap();
+    let loaded = load_image(path.to_str().unwrap(), None).unwrap();
+    assert_eq!(loaded.natural_size, (60.0, 2000.0));
+    assert!(loaded.height <= 1600 && loaded.width < loaded.height);
+    let pixels = bitmap(&loaded);
+    let top = pixels.get_pixel(loaded.width / 2, 10).0;
+    let bottom = pixels.get_pixel(loaded.width / 2, loaded.height - 11).0;
+    assert!(top[0] > 200 && top[1] < 40);
+    assert!(bottom[1] > 200 && bottom[0] < 40);
+}

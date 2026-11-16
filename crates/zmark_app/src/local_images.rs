@@ -10,6 +10,9 @@ use std::sync::{
 };
 use tempfile::NamedTempFile;
 
+#[cfg(target_os = "macos")]
+mod native;
+
 pub const MAX_INPUT_BYTES: u64 = 20 * 1024 * 1024;
 pub const MAX_DECODED_BYTES: u64 = 64_000_000;
 /// Budget for decoded images visible in the preview. GPUI retains both this
@@ -123,6 +126,16 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
         Ok(
             format @ (ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP),
         ) => {
+            #[cfg(target_os = "macos")]
+            if matches!(format, ImageFormat::Png | ImageFormat::Jpeg) {
+                if let Some((pixels, natural_size)) = native::thumbnail(&bytes, format)? {
+                    let (width, height) = pixels.dimensions();
+                    let decoded_bytes = check_dimensions(width, height)?;
+                    let render = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)]));
+                    return Ok(Arc::new(LocalImage { snapshot: None, render: Some(render), source_path: path,
+                        width, height, natural_size, decoded_bytes }));
+                }
+            }
             let mut limits = Limits::default();
             limits.max_image_width = Some(4000);
             limits.max_image_height = Some(4000);

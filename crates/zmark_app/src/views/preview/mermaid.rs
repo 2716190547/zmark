@@ -14,6 +14,7 @@ struct SvgAsset;
 struct Svg {
     file: tempfile::NamedTempFile,
     bytes: usize,
+    size: (f32, f32),
 }
 impl Asset for SvgAsset {
     type Source = Source;
@@ -36,10 +37,60 @@ impl Asset for SvgAsset {
                 .map_err(|e| Arc::<str>::from(e.to_string()))?;
             file.write_all(svg.as_bytes())
                 .map_err(|e| Arc::<str>::from(e.to_string()))?;
-            let bytes = diagram_texture_bytes(file.path());
-            Ok(Arc::new(Svg { file, bytes }))
+            let (w, h) = zmark_core::mermaid::extract_svg_dimensions(&svg);
+            let size = (w as f32, h as f32);
+            let bytes = (size.0 * size.1 * 16.0).ceil() as usize;
+            Ok(Arc::new(Svg { file, bytes, size }))
         })
     }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct RasterSource {
+    path: PathBuf,
+    width: u32,
+    height: u32,
+}
+struct RasterAsset;
+impl Asset for RasterAsset {
+    type Source = RasterSource;
+    type Output = Result<Arc<RenderImage>, Arc<str>>;
+    fn load(
+        source: RasterSource,
+        cx: &mut App,
+    ) -> impl std::future::Future<Output = Self::Output> + Send + 'static {
+        let renderer = cx.svg_renderer();
+        cx.background_executor().spawn(async move {
+            let bytes = std::fs::read(&source.path).map_err(|e| Arc::<str>::from(e.to_string()))?;
+            let svg = renderer
+                .parse_svg(&bytes)
+                .map_err(|e| Arc::<str>::from(e.to_string()))?;
+            renderer
+                .render_parsed(
+                    &svg,
+                    SvgSize::ExactSize(size(
+                        DevicePixels(source.width as i32),
+                        DevicePixels(source.height as i32),
+                    )),
+                )
+                .map_err(|e| Arc::<str>::from(e.to_string()))
+        })
+    }
+}
+
+/// Round upward to limit resize churn; cap allocation independently of SVG size.
+fn preview_pixels(natural: (f32, f32), width: f32, scale: f32) -> (u32, u32) {
+    let desired = width.max(1.0).min(natural.0.max(1.0)) * scale.clamp(1.0, 4.0);
+    let width = (desired / 64.0).ceil() * 64.0;
+    let height = width * natural.1.max(1.0) / natural.0.max(1.0);
+    let ratio = (4_000_000.0 / (width * height))
+        .sqrt()
+        .min(4000.0 / width.max(height))
+        .min(1.0);
+    (
+        (width * ratio).floor().max(1.0) as u32,
+        (height * ratio).floor().max(1.0) as u32,
+    )
 }
 
 struct Request {
@@ -51,10 +102,11 @@ struct Request {
 struct Requests {
     frame: u64,
     entries: HashMap<(u64, bool), Request>,
+    rasters: HashMap<RasterSource, u64>,
 }
 static REQUESTS: LazyLock<Mutex<Requests>> = LazyLock::new(|| Mutex::new(Requests::default()));
 
-pub(super) fn retire(evicted: &[PathBuf], cx: &mut App) {
+pub(super) fn retire(evicted: &[PathBuf], window: &mut Window, cx: &mut App) {
     let sources = {
         let mut requests = REQUESTS.lock().unwrap();
         requests.frame += 1;
@@ -73,8 +125,51 @@ pub(super) fn retire(evicted: &[PathBuf], cx: &mut App) {
         });
         sources
     };
+    release_images(evicted, window, cx);
     for source in sources {
         cx.remove_asset::<SvgAsset>(&source);
+    }
+}
+
+impl Requests {
+    fn take_retired_rasters(&mut self, paths: &[PathBuf]) -> Vec<RasterSource> {
+        let mut retired = Vec::new();
+        self.rasters.retain(|source, _| {
+            if paths.contains(&source.path) {
+                retired.push(source.clone());
+                false
+            } else {
+                true
+            }
+        });
+        let mut bytes: u64 = self
+            .rasters
+            .keys()
+            .map(|s| u64::from(s.width) * u64::from(s.height) * 4)
+            .sum();
+        while bytes > 16 * 1024 * 1024 {
+            let oldest = self
+                .rasters
+                .iter()
+                .filter(|(_, frame)| **frame + 1 < self.frame)
+                .min_by_key(|(_, frame)| **frame)
+                .map(|(source, _)| source.clone());
+            let Some(source) = oldest else { break };
+            bytes = bytes.saturating_sub(u64::from(source.width) * u64::from(source.height) * 4);
+            self.rasters.remove(&source);
+            retired.push(source);
+        }
+        retired
+    }
+}
+
+pub(super) fn release_images(paths: &[PathBuf], window: &mut Window, cx: &mut App) {
+    let retired = REQUESTS.lock().unwrap().take_retired_rasters(paths);
+    for source in retired {
+        if let Some(Ok(image)) = window.get_asset::<RasterAsset>(&source, cx) {
+            crate::views::lightbox::drop_image_from_atlas(cx, image, window);
+        }
+        cx.remove_asset::<RasterAsset>(&source);
     }
 }
 
@@ -123,6 +218,7 @@ pub(super) struct Mermaid {
     pub theme: ThemeColors,
     pub strings: &'static I18nStrings,
     pub open: Option<OnOpenLightboxCallback>,
+    pub width: f32,
 }
 impl RenderOnce for Mermaid {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
@@ -154,12 +250,48 @@ impl RenderOnce for Mermaid {
         match result {
             Some(Ok(svg)) => {
                 let path = svg.file.path().to_path_buf();
-                let mut cache = DIAGRAM_CACHE.lock().unwrap();
-                if cache.get(&key).is_none() {
-                    cache.insert_sized(key, path.clone(), svg.bytes);
+                let display_width = (self.width - 34.0).max(1.0).min(svg.size.0);
+                let display = (
+                    display_width,
+                    display_width * svg.size.1 / svg.size.0.max(1.0),
+                );
+                let (width, height) =
+                    preview_pixels(svg.size, display_width, window.scale_factor());
+                let source = RasterSource {
+                    path: path.clone(),
+                    width,
+                    height,
+                };
+                {
+                    let mut requests = REQUESTS.lock().unwrap();
+                    let frame = requests.frame;
+                    requests.rasters.insert(source.clone(), frame);
                 }
-                drop(cache);
-                render_mermaid_container(path, hash, &self.theme, self.strings, self.open.as_ref())
+                DIAGRAM_CACHE.lock().unwrap().insert_sized(
+                    key,
+                    path.clone(),
+                    width as usize * height as usize * 4,
+                );
+                let image = match window.use_asset::<RasterAsset>(&source, cx) {
+                    Some(Ok(image)) => Some(image),
+                    Some(Err(error)) => {
+                        return div()
+                            .p_3()
+                            .text_color(self.theme.text_muted)
+                            .child(format!("图表栅格化失败：{error}"))
+                            .into_any_element()
+                    }
+                    None => None,
+                };
+                render_mermaid_container(
+                    path,
+                    image,
+                    display,
+                    hash,
+                    &self.theme,
+                    self.strings,
+                    self.open.as_ref(),
+                )
             }
             Some(Err(error)) => div()
                 .w_full()
@@ -213,6 +345,7 @@ mod tests {
                 theme: crate::theme::ThemeColors::resolve("default", self.dark),
                 strings: zmark_core::i18n::get_strings(zmark_core::i18n::SupportedLocale::En),
                 open: None,
+                width: 640.0,
             }
         }
     }
@@ -300,5 +433,49 @@ mod tests {
             !path.exists(),
             "native asset owns its immutable temporary SVG"
         );
+    }
+}
+
+#[cfg(test)]
+mod raster_tests {
+    use super::{preview_pixels, RasterSource, Requests};
+
+    #[test]
+    fn preview_pixels_follow_width_and_dpr_without_filling_the_budget() {
+        assert_eq!(preview_pixels((1000.0, 600.0), 400.0, 2.0), (832, 499));
+        assert_eq!(
+            preview_pixels((1000.0, 600.0), 400.0, 2.0),
+            preview_pixels((1000.0, 600.0), 410.0, 2.0)
+        );
+        let (w1, _) = preview_pixels((1000.0, 600.0), 400.0, 1.0);
+        let (w3, _) = preview_pixels((1000.0, 600.0), 400.0, 3.0);
+        assert!(w3 > w1);
+        for natural in [(1.0, 10000.0), (10000.0, 1.0), (10000.0, 10000.0)] {
+            let (w, h) = preview_pixels(natural, 10000.0, 4.0);
+            assert!(w <= 4000 && h <= 4000 && u64::from(w) * u64::from(h) <= 4_000_000);
+            assert!(w > 0 && h > 0);
+        }
+    }
+    #[test]
+    fn raster_budget_protects_visible_variants_and_releases_hidden_sources() {
+        let a = RasterSource {
+            path: "same.svg".into(),
+            width: 2000,
+            height: 1500,
+        };
+        let b = RasterSource {
+            path: "same.svg".into(),
+            width: 1000,
+            height: 1500,
+        };
+        let mut requests = Requests::default();
+        requests.frame = 3;
+        requests.rasters.insert(a.clone(), 2);
+        requests.rasters.insert(b.clone(), 2);
+        assert!(requests.take_retired_rasters(&[]).is_empty());
+        requests.rasters.insert(a.clone(), 1);
+        assert_eq!(requests.take_retired_rasters(&[]), vec![a]);
+        assert_eq!(requests.take_retired_rasters(&["same.svg".into()]), vec![b]);
+        assert!(requests.rasters.is_empty());
     }
 }

@@ -63,6 +63,9 @@ pub fn render_preview_pane_with_callbacks(
     let origins = scroll_state.origins();
     let total = scroll_state.total_height();
     let scroll_handle = scroll_state.scroll_handle().clone();
+    let pane_width = f32::from(scroll_handle.bounds().size.width);
+    let media_width = if pane_width > 1.0 { pane_width - 64.0 } else { max_column_width }
+        .min(max_column_width).max(1.0);
     let wheel_cb = callbacks.on_wheel.clone();
     regions.lock().unwrap().clear();
 
@@ -167,6 +170,7 @@ pub fn render_preview_pane_with_callbacks(
                 &item_parsed.code_blocks,
                 &flat,
                 "0",
+                media_width,
                 reduce_motion,
             ));
 
@@ -381,6 +385,7 @@ fn render_block_element(
     code_blocks: &[zmark_core::ast::ParsedCodeBlock],
     flat: &zmark_core::ast::FlattenResult,
     path: &str,
+    media_width: f32,
     reduce_motion: bool,
 ) -> AnyElement {
     match block {
@@ -478,7 +483,7 @@ fn render_block_element(
                         hasher.finish()
                     };
                     fade_in_card(
-                        render_mermaid_diagram(code, theme, strings, base_font_size, on_open_lightbox),
+                        render_mermaid_diagram(code, theme, strings, base_font_size, on_open_lightbox, media_width),
                         reduce_motion,
                         format!("mermaid_fade:{hash:016x}:{}", theme.is_dark),
                     )
@@ -531,6 +536,7 @@ fn render_block_element(
                     code_blocks,
                     flat,
                     &child_path,
+                    media_width - 28.0,
                     reduce_motion,
                 ));
             }
@@ -571,6 +577,7 @@ fn render_block_element(
             code_blocks,
             flat,
             path,
+            media_width,
             reduce_motion,
         ),
         BlockElement::Table { headers, rows } => {
@@ -1140,10 +1147,10 @@ impl DiagramCache {
                 let old_path = std::mem::replace(&mut entry.path, path);
                 let _ = std::fs::remove_file(&old_path);
                 self.evicted.push(old_path);
-                self.bytes = self.bytes.saturating_sub(entry.bytes);
-                entry.bytes = bytes;
-                self.bytes += bytes;
             }
+            self.bytes = self.bytes.saturating_sub(entry.bytes);
+            entry.bytes = bytes;
+            self.bytes += bytes;
             if let Some(pos) = self.order.iter().position(|k| k == &key) {
                 self.order.remove(pos);
             }
@@ -1240,7 +1247,7 @@ pub fn release_evicted_diagram_images(window: &mut Window, cx: &mut App) -> bool
         cache.begin_frame();
         cache.take_evicted()
     };
-    mermaid::retire(&paths, cx);
+    mermaid::retire(&paths, window, cx);
     if paths.is_empty() {
         return false;
     }
@@ -1269,6 +1276,7 @@ pub fn finish_diagram_frame(pinned: Option<&std::path::Path>) -> bool {
 pub fn release_hidden_diagram_images(pinned: Option<&std::path::Path>, window: &mut Window, cx: &mut App) -> bool {
     let paths = DIAGRAM_CACHE.lock().unwrap().take_hidden_images(pinned);
     let released = !paths.is_empty();
+    mermaid::release_images(&paths, window, cx);
     for path in paths {
         crate::views::lightbox::release_lightbox_image(&path, window, cx);
     }
@@ -1281,6 +1289,8 @@ pub fn diagram_cache_has_pending_release() -> bool {
 
 fn render_mermaid_container(
     path: std::path::PathBuf,
+    image: Option<Arc<RenderImage>>,
+    display: (f32, f32),
     code_hash: u64,
     theme: &ThemeColors,
     strings: &'static I18nStrings,
@@ -1347,10 +1357,9 @@ fn render_mermaid_container(
     }
 
     container
-        .child(
-            img(path)
-                .max_w_full()
-        )
+        .child(div().w(px(display.0)).h(px(display.1)).when_some(image, |el, image| {
+            el.child(img(image).size_full())
+        }))
         .into_any_element()
 }
 
@@ -1371,9 +1380,10 @@ fn render_mermaid_diagram(
     strings: &'static I18nStrings,
     _base_font_size: f32,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
+    media_width: f32,
 ) -> AnyElement {
     mermaid::Mermaid { code: Arc::from(code), theme: theme.clone(), strings,
-        open: on_open_lightbox.cloned() }.into_any_element()
+        open: on_open_lightbox.cloned(), width: media_width }.into_any_element()
 }
 
 struct CodeTooltipView {
@@ -1416,6 +1426,7 @@ fn render_list_element(
     code_blocks: &[zmark_core::ast::ParsedCodeBlock],
     flat: &zmark_core::ast::FlattenResult,
     path: &str,
+    media_width: f32,
     reduce_motion: bool,
 ) -> AnyElement {
     let mut item_elements = Vec::with_capacity(items.len());
@@ -1524,6 +1535,7 @@ fn render_list_element(
                         code_blocks,
                         flat,
                         &child_path,
+                    media_width - 28.0,
                     reduce_motion,
                     );
                     first_child_el = Some(
@@ -1555,6 +1567,7 @@ fn render_list_element(
                         code_blocks,
                         flat,
                         &child_path,
+                    media_width - 28.0,
                     reduce_motion,
                     )
                 } else {
@@ -1575,6 +1588,7 @@ fn render_list_element(
                         code_blocks,
                         flat,
                         &child_path,
+                    media_width - 28.0,
                     reduce_motion,
                     )
                 };
@@ -1664,7 +1678,7 @@ fn render_code_block(
         .unwrap_or(false);
 
     let on_copy_cb = on_copy.cloned();
-    let code_to_copy = code.to_string();
+    let code_to_copy = code.clone();
     let code_text = if code.is_empty() { " ".to_string() } else { code.to_string() };
 
     let canonical_lang = zmark_core::syntax::resolve_canonical_language(lang);
@@ -1788,7 +1802,7 @@ fn render_code_block(
         })
         .on_click(move |_, window, cx| {
             if let Some(ref cb) = on_copy_cb {
-                cb(code_to_copy.clone(), hash, window, cx);
+                cb(code_to_copy.to_string(), hash, window, cx);
             }
         })
         .child({

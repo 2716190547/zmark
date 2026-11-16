@@ -27,6 +27,9 @@ embed-resource = "3.0"
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2.7"
+core-foundation = "0.10"
+core-graphics = "0.24"
+foreign-types = "0.5"
 
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.12", default-features = false, features = ["font-kit", "test-support"] }

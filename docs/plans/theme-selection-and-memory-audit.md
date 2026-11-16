@@ -1,6 +1,6 @@
 # 主题选中色恢复与内存审视
 
-版本 R8，2026-11-16（补齐浏览后的资源回落、剩余优化排序及 Rust 1.100.0 本机升级）。用户已确认：Default 保留当前加深暖灰；其他主题恢复 6dfdab3 的主题适配（accent 混合 surface，浅色 12%、深色 20%）；正文系统原生选区不变。R2/R3 的内存范围为分析和测量方案；R4 已由用户扩展授权为工程落地及本机操作验证。无新增架构决策。
+版本 R9，2026-11-16（补齐浏览后的资源回落、Rust 1.100.0 升级，以及面向 200MiB 目标的媒体解码与纹理优化）。用户已确认：Default 保留当前加深暖灰；其他主题恢复 6dfdab3 的主题适配（accent 混合 surface，浅色 12%、深色 20%）；正文系统原生选区不变。R2/R3 的内存范围为分析和测量方案；R4 已由用户扩展授权为工程落地及本机操作验证。无新增架构决策。
 
 ## 实施和验收
 
@@ -350,3 +350,55 @@ macOS 可优先对照原生 Image I/O：`CGImageSourceCreateThumbnailAtIndex` �
 - 新版已重新启动，PID 60631。20:50:37 的启动样本为 RSS 166,352KiB、footprint 170.4M、peak 174.2M；只是启动存活检查，非相同浏览路径对照，**不与 PID 52991 的空闲值比较以宣称升级节省内存**。原件 `rust1100_startup.vmmap.txt`。
 
 **自动测试未运行（按用户要求）；macOS 已构建、安装并启动，Windows/Linux 编译和正式门禁尚未执行。** 准备推送构建更新时，在最终候选上再运行 `scripts/full_gate.sh` 并核实三平台 CI；本轮没有推送或创建 PR。
+
+
+## R9：面向 200MiB 目标的媒体优化与偶发卡顿审视
+
+用户继续授权本机内存和浏览性能优化，期望朝 200MB 以内推进。以下统一将 RSS 换算为 MiB，并保留 vmmap 的 footprint/peak 原始 M 标记；三者不是同一个指标。200MiB 是工程目标，不是任何文档、窗口、灯箱和缩放状态下的硬性上限。
+
+### 本轮浏览基线及证据边界
+
+对已安装的 Rust 1.100.0 版本 PID 60631，在窗口大小不变的情况下浏览第一份长 Markdown（约 195,468 字、5,200 多行），操作分屏预览滚动。本机 CUA 曾成功连接并操作该窗口；之后再次连接返回 `cgWindowNotFound`，不能把一次连接成功表述为全程 UI 验收。
+
+- 21:01:36：RSS 194,032KiB（约 189.5MiB），footprint 159.6M，进程历史 peak 290.2M。
+- 21:04:52 滚动后：RSS 258,480KiB（约 252.4MiB），footprint 214.7M，历史 peak 290.6M；graphics 16.9M、IOSurface 74.5M。此时 Malloc Large 空区仍有约 57.2M resident；不能将空区、纹理和所有进程 RSS 直接相加当作独立占用。
+- `/usr/bin/sample` 10 秒、2ms 间隔的活动样本存在 CoreText 排版及大量未符号化 release 地址；没有取得可精确归因的单帧卡顿轨迹。不能据此宣称用户的偶发卡顿已经完全复现或解决。
+
+原件：`/tmp/zmark-memory-session/round2_before.vmmap.txt`、`round2_after_scroll.vmmap.txt`、`round2-active.sample.txt`。这些是本机临时测量，不纳入 git，也不等同可随报告迁移的附件。
+
+### 已实施的两项主要改动
+
+**一、Mermaid 预览按显示宽度和 DPR 栅格化，灯箱保留原 SVG。** 之前预览使用 `img(path)`，GPUI 的 SVG 文件加载器按固有尺寸及固定 2x 生成位图，之后才由布局压缩显示。现在复用 GPUI 自带 `SvgRenderer`，后台生成预览纹理；宽度按实际列宽、嵌套缩进、窗口 scale_factor 计算，按 64px 档位减少微小缩放造成的重建。每张预览纹理最多 4MP、单边 4000px；这是分配边界，不会把小图强行放大到上限。双击灯箱仍使用原 SVG，可独立高分辨率渲染。
+
+为纹理资产记录独立的 16MiB 软预算，优先回收离屏旧尺寸；同时可见的不同尺寸变体均受保护，全部可见时允许暂时超预算，避免滚动过程中不断删除再生成。已有切源码/切文档后的离屏释放也接通新资产；旧的 GPUI 图片/灯箱释放路径继续保留。布局 SVG、纹理资产的预算有重叠语义，不把 32MiB 加 16MiB 当作实际常驻总量。代码：`views/preview/mermaid.rs`、`views/preview.rs`。
+
+**二、macOS 大幅不透明 PNG/JPEG 使用系统 Image I/O 缩略解码。** 原路径先完整解码，再以 Lanczos 缩到 1600px；4000×4000 的 RGBA 中间图本身约 61MiB，转换、缩图和分配器驻留会叠加峰值。现在通过 Image I/O 在解码阶段限制至 1600px，并处理 EXIF 方向；输入仍受原有 20MiB、4000px/16MP 限制。Core Foundation/Graphics 采用已在 lock 中存在的版本，只补直接依赖，不引入另一个图像框架。CFData 不复制输入，所有借用及原生对象均限制在一次解码内，返回自有像素。
+
+透明 PNG 保留原 Rust 解码器以保护 straight-alpha 精度；小图、GIF/WebP、Windows/Linux 路径不变。原生 JPEG 的色彩转换/缩略算法会产生小幅像素差异，这是有意采用系统解码的取舍，不能宣称逐像素等同旧路径。参考 Apple 的 [Image Sources 指南](https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/ImageIOGuide/imageio_source/ikpg_source.html)及 [WWDC 2018 图片内存建议](https://devstreaming-cdn.apple.com/videos/wwdc/2018/219mybpx95zm9x/219/219_image_and_graphics_best_practices.pdf)。代码：`local_images.rs`、`local_images/native.rs`。
+
+顺带取消预览代码块为“复制”按钮在每次渲染时创建完整 String；闭包共享现有 Arc，仅实际点击时转换为剪贴板文本。这是小幅热路径优化，未单独测出应用内存收益。
+
+### 解码隔离测量
+
+使用相同的合成 4000×4000 四色图片，最终均为 1600×1600；单次独立进程 `/usr/bin/time -l` 测量，原生探针直接引用本轮生产 `native.rs`。这是性能探针，不是 workspace 自动测试，也不覆盖全部图像兼容性。
+
+| 输入及路径 | 最大 RSS | 解码耗时 |
+| --- | ---: | ---: |
+| JPEG，原完整解码后缩图 | 167.7MiB | 326.84ms |
+| JPEG，Image I/O 缩略解码 | 63.4MiB | 221.79ms |
+| 不透明 PNG，原完整解码后缩图 | 166.9MiB | 368.93ms |
+| 不透明 PNG，Image I/O 缩略解码 | 56.6MiB | 132.81ms |
+
+PNG 四角颜色和次序一致；JPEG 四角有至多约 1 个通道单位的解码差异，次序一致。每条只测一次，耗时受同机负载影响，不能作为稳定延迟承诺。**隔离进程的约 104–110MiB 峰值差，不等同整个 ZMark 每次浏览都减少相同数值。** 本次没有在 macOS 上更换分配器或手工调用全局 trim。
+
+有效原件：`decode-final-jpg-old.txt`、`decode-final-jpg-native.txt`、`decode-final-png-old.txt`、`decode-final-png-native.txt`，均位于 `/tmp/zmark-memory-session/`。先前探针使用陈旧 Rust 产物及 PNG alpha 属性识别失败的日志不作为测量结果。
+
+### 自行审查、验证和仍需测量的部分
+
+当前代理按 ponytail-review 自行审查了调用链、异步资产生命周期、同时可见的尺寸变体、原生对象所有权、像素通道顺序和输入上限；没有派发新 pane 或独立代理，不称为独立审查批准。复用现有 GPUI Asset/纹理释放、Image I/O 及 CF 包装，未增加总缓存框架或可配置策略层；未发现应继续抽象或删除的额外层。
+
+新增尺寸/DPR/分配上限和可见变体预算的单元用例；扩充大 PNG 四角/透明度与 JPEG EXIF 方向用例，并同步旧 Mermaid 测试构造器的宽度字段。**自动测试未运行（按用户要求）**，不能写为这些用例通过。macOS release 构建及 bundle 签名成功；保留 33 条已有 warning 和上游 block future-incompatibility 提示。Windows/Linux 尚未构建验证。
+
+安装与新进程浏览测量待补：当前旧版进程 PID 60631 仍运行，CUA 无法取得其窗口，因此尚未覆盖 `/Applications/ZMark.app`。不得把已打包的新实现写作已安装，或把旧进程浏览数据当作新版本结果。
+
+后续重点仍是：按相同窗口和浏览路径复测整应用；分离窗口 IOSurface 基线、透明 PNG 的完整解码峰值、灯箱高分辨率纹理，以及长文段 CoreText 排版。多份大文本的保存基线共享继续列为下一阶段，需保护 dirty/冲突/撤销语义。本轮不通过丢弃正文、降低可见内容或清空撤销栈强行达到 200MiB。
