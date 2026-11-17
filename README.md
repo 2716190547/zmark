@@ -4,17 +4,19 @@
 
 [简体中文](README.zh-CN.md)
 
+[Source code and issues](https://github.com/2716190547/zmark) · [Installers and signed updates](https://github.com/2716190547/zmark-releases)
+
 ZMark is a desktop Markdown editor and reader for local files, with source editing for common code and text files. Write in source mode, read a formatted preview, or work in both views side by side. Organize folders in the sidebar and keep your documents where you choose.
 
 ## Download and install
 
-**Current version: 0.2.9** · [Release notes](docs/releases/v0.2.9.md)
+**Current version: 0.2.9** · [Release notes](https://github.com/2716190547/zmark/blob/dev/docs/releases/v0.2.9.md) · [0.2.9 source `033fb5d`](https://github.com/2716190547/zmark/tree/033fb5d7ca478afc06c15d902a7a516d7336e813)
 
 Download from [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.9). The [Gitee mirror](https://gitee.com/zeng_sc/zmark-releases/releases) may update later.
 
 | Platform | Package | Install |
 | --- | --- | --- |
-| macOS | ZIP / DMG | Move `ZMark.app` to Applications. |
+| macOS (Apple Silicon) | ZIP / DMG | Move `ZMark.app` to Applications. |
 | Windows x86_64 | Setup EXE | Run the installer. |
 | Linux x86_64 | DEB / tar.gz | Install the DEB or extract the tarball and run `usr/bin/zmark_app`. |
 
@@ -91,16 +93,18 @@ Settings provide light, dark, and system appearance; color palettes; language; r
 
 ## Technology
 
-ZMark uses **Rust** and **GPUI** for the desktop app, **pulldown-cmark** for Markdown parsing, **syntect** for code highlighting, and **rusty-mermaid** for diagram rendering. Local images use the Rust `image` crate; large opaque PNG/JPEG previews on macOS use native ImageIO thumbnail decoding. Preview diagrams are rasterized for their display size, and unused textures are released. See the [memory audit](docs/plans/theme-selection-and-memory-audit.md) for measurements and remaining limits; memory use depends on the document, media, and window size.
+ZMark uses **Rust** and **GPUI** for the desktop app, **pulldown-cmark** for Markdown parsing, **syntect** for code highlighting, and **rusty-mermaid** for diagram rendering. Local images use the Rust `image` crate; large opaque PNG/JPEG previews on macOS use native ImageIO thumbnail decoding. Preview diagrams are rasterized for their display size, and unused textures are released. See the [memory audit](https://github.com/2716190547/zmark/blob/dev/docs/plans/theme-selection-and-memory-audit.md) for measurements and remaining limits; memory use depends on the document, media, and window size.
 
 ## Build from source
 
-For contributors with access to the source repository, use the `dev` branch for the current application. Install rustup and the platform dependencies. `rust-toolchain.toml` pins **Rust 1.100.0**; Cargo uses it automatically when run through rustup:
+Use the public source repository’s `dev` branch for development. Install rustup and the platform dependencies. `rust-toolchain.toml` pins **Rust 1.100.0**; Cargo uses it automatically when run through rustup:
 
 ```sh
+git clone --branch dev https://github.com/2716190547/zmark.git
+cd zmark
 cargo run -p zmark_app
 ```
 
 The desktop workflow in `.github/workflows/build-desktop.yml` lists platform dependencies and packaging steps. On macOS, `./scripts/bundle_macos.sh` builds a staging bundle; add `--install` to install it explicitly.
 
-For local iteration, build and install with `./scripts/bundle_macos.sh --install`. Before pushing a release, run `scripts/full_gate.sh --bundle`. The [release guide](docs/releases/README.md) describes artifact verification and publication.
+For local iteration, build and install with `./scripts/bundle_macos.sh --install`. Before pushing a release, run `scripts/full_gate.sh --bundle`. The [release guide](https://github.com/2716190547/zmark/blob/dev/docs/releases/README.md) describes artifact verification and publication.
