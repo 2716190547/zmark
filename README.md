@@ -4,19 +4,29 @@
 
 [简体中文](README.zh-CN.md)
 
-ZMark is a desktop Markdown editor and reader for local files. Write in source mode, read a formatted preview, or work in both views side by side. Organize folders in the sidebar and keep your documents where you choose.
+[Source code and issues](https://github.com/2716190547/zmark) · [Installers and signed updates](https://github.com/2716190547/zmark-releases)
+
+ZMark is a desktop Markdown editor and reader for local files, with source editing for common code and text files. Write in source mode, read a formatted preview, or work in both views side by side. Organize folders in the sidebar and keep your documents where you choose.
 
 ## Download and install
 
-Get the latest published version from [GitHub Releases](https://github.com/2716190547/zmark-releases/releases) or the [Gitee release mirror](https://gitee.com/zeng_sc/zmark-releases/releases). The current release provides a macOS ZIP and a Windows installer. Extract the ZIP and move `ZMark.app` to Applications, or run the Windows setup program. Platform-specific behavior may differ.
+**Current version: 0.2.9** · [Release notes](https://github.com/2716190547/zmark/blob/dev/docs/releases/v0.2.9.md) · [0.2.9 source `033fb5d`](https://github.com/2716190547/zmark/tree/033fb5d7ca478afc06c15d902a7a516d7336e813)
 
-Linux builds are configured in the project, but the current public release does not include a Linux installer.
+Download from [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.9). The [Gitee mirror](https://gitee.com/zeng_sc/zmark-releases/releases) may update later.
+
+| Platform | Package | Install |
+| --- | --- | --- |
+| macOS (Apple Silicon) | ZIP / DMG | Move `ZMark.app` to Applications. |
+| Windows x86_64 | Setup EXE | Run the installer. |
+| Linux x86_64 | DEB / tar.gz | Install the DEB or extract the tarball and run `usr/bin/zmark_app`. |
+
+The macOS app is Ad-Hoc signed and is not notarized by Apple. The Windows installer has no publisher code signature. Platform-specific behavior may differ.
 
 ## Get started
 
-1. Open a Markdown file with **Cmd+O** on macOS or **Ctrl+O** on Windows and Linux. You can also start by editing the welcome draft.
+1. Open a Markdown or supported text file with **Cmd+O** on macOS or **Ctrl+O** on Windows and Linux. You can also start by editing the welcome draft.
 2. Choose **Source**, **Split**, or **Preview** in the toolbar. In split view, the two panes scroll together.
-3. Open the sidebar with **Cmd+B** or **Ctrl+B**. Add a folder to browse its Markdown files, search by file or folder name, or use the document outline to jump to a heading.
+3. Open the sidebar with **Cmd+B** or **Ctrl+B**. Drop files or folders into the window to add them to the sidebar. Filter by name, or use a Markdown document’s outline to jump to a heading.
 4. Save with **Cmd+S** or **Ctrl+S**. Choose a location the first time you save a draft. Double-click the document title to rename it.
 5. Open settings with **Cmd+,** or **Ctrl+,** to adjust appearance, editing, saving, and language.
 
@@ -24,7 +34,11 @@ Linux builds are configured in the project, but the current public release does 
 
 ### Files and folders
 
-The sidebar groups workspace folders, files opened outside those folders, and drafts. You can add more than one workspace folder and create Markdown files inside one. Removing a workspace folder from the sidebar does not delete its files. The search field filters **names**, rather than searching document contents; the outline lists headings in the active document.
+The sidebar groups workspace folders, files opened outside those folders, and drafts. Add folders using the toolbar or drag files and folders from your desktop. Supported files include Markdown, plain text, Rust, Python, JavaScript/TypeScript, C/C++, Java, Go, HTML/CSS, JSON, YAML, TOML, shell scripts, and more. Non-Markdown files open in source mode with language highlighting.
+
+Click a folder row to expand or collapse it; double-click its name to rename. Hold **Shift** for a range, or **Cmd** on macOS / **Ctrl** elsewhere to add or remove individual selections. Use the batch controls in the top-right corner and press **Esc** to leave multiselection. **Remove** hides sidebar items without deleting files; the undo control remains available for five seconds. **Delete** moves items to the system trash and is available through the context menu or batch toolbar.
+
+The sidebar search filters **names**. To search the active document’s contents, click the toolbar search icon or press **Cmd+F** / **Ctrl+F**. Click a result to jump to it. Use **Enter / Shift+Enter** or **F3 / Shift+F3** for the next or previous match; the find input also supports the arrow keys. The outline lists Markdown headings.
 
 Existing files can be saved automatically after editing or when the window loses focus; both behaviors can be configured in settings. A new draft needs a save location before it becomes a file. Unsaved changes are confirmed when closing.
 
@@ -68,6 +82,10 @@ Settings provide light, dark, and system appearance; color palettes; language; r
 | --- | --- | --- |
 | Open file | Cmd+O | Ctrl+O |
 | Save | Cmd+S | Ctrl+S |
+| Find in document | Cmd+F | Ctrl+F |
+| Next / previous match | F3 / Shift+F3 | F3 / Shift+F3 |
+| Undo sidebar removal (within 5 seconds) | Cmd+Option+Z | Ctrl+Alt+Z |
+| Exit multiselection / close find | Esc | Esc |
 | Source / split / preview | Cmd+1 / 2 / 3 | Ctrl+1 / 2 / 3 |
 | Toggle sidebar | Cmd+B | Ctrl+B |
 | Settings | Cmd+, | Ctrl+, |
@@ -75,14 +93,18 @@ Settings provide light, dark, and system appearance; color palettes; language; r
 
 ## Technology
 
-ZMark uses **Rust** and **GPUI** for the desktop app, **pulldown-cmark** for Markdown parsing, **syntect** for code highlighting, and **rusty-mermaid** for diagram rendering. Local images are decoded with the Rust `image` crate.
+ZMark uses **Rust** and **GPUI** for the desktop app, **pulldown-cmark** for Markdown parsing, **syntect** for code highlighting, and **rusty-mermaid** for diagram rendering. Local images use the Rust `image` crate; large opaque PNG/JPEG previews on macOS use native ImageIO thumbnail decoding. Preview diagrams are rasterized for their display size, and unused textures are released. See the [memory audit](https://github.com/2716190547/zmark/blob/dev/docs/plans/theme-selection-and-memory-audit.md) for measurements and remaining limits; memory use depends on the document, media, and window size.
 
 ## Build from source
 
-For contributors with access to the source repository, use the `dev` branch for the current application. Install a current stable Rust toolchain and platform dependencies, then run:
+Use the public source repository’s `dev` branch for development. Install rustup and the platform dependencies. `rust-toolchain.toml` pins **Rust 1.100.0**; Cargo uses it automatically when run through rustup:
 
 ```sh
+git clone --branch dev https://github.com/2716190547/zmark.git
+cd zmark
 cargo run -p zmark_app
 ```
 
 The desktop workflow in `.github/workflows/build-desktop.yml` lists platform dependencies and packaging steps. On macOS, `./scripts/bundle_macos.sh` builds a staging bundle; add `--install` to install it explicitly.
+
+For local iteration, build and install with `./scripts/bundle_macos.sh --install`. Before pushing a release, run `scripts/full_gate.sh --bundle`. The [release guide](https://github.com/2716190547/zmark/blob/dev/docs/releases/README.md) describes artifact verification and publication.
