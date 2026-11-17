@@ -35,4 +35,4 @@ ZMARK_LINUX_ASSETS_DIR=/absolute/path/linux-artifacts \
 
 发布脚本会再次运行测试门禁，核验 macOS 签名和版本，创建 DMG、签名 macOS/Windows 更新清单，创建草稿并回下载核对，最后转为公开发行并验证公开下载。发布说明默认读取 `docs/releases/v<version>.md`；可用 `ZMARK_RELEASE_NOTES` 指定文件。签名密钥保留在仓库外，禁止输出或提交。
 
-Gitee 镜像单独同步，GitHub 发布成功不代表镜像已经更新。发布记录须写明 source commit、CI run、各测试结果和公开校验结果。CI 通过不能替代 Windows/Linux 桌面实机体验验收。
+Gitee 镜像保证同步 macOS ZIP、Windows 安装程序和两份签名更新清单，DMG 与 Linux 包以 GitHub 为准。镜像上传使用 runner 预装的 curl；每个文件仍须回下载核对 SHA-256，已有文件先核验后复用。GitHub 发布成功不代表镜像已经更新。发布记录须写明 source commit、CI run、各测试结果和公开校验结果。CI 通过不能替代 Windows/Linux 桌面实机体验验收。
