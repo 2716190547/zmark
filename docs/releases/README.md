@@ -1,0 +1,36 @@
+# 版本与发布
+
+当前版本：**0.2.9**。更新说明：[v0.2.9](v0.2.9.md)。历史发行包及更新清单保留在公开的 `2716190547/zmark-releases` 仓库。
+
+## 版本来源
+
+- `crates/zmark_app/Cargo.toml`、`crates/zmark_core/Cargo.toml`、`crates/release_tool/Cargo.toml` 和对应的 `Cargo.lock` 项使用同一版本。
+- About 从 app 的 `CARGO_PKG_VERSION` 读取；macOS `Info.plist`、CI 安装包名和 Windows NSIS `VERSION` 从 app manifest 生成，无需另改常量。
+- 同步中英文 README 的当前版本和说明链接；新增 `docs/releases/v<version>.md`。历史计划、历史测量和第三方依赖版本不随应用版本替换。
+- `rust-toolchain.toml` 与 CI 固定 Rust 1.100.0；使用 rustup 的 Cargo，避免 PATH 中旧 Cargo 覆盖工具链选择。
+
+## 验证与推送
+
+本机体验迭代按用户约定不运行测试，直接构建安装。准备推送构建更新时，对最终候选执行：
+
+```sh
+scripts/full_gate.sh --bundle
+bash scripts/test_release_assets.sh
+```
+
+门禁覆盖 workspace 测试、串行的 Phase H/I 六目标、rename 检查及 macOS bundle。完成自行审查后提交并推送 `dev`，GitHub Actions `build-desktop` 生成三个平台的产物。保持现有 PR 打开，不自动合并。
+
+## 公开发行
+
+仅使用同一次成功 CI、同一 source commit 的产物。将 Actions 产物下载到 `target/` 下的独立目录，核对 macOS ZIP、Windows 安装程序及 Linux 包的 SHA-256，然后执行：
+
+```sh
+ZMARK_MACOS_ZIP=/absolute/path/ZMark-<version>-macos.zip \
+ZMARK_WINDOWS_SETUP=/absolute/path/ZMark-<version>-setup.exe \
+ZMARK_LINUX_ASSETS_DIR=/absolute/path/linux-artifacts \
+./scripts/release.sh <version>
+```
+
+发布脚本会再次运行测试门禁，核验 macOS 签名和版本，创建 DMG、签名 macOS/Windows 更新清单，创建草稿并回下载核对，最后转为公开发行并验证公开下载。发布说明默认读取 `docs/releases/v<version>.md`；可用 `ZMARK_RELEASE_NOTES` 指定文件。签名密钥保留在仓库外，禁止输出或提交。
+
+Gitee 镜像单独同步，GitHub 发布成功不代表镜像已经更新。发布记录须写明 source commit、CI run、各测试结果和公开校验结果。CI 通过不能替代 Windows/Linux 桌面实机体验验收。

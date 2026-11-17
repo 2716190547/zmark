@@ -1,5 +1,5 @@
 !ifndef VERSION
-  !define VERSION "0.2.1"
+  !error "Pass /DVERSION from crates/zmark_app/Cargo.toml"
 !endif
 !ifndef EXE_PATH
   !define EXE_PATH "target\release\zmark_app.exe"

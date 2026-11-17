@@ -22,6 +22,8 @@ printf 'wrong  ZMark-%s-linux-x86_64.deb\n' "$VERSION" > "$TMP/linux/SHA256SUMS-
 if run_preflight; then echo 'bad checksums unexpectedly accepted' >&2; exit 1; fi
 grep -q 'Linux artifact checksum mismatch' "$TMP/output"
 (cd "$TMP/linux" && shasum -a 256 "ZMark-$VERSION-linux-x86_64.deb" "ZMark-$VERSION-linux-x86_64.tar.gz") > "$TMP/linux/SHA256SUMS-linux"
+if ZMARK_RELEASE_NOTES="$TMP/missing.md" run_preflight; then echo 'missing notes unexpectedly accepted' >&2; exit 1; fi
+grep -q 'release notes not found or empty' "$TMP/output"
 if run_preflight; then echo 'unauthenticated release unexpectedly accepted' >&2; exit 1; fi
 grep -q 'gh is not authenticated' "$TMP/output"
-echo 'release asset preflight: missing / bad checksum / complete artifacts OK'
+echo 'release asset preflight: missing / bad checksum / missing notes / complete artifacts OK'

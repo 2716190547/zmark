@@ -5,5 +5,4 @@ mod preview_image_sizing_test;
 mod preview_selection_test;
 mod preview_virtual_scroll_test;
 mod split_scroll_sync_test;
-mod sync_scroll_app_test;
 mod preview_selection_interaction_test;

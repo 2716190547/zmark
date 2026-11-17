@@ -237,7 +237,7 @@ async fn rename_input_accepts_ime_text_caret_moves_and_enter_commits(cx: &mut Te
 }
 
 #[gpui::test]
-async fn folder_name_selects_and_renames_in_the_sidebar_without_switching_document(
+async fn folder_name_expands_and_renames_in_the_sidebar_without_switching_document(
     cx: &mut TestAppContext,
 ) {
     let dir = tempfile::tempdir().unwrap();
@@ -274,8 +274,8 @@ async fn folder_name_selects_and_renames_in_the_sidebar_without_switching_docume
     cx.update(|_, cx| {
         let ws = view.read(cx);
         assert!(
-            !ws.state.workspace_roots[0].is_expanded,
-            "name must not toggle"
+            ws.state.workspace_roots[0].is_expanded,
+            "a single click on the folder name expands it"
         );
         assert!(ws.selected_directory.is_some());
     });
@@ -285,6 +285,10 @@ async fn folder_name_selects_and_renames_in_the_sidebar_without_switching_docume
     });
     assert!(cx.debug_bounds("sidebar_rename_box").is_some());
     assert!(cx.debug_bounds("tab_rename_box").is_none());
+    cx.update(|_, cx| {
+        assert!(view.read(cx).state.workspace_roots[0].is_expanded,
+            "double-click rename must retain the expanded folder");
+    });
     cx.update(|window, cx| {
         let ws = view.read(cx);
         assert!(ws.state.active_key().unwrap().is_scratch());

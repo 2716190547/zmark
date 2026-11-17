@@ -462,7 +462,7 @@ async fn test_actual_decoded_render_image_budget(cx: &mut TestAppContext) {
         ("ultrawide_sf2", ultrawide_svg.clone(), 2.0, 0x2002),
         ("ultratall_sf1", ultratall_svg.clone(), 1.0, 0x3001),
         ("ultratall_sf2", ultratall_svg.clone(), 2.0, 0x3002),
-        // Hot cache check: re-opening 0x1003 with sf=2.0 hits cached _v2.svg
+        // Hot cache check: re-opening 0x1003 with sf=2.0 hits cached _v3.svg
         ("hot_cache_normal_sf2", normal_svg.clone(), 2.0, 0x1003),
     ];
 
@@ -480,11 +480,11 @@ async fn test_actual_decoded_render_image_budget(cx: &mut TestAppContext) {
                 .expect("displayed_path must be set")
         });
 
-        // Ensure newly generated files use _v2.svg suffix to avoid old unbudgeted cache files
+        // Ensure newly generated files use _v3.svg suffix to avoid old unbudgeted cache files
         assert!(
-            candidate_path.to_string_lossy().ends_with("_v2.svg")
+            candidate_path.to_string_lossy().ends_with("_v3.svg")
                 || candidate_path == path,
-            "cached file {:?} must have _v2 suffix",
+            "cached file {:?} must have _v3 suffix",
             candidate_path
         );
 
@@ -668,11 +668,15 @@ async fn test_lightbox_write_failure_fallback_without_blank_screen(cx: &mut Test
         let is_dark = view.read(app).theme(app).is_dark;
         let variant_str = if is_dark { "dark" } else { "light" };
         let sb = zmark_core::mermaid::scale_factor_to_bucket(window.scale_factor());
-        let path = cache_dir.join(format!("{:016x}_{}_{}_v2.svg", code_hash, variant_str, sb));
+        let path = cache_dir.join(format!("{:016x}_{}_{}_v3.svg", code_hash, variant_str, sb));
         (path, sb)
     });
 
-    let _ = std::fs::create_dir(&expected_unwritable_path);
+    // Remove a file from an earlier test run before blocking the current cache target.
+    if expected_unwritable_path.is_file() {
+        std::fs::remove_file(&expected_unwritable_path).unwrap();
+    }
+    std::fs::create_dir_all(&expected_unwritable_path).unwrap();
 
     cx.update(|window, app| {
         view.update(app, |ws, cx| {

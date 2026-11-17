@@ -1323,7 +1323,7 @@ fn path_context_menu<E: InteractiveElement + ParentElement + Styled + IntoElemen
 
 #[cfg(test)]
 mod collapsed_selection_tests {
-    use super::*;
+    use super::{retained_file, DocKey, DrawerSearchParams, FileTreeNode, PathBuf};
 
     #[test]
     fn collapsed_projection_preserves_identity_and_respects_selection_and_hidden_paths() {

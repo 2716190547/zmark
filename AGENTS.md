@@ -24,16 +24,16 @@
 
 - 功能开发在 `dev` 分支进行；未经明确要求不 push、不建 PR、不改写 git 历史。
 - 本轮用户已于 2026-11-04 明确要求任务完成后上传 PR：由协调端在任务完成并通过自行审查和用户验收后推送交付分支、创建或更新对应 PR，附改动与验证结果并回传链接；保持 PR 打开供审阅，不自动关闭或合并。执行端继续按阶段交付回调，不提前发布未验收代码。
-- 按可独立验证的阶段提交；中间提交前运行本次改动及调用链上受影响功能的相关测试，记录所跑命令与未跑范围，不将有限验证提交报告为阶段完成。
-- 阶段提审、打包前，在最终候选上运行 `cargo test --workspace` 及项目要求的 feature 专项回归，全绿后再提交交付。共享 editor/preview/workspace/theme/AST/布局链路的修改须包含相关历史回归；影响范围不明确时扩大到全量。
+- 按可独立验证的阶段提交，记录实际构建、验证与未跑范围；本机迭代不运行测试，准备推送时统一执行最终门禁。
+- 准备推送构建更新时，在最终候选上运行 `scripts/full_gate.sh`，覆盖 workspace 与 feature 专项；本机打包安装不单独触发测试。共享链路的历史回归继续保留，不通过删除有效保护使门禁通过。
 - Phase H 当前 21 项与 Phase I 28 项观测专项在阶段交付时用同一条多目标 `cargo test` 命令串行运行（`--test-threads=1`），并分别报告结果。H 的 B3/B4 共 8 项与默认全量重叠，结果分报、去重，不把默认全量当作覆盖所有专项。
 - Phase I 的 `phase_i_syntax_and_warm_palette_test` 与 `rework4_stage_a_workspace_test` 已用 `required-features` 隔离观测；阶段交付将它们与 Phase H 四个目标合并运行：`cargo test -p zmark_app --features test-observation --test phase_i_syntax_and_warm_palette_test --test rework4_stage_a_workspace_test --test phase_h_b1_real_geometry --test phase_h_b2_highlight_matches_copy --test phase_h_b3_autoscroll_real_events --test phase_h_b4_cmd_c_routing -- --test-threads=1`。默认全量不包含 Phase I 两组及 Phase H B1/B2；不能漏跑后声称完整回归。
 - 已派发任务若明确要求更严格的验证门槛，按该任务要求完成，不用新规则回溯减免。测试精简只删除有证据的重复、失效或已被更强检查替代的用例，不通过 ignore、放宽断言或缩小输入降低保护；详见 `docs/plans/test-suite-maintenance.md`。
 
 ## 开发循环与审查分级
 
-- **日常迭代**：每个改动/阶段运行 `scripts/dev_check.sh`（`cargo nextest run --workspace` + rename 门禁）。它并行执行全部 363 项测试，热运行约 7–10 秒；不要为每个中间提交重跑完整 `cargo test --workspace`。
-- **交付门槛**：在最终候选上运行一次 `scripts/full_gate.sh`（完整 `cargo test --workspace` + Phase I/H 六目标串行 + rename 门禁）；需要安装包时加 `--bundle`。当前最终门槛实测约 1.5 分钟（80.5 秒），改动前约 6–7 分钟。
+- **日常迭代**：按用户要求不运行测试，修改完成直接构建安装。`scripts/dev_check.sh` 保留为用户明确要求快速检查时的入口，不自动调用。
+- **交付门槛**：在最终候选上运行一次 `scripts/full_gate.sh`（完整 `cargo test --workspace` + Phase I/H 六目标串行 + rename 门禁）；需要安装包时加 `--bundle`。2026-11-17 最终候选默认 workspace 485 项，另含 Phase H/I 49 项执行（其中 8 项重复）；本机带打包门禁约 91 秒。耗时仅作参考。
 - **测试目标结构**：Phase H/I 的 6 个命名目标（`phase_h_b1/b2/b3/b4`、`phase_i_syntax_and_warm_palette_test`、`rework4_stage_a_workspace_test`）保持独立；其余 app 测试按领域合并为 `app_state/app_editor/app_preview/app_media`，core 测试合并为 `core_all`。`hidpi_lightbox_test`、`lightbox_*` 与 `cache_accounting_test` 因进程级纹理/分配器状态保持独立。不要把这些文件并入聚合目标，也不要把命名目标并入聚合目标。
 - **审查方式（2026-11-16 用户更新）**：由当前代理自行审查；不使用已弃用的 herdr-triad，不向其他 pane/窗口派审查、规划或执行任务，也不自动启动子代理。此约定覆盖旧文档及 grill-with-docs 等 skill 的独立代理审查关口；自查不表述为独立审查通过。只有用户后续明确要求协作时才另行安排。
 - **任务粒度**：一次会话只推进一个大任务；跨任务拆分为独立会话或分支，避免上下文与改动范围膨胀。
@@ -58,7 +58,7 @@ GPUI 0.2 的窗口装饰、拖拽与灯箱变换限制已记录在 `docs/adr/002
 
 ## 完成判定
 
-- 完成前确认：`git status` 干净、全量测试通过、需求逐条核对完毕。
+- 完成前确认：本轮改动已提交、需求逐条核对完毕；发布时最终门禁通过，本机迭代如实记录未运行测试。其他用户素材或无关改动保留并单独说明，不为得到干净状态而删除。
 - 最终报告第一行写 `STATUS: DONE` 或 `STATUS: BLOCKED`，便于协调窗口判定。
 - 有未完成项或替代实现时，必须写 `STATUS: BLOCKED` 或在报告中逐条标注，不能只写 DONE。
 

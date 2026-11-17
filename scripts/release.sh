@@ -9,6 +9,7 @@ RELEASES_REPO="${ZMARK_RELEASES_REPO:-2716190547/zmark-releases}"
 RELEASE_KEY="${ZMARK_RELEASE_KEY:-$HOME/.config/zmark/release.key}"
 WINDOWS_SETUP="${ZMARK_WINDOWS_SETUP:-}"
 LINUX_DIR="${ZMARK_LINUX_ASSETS_DIR:-}"
+RELEASE_NOTES="${ZMARK_RELEASE_NOTES:-$DIR/docs/releases/v$VERSION.md}"
 
 if [ -z "$VERSION" ]; then
     echo "usage: scripts/release.sh <version>" >&2
@@ -41,6 +42,10 @@ for suffix in deb tar.gz; do
         exit 1
     fi
 done
+if [ ! -s "$RELEASE_NOTES" ]; then
+    echo "error: release notes not found or empty: $RELEASE_NOTES" >&2
+    exit 1
+fi
 if ! gh auth status >/dev/null 2>&1; then
     echo "error: gh is not authenticated" >&2
     exit 1
@@ -139,7 +144,7 @@ gh release create "v$VERSION" \
     --repo "$RELEASES_REPO" \
     --draft \
     --title "ZMark v$VERSION" \
-    --notes "ZMark v$VERSION" \
+    --notes-file "$RELEASE_NOTES" \
     "$ZIP" "$MANIFEST" "$WINDOWS_ASSET" "$WINDOWS_MANIFEST" \
     "$DMG" "$DMG.sha256" "$LINUX_DEB" "$LINUX_TAR" "$VERIFY_DIR/SHA256SUMS-linux"
 

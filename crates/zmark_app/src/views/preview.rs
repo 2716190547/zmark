@@ -1673,9 +1673,7 @@ fn render_code_block(
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     code.as_ref().hash(&mut hasher);
     let hash = hasher.finish();
-    let is_copied = copied_code_hash
-        .map(|(h, t)| h == hash && t.elapsed() < std::time::Duration::from_millis(1200))
-        .unwrap_or(false);
+    let is_copied = copy_feedback_active(copied_code_hash, hash, std::time::Instant::now());
 
     let on_copy_cb = on_copy.cloned();
     let code_to_copy = code.clone();
@@ -1861,6 +1859,31 @@ fn render_code_block(
             )
         })
         .into_any_element()
+}
+
+fn copy_feedback_active(
+    copied: Option<(u64, std::time::Instant)>,
+    hash: u64,
+    now: std::time::Instant,
+) -> bool {
+    copied.is_some_and(|(copied_hash, instant)| {
+        copied_hash == hash && now.duration_since(instant) < std::time::Duration::from_millis(1200)
+    })
+}
+
+#[cfg(test)]
+mod copy_feedback_tests {
+    use super::copy_feedback_active;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn feedback_matches_the_block_and_expires_at_the_boundary() {
+        let start = Instant::now();
+        assert!(copy_feedback_active(Some((7, start)), 7, start + Duration::from_millis(1199)));
+        assert!(!copy_feedback_active(Some((7, start)), 7, start + Duration::from_millis(1200)));
+        assert!(!copy_feedback_active(Some((7, start)), 8, start));
+        assert!(!copy_feedback_active(None, 7, start));
+    }
 }
 
 #[cfg(test)]

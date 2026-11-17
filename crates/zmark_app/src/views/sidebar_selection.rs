@@ -192,7 +192,7 @@ pub fn selection_layer(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{point, px, size, Bounds, DocKey, HashSet, SidebarSelection};
 
     #[test]
     fn modifier_selection_excludes_drafts_and_shift_uses_file_rows() {

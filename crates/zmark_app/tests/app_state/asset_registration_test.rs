@@ -18,7 +18,6 @@ const PRODUCTION_ICONS: &[&str] = &[
     "icons/check.svg",
     "icons/files.svg",
     "icons/list.svg",
-    "icons/chevron-right.svg",
     "icons/palette.svg",
     "icons/languages.svg",
     "icons/info.svg",
