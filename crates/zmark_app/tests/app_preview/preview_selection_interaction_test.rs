@@ -95,3 +95,66 @@ async fn pressing_elsewhere_clears_an_existing_selection(cx: &mut TestAppContext
         "a click elsewhere must leave no highlighted range, got {after:?}"
     );
 }
+
+#[gpui::test]
+async fn fast_click_and_missing_mouse_up_do_not_leave_preview_dragging(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let b = pane(&view, cx);
+    let start = point(b.left() + px(60.), b.top() + px(60.));
+    let end = point(b.left() + px(400.), b.top() + px(200.));
+
+    // No redraw between press and release: handlers must use live state.
+    for _ in 0..3 {
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(start, MouseButton::Left, Modifiers::none());
+    }
+    cx.run_until_parked();
+    assert!(!cx.update(|_, cx| view.read(cx).is_preview_selecting));
+    let after_click = selection(&view, cx);
+    cx.simulate_mouse_move(end, None, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(selection(&view, cx), after_click, "hovering after quick clicks must not extend selection");
+
+    // A mouse-up can be lost outside the window. The next unpressed move ends the drag.
+    press(cx, start);
+    let before_hover = selection(&view, cx);
+    cx.simulate_mouse_move(end, None, Modifiers::none());
+    cx.run_until_parked();
+    assert!(!cx.update(|_, cx| view.read(cx).is_preview_selecting));
+    assert_eq!(selection(&view, cx), before_hover, "an unpressed move must preserve the last selection");
+}
+
+#[gpui::test]
+async fn escape_from_lightbox_cannot_resume_the_previous_text_drag(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let b = pane(&view, cx);
+    let start = point(b.left() + px(60.), b.top() + px(60.));
+    press(cx, start);
+    assert!(cx.update(|_, cx| view.read(cx).is_preview_selecting));
+    let before = selection(&view, cx);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image.png");
+    image::RgbaImage::new(8, 8).save(&path).unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |ws, cx| {
+            ws.open_image_lightbox(path, window, cx);
+            cx.notify();
+        });
+        let _ = window.draw(cx);
+    });
+    // The modal receives the release that the text pane no longer sees.
+    let card = cx.debug_bounds("lightbox_diagram_card").unwrap();
+    release(cx, card.center());
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.simulate_mouse_move(point(b.left() + px(400.), b.top() + px(200.)), None, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let ws = view.read(cx);
+        assert!(!ws.lightbox.is_open);
+        assert!(!ws.is_preview_selecting);
+        assert!(ws.preview_autoscroll_task.is_none());
+        assert!(ws.source_drag.is_none());
+        assert_eq!(ws.preview_selection, before, "closing a lightbox must not turn hovering into text selection");
+    });
+}

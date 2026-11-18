@@ -112,6 +112,10 @@ pub fn render_preview_pane_with_callbacks(
                 if !is_selecting {
                     return;
                 }
+                if event.pressed_button != Some(MouseButton::Left) {
+                    on_sel_move(selection, false, window, cx);
+                    return;
+                }
                 let Some(sel) = selection else { return };
                 let head = {
                     let reg = regions_move.lock().unwrap();
@@ -216,6 +220,10 @@ pub fn render_preview_pane_with_callbacks(
                 })
                 .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
                     if is_selecting {
+                        if event.pressed_button != Some(MouseButton::Left) {
+                            on_sel_move(selection, false, window, cx);
+                            return;
+                        }
                         // This block owns the drag while the pointer is over it; the pane-level
                         // fallback must not recompute (and overwrite) the head.
                         cx.stop_propagation();
@@ -292,7 +300,7 @@ pub fn render_preview_pane_with_callbacks(
             div()
                 .absolute()
                 .bottom_3()
-                .right_3()
+                .right_5()
                 .flex()
                 .items_center()
                 .gap_1p5()
@@ -323,6 +331,10 @@ pub fn render_preview_pane_with_callbacks(
                 .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
                     if is_selecting {
                         if let Some(ref sel_cb) = on_sel_move {
+                            if event.pressed_button != Some(MouseButton::Left) {
+                                sel_cb(selection, false, window, cx);
+                                return;
+                            }
                             if let Some(sel) = selection {
                                 let text_system = window.text_system();
                                 let reg = regions_move.lock().unwrap();
@@ -666,7 +678,7 @@ fn render_block_element(
                 .id("preview_table_scroll")
                 .w_full()
                 .min_w(px(0.))
-                .overflow_x_scroll()
+                .overflow_x_scroll().restrict_scroll_to_axis()
                 .my_2()
                 .child(
                     div()
@@ -757,6 +769,7 @@ fn render_styled_inlines(
                                 container = container.cursor(CursorStyle::PointingHand).on_mouse_down(
                                     MouseButton::Left,
                                     move |_, window, cx| {
+                                        cx.stop_propagation();
                                         open(snapshot.clone(), LOCAL_IMAGE_LIGHTBOX_HASH, Some(natural_size), window, cx)
                                     },
                                 );
@@ -1311,7 +1324,7 @@ fn render_mermaid_container(
         .items_center()
         .justify_center()
         .relative()
-        .overflow_x_scroll();
+        .overflow_x_scroll().restrict_scroll_to_axis();
 
     if let Some(cb) = on_open_lightbox {
         let cb = (*cb).clone();
@@ -1351,6 +1364,7 @@ fn render_mermaid_container(
             .cursor(CursorStyle::PointingHand)
             .hover(|s| s.border_color(theme.accent))
             .on_mouse_down(MouseButton::Left, move |_event, window, app| {
+                app.stop_propagation();
                 cb(p_click.clone(), code_hash, None, window, app);
             })
             .child(btn);
@@ -1748,7 +1762,7 @@ fn render_code_block(
     if should_wrap {
         content = content.whitespace_normal();
     } else {
-        content = content.overflow_x_scroll().whitespace_nowrap();
+        content = content.overflow_x_scroll().restrict_scroll_to_axis().whitespace_nowrap();
     }
 
     let content = with_text_probe_stateful(

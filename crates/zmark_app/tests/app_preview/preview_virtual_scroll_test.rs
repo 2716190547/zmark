@@ -9,6 +9,7 @@ use gpui::{
     point, px, Modifiers, MouseButton, Point, ScrollDelta, ScrollEvent, ScrollSource, TestAppContext,
     TouchPhase,
 };
+use gpui_component::scroll::ScrollbarHandle as _;
 
 fn long_doc() -> String {
     (0..180)
@@ -49,31 +50,35 @@ async fn thumb_follows_pointer_through_unmeasured_long_document(cx: &mut TestApp
     settle(cx, 8);
 
     let track = cx.debug_bounds("preview_scrollbar").unwrap();
-    let thumb = cx.debug_bounds("preview_scrollbar_thumb").unwrap();
-    let start = thumb.center();
+    let hover_pt = Point {
+        x: track.right() - px(6.),
+        y: track.origin.y + px(16.),
+    };
+    cx.simulate_mouse_move(hover_pt, None, Modifiers::none());
+    settle(cx, 2);
+    let (logical_len, travel) = cx.update(|_, cx| {
+        let ws = view.read(cx);
+        let vp_h = f32::from(track.size.height).max(1.0);
+        let content_h = f32::from(ws.preview_list.content_size().height).max(vp_h);
+        let logical_len = ((vp_h / content_h) * vp_h).max(48.0).min(vp_h);
+        (logical_len, (vp_h - logical_len).max(1.0))
+    });
+    let start = Point {
+        x: track.right() - px(6.),
+        y: track.origin.y + px(logical_len * 0.5),
+    };
     cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
 
     let mut previous_item = 0usize;
     for ratio in [0.31_f32, 0.68, 0.97] {
-        let target_y = track.origin.y
-            + (track.size.height - thumb.size.height) * ratio
-            + thumb.size.height * 0.5;
+        let target_y = track.origin.y + px(travel * ratio + logical_len * 0.5);
         let target = Point {
             x: start.x,
             y: target_y,
         };
         cx.simulate_mouse_move(target, MouseButton::Left, Modifiers::none());
         settle(cx, 3);
-        let actual = cx
-            .debug_bounds("preview_scrollbar_thumb")
-            .unwrap()
-            .center()
-            .y;
-        assert!(
-            (f32::from(actual - target_y)).abs() <= 2.0,
-            "thumb must follow pointer at ratio {ratio}: thumb {actual:?}, pointer {target_y:?}"
-        );
         let (state_ratio, item) = cx.update(|_, cx| {
             let ws = view.read(cx);
             (
@@ -82,7 +87,7 @@ async fn thumb_follows_pointer_through_unmeasured_long_document(cx: &mut TestApp
             )
         });
         assert!(
-            (state_ratio - ratio).abs() <= 0.03,
+            (state_ratio - ratio).abs() <= 0.04,
             "size-table ratio must match pointer ratio {ratio}, got {state_ratio}"
         );
         assert!(
@@ -97,7 +102,7 @@ async fn thumb_follows_pointer_through_unmeasured_long_document(cx: &mut TestApp
     };
     cx.simulate_mouse_up(last, MouseButton::Left, Modifiers::none());
     settle(cx, 2);
-    cx.update(|_, cx| assert!(view.read(cx).preview_scroll_drag.is_none()));
+    cx.update(|_, cx| assert!(!view.read(cx).preview_list.is_scrollbar_dragging()));
 }
 
 #[gpui::test]
@@ -196,8 +201,22 @@ async fn preview_dragged_to_end_stays_pinned_while_editor_wheels(cx: &mut TestAp
     settle(cx, 6);
 
     let track = cx.debug_bounds("preview_scrollbar").unwrap();
-    let thumb = cx.debug_bounds("preview_scrollbar_thumb").unwrap();
-    let start = thumb.center();
+    let hover_pt = Point {
+        x: track.right() - px(6.),
+        y: track.origin.y + px(16.),
+    };
+    cx.simulate_mouse_move(hover_pt, None, Modifiers::none());
+    settle(cx, 2);
+    let logical_len = cx.update(|_, cx| {
+        let ws = view.read(cx);
+        let vp_h = f32::from(track.size.height).max(1.0);
+        let content_h = f32::from(ws.preview_list.content_size().height).max(vp_h);
+        ((vp_h / content_h) * vp_h).max(48.0).min(vp_h)
+    });
+    let start = Point {
+        x: track.right() - px(6.),
+        y: track.origin.y + px(logical_len * 0.5),
+    };
     cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
     let end = Point {

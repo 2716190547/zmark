@@ -12,6 +12,219 @@ pub const CURRENT_CONFIG_VERSION: u32 = 1;
 /// Pre-rename config directory. Kept only so existing preferences migrate once.
 pub const LEGACY_APP_DIR: &str = "GlideMark";
 
+/// Palette identifier reserved for user-customized theme colors.
+pub const CUSTOM_PALETTE_ID: &str = "custom";
+
+/// Normalizes a 6-digit RGB hex color (`#RRGGBB` or `RRGGBB`) into lowercase `#rrggbb`.
+pub fn normalize_hex_rgb(input: &str) -> Option<String> {
+    let hex = input.trim().strip_prefix('#').unwrap_or_else(|| input.trim());
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("#{}", hex.to_ascii_lowercase()))
+}
+
+/// Identifies a customizable color slot inside a custom theme variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CustomColorSlot {
+    Bg,
+    Surface,
+    Border,
+    TextPrimary,
+    TextMuted,
+    Accent,
+    CodeBg,
+    SyntaxHeading,
+    SyntaxEmphasis,
+    SyntaxInlineCode,
+    SyntaxLink,
+    SyntaxBullet,
+    SyntaxCode,
+    SyntaxKeyword,
+    SyntaxFunction,
+    SyntaxAttribute,
+    SyntaxString,
+    SyntaxNumber,
+    SyntaxComment,
+}
+
+impl CustomColorSlot {
+    pub const CORE: [Self; 7] = [
+        Self::Bg,
+        Self::Surface,
+        Self::Border,
+        Self::TextPrimary,
+        Self::TextMuted,
+        Self::Accent,
+        Self::CodeBg,
+    ];
+
+    pub const SYNTAX: [Self; 12] = [
+        Self::SyntaxHeading,
+        Self::SyntaxEmphasis,
+        Self::SyntaxInlineCode,
+        Self::SyntaxLink,
+        Self::SyntaxBullet,
+        Self::SyntaxCode,
+        Self::SyntaxKeyword,
+        Self::SyntaxFunction,
+        Self::SyntaxAttribute,
+        Self::SyntaxString,
+        Self::SyntaxNumber,
+        Self::SyntaxComment,
+    ];
+
+    pub const ALL: [Self; 19] = [
+        Self::Bg,
+        Self::Surface,
+        Self::Border,
+        Self::TextPrimary,
+        Self::TextMuted,
+        Self::Accent,
+        Self::CodeBg,
+        Self::SyntaxHeading,
+        Self::SyntaxEmphasis,
+        Self::SyntaxInlineCode,
+        Self::SyntaxLink,
+        Self::SyntaxBullet,
+        Self::SyntaxCode,
+        Self::SyntaxKeyword,
+        Self::SyntaxFunction,
+        Self::SyntaxAttribute,
+        Self::SyntaxString,
+        Self::SyntaxNumber,
+        Self::SyntaxComment,
+    ];
+}
+
+/// Customizable hex color overrides (`#rrggbb`) for one light or dark variant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CustomThemePalette {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_primary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_muted: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_bg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_heading: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_emphasis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_inline_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_link: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_bullet: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_keyword: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_function: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_attribute: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_string: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_number: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_comment: Option<String>,
+}
+
+impl CustomThemePalette {
+    pub fn slot_ref(&self, slot: CustomColorSlot) -> &Option<String> {
+        match slot {
+            CustomColorSlot::Bg => &self.bg,
+            CustomColorSlot::Surface => &self.surface,
+            CustomColorSlot::Border => &self.border,
+            CustomColorSlot::TextPrimary => &self.text_primary,
+            CustomColorSlot::TextMuted => &self.text_muted,
+            CustomColorSlot::Accent => &self.accent,
+            CustomColorSlot::CodeBg => &self.code_bg,
+            CustomColorSlot::SyntaxHeading => &self.syntax_heading,
+            CustomColorSlot::SyntaxEmphasis => &self.syntax_emphasis,
+            CustomColorSlot::SyntaxInlineCode => &self.syntax_inline_code,
+            CustomColorSlot::SyntaxLink => &self.syntax_link,
+            CustomColorSlot::SyntaxBullet => &self.syntax_bullet,
+            CustomColorSlot::SyntaxCode => &self.syntax_code,
+            CustomColorSlot::SyntaxKeyword => &self.syntax_keyword,
+            CustomColorSlot::SyntaxFunction => &self.syntax_function,
+            CustomColorSlot::SyntaxAttribute => &self.syntax_attribute,
+            CustomColorSlot::SyntaxString => &self.syntax_string,
+            CustomColorSlot::SyntaxNumber => &self.syntax_number,
+            CustomColorSlot::SyntaxComment => &self.syntax_comment,
+        }
+    }
+
+    pub fn slot_mut(&mut self, slot: CustomColorSlot) -> &mut Option<String> {
+        match slot {
+            CustomColorSlot::Bg => &mut self.bg,
+            CustomColorSlot::Surface => &mut self.surface,
+            CustomColorSlot::Border => &mut self.border,
+            CustomColorSlot::TextPrimary => &mut self.text_primary,
+            CustomColorSlot::TextMuted => &mut self.text_muted,
+            CustomColorSlot::Accent => &mut self.accent,
+            CustomColorSlot::CodeBg => &mut self.code_bg,
+            CustomColorSlot::SyntaxHeading => &mut self.syntax_heading,
+            CustomColorSlot::SyntaxEmphasis => &mut self.syntax_emphasis,
+            CustomColorSlot::SyntaxInlineCode => &mut self.syntax_inline_code,
+            CustomColorSlot::SyntaxLink => &mut self.syntax_link,
+            CustomColorSlot::SyntaxBullet => &mut self.syntax_bullet,
+            CustomColorSlot::SyntaxCode => &mut self.syntax_code,
+            CustomColorSlot::SyntaxKeyword => &mut self.syntax_keyword,
+            CustomColorSlot::SyntaxFunction => &mut self.syntax_function,
+            CustomColorSlot::SyntaxAttribute => &mut self.syntax_attribute,
+            CustomColorSlot::SyntaxString => &mut self.syntax_string,
+            CustomColorSlot::SyntaxNumber => &mut self.syntax_number,
+            CustomColorSlot::SyntaxComment => &mut self.syntax_comment,
+        }
+    }
+
+    pub fn get(&self, slot: CustomColorSlot) -> Option<&str> {
+        self.slot_ref(slot).as_deref()
+    }
+
+    pub fn set(&mut self, slot: CustomColorSlot, value: Option<String>) {
+        *self.slot_mut(slot) = value.and_then(|s| normalize_hex_rgb(&s));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        CustomColorSlot::ALL.iter().all(|&s| self.slot_ref(s).is_none())
+    }
+}
+
+/// Separate light and dark custom theme color sets stored in `config.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CustomThemePreferences {
+    #[serde(default, skip_serializing_if = "CustomThemePalette::is_empty")]
+    pub light: CustomThemePalette,
+    #[serde(default, skip_serializing_if = "CustomThemePalette::is_empty")]
+    pub dark: CustomThemePalette,
+}
+
+impl CustomThemePreferences {
+    pub fn variant(&self, is_dark: bool) -> &CustomThemePalette {
+        if is_dark { &self.dark } else { &self.light }
+    }
+
+    pub fn variant_mut(&mut self, is_dark: bool) -> &mut CustomThemePalette {
+        if is_dark { &mut self.dark } else { &mut self.light }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.light.is_empty() && self.dark.is_empty()
+    }
+}
+
 fn legacy_config_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -98,6 +311,8 @@ pub struct Preferences {
     pub workspace_roots: Vec<PathBuf>,
     #[serde(default)]
     pub sidebar_hidden_paths: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "CustomThemePreferences::is_empty")]
+    pub custom_theme: CustomThemePreferences,
 }
 
 impl Default for Preferences {
@@ -119,6 +334,7 @@ impl Default for Preferences {
             config_version: CURRENT_CONFIG_VERSION,
             workspace_roots: Vec::new(),
             sidebar_hidden_paths: Vec::new(),
+            custom_theme: CustomThemePreferences::default(),
         }
     }
 }
@@ -406,5 +622,34 @@ mod tests {
         assert!(!migrate_config_if_needed(&old, &new));
         assert!(!new.exists());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn custom_theme_normalizes_hex_and_round_trips() {
+        assert_eq!(normalize_hex_rgb(" #AbCdEf "), Some("#abcdef".to_string()));
+        assert_eq!(normalize_hex_rgb("123456"), Some("#123456".to_string()));
+        assert_eq!(normalize_hex_rgb("#12345"), None);
+        assert_eq!(normalize_hex_rgb("zzzzzz"), None);
+
+        let mut prefs = Preferences::default();
+        assert!(!toml::to_string(&prefs).unwrap().contains("custom_theme"));
+
+        prefs.palette = CUSTOM_PALETTE_ID.to_string();
+        prefs
+            .custom_theme
+            .variant_mut(false)
+            .set(CustomColorSlot::Accent, Some("FF8800".to_string()));
+        prefs
+            .custom_theme
+            .variant_mut(true)
+            .set(CustomColorSlot::Bg, Some("invalid".to_string()));
+
+        let parsed: Preferences = toml::from_str(&toml::to_string(&prefs).unwrap()).unwrap();
+        assert_eq!(parsed.palette, CUSTOM_PALETTE_ID);
+        assert_eq!(
+            parsed.custom_theme.variant(false).get(CustomColorSlot::Accent),
+            Some("#ff8800")
+        );
+        assert!(parsed.custom_theme.variant(true).is_empty());
     }
 }

@@ -482,7 +482,7 @@ impl AppState {
         mut preferences: Preferences,
         preferences_path: PathBuf,
     ) -> Self {
-        if !crate::theme::ALL_PALETTES.iter().any(|p| p.id == preferences.palette) {
+        if !crate::theme::ThemeColors::is_valid_palette_id(&preferences.palette) {
             preferences.palette = "default".to_string();
             let _ = preferences.save_to_path(&preferences_path);
         }
@@ -491,7 +491,7 @@ impl AppState {
             ThemeMode::Dark => true,
             ThemeMode::Auto => false,
         };
-        let theme = ThemeColors::resolve(&preferences.palette, is_dark);
+        let theme = ThemeColors::resolve_preferences(&preferences, is_dark);
         let strings = get_strings(preferences.locale);
         let editor = EditorEngine::new(&doc.buffer);
 
@@ -615,6 +615,37 @@ impl AppState {
         self.recompute_theme();
     }
 
+    /// Updates one customizable color slot for the given light or dark variant.
+    pub fn set_custom_theme_color(
+        &mut self,
+        is_dark: bool,
+        slot: zmark_core::config::CustomColorSlot,
+        hex: &str,
+    ) {
+        self.preferences
+            .custom_theme
+            .variant_mut(is_dark)
+            .set(slot, Some(hex.to_string()));
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+        self.recompute_theme();
+    }
+
+    /// Copies all customizable colors from a built-in preset into a custom variant.
+    pub fn import_palette_into_custom(&mut self, is_dark: bool, source_palette_id: &str) {
+        let imported = ThemeColors::resolve(source_palette_id, is_dark).to_custom_palette();
+        *self.preferences.custom_theme.variant_mut(is_dark) = imported;
+        self.preferences.palette = zmark_core::config::CUSTOM_PALETTE_ID.to_string();
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+        self.recompute_theme();
+    }
+
+    /// Clears custom color overrides for the given light or dark variant back to Default.
+    pub fn reset_custom_theme(&mut self, is_dark: bool) {
+        *self.preferences.custom_theme.variant_mut(is_dark) = Default::default();
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+        self.recompute_theme();
+    }
+
     pub fn set_locale(&mut self, locale: SupportedLocale) {
         self.preferences.locale = locale;
         let _ = self.preferences.save_to_path(&self.preferences_path);
@@ -629,7 +660,7 @@ impl AppState {
             ThemeMode::Auto => is_dark,
         };
         if self.theme.is_dark != effective_dark {
-            self.theme = ThemeColors::resolve(&self.preferences.palette, effective_dark);
+            self.theme = ThemeColors::resolve_preferences(&self.preferences, effective_dark);
         }
     }
 
@@ -639,7 +670,7 @@ impl AppState {
             ThemeMode::Dark => true,
             ThemeMode::Auto => self.is_system_dark,
         };
-        self.theme = ThemeColors::resolve(&self.preferences.palette, is_dark);
+        self.theme = ThemeColors::resolve_preferences(&self.preferences, is_dark);
     }
 
     /// Marks the active document dirty without joining every line into a new
@@ -879,40 +910,92 @@ impl AppState {
             }
         }
 
-        // Check nesting relationships (missing roots MUST participate in nesting check)
-        for r in &self.workspace_roots {
+        // Check nesting relationships (missing roots MUST participate in nesting check).
+        // Nested children inside an existing root are still rejected; adding a parent
+        // directory absorbs any existing child roots it contains.
+        let mut absorb_indices = Vec::new();
+        for (idx, r) in self.workspace_roots.iter().enumerate() {
             let r_cmp = resolve_cmp_path(&r.path);
 
             if canonical.starts_with(&r_cmp) {
                 return Err(RootAddError::NestedInExisting(r.path.clone()));
             }
             if r_cmp.starts_with(&canonical) {
-                return Err(RootAddError::ContainsExisting(r.path.clone()));
+                absorb_indices.push(idx);
             }
         }
 
-        let idx = self.workspace_roots.len();
-        self.workspace_roots.push(WorkspaceRoot {
-            path: canonical,
-            tree: Vec::new(),
-            is_expanded: false,
-            is_missing: false,
-            truncated: false,
-            entries_used: 0,
-            files_used: 0,
-            deferred: false,
+        let rollback_snapshot = (!absorb_indices.is_empty()).then(|| {
+            (
+                self.workspace_roots.clone(),
+                self.preferences.workspace_roots.clone(),
+                self.scan_budget.clone(),
+                self.search_original_expanded.clone(),
+            )
         });
+
+        let mut absorbed_expanded_paths = Vec::new();
+        let insert_idx = if let Some(&first_idx) = absorb_indices.first() {
+            for &idx in absorb_indices.iter().rev() {
+                let removed = self.workspace_roots.remove(idx);
+                if !removed.is_missing && removed.is_expanded {
+                    absorbed_expanded_paths.push(removed.path.clone());
+                    absorbed_expanded_paths.extend(removed.expanded_folders());
+                }
+                if let Some(ref mut saved) = self.search_original_expanded {
+                    saved.remove(&removed.path);
+                }
+                self.scan_budget.entries_left = self
+                    .scan_budget
+                    .entries_left
+                    .saturating_add(removed.entries_used)
+                    .min(ScanBudget::MAX_GLOBAL_ENTRIES);
+                self.scan_budget.files_left = self
+                    .scan_budget
+                    .files_left
+                    .saturating_add(removed.files_used)
+                    .min(ScanBudget::MAX_GLOBAL_FILES);
+            }
+            first_idx
+        } else {
+            self.workspace_roots.len()
+        };
+
+        self.workspace_roots.insert(
+            insert_idx,
+            WorkspaceRoot {
+                path: canonical,
+                tree: Vec::new(),
+                is_expanded: false,
+                is_missing: false,
+                truncated: false,
+                entries_used: 0,
+                files_used: 0,
+                deferred: false,
+            },
+        );
         self.preferences.workspace_roots =
             self.workspace_roots.iter().map(|root| root.path.clone()).collect();
         if let Err(e) = self.preferences.save_to_path(&self.preferences_path) {
             // Atomic rollback
-            self.workspace_roots.pop();
-            self.preferences.workspace_roots =
-                self.workspace_roots.iter().map(|root| root.path.clone()).collect();
+            if let Some((roots, pref_roots, budget, search_expanded)) = rollback_snapshot {
+                self.workspace_roots = roots;
+                self.preferences.workspace_roots = pref_roots;
+                self.scan_budget = budget;
+                self.search_original_expanded = search_expanded;
+            } else {
+                self.workspace_roots.remove(insert_idx);
+                self.preferences.workspace_roots =
+                    self.workspace_roots.iter().map(|root| root.path.clone()).collect();
+            }
             return Err(RootAddError::SaveFailed(e.to_string()));
         }
-        self.refresh_root(idx);
-        Ok(idx)
+        self.refresh_root(insert_idx);
+        absorbed_expanded_paths.sort();
+        for expanded_path in absorbed_expanded_paths {
+            self.expand_to_file(&expanded_path);
+        }
+        Ok(insert_idx)
     }
 
     #[allow(dead_code)]

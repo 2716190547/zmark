@@ -1,7 +1,12 @@
 use gpui::prelude::*;
 use gpui::*;
+use gpui_component::Sizable as _;
+use gpui_component::color_picker::{ColorPickerEvent, ColorPickerState, ColorSelect};
+use std::collections::HashMap;
 use std::sync::Arc;
-use zmark_core::config::{Preferences, ThemeMode};
+use zmark_core::config::{
+    CustomColorSlot, CustomThemePreferences, Preferences, ThemeMode, CUSTOM_PALETTE_ID,
+};
 use zmark_core::i18n::{I18nStrings, SupportedLocale};
 
 use crate::state::SettingsTab;
@@ -18,6 +23,12 @@ pub struct SettingsWindowView {
     pub update_status: UpdateStatus,
     pub update_enabled: bool,
     pub update_reason: Option<String>,
+    pub editing_custom_dark: Option<bool>,
+    pub resolved_effective_dark: bool,
+    pub custom_syntax_expanded: bool,
+    pub custom_preset_open: bool,
+    custom_pickers: HashMap<CustomColorSlot, Entity<ColorPickerState>>,
+    custom_picker_subs: Vec<Subscription>,
 }
 
 impl SettingsWindowView {
@@ -62,6 +73,82 @@ impl SettingsWindowView {
             update_status,
             update_enabled,
             update_reason,
+            editing_custom_dark: None,
+            resolved_effective_dark: false,
+            custom_syntax_expanded: false,
+            custom_preset_open: false,
+            custom_pickers: HashMap::new(),
+            custom_picker_subs: Vec::new(),
+        }
+    }
+
+    fn ensure_custom_pickers(
+        &mut self,
+        editing_dark: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let preview_theme = ThemeColors::from_custom_palette(
+            self.preferences.custom_theme.variant(editing_dark),
+            editing_dark,
+        );
+        if self.custom_pickers.is_empty() {
+            for &slot in &CustomColorSlot::ALL {
+                let initial = preview_theme.slot(slot);
+                let picker =
+                    cx.new(|cx| ColorPickerState::new(window, cx).default_value(initial));
+                let sub = cx.subscribe(&picker, move |this, _, event: &ColorPickerEvent, cx| {
+                    let ColorPickerEvent::Change(Some(color)) = event else {
+                        return;
+                    };
+                    let hex = ThemeColors::hsla_to_hex(*color);
+                    let target_dark = this
+                        .editing_custom_dark
+                        .unwrap_or(this.resolved_effective_dark);
+                    if this
+                        .preferences
+                        .custom_theme
+                        .variant(target_dark)
+                        .get(slot)
+                        != Some(hex.as_str())
+                    {
+                        this.preferences
+                            .custom_theme
+                            .variant_mut(target_dark)
+                            .set(slot, Some(hex.clone()));
+                        if let Some(ws) = this.workspace.upgrade() {
+                            ws.update(cx, |ws, cx| {
+                                ws.state.set_custom_theme_color(target_dark, slot, &hex);
+                                cx.notify();
+                            });
+                        }
+                        cx.notify();
+                    }
+                });
+                self.custom_pickers.insert(slot, picker);
+                self.custom_picker_subs.push(sub);
+            }
+            return;
+        }
+
+        for &slot in &CustomColorSlot::ALL {
+            let Some(picker) = self.custom_pickers.get(&slot).cloned() else {
+                continue;
+            };
+            let expected = preview_theme.slot(slot);
+            let expected_hex = ThemeColors::hsla_to_hex(expected);
+            let needs_sync = {
+                let state = picker.read(cx);
+                !state.is_open()
+                    && state
+                        .value()
+                        .map(ThemeColors::hsla_to_hex)
+                        .as_deref()
+                        != Some(expected_hex.as_str())
+            };
+            if needs_sync {
+                picker.update(cx, |state, cx| state.set_value(expected, window, cx));
+            }
         }
     }
 }
@@ -77,14 +164,28 @@ impl Render for SettingsWindowView {
             ThemeMode::Dark => true,
             ThemeMode::Auto => is_sys_dark,
         };
-        if self.theme.is_dark != effective_dark {
-            self.theme = ThemeColors::resolve(&self.preferences.palette, effective_dark);
-        }
+        self.resolved_effective_dark = effective_dark;
+        let editing_dark = self.editing_custom_dark.unwrap_or(effective_dark);
+        let display_dark = if self.preferences.palette == CUSTOM_PALETTE_ID {
+            editing_dark
+        } else {
+            effective_dark
+        };
+        self.theme = ThemeColors::resolve_preferences(&self.preferences, display_dark);
         self.theme.refresh_native_selection(window.is_window_active());
         crate::theme::sync_component_theme(&self.theme, cx);
+        if self.current_tab == SettingsTab::Appearance
+            && self.preferences.palette == CUSTOM_PALETTE_ID
+        {
+            self.ensure_custom_pickers(editing_dark, window, cx);
+        }
         let current_tab = self.current_tab;
         let current_mode = self.preferences.theme;
         let current_palette = self.preferences.palette.clone();
+        let custom_theme = self.preferences.custom_theme.clone();
+        let custom_syntax_expanded = self.custom_syntax_expanded;
+        let custom_preset_open = self.custom_preset_open;
+        let custom_pickers = self.custom_pickers.clone();
         let current_locale = self.preferences.locale;
         let auto_save = self.preferences.auto_save;
         let auto_save_on_blur = self.preferences.auto_save_on_blur;
@@ -114,12 +215,13 @@ impl Render for SettingsWindowView {
         let on_set_mode = Arc::new(move |mode: ThemeMode, _window: &mut Window, cx: &mut App| {
             view_mode.update(cx, |this, cx| {
                 this.preferences.theme = mode;
+                this.editing_custom_dark = None;
                 let dark = match mode {
                     ThemeMode::Dark => true,
                     ThemeMode::Light => false,
                     ThemeMode::Auto => is_sys_dark,
                 };
-                this.theme = ThemeColors::resolve(&this.preferences.palette, dark);
+                this.theme = ThemeColors::resolve_preferences(&this.preferences, dark);
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_theme_mode(mode);
@@ -134,15 +236,74 @@ impl Render for SettingsWindowView {
         let on_set_palette = Arc::new(move |palette: &'static str, _window: &mut Window, cx: &mut App| {
             view_pal.update(cx, |this, cx| {
                 this.preferences.palette = palette.to_string();
+                if palette != CUSTOM_PALETTE_ID {
+                    this.editing_custom_dark = None;
+                    this.custom_preset_open = false;
+                }
                 let dark = match this.preferences.theme {
                     ThemeMode::Dark => true,
                     ThemeMode::Light => false,
                     ThemeMode::Auto => is_sys_dark,
                 };
-                this.theme = ThemeColors::resolve(palette, dark);
+                this.theme = ThemeColors::resolve_preferences(&this.preferences, dark);
                 if let Some(ws) = this.workspace.upgrade() {
                     ws.update(cx, |ws, cx| {
                         ws.state.set_palette(palette);
+                        cx.notify();
+                    });
+                }
+                cx.notify();
+            });
+        });
+
+        let view_edit_dark = cx.entity().clone();
+        let on_set_editing_dark = Arc::new(move |dark: bool, _window: &mut Window, cx: &mut App| {
+            view_edit_dark.update(cx, |this, cx| {
+                this.editing_custom_dark = Some(dark);
+                cx.notify();
+            });
+        });
+
+        let view_toggle_syntax = cx.entity().clone();
+        let on_toggle_custom_syntax = Arc::new(move |_window: &mut Window, cx: &mut App| {
+            view_toggle_syntax.update(cx, |this, cx| {
+                this.custom_syntax_expanded = !this.custom_syntax_expanded;
+                cx.notify();
+            });
+        });
+
+        let view_toggle_preset = cx.entity().clone();
+        let on_toggle_custom_preset = Arc::new(move |_window: &mut Window, cx: &mut App| {
+            view_toggle_preset.update(cx, |this, cx| {
+                this.custom_preset_open = !this.custom_preset_open;
+                cx.notify();
+            });
+        });
+
+        let view_import = cx.entity().clone();
+        let on_import_preset = Arc::new(move |dark: bool, preset_id: &'static str, _window: &mut Window, cx: &mut App| {
+            view_import.update(cx, |this, cx| {
+                let imported = ThemeColors::resolve(preset_id, dark).to_custom_palette();
+                *this.preferences.custom_theme.variant_mut(dark) = imported;
+                this.preferences.palette = CUSTOM_PALETTE_ID.to_string();
+                this.custom_preset_open = false;
+                if let Some(ws) = this.workspace.upgrade() {
+                    ws.update(cx, |ws, cx| {
+                        ws.state.import_palette_into_custom(dark, preset_id);
+                        cx.notify();
+                    });
+                }
+                cx.notify();
+            });
+        });
+
+        let view_reset = cx.entity().clone();
+        let on_reset_custom = Arc::new(move |dark: bool, _window: &mut Window, cx: &mut App| {
+            view_reset.update(cx, |this, cx| {
+                *this.preferences.custom_theme.variant_mut(dark) = Default::default();
+                if let Some(ws) = this.workspace.upgrade() {
+                    ws.update(cx, |ws, cx| {
+                        ws.state.reset_custom_theme(dark);
                         cx.notify();
                     });
                 }
@@ -342,6 +503,18 @@ impl Render for SettingsWindowView {
                             self.preferences.reduce_motion,
                             &theme,
                             strings,
+                            CustomThemeEditorProps {
+                                custom_theme: &custom_theme,
+                                editing_dark,
+                                syntax_expanded: custom_syntax_expanded,
+                                preset_open: custom_preset_open,
+                                pickers: &custom_pickers,
+                                on_set_editing_dark,
+                                on_toggle_syntax: on_toggle_custom_syntax,
+                                on_toggle_preset: on_toggle_custom_preset,
+                                on_import_preset,
+                                on_reset_custom,
+                            },
                             on_set_mode,
                             on_set_palette,
                             on_toggle_reduce_motion,
@@ -555,6 +728,238 @@ where
         )
 }
 
+struct CustomThemeEditorProps<'a> {
+    custom_theme: &'a CustomThemePreferences,
+    editing_dark: bool,
+    syntax_expanded: bool,
+    preset_open: bool,
+    pickers: &'a HashMap<CustomColorSlot, Entity<ColorPickerState>>,
+    on_set_editing_dark: Arc<dyn Fn(bool, &mut Window, &mut App)>,
+    on_toggle_syntax: Arc<dyn Fn(&mut Window, &mut App)>,
+    on_toggle_preset: Arc<dyn Fn(&mut Window, &mut App)>,
+    on_import_preset: Arc<dyn Fn(bool, &'static str, &mut Window, &mut App)>,
+    on_reset_custom: Arc<dyn Fn(bool, &mut Window, &mut App)>,
+}
+
+fn render_custom_color_rows(
+    slots: &[CustomColorSlot],
+    pickers: &HashMap<CustomColorSlot, Entity<ColorPickerState>>,
+    theme: &ThemeColors,
+    strings: &'static I18nStrings,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .children(slots.iter().filter_map(|&slot| {
+            let picker = pickers.get(&slot)?;
+            let label = zmark_core::i18n::localize_custom_color_slot(slot, strings);
+            Some(
+                div()
+                    .w_full()
+                    .py_1()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .text_xs()
+                            .text_color(theme.text_primary)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .w(px(136.))
+                            .flex_shrink_0()
+                            .child(ColorSelect::new(picker).small()),
+                    ),
+            )
+        }))
+}
+
+fn render_custom_theme_editor(
+    props: &CustomThemeEditorProps<'_>,
+    theme: &ThemeColors,
+    strings: &'static I18nStrings,
+) -> impl IntoElement {
+    let editing_dark = props.editing_dark;
+    let on_light = props.on_set_editing_dark.clone();
+    let on_dark = props.on_set_editing_dark.clone();
+    let on_toggle_preset = props.on_toggle_preset.clone();
+    let on_reset = props.on_reset_custom.clone();
+    let on_toggle_syntax = props.on_toggle_syntax.clone();
+
+    div()
+        .w_full()
+        .p_3()
+        .rounded_lg()
+        .bg(theme.bg)
+        .border(px(1.))
+        .border_color(theme.border)
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .w(px(196.))
+                        .bg(theme.segmented_track_bg())
+                        .rounded_lg()
+                        .p(px(2.))
+                        .flex()
+                        .gap_1()
+                        .child(render_mode_pill(
+                            strings.custom_editing_light,
+                            !editing_dark,
+                            theme,
+                            move |_, window, cx| on_light(false, window, cx),
+                        ))
+                        .child(render_mode_pill(
+                            strings.custom_editing_dark,
+                            editing_dark,
+                            theme,
+                            move |_, window, cx| on_dark(true, window, cx),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(render_secondary_button(
+                            "btn_custom_import_preset",
+                            strings.custom_import_preset,
+                            theme,
+                            move |_, window, cx| on_toggle_preset(window, cx),
+                        ))
+                        .child(render_secondary_button(
+                            "btn_custom_reset",
+                            strings.custom_reset_defaults,
+                            theme,
+                            move |_, window, cx| on_reset(editing_dark, window, cx),
+                        )),
+                ),
+        )
+        .when(props.preset_open, |el| {
+            el.child(
+                div()
+                    .w_full()
+                    .p_2()
+                    .rounded_md()
+                    .bg(theme.surface)
+                    .border(px(1.))
+                    .border_color(theme.border)
+                    .flex()
+                    .flex_wrap()
+                    .gap_1p5()
+                    .children(ALL_PALETTES.iter().map(|desc| {
+                        let preset_id = desc.id;
+                        let resolved = ThemeColors::resolve(preset_id, editing_dark);
+                        let on_import = props.on_import_preset.clone();
+                        div()
+                            .id(SharedString::from(format!("custom_import_{preset_id}")))
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(resolved.bg)
+                            .border(px(1.))
+                            .border_color(resolved.border)
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .text_xs()
+                            .text_color(resolved.text_primary)
+                            .hover(|s| s.border_color(resolved.accent))
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                on_import(editing_dark, preset_id, window, cx);
+                            })
+                            .child(div().size(px(8.)).rounded_full().bg(resolved.accent))
+                            .child(zmark_core::i18n::localize_palette_name(preset_id, strings))
+                    })),
+            )
+        })
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(render_section_title(strings.custom_core_colors, theme))
+                .child(render_custom_color_rows(
+                    &CustomColorSlot::CORE,
+                    props.pickers,
+                    theme,
+                    strings,
+                )),
+        )
+        .child(
+            div()
+                .pt_2()
+                .border_t(px(1.))
+                .border_color(theme.border)
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(
+                    div()
+                        .id("btn_toggle_custom_syntax")
+                        .py_1()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                            on_toggle_syntax(window, cx);
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .child(
+                                    svg()
+                                        .path(if props.syntax_expanded {
+                                            "icons/chevron-down.svg"
+                                        } else {
+                                            "icons/chevron-right.svg"
+                                        })
+                                        .size(px(14.))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child(render_section_title(strings.custom_syntax_colors, theme)),
+                        )
+                        .child(
+                            div()
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded(px(4.))
+                                .bg(theme.control_selection_bg())
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child("12"),
+                        ),
+                )
+                .when(props.syntax_expanded, |el| {
+                    el.child(render_custom_color_rows(
+                        &CustomColorSlot::SYNTAX,
+                        props.pickers,
+                        theme,
+                        strings,
+                    ))
+                }),
+        )
+}
+
 fn render_appearance_tab(
     current_mode: ThemeMode,
     current_palette: &str,
@@ -562,6 +967,7 @@ fn render_appearance_tab(
     reduce_motion: bool,
     theme: &ThemeColors,
     strings: &'static I18nStrings,
+    custom: CustomThemeEditorProps<'_>,
     on_set_mode: Arc<dyn Fn(ThemeMode, &mut Window, &mut App)>,
     on_set_palette: Arc<dyn Fn(&'static str, &mut Window, &mut App)>,
     on_toggle_reduce_motion: Arc<dyn Fn(bool, &mut Window, &mut App)>,
@@ -569,6 +975,12 @@ fn render_appearance_tab(
     let m1 = on_set_mode.clone();
     let m2 = on_set_mode.clone();
     let m3 = on_set_mode;
+    let is_custom_active = current_palette == CUSTOM_PALETTE_ID;
+    let resolved_custom = ThemeColors::from_custom_palette(
+        custom.custom_theme.variant(custom.editing_dark),
+        custom.editing_dark,
+    );
+    let on_select_custom = on_set_palette.clone();
 
     div()
         .flex()
@@ -687,9 +1099,66 @@ fn render_appearance_tab(
                                         .when(is_active, |c| c.border_2().border_color(theme.accent))
                                         .when(!is_active, |c| c.border_2().border_color(gpui::transparent_black()))
                                 }))
-                        })),
+                        }))
+                        .child(
+                            div()
+                                .id("palette_card_custom")
+                                .w_full()
+                                .p_3()
+                                .rounded_md()
+                                .bg(resolved_custom.bg)
+                                .cursor_pointer()
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    on_select_custom(CUSTOM_PALETTE_ID, window, cx);
+                                })
+                                .flex()
+                                .flex_col()
+                                .justify_between()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .text_base()
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(resolved_custom.text_primary)
+                                                .child("Aa"),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1()
+                                                .child(div().size(px(8.)).rounded_full().bg(resolved_custom.surface))
+                                                .child(div().size(px(8.)).rounded_full().bg(resolved_custom.syntax_heading))
+                                                .child(div().size(px(8.)).rounded_full().bg(resolved_custom.syntax_keyword))
+                                                .child(div().w(px(24.)).h(px(4.)).rounded_sm().bg(resolved_custom.accent)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(resolved_custom.text_primary)
+                                        .child(zmark_core::i18n::localize_palette_name(
+                                            CUSTOM_PALETTE_ID,
+                                            strings,
+                                        )),
+                                )
+                                .when(is_custom_active, |c| c.border_2().border_color(theme.accent))
+                                .when(!is_custom_active, |c| {
+                                    c.border_2().border_color(gpui::transparent_black())
+                                }),
+                        ),
                 ),
         )
+        .when(is_custom_active, |el| {
+            el.child(render_custom_theme_editor(&custom, theme, strings))
+        })
         .child(render_setting_row(
             strings.reduce_motion_label,
             Some(strings.reduce_motion_desc.into()),

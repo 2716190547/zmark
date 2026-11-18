@@ -94,4 +94,29 @@ impl SyncScrollMap {
         let span = (anchor.source_line_end.saturating_sub(anchor.source_line_start)) as f32;
         anchor.source_line_start + (span * p).round() as usize
     }
+
+    /// Translates preview block index and inner progress `[0.0, 1.0]` back to a
+    /// continuous 1-based source line position so reverse sync glides smoothly
+    /// across both multi-line blocks and single-line blocks (e.g. images).
+    pub fn preview_to_source_line_fraction(&self, block_index: usize, progress: f32) -> f32 {
+        if self.anchors.is_empty() {
+            return 1.0;
+        }
+
+        let idx = self
+            .anchors
+            .iter()
+            .position(|a| a.block_index == block_index)
+            .unwrap_or(self.anchors.len() - 1);
+        let anchor = &self.anchors[idx];
+        let p = progress.clamp(0.0, 1.0);
+        let start = anchor.source_line_start as f32;
+        let next_start = self
+            .anchors
+            .get(idx + 1)
+            .map(|next| next.source_line_start as f32)
+            .unwrap_or((anchor.source_line_end + 1) as f32);
+        let end = (anchor.source_line_end as f32).max(next_start);
+        start + (end - start).max(0.0) * p
+    }
 }

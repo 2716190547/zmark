@@ -67,14 +67,18 @@ fn test_workspace_root_add_canonicalize_and_dedup() {
 }
 
 #[test]
-fn test_workspace_root_nested_and_parent_rejection() {
+fn test_workspace_root_nested_rejection_and_parent_absorption() {
     let tmp = tempdir().unwrap();
     let parent = tmp.path().join("parent_workspace");
     let child = parent.join("nested_folder");
+    let sibling = tmp.path().join("other_workspace");
     fs::create_dir_all(&child).unwrap();
+    fs::create_dir_all(&sibling).unwrap();
+    let doc_path = child.join("note.md");
+    fs::write(&doc_path, "# Note\n").unwrap();
 
     let canonical_parent = fs::canonicalize(&parent).unwrap();
-    let canonical_child = fs::canonicalize(&child).unwrap();
+    let canonical_sibling = fs::canonicalize(&sibling).unwrap();
 
     // Case 1: Existing parent rejects child (NestedInExisting)
     {
@@ -84,12 +88,23 @@ fn test_workspace_root_nested_and_parent_rejection() {
         assert_eq!(err, RootAddError::NestedInExisting(canonical_parent.clone()));
     }
 
-    // Case 2: Existing child rejects parent (ContainsExisting)
+    // Case 2: Existing child is absorbed in-place when adding its parent
     {
         let mut state = clean_test_state(&tmp);
         state.add_workspace_root(child.clone()).unwrap();
-        let err = state.add_workspace_root(parent.clone()).unwrap_err();
-        assert_eq!(err, RootAddError::ContainsExisting(canonical_child.clone()));
+        state.add_workspace_root(sibling.clone()).unwrap();
+        state.open_file(doc_path.clone()).unwrap();
+        state.workspace_roots[0].is_expanded = true;
+
+        let idx = state.add_workspace_root(parent.clone()).unwrap();
+        assert_eq!(idx, 0, "absorbed parent should keep the first child's slot");
+        assert_eq!(state.workspace_roots.len(), 2);
+        assert_eq!(state.workspace_roots[0].path, canonical_parent);
+        assert_eq!(state.workspace_roots[1].path, canonical_sibling);
+        assert!(state.workspace_roots[0].is_expanded);
+        assert_eq!(state.folder_expanded(&fs::canonicalize(&child).unwrap()), Some(true));
+        assert!(state.loose_docs().is_empty());
+        assert_eq!(state.preferences.workspace_roots, vec![canonical_parent, canonical_sibling]);
     }
 }
 
@@ -221,7 +236,7 @@ fn test_workspace_root_missing_root_blocks_nesting() {
     let err = state.add_workspace_root(real_child.clone()).unwrap_err();
     assert_eq!(err, RootAddError::NestedInExisting(missing_parent.clone()));
 
-    // Attempting to add the parent of a missing child is also rejected
+    // Adding the parent of a missing child absorbs and replaces the missing child root
     let tmp_nested = tempdir().unwrap();
     let real_parent = tmp_nested.path().join("real_parent");
     let missing_child = real_parent.join("missing_child");
@@ -239,14 +254,18 @@ fn test_workspace_root_missing_root_blocks_nesting() {
         deferred: false,
     });
 
-    let err2 = state2.add_workspace_root(real_parent.clone()).unwrap_err();
-    assert_eq!(err2, RootAddError::ContainsExisting(missing_child.clone()));
+    let idx = state2.add_workspace_root(real_parent.clone()).unwrap();
+    assert_eq!(idx, 0);
+    assert_eq!(state2.workspace_roots.len(), 1);
+    assert_eq!(state2.workspace_roots[0].path, fs::canonicalize(&real_parent).unwrap());
+    assert!(!state2.workspace_roots[0].is_missing);
 }
 
 #[test]
 fn test_workspace_root_atomic_rollback_on_save_failure() {
     let tmp = tempdir().unwrap();
-    let root_a = tmp.path().join("project_a");
+    let parent_a = tmp.path().join("parent_a");
+    let root_a = parent_a.join("project_a");
     let root_b = tmp.path().join("project_b");
     fs::create_dir_all(&root_a).unwrap();
     fs::create_dir_all(&root_b).unwrap();
@@ -268,6 +287,19 @@ fn test_workspace_root_atomic_rollback_on_save_failure() {
     assert_eq!(
         state.workspace_roots[0].path,
         fs::canonicalize(&root_a).unwrap()
+    );
+
+    // 2. add_workspace_root failure while absorbing a child must roll back the child root
+    let absorb_err = state.add_workspace_root(parent_a.clone()).unwrap_err();
+    assert!(matches!(absorb_err, RootAddError::SaveFailed(_)));
+    assert_eq!(state.workspace_roots.len(), 1);
+    assert_eq!(
+        state.workspace_roots[0].path,
+        fs::canonicalize(&root_a).unwrap()
+    );
+    assert_eq!(
+        state.preferences.workspace_roots,
+        vec![fs::canonicalize(&root_a).unwrap()]
     );
 
     // 2. remove_workspace_root failure must roll back removed root

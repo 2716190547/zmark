@@ -1,7 +1,9 @@
 use gpui::prelude::*;
 use gpui::*;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -34,6 +36,81 @@ pub enum PaneKind {
 
 use crate::syntax::{VisibleSyntaxFailure, WarmState};
 
+#[derive(Clone)]
+struct EditorScrollbarHandle {
+    inner: UniformListScrollHandle,
+    dirty: Rc<Cell<bool>>,
+    dragging: Rc<Cell<bool>>,
+    shared_content_height: Rc<Cell<Option<f32>>>,
+}
+
+impl EditorScrollbarHandle {
+    fn virtual_scroll_bounds(&self) -> (f32, f32, f32) {
+        let base = &self.inner.0.borrow().base_handle;
+        let viewport_h = f32::from(base.bounds().size.height).max(1.0);
+        let real_max = f32::from(base.max_offset().y).max(0.0);
+        let real_total = viewport_h + real_max;
+        let virtual_total = match self.shared_content_height.get() {
+            Some(shared) if real_max > 0.5 => shared.max(real_total),
+            _ => real_total,
+        };
+        let virtual_max = (virtual_total - viewport_h).max(0.0);
+        (real_max, virtual_total, virtual_max)
+    }
+}
+
+impl gpui_component::scroll::ScrollbarHandle for EditorScrollbarHandle {
+    fn viewport_bounds(&self) -> Bounds<Pixels> {
+        self.inner.0.borrow().base_handle.bounds()
+    }
+
+    fn offset(&self) -> Point<Pixels> {
+        let (real_max, _, virtual_max) = self.virtual_scroll_bounds();
+        let base = &self.inner.0.borrow().base_handle;
+        let real = base.offset();
+        if real_max <= 0.5 || virtual_max <= 0.5 {
+            return real;
+        }
+        let ratio = (-f32::from(real.y) / real_max).clamp(0.0, 1.0);
+        point(real.x, px(-(ratio * virtual_max)))
+    }
+
+    fn set_offset(&self, offset: Point<Pixels>) {
+        let (real_max, _, virtual_max) = self.virtual_scroll_bounds();
+        let ratio = if virtual_max > 0.5 {
+            (-f32::from(offset.y) / virtual_max).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let real_y = (ratio * real_max).clamp(0.0, real_max);
+        let current_x = self.inner.0.borrow().base_handle.offset().x;
+        self.inner
+            .0
+            .borrow_mut()
+            .base_handle
+            .set_offset(point(current_x, px(-real_y)));
+        self.dirty.set(true);
+    }
+
+    fn content_size(&self) -> Size<Pixels> {
+        let base = &self.inner.0.borrow().base_handle;
+        let bounds = base.bounds();
+        let (_, virtual_total, _) = self.virtual_scroll_bounds();
+        size(
+            bounds.size.width + base.max_offset().x,
+            px(virtual_total.max(f32::from(bounds.size.height))),
+        )
+    }
+
+    fn start_drag(&self) {
+        self.dragging.set(true);
+    }
+
+    fn end_drag(&self) {
+        self.dragging.set(false);
+    }
+}
+
 pub struct WorkspaceView {
     pub state: AppState,
     sidebar_selection: crate::views::sidebar_selection::SharedSelection,
@@ -43,14 +120,13 @@ pub struct WorkspaceView {
     sidebar_undo_task: Option<Task<()>>,
     pub focus_handle: FocusHandle,
     pub editor_scroll_handle: UniformListScrollHandle,
+    editor_scrollbar_dirty: Rc<Cell<bool>>,
+    editor_scrollbar_dragging: Rc<Cell<bool>>,
+    split_scrollbar_content_height: Rc<Cell<Option<f32>>>,
+    sync_scroll_target: Option<(ScrollOrigin, f32)>,
+    sync_scroll_task: Option<Task<()>>,
     pub preview_list: PreviewScrollState,
-    pub preview_scroll_focus: FocusHandle,
-    pub preview_scroll_bounds: Option<Bounds<Pixels>>,
     preview_viewport_size: Option<Size<Pixels>>,
-    /// (track bounds, grab offset inside the thumb, thumb height)
-    pub preview_scroll_drag: Option<(Bounds<Pixels>, f32, f32)>,
-    preview_drag_ratio: Option<f32>,
-    preview_drag_ratio_until: Option<std::time::Instant>,
     pub preview_scroll_activation_observed: bool,
     pub preview_scroll_end_pending: bool,
     preview_scroll_pending_seek: Option<(usize, f32)>,
@@ -217,18 +293,18 @@ impl WorkspaceView {
         let mut view = Self {
             state,
             focus_handle: cx.focus_handle(),
-            preview_scroll_focus: cx.focus_handle().tab_stop(true),
-            preview_scroll_bounds: None,
             preview_viewport_size: None,
-            preview_scroll_drag: None,
-            preview_drag_ratio: None,
-            preview_drag_ratio_until: None,
             preview_scroll_activation_observed: false,
             preview_scroll_end_pending: false,
             preview_scroll_pending_seek: None,
             preview_scroll_seek_generation: 0,
             last_preview_sync_offset: 0.0,
             editor_scroll_handle: UniformListScrollHandle::new(),
+            editor_scrollbar_dirty: Rc::new(Cell::new(false)),
+            editor_scrollbar_dragging: Rc::new(Cell::new(false)),
+            split_scrollbar_content_height: Rc::new(Cell::new(None)),
+            sync_scroll_target: None,
+            sync_scroll_task: None,
             preview_list,
             drawer_scroll_handle: ScrollHandle::new(),
             split_ratio: 0.5,
@@ -427,6 +503,9 @@ impl WorkspaceView {
         self.source_rows.lock().unwrap().clear();
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
+        self.cancel_synced_scroll();
+        self.editor_scrollbar_dragging.set(false);
+        self.split_scrollbar_content_height.set(None);
         self.preview_selection = None;
         self.is_preview_selecting = false;
         self.preview_focused = false;
@@ -886,6 +965,7 @@ impl WorkspaceView {
     pub fn align_preview_to_cursor(&mut self) {
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
+        self.cancel_synced_scroll();
         let cursor_line = self.state.editor.cursor().0 + 1;
         let (block_index, inner_progress) = match self.sync_scroll_map() {
             Some(map) => map.source_line_to_preview_progress(cursor_line),
@@ -1398,13 +1478,7 @@ impl WorkspaceView {
         if wheel_dy == 0.0 {
             return;
         }
-        let (current_y, max_y) = {
-            let handle = self.editor_scroll_handle.0.borrow();
-            (
-                (-f32::from(handle.base_handle.offset().y)).max(0.0),
-                f32::from(handle.base_handle.max_offset().y).max(0.0),
-            )
-        };
+        let (current_y, max_y, _) = self.editor_scroll_metrics();
         // GPUI applies `scroll_offset.y += delta_y`; content offset is its negation.
         let projected_y = projected_scroll_offset(current_y, wheel_dy, max_y);
         if (projected_y - current_y).abs() <= 0.5 {
@@ -1413,36 +1487,7 @@ impl WorkspaceView {
         }
         self.last_scroll_origin = Some((ScrollOrigin::Editor, now));
 
-        let target = if projected_y <= 0.5 {
-            0.0
-        } else if projected_y >= max_y - 0.5 {
-            self.preview_list.max_scroll()
-        } else {
-            let visual_lines = self.compute_visual_lines(window);
-            let row_h = crate::views::editor::calculate_line_row_height(
-                self.state.preferences.font_size,
-                self.state.preferences.line_height,
-            )
-            .max(1.0);
-            let top_vis_index =
-                ((projected_y / row_h).floor() as usize).min(visual_lines.len().saturating_sub(1));
-            let vl_opt = visual_lines.get(top_vis_index);
-            let phys_line_idx = vl_opt.map(|vl| vl.physical_line_idx).unwrap_or(0);
-            let phys_line = phys_line_idx + 1;
-            let subline_idx = vl_opt.map(|vl| vl.subline_idx).unwrap_or(0);
-            let total_sublines = visual_lines
-                .iter()
-                .filter(|vl| vl.physical_line_idx == phys_line_idx)
-                .count()
-                .max(1);
-            let (block_index, inner_progress) = match self.sync_scroll_map() {
-                Some(map) => map.source_line_to_preview_progress(phys_line),
-                None => (0, 0.0),
-            };
-            let fraction =
-                calculate_subline_scroll_fraction(inner_progress, subline_idx, total_sublines);
-            self.preview_list.offset_for_block(block_index, fraction)
-        };
+        let target = self.preview_offset_for_editor_y(projected_y, max_y, window);
         // A down-gesture must never move the preview up (and vice versa), even
         // when estimated block heights make the mapped target overshoot.
         let current_preview = self.preview_list.offset();
@@ -1451,9 +1496,58 @@ impl WorkspaceView {
         } else {
             target.min(current_preview)
         };
-        self.preview_list.set_scroll_offset(target);
-        self.last_preview_sync_offset = self.preview_list.offset();
-        cx.notify();
+        self.drive_synced_scroll(ScrollOrigin::Preview, target, false, window, cx);
+    }
+
+    fn preview_offset_for_vis_index(
+        &mut self,
+        visual_lines: &[crate::editor_engine::VisualLine],
+        vis_idx: usize,
+    ) -> f32 {
+        let vl_opt = visual_lines.get(vis_idx);
+        let phys_line_idx = vl_opt.map(|vl| vl.physical_line_idx).unwrap_or(0);
+        let phys_line = phys_line_idx + 1;
+        let subline_idx = vl_opt.map(|vl| vl.subline_idx).unwrap_or(0);
+        let total_sublines = visual_lines
+            .iter()
+            .filter(|vl| vl.physical_line_idx == phys_line_idx)
+            .count()
+            .max(1);
+        let (block_index, inner_progress) = match self.sync_scroll_map() {
+            Some(map) => map.source_line_to_preview_progress(phys_line),
+            None => (0, 0.0),
+        };
+        let fraction =
+            calculate_subline_scroll_fraction(inner_progress, subline_idx, total_sublines);
+        self.preview_list.offset_for_block(block_index, fraction)
+    }
+
+    fn preview_offset_for_editor_y(&mut self, y: f32, max_y: f32, window: &mut Window) -> f32 {
+        if y <= 0.5 {
+            return 0.0;
+        }
+        if y >= max_y - 0.5 {
+            return self.preview_list.max_scroll();
+        }
+        let visual_lines = self.compute_visual_lines(window);
+        if visual_lines.is_empty() {
+            return 0.0;
+        }
+        let row_h = crate::views::editor::calculate_line_row_height(
+            self.state.preferences.font_size,
+            self.state.preferences.line_height,
+        )
+        .max(1.0);
+        let exact_vis = (y / row_h).max(0.0);
+        let v0 = (exact_vis.floor() as usize).min(visual_lines.len() - 1);
+        let v1 = (v0 + 1).min(visual_lines.len() - 1);
+        let frac = (exact_vis - v0 as f32).clamp(0.0, 1.0);
+        let p0 = self.preview_offset_for_vis_index(&visual_lines, v0);
+        if v1 == v0 || frac <= f32::EPSILON {
+            return p0;
+        }
+        let p1 = self.preview_offset_for_vis_index(&visual_lines, v1);
+        p0 + (p1 - p0) * frac
     }
 
     /// Synchronizes preview wheel scrolling to the editor pane with 100ms echo suppression.
@@ -1491,12 +1585,21 @@ impl WorkspaceView {
             return;
         }
         self.last_scroll_origin = Some((ScrollOrigin::Preview, now));
-        self.scroll_editor_to_preview_offset(projected, Some(wheel_dy < 0.0), window);
+        self.scroll_editor_to_preview_offset(projected, Some(wheel_dy < 0.0), false, window, cx);
         self.last_preview_sync_offset = projected;
         cx.notify();
     }
 
     fn sync_preview_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_preview_scroll_with_mode(false, window, cx);
+    }
+
+    fn sync_preview_scroll_with_mode(
+        &mut self,
+        immediate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.state.view_mode != ViewMode::Split
             || self.state.doc().is_parse_stale()
             || self.state.doc().parsed.anchors.is_empty()
@@ -1513,7 +1616,7 @@ impl WorkspaceView {
         }
         self.last_scroll_origin = Some((ScrollOrigin::Preview, now));
         let offset = self.preview_list.offset();
-        self.scroll_editor_to_preview_offset(offset, None, window);
+        self.scroll_editor_to_preview_offset(offset, None, immediate, window, cx);
         cx.notify();
     }
 
@@ -1524,78 +1627,197 @@ impl WorkspaceView {
         &mut self,
         offset: f32,
         direction: Option<bool>,
+        immediate: bool,
         window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
         let max = self.preview_list.max_scroll();
         let visual_lines = self.compute_visual_lines(window);
         if visual_lines.is_empty() {
             return;
         }
-        let target_vis_idx = if offset <= 0.5 || max <= 0.5 {
-            0
+        let max_vis = visual_lines.len() - 1;
+        let (target_vis_idx, exact_vis) = if offset <= 0.5 || max <= 0.5 {
+            (0, 0.0)
         } else if offset >= max - 0.5 {
-            visual_lines.len().saturating_sub(1)
+            (max_vis, max_vis as f32)
         } else {
             let (block_ix, progress) = self.preview_list.block_progress_at_offset(offset);
-            let target_line = match self.sync_scroll_map() {
-                Some(map) => map.preview_to_source_line(block_ix, progress),
-                None => 1,
+            let exact_line = match self.sync_scroll_map() {
+                Some(map) => map.preview_to_source_line_fraction(block_ix, progress),
+                None => 1.0,
             };
-            let phys_line_idx = target_line.saturating_sub(1);
-            visual_lines
+            let phys_pos = (exact_line - 1.0).max(0.0);
+            let phys0 = phys_pos.floor() as usize;
+            let phys_frac = (phys_pos - phys0 as f32).clamp(0.0, 1.0);
+            let first_vis = visual_lines
                 .iter()
-                .position(|vl| vl.physical_line_idx == phys_line_idx)
-                .unwrap_or_else(|| visual_lines.len().saturating_sub(1))
+                .position(|vl| vl.physical_line_idx == phys0)
+                .unwrap_or(max_vis);
+            let next_vis = visual_lines
+                .iter()
+                .position(|vl| vl.physical_line_idx > phys0)
+                .unwrap_or(visual_lines.len());
+            let exact_vis =
+                first_vis as f32 + (next_vis.saturating_sub(first_vis)) as f32 * phys_frac;
+            (first_vis, exact_vis)
         };
-        let target_vis_idx = match direction {
-            Some(forward) => {
-                let current_y =
-                    (-f32::from(self.editor_scroll_handle.0.borrow().base_handle.offset().y))
-                        .max(0.0);
-                let row_h = crate::views::editor::calculate_line_row_height(
-                    self.state.preferences.font_size,
-                    self.state.preferences.line_height,
-                )
-                .max(1.0);
-                let current_vis = (current_y / row_h).floor() as usize;
-                if forward {
-                    target_vis_idx.max(current_vis)
-                } else {
-                    target_vis_idx.min(current_vis)
-                }
+        let (current_y, editor_max, _) = self.editor_scroll_metrics();
+        let row_h = crate::views::editor::calculate_line_row_height(
+            self.state.preferences.font_size,
+            self.state.preferences.line_height,
+        )
+        .max(1.0);
+        if editor_max <= 0.5 {
+            let current_vis = (current_y / row_h).floor() as usize;
+            let target_vis_idx = match direction {
+                Some(true) => target_vis_idx.max(current_vis),
+                Some(false) => target_vis_idx.min(current_vis),
+                None => target_vis_idx,
+            };
+            self.editor_scroll_handle
+                .scroll_to_item_strict(target_vis_idx, ScrollStrategy::Top);
+            return;
+        }
+        let mut target_y = if offset >= max - 0.5 && max > 0.5 {
+            editor_max
+        } else {
+            (exact_vis * row_h).clamp(0.0, editor_max)
+        };
+        if let Some(forward) = direction {
+            target_y = if forward {
+                target_y.max(current_y)
+            } else {
+                target_y.min(current_y)
+            };
+        }
+        self.drive_synced_scroll(ScrollOrigin::Editor, target_y, immediate, window, cx);
+    }
+
+    fn cancel_synced_scroll(&mut self) {
+        self.sync_scroll_target = None;
+        self.sync_scroll_task = None;
+    }
+
+    /// Returns the active smooth-sync scroll target pane and offset, if any.
+    pub fn sync_scroll_target(&self) -> Option<(ScrollOrigin, f32)> {
+        self.sync_scroll_target
+    }
+
+    fn apply_synced_target(&mut self, target_pane: ScrollOrigin, offset: f32) {
+        match target_pane {
+            ScrollOrigin::Preview => {
+                self.last_scroll_origin = Some((ScrollOrigin::Editor, std::time::Instant::now()));
+                self.preview_list.set_scroll_offset(offset);
+                self.last_preview_sync_offset = self.preview_list.offset();
             }
-            None => target_vis_idx,
+            ScrollOrigin::Editor => {
+                self.last_scroll_origin = Some((ScrollOrigin::Preview, std::time::Instant::now()));
+                let handle = self.editor_scroll_handle.0.borrow().base_handle.clone();
+                let max_y = f32::from(handle.max_offset().y).max(0.0);
+                let clamped = offset.clamp(0.0, max_y);
+                handle.set_offset(point(handle.offset().x, px(-clamped)));
+            }
+        }
+    }
+
+    fn drive_synced_scroll(
+        &mut self,
+        target_pane: ScrollOrigin,
+        target: f32,
+        immediate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.preferences.reduce_motion || immediate {
+            self.cancel_synced_scroll();
+            self.apply_synced_target(target_pane, target);
+            cx.notify();
+            return;
+        }
+        let (current, max_scroll) = match target_pane {
+            ScrollOrigin::Preview => (self.preview_list.offset(), self.preview_list.max_scroll()),
+            ScrollOrigin::Editor => {
+                let (cur, max, _) = self.editor_scroll_metrics();
+                (cur, max)
+            }
         };
-        self.editor_scroll_handle
-            .scroll_to_item_strict(target_vis_idx, ScrollStrategy::Top);
+        let target = target.clamp(0.0, max_scroll);
+        if (target - current).abs() <= 1.0 {
+            self.cancel_synced_scroll();
+            self.apply_synced_target(target_pane, target);
+            cx.notify();
+            return;
+        }
+        let first_step = current + (target - current) * 0.35;
+        self.apply_synced_target(target_pane, first_step);
+
+        let keep_task = self
+            .sync_scroll_target
+            .is_some_and(|(pane, _)| pane == target_pane)
+            && self.sync_scroll_task.is_some();
+        self.sync_scroll_target = Some((target_pane, target));
+        if !keep_task {
+            let view = cx.entity().downgrade();
+            let handle = window.window_handle();
+            self.sync_scroll_task = Some(cx.spawn(async move |_this, app| loop {
+                app.background_executor()
+                    .timer(std::time::Duration::from_millis(16))
+                    .await;
+                let keep_going = handle
+                    .update(app, |_, _window, app| {
+                        view.update(app, |this, cx| this.step_synced_scroll(cx))
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                if !keep_going {
+                    break;
+                }
+            }));
+        }
+        cx.notify();
+    }
+
+    fn step_synced_scroll(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((target_pane, raw_target)) = self.sync_scroll_target else {
+            self.sync_scroll_task = None;
+            return false;
+        };
+        if self.state.view_mode != ViewMode::Split {
+            self.cancel_synced_scroll();
+            return false;
+        }
+        let (current, max_scroll) = match target_pane {
+            ScrollOrigin::Preview => (self.preview_list.offset(), self.preview_list.max_scroll()),
+            ScrollOrigin::Editor => {
+                let (cur, max, _) = self.editor_scroll_metrics();
+                (cur, max)
+            }
+        };
+        let target = raw_target.clamp(0.0, max_scroll);
+        if (target - current).abs() <= 0.75 {
+            self.apply_synced_target(target_pane, target);
+            self.cancel_synced_scroll();
+            cx.notify();
+            return false;
+        }
+        let next = current + (target - current) * 0.28;
+        self.apply_synced_target(target_pane, next);
+        cx.notify();
+        true
     }
 
     fn end_preview_scroll_drag(&mut self) {
-        self.preview_drag_ratio = None;
-        self.preview_drag_ratio_until = None;
-        if self.preview_scroll_drag.take().is_some() {
-            self.preview_list.scrollbar_drag_ended();
-        }
-    }
-
-    fn release_preview_scroll_drag(&mut self) {
-        // Keep the pointer-owned ratio for a short settle window: the first
-        // measured heights after release must not pull the thumb back.
-        let ratio = self.preview_drag_ratio;
-        self.end_preview_scroll_drag();
-        if let Some(ratio) = ratio {
-            self.preview_drag_ratio = Some(ratio);
-            self.preview_drag_ratio_until = Some(
-                std::time::Instant::now() + std::time::Duration::from_millis(250),
-            );
-        }
+        self.preview_list.cancel_scrollbar_drag();
     }
 
     fn cancel_pending_preview_seek(&mut self) {
         self.outline_scroll_task = None;
-        if self.preview_scroll_drag.is_none() {
-            self.preview_drag_ratio = None;
-            self.preview_drag_ratio_until = None;
+        if !self.preview_list.is_scrollbar_dragging() {
+            self.preview_list.cancel_scrollbar_drag();
+        }
+        if matches!(self.sync_scroll_target, Some((ScrollOrigin::Preview, _))) {
+            self.cancel_synced_scroll();
         }
         self.preview_scroll_seek_generation = self.preview_scroll_seek_generation.wrapping_add(1);
         self.preview_scroll_end_pending = false;
@@ -1639,16 +1861,13 @@ impl WorkspaceView {
     fn apply_outline_scroll(&mut self, offset: f32, window: &mut Window, cx: &mut Context<Self>) {
         self.preview_list.set_scroll_offset(offset);
         self.last_scroll_origin = None;
-        self.sync_preview_scroll(window, cx);
+        self.sync_preview_scroll_with_mode(true, window, cx);
         self.last_preview_sync_offset = self.preview_list.offset();
         cx.notify();
     }
 
     fn preview_scroll_to_ratio(&mut self, ratio: f32, window: &mut Window, cx: &mut Context<Self>) {
         let ratio = ratio.clamp(0.0, 1.0);
-        if self.preview_scroll_drag.is_some() {
-            self.preview_drag_ratio = Some(ratio);
-        }
         self.cancel_pending_preview_seek();
         self.preview_list
             .set_scroll_offset(ratio * self.preview_list.max_scroll());
@@ -1658,169 +1877,66 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    fn render_preview_scrollbar(
-        &self,
-        theme: &crate::theme::ThemeColors,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let max_scroll = self.preview_list.max_scroll();
-        let enabled = max_scroll > 0.5;
-        let ratio = self.preview_list.scroll_ratio();
-        let track = self
-            .preview_scroll_bounds
-            .unwrap_or_else(|| self.preview_list.viewport_bounds());
-        let height = f32::from(track.size.height).max(1.0);
-        let thumb_height = if enabled {
-            28.0_f32.min(height)
+    /// Returns `(current_y, max_scroll, ratio)` from the editor uniform list handle.
+    fn editor_scroll_metrics(&self) -> (f32, f32, f32) {
+        let handle = self.editor_scroll_handle.0.borrow();
+        let max_scroll = f32::from(handle.base_handle.max_offset().y).max(0.0);
+        let current_y = (-f32::from(handle.base_handle.offset().y)).clamp(0.0, max_scroll);
+        let ratio = if max_scroll > 0.5 {
+            (current_y / max_scroll).clamp(0.0, 1.0)
         } else {
-            height
+            0.0
         };
-        let thumb_top = ratio * (height - thumb_height).max(0.0);
-        let bounds_view = cx.entity().clone();
-        let drag_view = cx.weak_entity();
+        (current_y, max_scroll, ratio)
+    }
 
+    fn editor_scrollbar_handle(&self) -> EditorScrollbarHandle {
+        EditorScrollbarHandle {
+            inner: self.editor_scroll_handle.clone(),
+            dirty: self.editor_scrollbar_dirty.clone(),
+            dragging: self.editor_scrollbar_dragging.clone(),
+            shared_content_height: self.split_scrollbar_content_height.clone(),
+        }
+    }
+
+    fn render_overlay_scrollbar<H: gpui_component::scroll::ScrollbarHandle + Clone>(
+        id: &'static str,
+        selector: &'static str,
+        handle: &H,
+    ) -> AnyElement {
         div()
-            .id("preview_scrollbar")
-            .debug_selector(|| "preview_scrollbar".to_string())
-            .track_focus(&self.preview_scroll_focus)
-            .tab_stop(true)
-            .w(px(14.))
-            .h_full()
-            .relative()
-            .bg(theme.surface)
+            .absolute()
+            .inset_0()
+            .debug_selector(move || selector.to_string())
             .child(
-                canvas(
-                    move |bounds, _window, cx| {
-                        bounds_view.update(cx, |this, cx| {
-                            if this.preview_scroll_bounds.is_some_and(|old| old != bounds) {
-                                this.cancel_pending_preview_seek();
-                                this.end_preview_scroll_drag();
-                            }
-                            this.preview_scroll_bounds = Some(bounds);
-                            let viewport = this.preview_list.viewport_bounds();
-                            if this
-                                .preview_viewport_size
-                                .is_some_and(|old| old != viewport.size)
-                            {
-                                this.cancel_pending_preview_seek();
-                                this.end_preview_scroll_drag();
-                                cx.notify();
-                            }
-                            this.preview_viewport_size = Some(viewport.size);
-                        });
-                    },
-                    move |_, _, window, _| {
-                        let release_view = drag_view.clone();
-                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-                            if phase != DispatchPhase::Capture {
-                                return;
-                            }
-                            let _ = drag_view.update(cx, |this, cx| {
-                                if let Some((bounds, grab_offset, thumb)) = this.preview_scroll_drag
-                                {
-                                    if event.pressed_button != Some(MouseButton::Left) {
-                                        this.release_preview_scroll_drag();
-                                        cx.notify();
-                                    } else {
-                                        let available =
-                                            (f32::from(bounds.size.height) - thumb).max(1.0);
-                                        let ratio = (f32::from(event.position.y - bounds.origin.y)
-                                            - grab_offset)
-                                            / available;
-                                        this.preview_scroll_to_ratio(ratio, window, cx);
-                                    }
-                                }
-                            });
-                        });
-                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                            if phase == DispatchPhase::Capture && event.button == MouseButton::Left
-                            {
-                                let _ = release_view.update(cx, |this, cx| {
-                                    if this.preview_scroll_drag.is_some() {
-                                        this.release_preview_scroll_drag();
-                                        cx.notify();
-                                    }
-                                });
-                            }
-                        });
-                    },
-                )
-                .absolute()
-                .size_full(),
+                gpui_component::scroll::Scrollbar::vertical(handle)
+                    .id(id)
+                    .mode(gpui_component::scroll::ScrollbarMode::Hover)
+                    .viewport_from_layout()
+                    .styles(|styles| {
+                        styles
+                            .thumb(|t| t.radius(px(999.)))
+                            .thumb_hover(|t| t.radius(px(999.)))
+                            .thumb_active(|t| t.radius(px(999.)))
+                    }),
             )
-            .child(
-                div()
-                    .debug_selector(|| "preview_scrollbar_thumb".to_string())
-                    .absolute()
-                    .left(px(4.))
-                    .top(px(thumb_top))
-                    .w(px(6.))
-                    .h(px(thumb_height))
-                    .rounded_full()
-                    .bg(theme.text_muted.opacity(if enabled { 0.55 } else { 0.20 })),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    window.focus(&this.preview_scroll_focus, cx);
-                    this.preview_focused = true;
-                    this.is_preview_selecting = false;
-                    this.preview_autoscroll_task = None;
-                    let Some(bounds) = this.preview_scroll_bounds else {
-                        return;
-                    };
-                    if !(this.preview_list.max_scroll() > 0.5) {
-                        return;
-                    }
-                    this.preview_list.scrollbar_drag_started();
-                    // Recompute from the live ratio: measured heights may have moved
-                    // the thumb since this element was built.
-                    let local_thumb_top = this.preview_list.scroll_ratio()
-                        * (f32::from(bounds.size.height) - thumb_height).max(0.0);
-                    let local_y = f32::from(event.position.y - bounds.origin.y);
-                    let grab_offset =
-                        if (local_thumb_top..local_thumb_top + thumb_height).contains(&local_y) {
-                            local_y - local_thumb_top
-                        } else {
-                            thumb_height / 2.0
-                        };
-                    this.preview_scroll_drag = Some((bounds, grab_offset, thumb_height));
-                    let available = (f32::from(bounds.size.height) - thumb_height).max(1.0);
-                    let ratio = (local_y - grab_offset) / available;
-                    this.preview_scroll_to_ratio(ratio, window, cx);
-                }),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.release_preview_scroll_drag();
-                    cx.notify();
-                }),
-            )
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                let mods = event.keystroke.modifiers;
-                if mods.platform || mods.control || mods.alt {
-                    return;
-                }
-                let current = this.preview_list.scroll_ratio();
-                let max = this.preview_list.max_scroll().max(1.0);
-                let step = (40.0 / max).min(1.0);
-                let next = match event.keystroke.key.as_str() {
-                    "up" | "left" => Some(current - step),
-                    "down" | "right" => Some(current + step),
-                    "pageup" => Some(current - (step * 8.0).max(0.1)),
-                    "pagedown" => Some(current + (step * 8.0).max(0.1)),
-                    "home" => Some(0.0),
-                    "end" => Some(1.0),
-                    _ => None,
-                };
-                if let Some(next) = next {
-                    this.preview_scroll_to_ratio(next, window, cx);
-                    cx.stop_propagation();
-                }
-            }))
             .into_any_element()
+    }
+
+    fn render_editor_scrollbar(&self) -> AnyElement {
+        Self::render_overlay_scrollbar(
+            "editor_scrollbar_native",
+            "editor_scrollbar",
+            &self.editor_scrollbar_handle(),
+        )
+    }
+
+    fn render_preview_scrollbar(&self) -> AnyElement {
+        Self::render_overlay_scrollbar(
+            "preview_scrollbar_native",
+            "preview_scrollbar",
+            &self.preview_list,
+        )
     }
 
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
@@ -1876,6 +1992,9 @@ impl WorkspaceView {
         self.end_source_drag();
         self.cancel_pending_preview_seek();
         self.end_preview_scroll_drag();
+        self.cancel_synced_scroll();
+        self.editor_scrollbar_dragging.set(false);
+        self.split_scrollbar_content_height.set(None);
         if mode != ViewMode::Source && self.state.parse_is_stale() {
             self.parse_now_and_refresh();
         }
@@ -1975,6 +2094,13 @@ impl WorkspaceView {
                 ));
             }
         }
+    }
+
+    fn end_preview_selection(&mut self) {
+        self.is_preview_selecting = false;
+        self.preview_autoscroll_task = None;
+        self.preview_autoscroll_accum = 0.0;
+        self.preview_mouse_window_pos = None;
     }
 
     pub fn trigger_preview_autoscroll_if_needed(&mut self, cx: &mut Context<Self>) {
@@ -2112,6 +2238,11 @@ impl WorkspaceView {
     }
 
     pub fn close_lightbox(&mut self, window: &mut Window, cx: &mut App) {
+        // Opening a modal on mouse-down can hide the matching mouse-up from the panes.
+        self.end_source_drag();
+        self.end_preview_selection();
+        self.end_preview_scroll_drag();
+        self.is_resizing_split = false;
         self.clear_lightbox_sharp(window, cx);
         if let Some(image) = self.lightbox_local_image.take() {
             let shared = self.local_images.lock().unwrap().entries.values().any(|state| matches!(state,
@@ -2304,7 +2435,7 @@ impl WorkspaceView {
         let current_tab = self.state.settings_tab;
 
         cx.defer(move |cx| {
-            let bounds = Bounds::centered(None, size(px(640.), px(460.)), cx);
+            let bounds = Bounds::centered(None, size(px(680.), px(540.)), cx);
             let handle = cx.open_window(
                 WindowOptions {
                     titlebar: crate::platform::auxiliary_titlebar_options(
@@ -2650,6 +2781,25 @@ impl WorkspaceView {
             }
         }
         cx.notify();
+    }
+
+    fn open_or_add_workspace_dir(
+        &mut self,
+        path: &Path,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        self.restore_sidebar_path(path, cx);
+        if self.state.find_root_index_for_path(path).is_some() {
+            self.state.expand_to_file(path);
+            return Ok(());
+        }
+        match self.state.add_workspace_root(path.to_path_buf()) {
+            Ok(_) => {
+                self.state.expand_to_file(path);
+                Ok(())
+            }
+            Err(error) => Err(format_root_add_error(self.state.strings, error)),
+        }
     }
 
     fn restore_sidebar_path(&mut self, path: &Path, cx: &mut Context<Self>) {
@@ -3645,6 +3795,8 @@ impl Render for WorkspaceView {
                     this.cancel_source_composition();
                     this.end_source_drag();
                     this.end_preview_scroll_drag();
+                    this.cancel_synced_scroll();
+                    this.editor_scrollbar_dragging.set(false);
                 }
                 this.state.theme.native_selection = None;
                 cx.notify();
@@ -3702,17 +3854,36 @@ impl Render for WorkspaceView {
         let font_size = self.state.preferences.font_size;
         let line_height = self.state.preferences.line_height;
         let max_width = self.state.preferences.max_column_width;
-        let drag_ratio = if self.preview_scroll_drag.is_some()
-            || self
-                .preview_drag_ratio_until
-                .is_some_and(|until| std::time::Instant::now() < until)
+        if self.editor_scrollbar_dirty.replace(false) {
+            self.cancel_pending_preview_seek();
+            self.preview_list.cancel_scrollbar_drag();
+            if self.state.view_mode == ViewMode::Split
+                && !self.state.doc().is_parse_stale()
+                && !parsed.anchors.is_empty()
+            {
+                let (current_y, max_y, _) = self.editor_scroll_metrics();
+                if max_y > 0.5 {
+                    let preview_target = self.preview_offset_for_editor_y(current_y, max_y, window);
+                    self.drive_synced_scroll(ScrollOrigin::Preview, preview_target, false, window, cx);
+                }
+            }
+        }
+        let preview_scrollbar_moved = self.preview_list.take_scrollbar_scrolled();
+        if preview_scrollbar_moved {
+            self.cancel_pending_preview_seek();
+            self.last_scroll_origin = Some((ScrollOrigin::Preview, std::time::Instant::now()));
+        }
+        let viewport_size = self.preview_list.viewport_bounds().size;
+        if self
+            .preview_viewport_size
+            .is_some_and(|old| old != viewport_size)
         {
-            self.preview_drag_ratio
-        } else {
-            self.preview_drag_ratio = None;
-            self.preview_drag_ratio_until = None;
-            None
-        };
+            self.cancel_pending_preview_seek();
+            self.preview_list.cancel_scrollbar_drag();
+            self.cancel_synced_scroll();
+        }
+        self.preview_viewport_size = Some(viewport_size);
+        let drag_ratio = self.preview_list.active_drag_ratio();
         let (visible_range, measured_changed, layout_changed, range_changed) = if self.state.view_mode != ViewMode::Source {
             let measured_changed = self.preview_list.apply_measured(drag_ratio);
             let layout_changed = self.preview_list.ensure_layout(&parsed, max_width, font_size, line_height, rem);
@@ -3721,10 +3892,35 @@ impl Render for WorkspaceView {
         } else {
             (0..0, false, false, false)
         };
+        let any_scrollbar_dragging =
+            self.editor_scrollbar_dragging.get() || self.preview_list.is_scrollbar_dragging();
+        if !any_scrollbar_dragging {
+            let shared_height = if self.state.view_mode == ViewMode::Split {
+                let (_, editor_max, _) = self.editor_scroll_metrics();
+                let editor_vp =
+                    f32::from(self.editor_scroll_handle.0.borrow().base_handle.bounds().size.height);
+                let preview_max = self.preview_list.max_scroll();
+                let preview_vp = f32::from(self.preview_list.viewport_bounds().size.height);
+                if editor_max > 0.5 && preview_max > 0.5 && editor_vp > 1.0 && preview_vp > 1.0 {
+                    let editor_total = editor_vp + editor_max;
+                    let preview_total = self.preview_list.total_height();
+                    Some(editor_total.max(preview_total))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if self.split_scrollbar_content_height.get() != shared_height {
+                self.split_scrollbar_content_height.set(shared_height);
+                self.preview_list.set_shared_content_height(shared_height);
+                cx.notify();
+            }
+        }
         // Measurement/layout rewrites are programmatic: record the new offset so
         // the reconciliation below cannot mistake them for user scrolling and
         // echo them into the editor.
-        if measured_changed || layout_changed {
+        if (measured_changed || layout_changed) && !preview_scrollbar_moved {
             self.last_preview_sync_offset = self.preview_list.offset();
         }
         if measured_changed || layout_changed || range_changed {
@@ -3963,6 +4159,7 @@ impl Render for WorkspaceView {
                 view_heading.update(cx, |this, cx| {
                     this.cancel_pending_preview_seek();
                     this.end_preview_scroll_drag();
+                    this.cancel_synced_scroll();
                     let target = this
                         .preview_list
                         .offset_for_block(block_idx, 0.0)
@@ -3985,11 +4182,8 @@ impl Render for WorkspaceView {
                         if let Some(path) = paths.pop() {
                             let _ = this.update(app, |this, cx| {
                                 let path = path.canonicalize().unwrap_or(path);
-                                this.restore_sidebar_path(&path, cx);
-                                if path.is_dir() && this.state.workspace_roots.iter().any(|root| path.starts_with(&root.path)) {
-                                    this.state.expand_to_file(&path); cx.notify(); return;
-                                }
                                 if path.is_file() {
+                                    this.restore_sidebar_path(&path, cx);
                                     match this.state.load_file(path) {
                                         Ok(()) => this.on_document_swapped(None, cx),
                                         Err(e) => this.error_banner = Some(e.to_string()),
@@ -3997,52 +4191,12 @@ impl Render for WorkspaceView {
                                     cx.notify();
                                     return;
                                 }
-                                match this.state.add_workspace_root(path) {
-                                    Ok(_) => {
+                                match this.open_or_add_workspace_dir(&path, cx) {
+                                    Ok(()) => {
                                         this.error_banner = None;
                                         this.state.clear_error();
                                     }
-                                    Err(e) => {
-                                        let strings = this.state.strings;
-                                        let msg = match e {
-                                            crate::state::RootAddError::NotFound => {
-                                                strings.error_root_not_found.to_string()
-                                            }
-                                            crate::state::RootAddError::NotADirectory => {
-                                                strings.error_root_not_dir.to_string()
-                                            }
-                                            crate::state::RootAddError::AlreadyExists => {
-                                                strings.error_root_already_exists.to_string()
-                                            }
-                                            crate::state::RootAddError::NestedInExisting(p) => {
-                                                format!(
-                                                    "{}: {}",
-                                                    strings.error_root_nested,
-                                                    p.display()
-                                                )
-                                            }
-                                            crate::state::RootAddError::ContainsExisting(p) => {
-                                                format!(
-                                                    "{}: {}",
-                                                    strings.error_root_parent,
-                                                    p.display()
-                                                )
-                                            }
-                                            crate::state::RootAddError::SaveFailed(err) => {
-                                                format!("{}: {}", strings.error_save_failed, err)
-                                            }
-                                            crate::state::RootAddError::CanonicalizeFailed(
-                                                p,
-                                                err,
-                                            ) => {
-                                                format!(
-                                                    "{}: {}: {}",
-                                                    strings.error_canonicalize_failed,
-                                                    p.display(),
-                                                    err
-                                                )
-                                            }
-                                        };
+                                    Err(msg) => {
                                         this.error_banner = Some(msg.clone());
                                         this.state.set_error(msg);
                                     }
@@ -4168,14 +4322,8 @@ impl Render for WorkspaceView {
                 for path in paths.paths() {
                     let path = path.canonicalize().unwrap_or_else(|_| path.clone());
                     if path.is_dir() {
-                        this.restore_sidebar_path(&path, cx);
-                        if this.state.workspace_roots.iter().any(|root| path.starts_with(&root.path)) {
-                            this.state.expand_to_file(&path);
-                        } else {
-                            match this.state.add_workspace_root(path.clone()) {
-                                Ok(_) => this.state.expand_to_file(&path),
-                                Err(error) => errors.push(format!("{}: {}", path.display(), error)),
-                            }
+                        if let Err(msg) = this.open_or_add_workspace_dir(&path, cx) {
+                            errors.push(format!("{}: {}", path.display(), msg));
                         }
                     } else {
                         match this.state.load_file(path.clone()) {
@@ -4198,17 +4346,26 @@ impl Render for WorkspaceView {
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.source_mouse_move(event, window, cx);
                 if this.is_resizing_split {
-                    let w = this.workspace_width;
-                    let x = f32::from(event.position.x);
-                    let left_offset = if this.state.drawer_open { crate::views::editor::DRAWER_WIDTH } else { 0.0 };
-                    let avail_w = (w - left_offset).max(100.0);
-                    let offset_x = (x - left_offset).max(0.0);
-                    this.split_ratio = (offset_x / avail_w).clamp(0.20, 0.80);
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        let w = this.workspace_width;
+                        let x = f32::from(event.position.x);
+                        let left_offset = if this.state.drawer_open { crate::views::editor::DRAWER_WIDTH } else { 0.0 };
+                        let avail_w = (w - left_offset).max(100.0);
+                        let offset_x = (x - left_offset).max(0.0);
+                        this.split_ratio = (offset_x / avail_w).clamp(0.20, 0.80);
+                    } else {
+                        this.is_resizing_split = false;
+                    }
                     cx.notify();
                 }
                 if this.is_preview_selecting {
-                    this.preview_mouse_window_pos = Some(event.position);
-                    this.trigger_preview_autoscroll_if_needed(cx);
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        this.preview_mouse_window_pos = Some(event.position);
+                        this.trigger_preview_autoscroll_if_needed(cx);
+                    } else {
+                        this.end_preview_selection();
+                        cx.notify();
+                    }
                 }
             }))
             .on_mouse_up(MouseButton::Middle, cx.listener(|this, _, _, cx| {
@@ -4221,19 +4378,18 @@ impl Render for WorkspaceView {
             }))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| {
                 this.release_source_drag(MouseButton::Left);
+                this.is_resizing_split = false;
+                this.end_preview_selection();
                 cx.notify();
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _window, cx| {
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                if event.button != MouseButton::Left { return; }
                 this.release_source_drag(MouseButton::Left);
-                this.release_preview_scroll_drag();
                 if this.is_resizing_split {
                     this.is_resizing_split = false;
                 }
                 if this.is_preview_selecting {
-                    this.is_preview_selecting = false;
-                    this.preview_autoscroll_task = None;
-                    this.preview_autoscroll_accum = 0.0;
-                    this.preview_mouse_window_pos = None;
+                    this.end_preview_selection();
                     cx.notify();
                 }
             }))
@@ -4391,12 +4547,21 @@ impl Render for WorkspaceView {
                 }
                 let key = event.keystroke.key.as_str();
                 let mods = event.keystroke.modifiers;
-                if key.eq_ignore_ascii_case("tab") && this.preview_focused {
-                    if this.preview_scroll_focus.is_focused(window) { window.focus(&this.focus_handle, cx); }
-                    else { window.focus(&this.preview_scroll_focus, cx); }
-                    return;
+                if (this.preview_focused || this.state.view_mode == ViewMode::Preview)
+                    && !mods.platform
+                    && !mods.control
+                    && !mods.alt
+                {
+                    if let Some(next) = scrollbar_key_step(
+                        key,
+                        this.preview_list.scroll_ratio(),
+                        this.preview_list.max_scroll(),
+                    ) {
+                        this.preview_scroll_to_ratio(next, window, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
                 }
-                if this.preview_scroll_focus.is_focused(window) && !mods.secondary(cx) { return; }
 
                 if mods.secondary(cx) {
                     match key {
@@ -4889,7 +5054,10 @@ impl Render for WorkspaceView {
                                 let on_selection_change: crate::views::preview::OnPreviewSelectionCallback = Arc::new(move |sel, is_selecting, window, app| {
                                     let view = view_for_sel.clone();
                                     view.update(app, |this, cx| {
-                                        this.preview_selection = sel;
+                                        if this.lightbox.is_open { return; }
+                                        if is_selecting || sel.is_none() {
+                                            this.preview_selection = sel;
+                                        }
                                         this.is_preview_selecting = is_selecting;
                                         if is_selecting {
                                             this.preview_focused = true;
@@ -4898,9 +5066,7 @@ impl Render for WorkspaceView {
                                             this.preview_mouse_window_pos = Some(window.mouse_position());
                                             this.trigger_preview_autoscroll_if_needed(cx);
                                         } else {
-                                            this.preview_autoscroll_task = None;
-                                            this.preview_autoscroll_accum = 0.0;
-                                            this.preview_mouse_window_pos = None;
+                                            this.end_preview_selection();
                                         }
                                         cx.notify();
                                     });
@@ -5032,46 +5198,55 @@ impl Render for WorkspaceView {
                                                 let view_bounds = cx.entity().clone();
                                                 div()
                                                     .size_full()
-                                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _event: &MouseDownEvent, window, cx| {
-                                                        window.focus(&this.focus_handle, cx);
-                                                        this.search_focused = false;
-                                                        cx.notify();
-                                                    }))
+                                                    .flex()
                                                     .child(
-                                                        canvas(
-                                                            move |bounds, _window, cx| {
-                                                                view_bounds.update(cx, |this, _cx| {
-                                                                    this.editor_content_bounds = Some(bounds);
-                                                                    this.preview_content_bounds = None;
-                                                                });
-                                                            },
-                                                            |_bounds, _, _window, _cx| {},
-                                                        )
-                                                        .absolute()
-                                                        .size_full(),
+                                                        div()
+                                                            .flex_1()
+                                                            .h_full()
+                                                            .relative()
+                                                            .min_w(px(0.))
+                                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                                window.focus(&this.focus_handle, cx);
+                                                                this.search_focused = false;
+                                                                cx.notify();
+                                                            }))
+                                                            .child(
+                                                                canvas(
+                                                                    move |bounds, _window, cx| {
+                                                                        view_bounds.update(cx, |this, _cx| {
+                                                                            this.editor_content_bounds = Some(bounds);
+                                                                            this.preview_content_bounds = None;
+                                                                        });
+                                                                    },
+                                                                    |_bounds, _, _window, _cx| {},
+                                                                )
+                                                                .absolute()
+                                                                .size_full(),
+                                                            )
+                                                            .child(render_editor_pane(
+                                                                self.source_display_lines(),
+                                                                self.state.editor.char_count,
+                                                                visual_lines.clone(),
+                                                                self.document_layout_cache.line_offsets.clone(),
+                                                                self.syntax_cache.clone(),
+                                                                self.source_code_blocks.clone(),
+                                                                !self.state.doc().is_parse_stale() && self.source_composition.is_none(),
+                                                                self.source_display_cursor(),
+                                                                theme,
+                                                                strings,
+                                                                self.state.preferences.font_size,
+                                                                self.state.preferences.line_height,
+                                                                self.state.preferences.show_line_numbers,
+                                                                &self.editor_scroll_handle,
+                                                                gutter_width,
+                                                                on_click_line.clone(),
+                                                                cx.entity().clone(),
+                                                                Arc::new(self.source_display_selection_ranges()),
+                                                                self.source_marked_range(),
+                                                                &editor_failures,
+                                                            ))
+                                                            .child(self.render_editor_scrollbar()),
                                                     )
-                                                    .child(render_editor_pane(
-                                                        self.source_display_lines(),
-                                                        self.state.editor.char_count,
-                                                        visual_lines.clone(),
-                                                        self.document_layout_cache.line_offsets.clone(),
-                                                        self.syntax_cache.clone(),
-                                                        self.source_code_blocks.clone(),
-                                                        !self.state.doc().is_parse_stale() && self.source_composition.is_none(),
-                                                        self.source_display_cursor(),
-                                                        theme,
-                                                        strings,
-                                                        self.state.preferences.font_size,
-                                                        self.state.preferences.line_height,
-                                                        self.state.preferences.show_line_numbers,
-                                                        &self.editor_scroll_handle,
-                                                        gutter_width,
-                                                        on_click_line.clone(),
-                                                        cx.entity().clone(),
-                                                        Arc::new(self.source_display_selection_ranges()),
-                                                        self.source_marked_range(),
-                                                        &editor_failures,
-                                                    ))
                                                     .into_any_element()
                                             }
                                             ViewMode::Preview => {
@@ -5108,9 +5283,10 @@ impl Render for WorkspaceView {
                                                         self.rendered_regions.clone(),
                                                         self.syntax_cache.clone(),
                                                         &preview_failures,
-                                                    self.local_images.clone(),
-                                                    reduce_motion,
-                                                    ))).child(self.render_preview_scrollbar(theme, cx))
+                                                        self.local_images.clone(),
+                                                        reduce_motion,
+                                                    ))
+                                                    .child(self.render_preview_scrollbar()))
                                                     .into_any_element()
                                             }
                                             ViewMode::Split => div()
@@ -5126,50 +5302,61 @@ impl Render for WorkspaceView {
                                                         .min_h(px(0.))
                                                         .h_full()
                                                         .flex()
-                                                        .flex_col()
                                                         .overflow_hidden()
-                                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _event: &MouseDownEvent, window, cx| {
-                                                            window.focus(&this.focus_handle, cx);
-                                                            this.search_focused = false;
-                                                            cx.notify();
-                                                        }))
                                                         .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
                                                             this.handle_editor_scroll_wheel(event, window, cx);
                                                         }))
                                                         .child(
-                                                            canvas(
-                                                                move |bounds, _window, cx| {
-                                                                    view_bounds.update(cx, |this, _cx| {
-                                                                        this.editor_content_bounds = Some(bounds);
-                                                                    });
-                                                                },
-                                                                |_bounds, _, _window, _cx| {},
-                                                            )
-                                                            .absolute()
-                                                            .size_full(),
+                                                            div()
+                                                                .flex_1()
+                                                                .min_w(px(0.))
+                                                                .min_h(px(0.))
+                                                                .h_full()
+                                                                .flex()
+                                                                .flex_col()
+                                                                .relative()
+                                                                .overflow_hidden()
+                                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                                    window.focus(&this.focus_handle, cx);
+                                                                    this.search_focused = false;
+                                                                    cx.notify();
+                                                                }))
+                                                                .child(
+                                                                    canvas(
+                                                                        move |bounds, _window, cx| {
+                                                                            view_bounds.update(cx, |this, _cx| {
+                                                                                this.editor_content_bounds = Some(bounds);
+                                                                            });
+                                                                        },
+                                                                        |_bounds, _, _window, _cx| {},
+                                                                    )
+                                                                    .absolute()
+                                                                    .size_full(),
+                                                                )
+                                                                .child(render_editor_pane(
+                                                                    self.source_display_lines(),
+                                                                    self.state.editor.char_count,
+                                                                    visual_lines.clone(),
+                                                                    self.document_layout_cache.line_offsets.clone(),
+                                                                    self.syntax_cache.clone(),
+                                                                    self.source_code_blocks.clone(),
+                                                                    !self.state.doc().is_parse_stale() && self.source_composition.is_none(),
+                                                                    self.source_display_cursor(),
+                                                                    theme,
+                                                                    strings,
+                                                                    self.state.preferences.font_size,
+                                                                    self.state.preferences.line_height,
+                                                                    self.state.preferences.show_line_numbers,
+                                                                    &self.editor_scroll_handle,
+                                                                    gutter_width,
+                                                                    on_click_line,
+                                                                    cx.entity().clone(),
+                                                                    Arc::new(self.source_display_selection_ranges()),
+                                                                    self.source_marked_range(),
+                                                                    &editor_failures,
+                                                                ))
+                                                                .child(self.render_editor_scrollbar()),
                                                         )
-                                                        .child(render_editor_pane(
-                                                            self.source_display_lines(),
-                                                            self.state.editor.char_count,
-                                                            visual_lines.clone(),
-                                                            self.document_layout_cache.line_offsets.clone(),
-                                                            self.syntax_cache.clone(),
-                                                            self.source_code_blocks.clone(),
-                                                            !self.state.doc().is_parse_stale() && self.source_composition.is_none(),
-                                                            self.source_display_cursor(),
-                                                            theme,
-                                                            strings,
-                                                            self.state.preferences.font_size,
-                                                            self.state.preferences.line_height,
-                                                            self.state.preferences.show_line_numbers,
-                                                            &self.editor_scroll_handle,
-                                                            gutter_width,
-                                                            on_click_line,
-                                                            cx.entity().clone(),
-                                                            Arc::new(self.source_display_selection_ranges()),
-                                                            self.source_marked_range(),
-                                                            &editor_failures,
-                                                        ))
                                                 })
                                                 // Draggable Resizable Divider: 5px hit zone with 1px hairline
                                                 .child(
@@ -5243,8 +5430,9 @@ impl Render for WorkspaceView {
                                                                     self.syntax_cache.clone(),
                                                                     &preview_failures,
                                                                     self.local_images.clone(),
-                                                    reduce_motion,
-                                                                ))).child(self.render_preview_scrollbar(theme, cx))
+                                                                    reduce_motion,
+                                                                ))
+                                                                .child(self.render_preview_scrollbar()))
                                                         }),
                                                 )
                                                 .into_any_element(),
@@ -5757,6 +5945,47 @@ fn render_export_icon(color: Hsla) -> impl IntoElement {
         .path("icons/download.svg")
         .size(px(16.))
         .text_color(color)
+}
+
+fn format_root_add_error(
+    strings: &zmark_core::i18n::I18nStrings,
+    err: crate::state::RootAddError,
+) -> String {
+    match err {
+        crate::state::RootAddError::NotFound => strings.error_root_not_found.to_string(),
+        crate::state::RootAddError::NotADirectory => strings.error_root_not_dir.to_string(),
+        crate::state::RootAddError::AlreadyExists => strings.error_root_already_exists.to_string(),
+        crate::state::RootAddError::NestedInExisting(p) => {
+            format!("{}: {}", strings.error_root_nested, p.display())
+        }
+        crate::state::RootAddError::ContainsExisting(p) => {
+            format!("{}: {}", strings.error_root_parent, p.display())
+        }
+        crate::state::RootAddError::SaveFailed(err) => {
+            format!("{}: {}", strings.error_save_failed, err)
+        }
+        crate::state::RootAddError::CanonicalizeFailed(p, err) => {
+            format!(
+                "{}: {}: {}",
+                strings.error_canonicalize_failed,
+                p.display(),
+                err
+            )
+        }
+    }
+}
+
+fn scrollbar_key_step(key: &str, current_ratio: f32, max_scroll: f32) -> Option<f32> {
+    let step = (40.0 / max_scroll.max(1.0)).min(1.0);
+    match key {
+        "up" | "left" => Some(current_ratio - step),
+        "down" | "right" => Some(current_ratio + step),
+        "pageup" => Some(current_ratio - (step * 8.0).max(0.1)),
+        "pagedown" => Some(current_ratio + (step * 8.0).max(0.1)),
+        "home" => Some(0.0),
+        "end" => Some(1.0),
+        _ => None,
+    }
 }
 
 fn render_settings_icon(color: Hsla) -> impl IntoElement {

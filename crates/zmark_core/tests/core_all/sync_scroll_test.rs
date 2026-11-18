@@ -68,4 +68,12 @@ fn test_sync_scroll_multiple_uneven_blocks() {
     assert_eq!(map.preview_to_source_line(1, 0.0), 3);
     assert_eq!(map.preview_to_source_line(1, 1.0), 4);
     assert_eq!(map.preview_to_source_line(2, 0.5), 16);
+
+    // Continuous fractional mapping glides across single-line blocks too
+    let f0 = map.preview_to_source_line_fraction(0, 0.0);
+    let f_mid = map.preview_to_source_line_fraction(0, 0.5);
+    let f1 = map.preview_to_source_line_fraction(0, 1.0);
+    assert!((f0 - 1.0).abs() < 1e-4);
+    assert!((f_mid - 2.0).abs() < 1e-4);
+    assert!((f1 - 3.0).abs() < 1e-4);
 }

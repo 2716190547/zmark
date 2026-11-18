@@ -9,7 +9,12 @@
 
 use zmark_core::ast::{flatten_block, BlockElement, ParsedDocument};
 use gpui::{point, px, size, Bounds, ListOffset, Pixels, Point, ScrollHandle, Size};
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 const DEFAULT_ITEM_HEIGHT: f32 = 40.0;
 
@@ -23,6 +28,7 @@ pub struct PreviewScrollState {
     padding_top: f32,
     padding_bottom: f32,
     total: f32,
+    total_shared: Rc<Cell<f32>>,
     layout_key: u128,
     last_parsed_ptr: usize,
     pending: MeasurementSink,
@@ -31,7 +37,12 @@ pub struct PreviewScrollState {
     measured: Vec<Option<f32>>,
     /// (scroll offset when set, requested block, in-block progress). Keeps a
     /// programmatic `scroll_to` meaningful when GPUI clamps a short document.
-    logical_override: Option<(f32, usize, f32)>,
+    logical_override: Rc<Cell<Option<(f32, usize, f32)>>>,
+    scrollbar_dragging: Rc<Cell<bool>>,
+    scrollbar_drag_ratio: Rc<Cell<Option<f32>>>,
+    scrollbar_drag_until: Rc<Cell<Option<Instant>>>,
+    scrollbar_scrolled: Rc<Cell<bool>>,
+    shared_content_height: Rc<Cell<Option<f32>>>,
 }
 
 impl Default for PreviewScrollState {
@@ -49,12 +60,18 @@ impl PreviewScrollState {
             padding_top: 24.0,
             padding_bottom: 24.0,
             total: 48.0,
+            total_shared: Rc::new(Cell::new(48.0)),
             layout_key: 0,
             last_parsed_ptr: 0,
             pending: Rc::new(RefCell::new(Vec::new())),
             last_range: 0..0,
             measured: Vec::new(),
-            logical_override: None,
+            logical_override: Rc::new(Cell::new(None)),
+            scrollbar_dragging: Rc::new(Cell::new(false)),
+            scrollbar_drag_ratio: Rc::new(Cell::new(None)),
+            scrollbar_drag_until: Rc::new(Cell::new(None)),
+            scrollbar_scrolled: Rc::new(Cell::new(false)),
+            shared_content_height: Rc::new(Cell::new(None)),
         }
     }
 
@@ -94,7 +111,55 @@ impl PreviewScrollState {
     pub fn set_scroll_offset(&mut self, desired: f32) {
         let clamped = desired.clamp(0.0, self.max_scroll());
         self.scroll.set_offset(point(px(0.), px(-clamped)));
-        self.logical_override = None;
+        self.logical_override.set(None);
+    }
+
+    pub fn is_scrollbar_dragging(&self) -> bool {
+        self.scrollbar_dragging.get()
+    }
+
+    pub fn take_scrollbar_scrolled(&self) -> bool {
+        self.scrollbar_scrolled.replace(false)
+    }
+
+    pub fn active_drag_ratio(&self) -> Option<f32> {
+        if self.scrollbar_dragging.get()
+            || self
+                .scrollbar_drag_until
+                .get()
+                .is_some_and(|until| Instant::now() < until)
+        {
+            self.scrollbar_drag_ratio.get()
+        } else {
+            self.scrollbar_drag_ratio.set(None);
+            self.scrollbar_drag_until.set(None);
+            None
+        }
+    }
+
+    pub fn cancel_scrollbar_drag(&self) {
+        self.scrollbar_dragging.set(false);
+        self.scrollbar_drag_ratio.set(None);
+        self.scrollbar_drag_until.set(None);
+    }
+
+    pub fn shared_content_height(&self) -> Option<f32> {
+        self.shared_content_height.get()
+    }
+
+    pub fn set_shared_content_height(&self, height: Option<f32>) {
+        self.shared_content_height.set(height);
+    }
+
+    fn virtual_scroll_bounds(&self) -> (f32, f32, f32) {
+        let viewport_h = f32::from(self.scroll.bounds().size.height).max(1.0);
+        let real_max = (self.total_shared.get() - viewport_h).max(0.0);
+        let virtual_total = match self.shared_content_height.get() {
+            Some(shared) if real_max > 0.5 => shared.max(self.total_shared.get()),
+            _ => self.total_shared.get(),
+        };
+        let virtual_max = (virtual_total - viewport_h).max(0.0);
+        (real_max, virtual_total, virtual_max)
     }
 
     pub fn scroll_ratio(&self) -> f32 {
@@ -150,11 +215,11 @@ impl PreviewScrollState {
     }
 
     pub fn block_progress_at_offset(&mut self, offset: f32) -> (usize, f32) {
-        if let Some((stored, ix, progress)) = self.logical_override {
+        if let Some((stored, ix, progress)) = self.logical_override.get() {
             if (stored - offset).abs() <= 0.5 {
                 return (ix, progress);
             }
-            self.logical_override = None;
+            self.logical_override.set(None);
         }
         self.progress_from_offset(offset)
     }
@@ -288,6 +353,7 @@ impl PreviewScrollState {
             y += h;
         }
         self.total = y + self.padding_bottom;
+        self.total_shared.set(self.total);
     }
 
     // ---- `ListState`-shaped compatibility methods used by behaviour tests ----
@@ -299,7 +365,10 @@ impl PreviewScrollState {
         self.pending.borrow_mut().clear();
         self.recompute();
         self.layout_key = 0;
-        self.logical_override = None;
+        self.logical_override.set(None);
+        self.cancel_scrollbar_drag();
+        self.scrollbar_scrolled.set(false);
+        self.shared_content_height.set(None);
         self.set_scroll_offset(0.0);
     }
 
@@ -315,7 +384,7 @@ impl PreviewScrollState {
 
     pub fn logical_scroll_top(&self) -> ListOffset {
         let offset = self.offset();
-        let (ix, progress) = match self.logical_override {
+        let (ix, progress) = match self.logical_override.get() {
             Some((stored, ix, progress)) if (stored - offset).abs() <= 0.5 => (ix, progress),
             _ => self.progress_from_offset(offset),
         };
@@ -330,7 +399,7 @@ impl PreviewScrollState {
         let h = self.sizes.get(ix).copied().unwrap_or(0.0).max(1.0);
         let progress = (f32::from(top.offset_in_item) / h).clamp(0.0, 1.0);
         self.set_scroll_offset(self.offset_for_block(ix, progress));
-        self.logical_override = Some((self.offset(), ix, progress));
+        self.logical_override.set(Some((self.offset(), ix, progress)));
     }
 
     pub fn bounds_for_item(&self, ix: usize) -> Option<Bounds<Pixels>> {
@@ -362,8 +431,71 @@ impl PreviewScrollState {
         self.set_scroll_offset((-f32::from(position.y)).max(0.0));
     }
 
-    pub fn scrollbar_drag_started(&self) {}
-    pub fn scrollbar_drag_ended(&self) {}
+    pub fn scrollbar_drag_started(&self) {
+        self.scrollbar_dragging.set(true);
+        self.scrollbar_drag_until.set(None);
+        let viewport_h = f32::from(self.scroll.bounds().size.height).max(1.0);
+        let max_scroll = (self.total_shared.get() - viewport_h).max(0.0);
+        if max_scroll > 0.5 {
+            self.scrollbar_drag_ratio
+                .set(Some((self.offset() / max_scroll).clamp(0.0, 1.0)));
+        }
+    }
+
+    pub fn scrollbar_drag_ended(&self) {
+        self.scrollbar_dragging.set(false);
+        if self.scrollbar_drag_ratio.get().is_some() {
+            self.scrollbar_drag_until
+                .set(Some(Instant::now() + Duration::from_millis(250)));
+        }
+    }
+}
+
+impl gpui_component::scroll::ScrollbarHandle for PreviewScrollState {
+    fn viewport_bounds(&self) -> Bounds<Pixels> {
+        self.scroll.bounds()
+    }
+
+    fn offset(&self) -> Point<Pixels> {
+        let (real_max, _, virtual_max) = self.virtual_scroll_bounds();
+        if real_max <= 0.5 || virtual_max <= 0.5 {
+            return self.scroll.offset();
+        }
+        let real_y = (-f32::from(self.scroll.offset().y)).clamp(0.0, real_max);
+        let ratio = (real_y / real_max).clamp(0.0, 1.0);
+        point(px(0.), px(-(ratio * virtual_max)))
+    }
+
+    fn set_offset(&self, offset: Point<Pixels>) {
+        let (real_max, _, virtual_max) = self.virtual_scroll_bounds();
+        let ratio = if virtual_max > 0.5 {
+            (-f32::from(offset.y) / virtual_max).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let real_y = (ratio * real_max).clamp(0.0, real_max);
+        self.scroll.set_offset(point(px(0.), px(-real_y)));
+        self.logical_override.set(None);
+        if self.scrollbar_dragging.get() && real_max > 0.5 {
+            self.scrollbar_drag_ratio.set(Some(ratio));
+        }
+        self.scrollbar_scrolled.set(true);
+    }
+
+    fn content_size(&self) -> Size<Pixels> {
+        let bounds = self.scroll.bounds();
+        let (_, virtual_total, _) = self.virtual_scroll_bounds();
+        let total = virtual_total.max(f32::from(bounds.size.height));
+        size(bounds.size.width, px(total))
+    }
+
+    fn start_drag(&self) {
+        self.scrollbar_drag_started();
+    }
+
+    fn end_drag(&self) {
+        self.scrollbar_drag_ended();
+    }
 }
 
 fn layout_key(

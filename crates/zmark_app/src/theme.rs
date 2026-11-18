@@ -3,12 +3,16 @@ use gpui::*;
 pub fn init_components(cx: &mut App) {
     if !cx.has_global::<gpui_component::Theme>() {
         gpui_component::init(cx);
+        gpui_component::Theme::set_scrollbar_mode(
+            gpui_component::scroll::ScrollbarMode::Hover,
+            cx,
+        );
         cx.bind_keys([KeyBinding::new("escape", crate::actions::CancelRename, Some("InlineRename"))]);
     }
 }
 
 pub fn sync_component_theme(theme: &ThemeColors, cx: &mut App) {
-    use gpui_component::{Theme, ThemeMode};
+    use gpui_component::{Theme, ThemeMode, scroll::ScrollbarMode};
     let mode = if theme.is_dark { ThemeMode::Dark } else { ThemeMode::Light };
     if Theme::global(cx).mode != mode {
         Theme::change(mode, None, cx);
@@ -27,8 +31,14 @@ pub fn sync_component_theme(theme: &ThemeColors, cx: &mut App) {
     colors.popover_foreground = theme.text_primary;
     colors.selection = theme.selection_bg();
     colors.caret = theme.text_primary.opacity(0.85);
-    if colors != Theme::global(cx).colors {
-        Theme::update(cx, |native| native.colors = colors);
+    colors.scrollbar = gpui::transparent_black();
+    colors.scrollbar_thumb = theme.text_muted.opacity(0.45);
+    colors.scrollbar_thumb_hover = theme.text_muted.opacity(0.75);
+    if colors != Theme::global(cx).colors || Theme::global(cx).scrollbar_mode != ScrollbarMode::Hover {
+        Theme::update(cx, |native| {
+            native.colors = colors;
+            native.scrollbar_mode = ScrollbarMode::Hover;
+        });
     }
 }
 
@@ -257,6 +267,117 @@ impl ThemeColors {
         self.text_muted
     }
 
+    /// Parses a `#rrggbb` or `rrggbb` hex string into an opaque `Hsla` color.
+    pub fn parse_hex_rgb(input: &str) -> Option<Hsla> {
+        let normalized = zmark_core::config::normalize_hex_rgb(input)?;
+        let value = u32::from_str_radix(&normalized[1..], 16).ok()?;
+        Some(rgb(value).into())
+    }
+
+    /// Formats an `Hsla` color as lowercase `#rrggbb`.
+    pub fn hsla_to_hex(color: Hsla) -> String {
+        let c = color.to_rgb();
+        let r = (c.r.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let g = (c.g.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let b = (c.b.clamp(0.0, 1.0) * 255.0).round() as u8;
+        format!("#{r:02x}{g:02x}{b:02x}")
+    }
+
+    /// Returns whether `palette_id` names a built-in palette or the custom palette.
+    pub fn is_valid_palette_id(palette_id: &str) -> bool {
+        palette_id == zmark_core::config::CUSTOM_PALETTE_ID
+            || ALL_PALETTES.iter().any(|p| p.id == palette_id)
+    }
+
+    /// Returns the color assigned to a customizable slot.
+    pub fn slot(&self, slot: zmark_core::config::CustomColorSlot) -> Hsla {
+        use zmark_core::config::CustomColorSlot;
+        match slot {
+            CustomColorSlot::Bg => self.bg,
+            CustomColorSlot::Surface => self.surface,
+            CustomColorSlot::Border => self.border,
+            CustomColorSlot::TextPrimary => self.text_primary,
+            CustomColorSlot::TextMuted => self.text_muted,
+            CustomColorSlot::Accent => self.accent,
+            CustomColorSlot::CodeBg => self.code_bg,
+            CustomColorSlot::SyntaxHeading => self.syntax_heading,
+            CustomColorSlot::SyntaxEmphasis => self.syntax_emphasis,
+            CustomColorSlot::SyntaxInlineCode => self.syntax_inline_code,
+            CustomColorSlot::SyntaxLink => self.syntax_link,
+            CustomColorSlot::SyntaxBullet => self.syntax_bullet,
+            CustomColorSlot::SyntaxCode => self.syntax_code,
+            CustomColorSlot::SyntaxKeyword => self.syntax_keyword,
+            CustomColorSlot::SyntaxFunction => self.syntax_function,
+            CustomColorSlot::SyntaxAttribute => self.syntax_attribute,
+            CustomColorSlot::SyntaxString => self.syntax_string,
+            CustomColorSlot::SyntaxNumber => self.syntax_number,
+            CustomColorSlot::SyntaxComment => self.syntax_comment,
+        }
+    }
+
+    /// Returns a mutable reference to a customizable slot's color.
+    pub fn slot_mut(&mut self, slot: zmark_core::config::CustomColorSlot) -> &mut Hsla {
+        use zmark_core::config::CustomColorSlot;
+        match slot {
+            CustomColorSlot::Bg => &mut self.bg,
+            CustomColorSlot::Surface => &mut self.surface,
+            CustomColorSlot::Border => &mut self.border,
+            CustomColorSlot::TextPrimary => &mut self.text_primary,
+            CustomColorSlot::TextMuted => &mut self.text_muted,
+            CustomColorSlot::Accent => &mut self.accent,
+            CustomColorSlot::CodeBg => &mut self.code_bg,
+            CustomColorSlot::SyntaxHeading => &mut self.syntax_heading,
+            CustomColorSlot::SyntaxEmphasis => &mut self.syntax_emphasis,
+            CustomColorSlot::SyntaxInlineCode => &mut self.syntax_inline_code,
+            CustomColorSlot::SyntaxLink => &mut self.syntax_link,
+            CustomColorSlot::SyntaxBullet => &mut self.syntax_bullet,
+            CustomColorSlot::SyntaxCode => &mut self.syntax_code,
+            CustomColorSlot::SyntaxKeyword => &mut self.syntax_keyword,
+            CustomColorSlot::SyntaxFunction => &mut self.syntax_function,
+            CustomColorSlot::SyntaxAttribute => &mut self.syntax_attribute,
+            CustomColorSlot::SyntaxString => &mut self.syntax_string,
+            CustomColorSlot::SyntaxNumber => &mut self.syntax_number,
+            CustomColorSlot::SyntaxComment => &mut self.syntax_comment,
+        }
+    }
+
+    /// Exports this theme's customizable slots as `#rrggbb` hex strings.
+    pub fn to_custom_palette(&self) -> zmark_core::config::CustomThemePalette {
+        let mut out = zmark_core::config::CustomThemePalette::default();
+        for &slot in &zmark_core::config::CustomColorSlot::ALL {
+            out.set(slot, Some(Self::hsla_to_hex(self.slot(slot))));
+        }
+        out
+    }
+
+    /// Builds a custom theme from saved hex overrides, falling back per slot to Default.
+    pub fn from_custom_palette(
+        custom: &zmark_core::config::CustomThemePalette,
+        is_dark: bool,
+    ) -> Self {
+        let mut theme = Self::default_palette(is_dark);
+        theme.id = zmark_core::config::CUSTOM_PALETTE_ID;
+        theme.name = "Custom";
+        for &slot in &zmark_core::config::CustomColorSlot::ALL {
+            if let Some(hex) = custom.get(slot).and_then(Self::parse_hex_rgb) {
+                *theme.slot_mut(slot) = hex;
+            }
+        }
+        theme
+    }
+
+    /// Resolves the active theme from full user preferences, including custom overrides.
+    pub fn resolve_preferences(
+        preferences: &zmark_core::config::Preferences,
+        is_dark: bool,
+    ) -> Self {
+        if preferences.palette == zmark_core::config::CUSTOM_PALETTE_ID {
+            Self::from_custom_palette(preferences.custom_theme.variant(is_dark), is_dark)
+        } else {
+            Self::resolve(&preferences.palette, is_dark)
+        }
+    }
+
     pub fn resolve(palette_id: &str, is_dark: bool) -> Self {
         match palette_id {
             "default" | "miaoyan" => Self::default_palette(is_dark),
@@ -267,6 +388,12 @@ impl ThemeColors {
             "github" => Self::github(is_dark),
             "solarized" => Self::solarized(is_dark),
             "one-dark" => Self::one_dark(is_dark),
+            zmark_core::config::CUSTOM_PALETTE_ID => {
+                let mut theme = Self::default_palette(is_dark);
+                theme.id = zmark_core::config::CUSTOM_PALETTE_ID;
+                theme.name = "Custom";
+                theme
+            }
             _ => Self::default_palette(is_dark),
         }
     }

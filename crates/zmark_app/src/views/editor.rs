@@ -900,7 +900,7 @@ pub fn render_editor_pane(
             div()
                 .absolute()
                 .bottom_3()
-                .right_3()
+                .right_5()
                 .flex()
                 .items_center()
                 .gap_2()

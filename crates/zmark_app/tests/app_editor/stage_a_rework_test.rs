@@ -211,16 +211,43 @@ async fn test_preview_scroll_reverse_mapping_with_soft_wrap(cx: &mut TestAppCont
             };
             workspace.handle_preview_scroll_wheel(&dummy_event, window, cx);
 
-            // Verify deferred_scroll_to_item in editor_scroll_handle matches expected_vis_idx (NOT heading_phys_idx!)
-            let state_ref = workspace.editor_scroll_handle.0.borrow();
-            let deferred = state_ref.deferred_scroll_to_item.expect("deferred_scroll_to_item should be set");
-            assert_eq!(
-                deferred.item_index,
-                expected_vis_idx,
-                "handle_preview_scroll_wheel must scroll to visual line index {}, NOT physical line index {}",
-                expected_vis_idx,
-                heading_phys_idx
+            // Verify reverse sync targets expected_vis_idx (NOT heading_phys_idx!),
+            // either via deferred item scroll before layout or continuous smooth target after layout.
+            let row_h = zmark_app::views::editor::calculate_line_row_height(
+                workspace.state.preferences.font_size,
+                workspace.state.preferences.line_height,
             );
+            let deferred = workspace
+                .editor_scroll_handle
+                .0
+                .borrow()
+                .deferred_scroll_to_item;
+            if let Some(deferred) = deferred {
+                assert_eq!(
+                    deferred.item_index,
+                    expected_vis_idx,
+                    "handle_preview_scroll_wheel must scroll to visual line index {}, NOT physical line index {}",
+                    expected_vis_idx,
+                    heading_phys_idx
+                );
+            } else {
+                let (origin, target_y) = workspace
+                    .sync_scroll_target()
+                    .expect("sync_scroll_target should be set after layout");
+                assert_eq!(origin, zmark_app::views::workspace::ScrollOrigin::Editor);
+                let target_vis = (target_y / row_h).floor() as usize;
+                assert_eq!(
+                    target_vis,
+                    expected_vis_idx,
+                    "handle_preview_scroll_wheel must scroll to visual line index {}, NOT physical line index {} (target_y={}, row_h={})",
+                    expected_vis_idx,
+                    heading_phys_idx,
+                    target_y,
+                    row_h
+                );
+                let current_y = -f32::from(workspace.editor_scroll_handle.0.borrow().base_handle.offset().y);
+                assert!(current_y > 0.0, "first smooth sync step must advance editor offset immediately");
+            }
         });
     });
 }
