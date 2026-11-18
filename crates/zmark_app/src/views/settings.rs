@@ -783,29 +783,18 @@ impl Render for SettingsWindowView {
                             )
                             .into_any_element()
                         }
-                        SettingsTab::About => {
-                            let ws_onboarding = self.workspace.clone();
-                            render_about_tab(
-                                &theme,
-                                strings,
-                                &update_status,
-                                update_enabled,
-                                update_reason.as_deref(),
-                                on_check_update,
-                                move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
-                                    cx.open_url("https://github.com/2716190547/zmark-releases");
-                                },
-                                move |_: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-                                    if let Some(ws) = ws_onboarding.upgrade() {
-                                        ws.update(cx, |ws, cx| {
-                                            ws.start_onboarding(cx);
-                                        });
-                                    }
-                                    window.remove_window();
-                                },
-                            )
-                            .into_any_element()
-                        }
+                        SettingsTab::About => render_about_tab(
+                            &theme,
+                            strings,
+                            &update_status,
+                            update_enabled,
+                            update_reason.as_deref(),
+                            on_check_update,
+                            move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+                                cx.open_url("https://github.com/2716190547/zmark-releases");
+                            },
+                        )
+                        .into_any_element(),
                     }),
             )
             .when(cfg!(target_os = "windows"), |el| {
@@ -1717,36 +1706,22 @@ fn render_shortcuts_tab(
         .child(
             div()
                 .flex()
-                .items_center()
-                .justify_between()
-                .child(render_section_title(strings.shortcuts_label, theme))
-                .when(has_overrides, |el| {
-                    el.child(render_secondary_button(
-                        "btn_reset_all_shortcuts",
-                        strings.shortcut_reset_all,
-                        theme,
-                        move |_, window, cx| on_reset_all(window, cx),
-                    ))
-                }),
-        )
-        .child(
-            div()
-                .w_full()
-                .px_3()
-                .py_2()
-                .rounded(px(8.))
-                .bg(theme.text_primary.opacity(0.04))
-                .border(px(1.))
-                .border_color(theme.border)
-                .flex()
-                .items_center()
-                .gap_2()
+                .flex_col()
+                .gap_1()
                 .child(
-                    svg()
-                        .path("icons/keyboard.svg")
-                        .size(px(14.))
-                        .flex_shrink_0()
-                        .text_color(theme.accent),
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(render_section_title(strings.shortcuts_label, theme))
+                        .when(has_overrides, |el| {
+                            el.child(render_secondary_button(
+                                "btn_reset_all_shortcuts",
+                                strings.shortcut_reset_all,
+                                theme,
+                                move |_, window, cx| on_reset_all(window, cx),
+                            ))
+                        }),
                 )
                 .child(
                     div()
@@ -1789,33 +1764,22 @@ fn render_shortcuts_tab(
                             let on_rep = handlers.on_replace_conflict.clone();
                             let on_can = handlers.on_cancel_conflict.clone();
 
-                            let pill_bg = if is_recording {
-                                theme.accent.opacity(0.18)
-                            } else if is_customized {
-                                theme.accent.opacity(0.10)
+                            let pill_bg = if is_recording || is_customized {
+                                theme.control_selection_bg()
                             } else {
-                                theme.text_primary.opacity(0.05)
+                                theme.text_primary.opacity(0.04)
                             };
                             let pill_border = if is_recording {
-                                theme.accent
-                            } else if is_customized {
-                                theme.accent.opacity(0.55)
+                                theme.text_primary.opacity(0.32)
                             } else {
-                                theme.text_primary.opacity(0.16)
+                                theme.border
                             };
-                            let pill_text = if is_recording {
-                                theme.accent
+                            let pill_text = if is_recording || is_customized {
+                                theme.selection_text()
                             } else if spec.trim().is_empty() {
                                 theme.text_muted
                             } else {
                                 theme.text_primary
-                            };
-                            let edit_icon_color = if is_recording {
-                                theme.accent
-                            } else if is_customized {
-                                theme.accent.opacity(0.85)
-                            } else {
-                                theme.text_muted
                             };
                             let edit_hint = strings.shortcut_edit_hint;
 
@@ -1855,10 +1819,12 @@ fn render_shortcuts_tab(
                                                             .px_1p5()
                                                             .py_0p5()
                                                             .rounded(px(4.))
-                                                            .bg(theme.accent.opacity(0.12))
+                                                            .bg(theme.text_primary.opacity(0.05))
+                                                            .border(px(1.))
+                                                            .border_color(theme.border)
                                                             .text_size(px(10.))
                                                             .font_weight(FontWeight::MEDIUM)
-                                                            .text_color(theme.accent)
+                                                            .text_color(theme.text_muted)
                                                             .child(strings.shortcut_custom_badge),
                                                     )
                                                 }),
@@ -1882,12 +1848,13 @@ fn render_shortcuts_tab(
                                                         .items_center()
                                                         .gap_1p5()
                                                         .text_xs()
+                                                        .when(is_recording, |el| el.font_weight(FontWeight::MEDIUM))
                                                         .font_family(crate::platform::MONO_FONT)
                                                         .text_color(pill_text)
                                                         .cursor_pointer()
                                                         .hover(|s| {
-                                                            s.border_color(theme.accent)
-                                                                .bg(theme.accent.opacity(0.12))
+                                                            s.border_color(theme.text_primary.opacity(0.28))
+                                                                .bg(theme.control_selection_bg())
                                                         })
                                                         .tooltip(move |_, cx| {
                                                             cx.new(|_| crate::views::workspace::TooltipView {
@@ -1900,13 +1867,15 @@ fn render_shortcuts_tab(
                                                             on_rec(action, window, cx);
                                                         })
                                                         .child(key_label)
-                                                        .child(
-                                                            svg()
-                                                                .path("icons/pencil.svg")
-                                                                .size(px(11.))
-                                                                .flex_shrink_0()
-                                                                .text_color(edit_icon_color),
-                                                        ),
+                                                        .when(!is_recording, |el| {
+                                                            el.child(
+                                                                svg()
+                                                                    .path("icons/pencil.svg")
+                                                                    .size(px(11.))
+                                                                    .flex_shrink_0()
+                                                                    .text_color(theme.text_muted),
+                                                            )
+                                                        }),
                                                 )
                                                 .when(is_customized && !is_recording, |el| {
                                                     let res_sel = res_id.clone();
@@ -1937,7 +1906,7 @@ fn render_shortcuts_tab(
                                     el.child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme.accent)
+                                            .text_color(theme.text_muted)
                                             .child(msg),
                                     )
                                 })
@@ -1954,12 +1923,12 @@ fn render_shortcuts_tab(
                                     el.child(
                                         div()
                                             .w_full()
-                                            .px_2()
-                                            .py_1()
+                                            .px_2p5()
+                                            .py_1p5()
                                             .rounded(px(6.))
-                                            .bg(theme.accent.opacity(0.08))
+                                            .bg(theme.control_selection_bg())
                                             .border(px(1.))
-                                            .border_color(theme.accent.opacity(0.35))
+                                            .border_color(theme.text_primary.opacity(0.22))
                                             .flex()
                                             .items_center()
                                             .justify_between()
@@ -1967,7 +1936,7 @@ fn render_shortcuts_tab(
                                             .child(
                                                 div()
                                                     .text_xs()
-                                                    .text_color(theme.text_primary)
+                                                    .text_color(theme.selection_text())
                                                     .child(conflict_msg),
                                             )
                                             .child(
@@ -1982,9 +1951,9 @@ fn render_shortcuts_tab(
                                                             .px_2()
                                                             .py_0p5()
                                                             .rounded(px(4.))
-                                                            .bg(theme.accent)
+                                                            .bg(theme.text_primary)
                                                             .text_xs()
-                                                            .text_color(rgb(0xffffff))
+                                                            .text_color(theme.surface)
                                                             .cursor_pointer()
                                                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                                                 cx.stop_propagation();
@@ -2025,7 +1994,6 @@ fn render_about_tab(
     update_reason: Option<&str>,
     on_check_update: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     on_open_github: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
-    on_replay_onboarding: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let update_text = match update_status {
         UpdateStatus::Checking | UpdateStatus::Installing => strings.update_checking.to_string(),
@@ -2100,17 +2068,6 @@ fn render_about_tab(
                 .flex_col()
                 .gap_2()
                 .child(render_section_title(strings.open_source_label, theme))
-                .child(render_setting_row(
-                    strings.onboarding_replay_label,
-                    Some(strings.onboarding_replay_desc.into()),
-                    render_secondary_button(
-                        "btn_replay_onboarding",
-                        strings.onboarding_replay_button,
-                        theme,
-                        on_replay_onboarding,
-                    ),
-                    theme,
-                ))
                 .child(render_setting_row(
                     "github.com/2716190547/zmark-releases",
                     Some(strings.footer_credit.into()),

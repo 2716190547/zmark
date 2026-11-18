@@ -48,6 +48,8 @@ pub enum InlineItem {
         #[serde(default)]
         source_range: Option<std::ops::Range<usize>>,
     },
+    /// Explicit inline HTML break (`<br>` / `<br/>`).
+    LineBreak,
 }
 
 /// A collection of inline formatted pieces.
@@ -74,6 +76,7 @@ impl InlineGroup {
                 | InlineItem::Code(s) => out.push_str(s),
                 InlineItem::Link { text, .. } => out.push_str(text),
                 InlineItem::Image { alt, .. } => out.push_str(alt),
+                InlineItem::LineBreak => out.push('\n'),
             }
         }
         out
@@ -301,7 +304,7 @@ pub fn flatten_block(block: &BlockElement, path: &str) -> FlattenResult {
                 text,
             }
         }
-        BlockElement::Rule => FlattenResult {
+        BlockElement::TableOfContents | BlockElement::Spacer { .. } | BlockElement::Rule => FlattenResult {
             text: String::new(),
             segments: Vec::new(),
         },
@@ -349,6 +352,12 @@ pub enum BlockElement {
     Table {
         headers: Vec<InlineGroup>,
         rows: Vec<Vec<InlineGroup>>,
+    },
+    /// Standalone `[toc]` / `[[toc]]` marker rendered as an interactive document outline card.
+    TableOfContents,
+    /// Standalone HTML line break block (`<br>` / `<br/>`) rendered as vertical breathing room.
+    Spacer {
+        lines: u8,
     },
     Rule,
 }
@@ -590,6 +599,45 @@ fn is_inline_start(ev: &Event) -> bool {
     )
 }
 
+fn is_toc_marker(inlines: &InlineGroup) -> bool {
+    if !inlines.0.iter().all(|item| matches!(item, InlineItem::Text(_))) {
+        return false;
+    }
+    let text = inlines.plain_text();
+    let trimmed = text.trim();
+    trimmed.eq_ignore_ascii_case("[toc]") || trimmed.eq_ignore_ascii_case("[[toc]]")
+}
+
+fn paragraph_or_toc(inlines: InlineGroup, end_offset: usize) -> (BlockElement, usize) {
+    if is_toc_marker(&inlines) {
+        (BlockElement::TableOfContents, end_offset)
+    } else {
+        (BlockElement::Paragraph(inlines), end_offset)
+    }
+}
+
+/// Counts `<br>` / `<br/>` / `<br />` tags if `raw` consists exclusively of break tags and whitespace.
+fn parse_html_break_count(raw: &str) -> Option<u8> {
+    let mut rest = raw.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    let mut count: u8 = 0;
+    while !rest.is_empty() {
+        if rest.len() < 4 || !rest.as_bytes()[..3].eq_ignore_ascii_case(b"<br") {
+            return None;
+        }
+        let close_rel = rest[3..].find('>')?;
+        let inner = rest[3..3 + close_rel].trim();
+        if !inner.is_empty() && inner != "/" {
+            return None;
+        }
+        count = count.saturating_add(1);
+        rest = rest[3 + close_rel + 1..].trim_start();
+    }
+    (count > 0).then_some(count.min(4))
+}
+
 fn parse_single_block<'a, I>(
     ev: Event<'a>,
     range: std::ops::Range<usize>,
@@ -620,7 +668,33 @@ where
             let (inlines, end_range) =
                 collect_inlines_until(iter, &mut |e| matches!(e, Event::End(TagEnd::Paragraph)));
             let end_offset = end_range.map(|r| r.end).unwrap_or(range.end);
-            Some((BlockElement::Paragraph(inlines), end_offset))
+            Some(paragraph_or_toc(inlines, end_offset))
+        }
+        Event::Start(Tag::HtmlBlock) => {
+            let mut raw = String::new();
+            let mut end_offset = range.end;
+            while let Some((sub_ev, sub_range)) = iter.peek() {
+                match sub_ev {
+                    Event::End(TagEnd::HtmlBlock) => {
+                        end_offset = sub_range.end;
+                        iter.next();
+                        break;
+                    }
+                    Event::Html(t) | Event::Text(t) => {
+                        raw.push_str(t);
+                        end_offset = sub_range.end;
+                        iter.next();
+                    }
+                    _ => {
+                        end_offset = sub_range.end;
+                        iter.next();
+                    }
+                }
+            }
+            parse_html_break_count(&raw).map(|lines| (BlockElement::Spacer { lines }, end_offset))
+        }
+        Event::Html(t) => {
+            parse_html_break_count(&t).map(|lines| (BlockElement::Spacer { lines }, range.end))
         }
         Event::Start(Tag::CodeBlock(kind)) => {
             let is_indented = matches!(kind, CodeBlockKind::Indented);
@@ -831,7 +905,7 @@ where
             if inlines.0.is_empty() {
                 None
             } else {
-                Some((BlockElement::Paragraph(inlines), end_offset))
+                Some(paragraph_or_toc(inlines, end_offset))
             }
         }
         _ => None,
@@ -912,6 +986,16 @@ where
             inlines.push(InlineItem::Text(" ".to_string()));
             true
         }
+        Event::InlineHtml(html) | Event::Html(html) => {
+            if let Some(count) = parse_html_break_count(&html) {
+                for _ in 0..count {
+                    inlines.push(InlineItem::LineBreak);
+                }
+                true
+            } else {
+                false
+            }
+        }
         _ => false,
     }
 }
@@ -946,6 +1030,7 @@ fn inline_to_string(item: InlineItem) -> String {
         | InlineItem::Code(s) => s,
         InlineItem::Link { text, .. } => text,
         InlineItem::Image { alt, .. } => alt,
+        InlineItem::LineBreak => "\n".to_string(),
     }
 }
 

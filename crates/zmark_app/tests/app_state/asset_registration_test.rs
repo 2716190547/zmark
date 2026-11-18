@@ -26,6 +26,10 @@ const PRODUCTION_ICONS: &[&str] = &[
     "icons/refresh.svg",
     "icons/x.svg",
     "icons/maximize.svg",
+    "welcome/hero.svg",
+    "welcome/workflow.svg",
+    "welcome/syntax-playground.svg",
+    "welcome/lightbox-badge.svg",
 ];
 
 #[test]

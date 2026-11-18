@@ -582,6 +582,8 @@ fn estimate_sizes(
                     })
                     .sum::<f32>(),
                 BlockElement::Table { rows, .. } => (rows.len() + 1) as f32 * (lh + rem * 0.75),
+                BlockElement::TableOfContents => rem * 7.5,
+                BlockElement::Spacer { lines } => (*lines as f32) * 14.0,
                 BlockElement::Rule => rem * 2.0 + 1.0,
             };
             (h + item_pad).max(DEFAULT_ITEM_HEIGHT)
@@ -713,6 +715,8 @@ fn estimate_block(
             .sum::<f32>(),
         BlockElement::Table { rows, .. } => (rows.len() + 1) as f32 * (*lh + rem * 0.75),
         BlockElement::Paragraph(_) => text_h,
+        BlockElement::TableOfContents => rem * 7.5,
+        BlockElement::Spacer { lines } => (*lines as f32) * 14.0,
         BlockElement::Rule => rem * 2.0,
     }
 }

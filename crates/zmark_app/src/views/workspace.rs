@@ -2434,25 +2434,8 @@ impl WorkspaceView {
         self.sidebar_busy
             || self.lightbox.is_open
             || self.is_renaming
-            || self.state.onboarding_open
             || self.state.pending_close.is_some()
             || self.state.pending_remove_root.is_some()
-    }
-
-    pub fn start_onboarding(&mut self, cx: &mut Context<Self>) {
-        self.state.open_onboarding();
-        self.settings_window = None;
-        cx.notify();
-    }
-
-    pub fn step_onboarding(&mut self, step: usize, cx: &mut Context<Self>) {
-        self.state.set_onboarding_step(step);
-        cx.notify();
-    }
-
-    pub fn finish_onboarding(&mut self, cx: &mut Context<Self>) {
-        self.state.finish_onboarding(true);
-        cx.notify();
     }
 
     pub fn open_settings_window(&mut self, cx: &mut Context<Self>) {
@@ -3857,302 +3840,6 @@ impl WorkspaceView {
                     ),
             )
     }
-
-    fn render_onboarding_modal(
-        &self,
-        theme: &crate::theme::ThemeColors,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        use zmark_core::config::ShortcutActionId;
-        let strings = self.state.strings;
-        let prefs = &self.state.preferences;
-        let os = cx.platform_info().os;
-        let step = self
-            .state
-            .onboarding_step
-            .min(AppState::ONBOARDING_STEP_COUNT - 1);
-
-        let key_chip = |label: &'static str, action: Option<ShortcutActionId>| {
-            let shortcut_text = action
-                .and_then(|id| crate::actions::shortcut_display_for_action(prefs, id, os));
-            div()
-                .px_2p5()
-                .py_1()
-                .rounded(px(6.))
-                .bg(theme.surface)
-                .border_1()
-                .border_color(theme.border)
-                .flex()
-                .items_center()
-                .gap_1p5()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(label),
-                )
-                .when_some(shortcut_text, |el, key| {
-                    el.child(
-                        div()
-                            .px_1p5()
-                            .py_0p5()
-                            .rounded(px(4.))
-                            .bg(theme.accent.opacity(0.12))
-                            .font_family(crate::platform::MONO_FONT)
-                            .text_size(px(11.))
-                            .text_color(theme.accent)
-                            .child(key),
-                    )
-                })
-        };
-
-        let (icon_path, title, desc, chips): (&'static str, &'static str, &'static str, Vec<AnyElement>) = match step {
-            0 => (
-                "icons/columns-2.svg",
-                strings.onboarding_step1_title,
-                strings.onboarding_step1_desc,
-                vec![
-                    key_chip(strings.source_mode, Some(ShortcutActionId::ToggleSourceMode)).into_any_element(),
-                    key_chip(strings.split_mode, Some(ShortcutActionId::ToggleSplitMode)).into_any_element(),
-                    key_chip(strings.preview_mode, Some(ShortcutActionId::TogglePreviewMode)).into_any_element(),
-                ],
-            ),
-            1 => (
-                "icons/folder.svg",
-                strings.onboarding_step2_title,
-                strings.onboarding_step2_desc,
-                vec![
-                    key_chip(strings.directory_drawer, Some(ShortcutActionId::ToggleDrawer)).into_any_element(),
-                    key_chip(strings.shortcut_toggle_sidebar_tab, Some(ShortcutActionId::ToggleSidebarTab)).into_any_element(),
-                    key_chip(strings.find_in_file, Some(ShortcutActionId::FindInFile)).into_any_element(),
-                ],
-            ),
-            2 => (
-                "icons/image.svg",
-                strings.onboarding_step3_title,
-                strings.onboarding_step3_desc,
-                vec![
-                    key_chip(strings.open_file, Some(ShortcutActionId::OpenFileDialog)).into_any_element(),
-                    key_chip(strings.export_html, Some(ShortcutActionId::ExportHtml)).into_any_element(),
-                    key_chip("Mermaid · Lightbox", None).into_any_element(),
-                ],
-            ),
-            _ => (
-                "icons/keyboard.svg",
-                strings.onboarding_step4_title,
-                strings.onboarding_step4_desc,
-                vec![
-                    key_chip(strings.settings, Some(ShortcutActionId::ToggleSettings)).into_any_element(),
-                    key_chip(strings.shortcut_new_draft, Some(ShortcutActionId::NewDraft)).into_any_element(),
-                    key_chip(strings.shortcut_format_bold, Some(ShortcutActionId::SourceBold)).into_any_element(),
-                ],
-            ),
-        };
-
-        let is_first = step == 0;
-        let is_last = step + 1 >= AppState::ONBOARDING_STEP_COUNT;
-        let step_counter = format!("{} / {}", step + 1, AppState::ONBOARDING_STEP_COUNT);
-
-        div()
-            .id("onboarding_modal_backdrop")
-            .absolute()
-            .inset_0()
-            .bg(rgba(0x00000066))
-            .occlude()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .id("onboarding_modal_card")
-                    .w(px(520.))
-                    .max_w(px(520.))
-                    .p_6()
-                    .rounded_xl()
-                    .bg(theme.surface)
-                    .border_1()
-                    .border_color(theme.border)
-                    .shadow_2xl()
-                    .flex()
-                    .flex_col()
-                    .gap_5()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .w(px(36.))
-                                            .h(px(36.))
-                                            .rounded_lg()
-                                            .bg(theme.accent.opacity(0.12))
-                                            .border_1()
-                                            .border_color(theme.accent.opacity(0.28))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                svg()
-                                                    .path(icon_path)
-                                                    .size(px(18.))
-                                                    .text_color(theme.accent),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_0p5()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.accent)
-                                                    .child(strings.onboarding_kicker),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(11.))
-                                                    .font_family(crate::platform::MONO_FONT)
-                                                    .text_color(theme.text_muted)
-                                                    .child(step_counter),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .id("btn_onboarding_skip")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded(px(6.))
-                                    .text_xs()
-                                    .text_color(theme.text_muted)
-                                    .cursor_pointer()
-                                    .hover(|s| {
-                                        s.bg(theme.hover_bg())
-                                            .text_color(theme.text_primary)
-                                    })
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _window, cx| {
-                                            this.finish_onboarding(cx);
-                                        }),
-                                    )
-                                    .child(strings.onboarding_skip),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.text_primary)
-                                    .child(title),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .line_height(relative(1.6))
-                                    .text_color(theme.text_muted)
-                                    .child(desc),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .p_3()
-                            .rounded_lg()
-                            .bg(theme.bg)
-                            .border_1()
-                            .border_color(theme.border)
-                            .flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .children(chips),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .pt_1()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1p5()
-                                    .children((0..AppState::ONBOARDING_STEP_COUNT).map(|idx| {
-                                        let active = idx == step;
-                                        div()
-                                            .id(SharedString::from(format!("onboarding_dot_{idx}")))
-                                            .w(px(if active { 18. } else { 6. }))
-                                            .h(px(6.))
-                                            .rounded_full()
-                                            .bg(if active {
-                                                theme.accent
-                                            } else {
-                                                theme.text_muted.opacity(0.35)
-                                            })
-                                            .cursor_pointer()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(move |this, _, _window, cx| {
-                                                    this.step_onboarding(idx, cx);
-                                                }),
-                                            )
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .when(!is_first, |el| {
-                                        el.child(render_modal_button(
-                                            "btn_onboarding_prev",
-                                            strings.onboarding_prev.to_string(),
-                                            theme,
-                                            ModalButtonRole::Secondary,
-                                            cx.listener(move |this, _, _window, cx| {
-                                                this.step_onboarding(step.saturating_sub(1), cx);
-                                            }),
-                                        ))
-                                    })
-                                    .child(render_modal_button(
-                                        if is_last {
-                                            "btn_onboarding_finish"
-                                        } else {
-                                            "btn_onboarding_next"
-                                        },
-                                        if is_last {
-                                            strings.onboarding_finish.to_string()
-                                        } else {
-                                            strings.onboarding_next.to_string()
-                                        },
-                                        theme,
-                                        ModalButtonRole::Primary,
-                                        cx.listener(move |this, _, _window, cx| {
-                                            if is_last {
-                                                this.finish_onboarding(cx);
-                                            } else {
-                                                this.step_onboarding(step + 1, cx);
-                                            }
-                                        }),
-                                    )),
-                            ),
-                    ),
-            )
-    }
 }
 
 impl Render for WorkspaceView {
@@ -4898,33 +4585,6 @@ impl Render for WorkspaceView {
                     return;
                 }
 
-                if this.state.onboarding_open {
-                    match event.keystroke.key.as_str() {
-                        "escape" => {
-                            this.finish_onboarding(cx);
-                            cx.stop_propagation();
-                        }
-                        "left" => {
-                            let step = this.state.onboarding_step;
-                            if step > 0 {
-                                this.step_onboarding(step - 1, cx);
-                            }
-                            cx.stop_propagation();
-                        }
-                        "right" | "enter" => {
-                            let step = this.state.onboarding_step;
-                            if step + 1 >= AppState::ONBOARDING_STEP_COUNT {
-                                this.finish_onboarding(cx);
-                            } else {
-                                this.step_onboarding(step + 1, cx);
-                            }
-                            cx.stop_propagation();
-                        }
-                        _ => {}
-                    }
-                    return;
-                }
-
                 if this.state.pending_remove_root.is_some() {
                     match event.keystroke.key.as_str() {
                         "escape" => {
@@ -5028,6 +4688,7 @@ impl Render for WorkspaceView {
             .text_color(theme.text_primary)
             // 1. Left Drawer (Files & TOC) with Bidirectional 180ms Animation
             .when(show_drawer, |body| {
+                let on_select_heading_drawer = on_select_heading.clone();
                 body.child(
                     div()
                         .id(if is_drawer_closing { "animated_drawer_closing" } else { "animated_drawer_opening" })
@@ -5152,7 +4813,7 @@ impl Render for WorkspaceView {
                                         on_select_doc,
                                         on_close_doc,
                                         on_new_draft,
-                                        on_select_heading,
+                                        on_select_heading_drawer,
                                         on_open_folder,
                                         on_toggle_drawer,
                                         on_new_file_in_dir,
@@ -5563,6 +5224,7 @@ impl Render for WorkspaceView {
                                     on_selection_change: Some(on_selection_change),
                                     on_autoscroll: Some(on_autoscroll),
                                     on_image_recovery: Some(on_image_recovery),
+                                    on_select_heading: Some(on_select_heading.clone()),
                                     on_wheel: Some(on_wheel),
                                 };
 
@@ -5859,9 +5521,6 @@ impl Render for WorkspaceView {
                     })
                     .when(self.state.pending_close.is_some(), |root| {
                         root.child(self.render_close_modal(theme, cx))
-                    })
-                    .when(self.state.onboarding_open, |root| {
-                        root.child(self.render_onboarding_modal(theme, cx))
                     });
 
         self.complete_local_image_decode(window, cx);

@@ -22,6 +22,7 @@ pub const MAX_CACHE_BYTES: u64 = 48 * 1024 * 1024;
 /// and caps image height at 400pt; at 2x display density that needs at most
 /// 1600px on either side, so larger source pixels only wasted texture memory.
 pub const MAX_TEXTURE_SIDE: u32 = 1600;
+pub const EMBEDDED_ASSET_SCHEME: &str = "zmark-asset://";
 
 pub fn resolve_image_path(reference: &str, document: Option<&Path>) -> Result<PathBuf, String> {
     let path = reference.split('#').next().unwrap_or("");
@@ -101,7 +102,83 @@ impl LocalImage {
     }
 }
 
+fn load_embedded_svg_asset(reference: &str) -> Result<Arc<LocalImage>, String> {
+    use gpui::AssetSource;
+    let rel = reference
+        .strip_prefix(EMBEDDED_ASSET_SCHEME)
+        .unwrap_or("")
+        .split('#')
+        .next()
+        .unwrap_or("");
+    if rel.is_empty()
+        || rel.contains('?')
+        || rel.contains("..")
+        || rel.contains('\\')
+        || !rel.ends_with(".svg")
+    {
+        return Err("仅支持加载内置 UTF-8 SVG 资源".into());
+    }
+    let bytes = crate::assets::AppAssets
+        .load(rel)
+        .map_err(|e| format!("无法读取内置图标：{e}"))?
+        .ok_or_else(|| format!("未找到内置 SVG 资源：{rel}"))?;
+    load_svg_bytes(bytes.as_ref(), PathBuf::from(rel))
+}
+
+fn load_svg_bytes(bytes: &[u8], source_path: PathBuf) -> Result<Arc<LocalImage>, String> {
+    if bytes.len() as u64 > MAX_INPUT_BYTES {
+        return Err("图片文件超过 20MiB".into());
+    }
+    let forbidden = Arc::new(AtomicBool::new(false));
+    let data_flag = forbidden.clone();
+    let string_flag = forbidden.clone();
+    let mut options = usvg::Options::default();
+    options.image_href_resolver = usvg::ImageHrefResolver {
+        resolve_data: Box::new(move |_, _, _| {
+            data_flag.store(true, Ordering::Relaxed);
+            None
+        }),
+        resolve_string: Box::new(move |_, _| {
+            string_flag.store(true, Ordering::Relaxed);
+            None
+        }),
+    };
+    let tree = usvg::Tree::from_str(
+        std::str::from_utf8(bytes).map_err(|_| "不支持此图片格式，SVG 须为 UTF-8")?,
+        &options,
+    )
+    .map_err(|e| format!("图片损坏或格式不支持：{e}"))?;
+    if forbidden.load(Ordering::Relaxed) {
+        return Err("不支持 SVG 内嵌位图或外部图像".into());
+    }
+    let natural_size = (tree.size().width(), tree.size().height());
+    // GPUI's resource loader rasterizes SVG at 2x. Budget the real bitmap.
+    let w = (tree.size().width() * 2.0) as u32;
+    let h = (tree.size().height() * 2.0) as u32;
+    let decoded_bytes = check_dimensions(w, h)?;
+    let mut snapshot = tempfile::Builder::new()
+        .prefix("zmark-image-")
+        .suffix(".svg")
+        .tempfile()
+        .map_err(|e| format!("图片快照写入失败：{e}"))?;
+    snapshot
+        .write_all(bytes)
+        .map_err(|e| format!("图片快照写入失败：{e}"))?;
+    Ok(Arc::new(LocalImage {
+        snapshot: Some(snapshot),
+        render: None,
+        source_path,
+        width: w,
+        height: h,
+        natural_size,
+        decoded_bytes,
+    }))
+}
+
 pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalImage>, String> {
+    if reference.starts_with(EMBEDDED_ASSET_SCHEME) {
+        return load_embedded_svg_asset(reference);
+    }
     let path = resolve_image_path(reference, document)?;
     if !std::fs::metadata(&path)
         .map_err(|e| format!("无法读取图片：{e}"))?
@@ -121,8 +198,7 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
         return Err("图片文件超过 20MiB".into());
     }
 
-    let natural_size;
-    let (width, height, decoded_bytes, extension, output) = match image::guess_format(&bytes) {
+    match image::guess_format(&bytes) {
         Ok(
             format @ (ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP),
         ) => {
@@ -152,7 +228,7 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
             let mut decoded =
                 DynamicImage::from_decoder(decoder).map_err(|e| format!("图片解码失败：{e}"))?;
             decoded.apply_orientation(orientation);
-            natural_size = (decoded.width() as f32, decoded.height() as f32);
+            let natural_size = (decoded.width() as f32, decoded.height() as f32);
             let (out_w, out_h) = fit_within(decoded.width(), decoded.height(), MAX_TEXTURE_SIDE);
             let resized = (out_w, out_h) != (decoded.width(), decoded.height());
             if resized {
@@ -170,54 +246,8 @@ pub fn load_image(reference: &str, document: Option<&Path>) -> Result<Arc<LocalI
                 width: out_w, height: out_h, natural_size, decoded_bytes: used }));
         }
         Ok(_) => return Err("不支持此图片格式".into()),
-        Err(_) => {
-            let forbidden = Arc::new(AtomicBool::new(false));
-            let data_flag = forbidden.clone();
-            let string_flag = forbidden.clone();
-            let mut options = usvg::Options::default();
-            options.image_href_resolver = usvg::ImageHrefResolver {
-                resolve_data: Box::new(move |_, _, _| {
-                    data_flag.store(true, Ordering::Relaxed);
-                    None
-                }),
-                resolve_string: Box::new(move |_, _| {
-                    string_flag.store(true, Ordering::Relaxed);
-                    None
-                }),
-            };
-            let tree = usvg::Tree::from_str(
-                std::str::from_utf8(&bytes).map_err(|_| "不支持此图片格式，SVG 须为 UTF-8")?,
-                &options,
-            )
-            .map_err(|e| format!("图片损坏或格式不支持：{e}"))?;
-            if forbidden.load(Ordering::Relaxed) {
-                return Err("不支持 SVG 内嵌位图或外部图像".into());
-            }
-            natural_size = (tree.size().width(), tree.size().height());
-            // GPUI's resource loader rasterizes SVG at 2x. Budget the real bitmap.
-            let w = (tree.size().width() * 2.0) as u32;
-            let h = (tree.size().height() * 2.0) as u32;
-            let used = check_dimensions(w, h)?;
-            (w, h, used, ".svg", bytes)
-        }
-    };
-    let mut snapshot = tempfile::Builder::new()
-        .prefix("zmark-image-")
-        .suffix(extension)
-        .tempfile()
-        .map_err(|e| format!("图片快照写入失败：{e}"))?;
-    snapshot
-        .write_all(&output)
-        .map_err(|e| format!("图片快照写入失败：{e}"))?;
-    Ok(Arc::new(LocalImage {
-        snapshot: Some(snapshot),
-        render: None,
-        source_path: path,
-        width,
-        height,
-        natural_size,
-        decoded_bytes,
-    }))
+        Err(_) => load_svg_bytes(&bytes, path),
+    }
 }
 
 #[derive(Debug, Clone)]

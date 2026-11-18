@@ -35,6 +35,10 @@ const ASSETS: &[(&str, &[u8])] = &[
     ("icons/maximize.svg", include_bytes!("../assets/icons/maximize.svg")),
     ("icons/search.svg", include_bytes!("../assets/icons/search.svg")),
     ("icons/image.svg", include_bytes!("../assets/icons/image.svg")),
+    ("welcome/hero.svg", include_bytes!("../assets/welcome/hero.svg")),
+    ("welcome/workflow.svg", include_bytes!("../assets/welcome/workflow.svg")),
+    ("welcome/syntax-playground.svg", include_bytes!("../assets/welcome/syntax-playground.svg")),
+    ("welcome/lightbox-badge.svg", include_bytes!("../assets/welcome/lightbox-badge.svg")),
 ];
 
 impl AssetSource for AppAssets {

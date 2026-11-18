@@ -1,10 +1,15 @@
-use crate::ast::{parse_markdown, BlockElement, InlineGroup, InlineItem, ParsedDocument};
+use crate::ast::{parse_markdown, BlockElement, HeadingItem, InlineGroup, InlineItem, ParsedDocument};
 
 /// Render a parsed document into HTML snippet body.
 pub fn render_html(doc: &ParsedDocument) -> String {
     let mut body_html = String::new();
-    for block in &doc.blocks {
-        render_block(block, &mut body_html);
+    let has_toc = doc
+        .blocks
+        .iter()
+        .any(|b| matches!(b, BlockElement::TableOfContents));
+    let headings = if has_toc { doc.headings() } else { Vec::new() };
+    for (block_idx, block) in doc.blocks.iter().enumerate() {
+        render_block_with_context(block, Some(block_idx), &headings, &mut body_html);
     }
     body_html
 }
@@ -43,8 +48,22 @@ pub fn export_markdown_to_html(source: &str, title: &str) -> String {
 }
 
 fn render_block(block: &BlockElement, out: &mut String) {
+    render_block_with_context(block, None, &[], out);
+}
+
+fn render_block_with_context(
+    block: &BlockElement,
+    top_block_idx: Option<usize>,
+    headings: &[HeadingItem],
+    out: &mut String,
+) {
     match block {
         BlockElement::Heading { level, content } => {
+            if let Some(idx) = top_block_idx {
+                if !headings.is_empty() {
+                    out.push_str(&format!("<a id=\"heading-{}\"></a>", idx));
+                }
+            }
             out.push_str(&format!("<h{}>", level));
             render_inline_group(content, out);
             out.push_str(&format!("</h{}>\n", level));
@@ -108,6 +127,27 @@ fn render_block(block: &BlockElement, out: &mut String) {
             }
             out.push_str("</tbody>\n</table>\n");
         }
+        BlockElement::TableOfContents => {
+            if !headings.is_empty() {
+                let min_lvl = headings.iter().map(|h| h.level).min().unwrap_or(1);
+                out.push_str("<nav class=\"zmark-toc\"><ul>\n");
+                for h in headings {
+                    let indent = h.level.saturating_sub(min_lvl) as usize * 16;
+                    out.push_str(&format!(
+                        "<li style=\"margin-left: {}px;\"><a href=\"#heading-{}\">{}</a></li>\n",
+                        indent,
+                        h.block_index,
+                        escape_html(&h.text)
+                    ));
+                }
+                out.push_str("</ul></nav>\n");
+            }
+        }
+        BlockElement::Spacer { lines } => {
+            for _ in 0..*lines {
+                out.push_str("<br>\n");
+            }
+        }
         BlockElement::Rule => {
             out.push_str("<hr>\n");
         }
@@ -162,6 +202,7 @@ fn render_inline_group(group: &InlineGroup, out: &mut String) {
                 }
                 out.push_str(">");
             }
+            InlineItem::LineBreak => out.push_str("<br>"),
         }
     }
 }
@@ -296,6 +337,24 @@ hr {
     border: none;
     border-top: 1px solid var(--border-color);
     margin: 2rem 0;
+}
+
+.zmark-toc {
+    background-color: var(--code-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+}
+
+.zmark-toc ul {
+    list-style: none;
+    margin: 0;
+    padding-left: 0;
+}
+
+.zmark-toc li {
+    margin: 0.2rem 0;
 }
 
 @media print {

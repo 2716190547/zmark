@@ -45,9 +45,6 @@ fn main() {
             // Launch with the file sidebar open. Tests build AppState directly and
             // keep the closed default so their layout assumptions stay stable.
             state.drawer_open = true;
-            if !state.preferences.onboarding_completed {
-                state.open_onboarding();
-            }
             let update_config = zmark_app::updater::UpdateConfig::production();
             let view = cx.new(|cx| {
                 WorkspaceView::new_with_update_config(state, update_config, cx)

@@ -458,9 +458,6 @@ pub struct Preferences {
     /// Sparse shortcut overrides (`action_id -> GPUI keystroke spec`; `""` means unbound).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub shortcuts: BTreeMap<String, String>,
-    /// Whether the user has dismissed or completed the first-launch onboarding tour.
-    #[serde(default)]
-    pub onboarding_completed: bool,
 }
 
 impl Default for Preferences {
@@ -484,7 +481,6 @@ impl Default for Preferences {
             sidebar_hidden_paths: Vec::new(),
             custom_theme: CustomThemePreferences::default(),
             shortcuts: BTreeMap::new(),
-            onboarding_completed: false,
         }
     }
 }

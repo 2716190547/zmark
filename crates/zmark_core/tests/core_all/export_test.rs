@@ -42,3 +42,13 @@ fn test_export_standalone_html() {
     assert!(html.contains("type=\"checkbox\" checked disabled"));
     assert!(html.contains("type=\"checkbox\" disabled"));
 }
+
+#[test]
+fn test_export_toc_and_html_breaks() {
+    let doc = parse_markdown("[toc]\n\n# Alpha\n\n<br/>\n\nHello<br/>World\n\n## Beta");
+    let html = export_html(&doc, "TOC");
+    assert!(html.contains("<nav class=\"zmark-toc\">"));
+    assert!(html.contains("href=\"#heading-1\""));
+    assert!(html.contains("<a id=\"heading-1\"></a><h1>Alpha</h1>"));
+    assert!(html.contains("<p>Hello<br>World</p>"));
+}

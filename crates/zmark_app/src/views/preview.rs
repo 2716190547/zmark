@@ -21,6 +21,7 @@ pub const LOCAL_IMAGE_LIGHTBOX_HASH: u64 = 0;
 pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, Option<(f32, f32)>, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewSelectionCallback = Arc<dyn Fn(Option<PreviewSelection>, bool, &mut Window, &mut App) + Send + Sync>;
 pub type OnImageRecoveryCallback = Arc<dyn Fn(std::ops::Range<usize>, String, crate::local_images::RecoveryCandidate, &mut Window, &mut App) + Send + Sync>;
+pub type OnSelectHeadingCallback = Arc<dyn Fn(usize, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewAutoscrollCallback = Arc<dyn Fn(f32, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewWheelCallback = Arc<dyn Fn(&ScrollEvent, &mut Window, &mut App) + Send + Sync>;
 
@@ -31,6 +32,7 @@ pub struct PreviewCallbacks {
     pub on_selection_change: Option<OnPreviewSelectionCallback>,
     pub on_autoscroll: Option<OnPreviewAutoscrollCallback>,
     pub on_image_recovery: Option<OnImageRecoveryCallback>,
+    pub on_select_heading: Option<OnSelectHeadingCallback>,
     pub on_wheel: Option<OnPreviewWheelCallback>,
 }
 
@@ -128,6 +130,15 @@ pub fn render_preview_pane_with_callbacks(
     }
 
     let mut content = div().relative().w_full().h(px(total));
+    let has_toc = item_parsed
+        .blocks
+        .iter()
+        .any(|b| matches!(b, BlockElement::TableOfContents));
+    let toc_headings: Vec<zmark_core::ast::HeadingItem> = if has_toc {
+        item_parsed.headings()
+    } else {
+        Vec::new()
+    };
 
     for ix in visible_range {
         let Some(block) = item_parsed.blocks.get(ix) else { continue; };
@@ -157,26 +168,35 @@ pub fn render_preview_pane_with_callbacks(
                 .absolute()
                 .size_full(),
             )
-            .child(render_block_element(
-                block,
-                &item_theme,
-                strings,
-                font_size,
-                copied_code_hash,
-                item_callbacks.on_copy.as_ref(),
-                item_callbacks.on_open_lightbox.as_ref(),
-                item_callbacks.on_image_recovery.as_ref(),
-                selected_char_range,
-                ix,
-                item_regions.clone(),
-                item_syntax_cache.clone(),
-                &images,
-                &item_parsed.code_blocks,
-                &flat,
-                "0",
-                media_width,
-                reduce_motion,
-            ));
+            .child(match block {
+                BlockElement::TableOfContents => render_toc_block(
+                    &toc_headings,
+                    item_callbacks.on_select_heading.as_ref(),
+                    &item_theme,
+                    strings,
+                    ix,
+                ),
+                _ => render_block_element(
+                    block,
+                    &item_theme,
+                    strings,
+                    font_size,
+                    copied_code_hash,
+                    item_callbacks.on_copy.as_ref(),
+                    item_callbacks.on_open_lightbox.as_ref(),
+                    item_callbacks.on_image_recovery.as_ref(),
+                    selected_char_range,
+                    ix,
+                    item_regions.clone(),
+                    item_syntax_cache.clone(),
+                    &images,
+                    &item_parsed.code_blocks,
+                    &flat,
+                    "0",
+                    media_width,
+                    reduce_motion,
+                ),
+            });
 
         let mut item = div()
             .absolute()
@@ -354,6 +374,133 @@ pub fn render_preview_pane_with_callbacks(
 
 /// Narrowest a table column may shrink to before the table scrolls sideways.
 const TABLE_MIN_CELL_WIDTH: f32 = 72.0;
+
+fn visual_text_units(text: &str) -> f32 {
+    text.chars()
+        .map(|ch| if ch.is_ascii() { 1.0 } else { 1.85 })
+        .sum::<f32>()
+}
+
+/// Computes `(min_width_px, flex_grow_weight)` per column and total `min_table_width`.
+fn compute_table_column_layout(
+    headers: &[InlineGroup],
+    rows: &[Vec<InlineGroup>],
+) -> (Vec<(f32, f32)>, f32) {
+    let cols = headers
+        .len()
+        .max(rows.iter().map(Vec::len).max().unwrap_or(0))
+        .max(1);
+    let mut max_units = vec![0.0_f32; cols];
+    for (idx, h) in headers.iter().enumerate() {
+        max_units[idx] = max_units[idx].max(visual_text_units(&h.plain_text()));
+    }
+    for row in rows {
+        for (idx, cell) in row.iter().enumerate() {
+            if idx < cols {
+                max_units[idx] = max_units[idx].max(visual_text_units(&cell.plain_text()));
+            }
+        }
+    }
+
+    let layout: Vec<(f32, f32)> = max_units
+        .into_iter()
+        .map(|units| {
+            let min_w = 48.0 + (units.min(18.0) / 18.0) * 40.0;
+            let weight = units.clamp(3.0, 48.0).powf(0.75);
+            (min_w, weight)
+        })
+        .collect();
+    let total_min_w: f32 = layout.iter().map(|(min_w, _)| *min_w).sum();
+    (layout, total_min_w.max(TABLE_MIN_CELL_WIDTH))
+}
+
+fn table_cell_box(el: gpui::Div, min_w: f32, weight: f32) -> gpui::Div {
+    let mut el = el.min_w(px(min_w));
+    el.style().flex_grow = Some(weight);
+    el.style().flex_shrink = Some(1.0);
+    el.style().flex_basis = Some(Length::Definite(px(0.).into()));
+    el
+}
+
+fn render_toc_block(
+    headings: &[zmark_core::ast::HeadingItem],
+    on_select_heading: Option<&OnSelectHeadingCallback>,
+    theme: &ThemeColors,
+    strings: &'static I18nStrings,
+    block_ix: usize,
+) -> AnyElement {
+    let min_level = headings.iter().map(|h| h.level).min().unwrap_or(1);
+    let mut card = div()
+        .id(SharedString::from(format!("preview_toc_{block_ix}")))
+        .w_full()
+        .min_w(px(0.))
+        .my_2()
+        .px_4()
+        .py_3()
+        .rounded_lg()
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.blockquote_bg())
+        .flex()
+        .flex_col()
+        .gap_1p5()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.text_muted)
+                .child(svg().path("icons/list.svg").size(px(13.)).text_color(theme.text_muted))
+                .child(strings.tab_outline),
+        );
+
+    if headings.is_empty() {
+        card = card.child(
+            div()
+                .text_xs()
+                .text_color(theme.text_muted)
+                .child(strings.outline_empty),
+        );
+    } else {
+        card = card.children(headings.iter().enumerate().map(|(idx, heading)| {
+            let indent = (heading.level.saturating_sub(min_level)) as f32 * 14.0;
+            let is_top = heading.level <= min_level;
+            let text_color = if is_top {
+                theme.text_primary
+            } else {
+                theme.text_muted
+            };
+            let target_block = heading.block_index;
+            let mut row = div()
+                .id(SharedString::from(format!("preview_toc_item_{block_ix}_{idx}")))
+                .pl(px(6.0 + indent))
+                .pr_2()
+                .py_1()
+                .rounded(px(5.))
+                .text_xs()
+                .text_color(text_color)
+                .when(is_top, |el| el.font_weight(FontWeight::MEDIUM))
+                .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
+                .child(heading.text.clone());
+
+            if let Some(cb) = on_select_heading {
+                let cb = cb.clone();
+                row = row.cursor_pointer().on_mouse_down(
+                    MouseButton::Left,
+                    move |_, window, cx| {
+                        cx.stop_propagation();
+                        cb(target_block, window, cx);
+                    },
+                );
+            }
+            row
+        }));
+    }
+
+    card.into_any_element()
+}
 
 /// Top/bottom margins for heading levels (top ≈ 2–3× bottom).
 pub fn heading_spacing(level: u8) -> (f32, f32) {
@@ -593,9 +740,14 @@ fn render_block_element(
             reduce_motion,
         ),
         BlockElement::Table { headers, rows } => {
+            let (col_layout, min_table_w) = compute_table_column_layout(headers, rows);
             let mut cur_offset = 0;
             let mut header_cells = Vec::new();
-            for h in headers {
+            for (col_idx, h) in headers.iter().enumerate() {
+                let (min_w, weight) = col_layout
+                    .get(col_idx)
+                    .copied()
+                    .unwrap_or((TABLE_MIN_CELL_WIDTH, 1.0));
                 let text = h.plain_text();
                 let len = text.chars().count();
                 let cell_start = cur_offset;
@@ -603,9 +755,7 @@ fn render_block_element(
                 cur_offset += len + 1;
                 header_cells.push(
                     with_text_probe(
-                        div()
-                            .flex_1()
-                            .min_w(px(TABLE_MIN_CELL_WIDTH))
+                        table_cell_box(div(), min_w, weight)
                             .p_3()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_size(px(base_font_size * 0.95))
@@ -629,11 +779,14 @@ fn render_block_element(
                 );
             }
 
-            let min_table_w = headers.len() as f32 * TABLE_MIN_CELL_WIDTH;
             let mut row_cells = Vec::new();
             for row in rows {
                 let mut cells = Vec::new();
-                for cell in row {
+                for (col_idx, cell) in row.iter().enumerate() {
+                    let (min_w, weight) = col_layout
+                        .get(col_idx)
+                        .copied()
+                        .unwrap_or((TABLE_MIN_CELL_WIDTH, 1.0));
                     let text = cell.plain_text();
                     let len = text.chars().count();
                     let cell_start = cur_offset;
@@ -641,9 +794,7 @@ fn render_block_element(
                     cur_offset += len + 1;
                     cells.push(
                         with_text_probe(
-                            div()
-                                .flex_1()
-                                .min_w(px(TABLE_MIN_CELL_WIDTH))
+                            table_cell_box(div(), min_w, weight)
                                 .p_3()
                                 .text_size(px(base_font_size * 0.95))
                                 .text_color(theme.text_primary)
@@ -704,6 +855,11 @@ fn render_block_element(
                 )
                 .into_any_element()
         }
+        BlockElement::TableOfContents => div().into_any_element(),
+        BlockElement::Spacer { lines } => div()
+            .w_full()
+            .h(px((*lines as f32) * 14.0))
+            .into_any_element(),
         BlockElement::Rule => div()
             .w_full()
             .my_4()
@@ -909,6 +1065,9 @@ pub fn render_styled_text_only(
             }
             InlineItem::Image { alt, .. } => {
                 text.push_str(alt);
+            }
+            InlineItem::LineBreak => {
+                text.push('\n');
             }
         }
     }
@@ -1902,7 +2061,8 @@ mod copy_feedback_tests {
 
 #[cfg(test)]
 mod typography_tests {
-    use super::heading_spacing;
+    use super::{compute_table_column_layout, heading_spacing};
+    use zmark_core::ast::{InlineGroup, InlineItem};
 
     #[test]
     fn heading_spacing_follows_the_reading_scale() {
@@ -1911,5 +2071,22 @@ mod typography_tests {
         assert_eq!(heading_spacing(3), (18.0, 6.0));
         assert_eq!(heading_spacing(4), (12.0, 4.0));
         assert_eq!(heading_spacing(6), (12.0, 4.0));
+    }
+
+    #[test]
+    fn table_column_layout_weights_wide_descriptions_above_narrow_markers() {
+        let cell = |s: &str| InlineGroup(vec![InlineItem::Text(s.to_string())]);
+        let headers = vec![cell("单词"), cell("词性"), cell("音标"), cell("含义")];
+        let rows = vec![vec![
+            cell("Response Body"),
+            cell("-"),
+            cell("/rɪˈspɒns ˈbɒdi/"),
+            cell("响应体（Spring MVC 中 @ResponseBody 注解，用于标识控制器方法的返回值）"),
+        ]];
+        let (layout, total_min) = compute_table_column_layout(&headers, &rows);
+        assert_eq!(layout.len(), 4);
+        assert!(layout[3].1 > layout[1].1 * 4.0, "meaning column should receive much wider share");
+        assert!(layout[1].0 < layout[3].0, "narrow column min width should stay compact");
+        assert!(total_min < 350.0, "4-column table should fit split pane without unnecessary x-scroll");
     }
 }

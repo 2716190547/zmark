@@ -266,49 +266,11 @@ fn toggle_sidebar_tab_expands_and_cycles_via_default_and_custom_shortcut(
     assert!(Preferences::load_or_default_from_path(&prefs_path).shortcuts.is_empty());
 }
 
-#[gpui::test]
-fn onboarding_lifecycle_blocks_shortcuts_steps_and_persists_completion(
-    cx: &mut gpui::TestAppContext,
-) {
-    use zmark_app::{state::AppState, views::workspace::WorkspaceView};
-    use zmark_core::{config::Preferences, i18n::SupportedLocale};
+#[test]
+fn welcome_document_keeps_clean_status_with_localized_title() {
+    use zmark_core::i18n::SupportedLocale;
 
-    let dir = tempfile::tempdir().unwrap();
-    let prefs_path = dir.path().join("config.toml");
     let welcome = zmark_app::welcome::initial_document(None, SupportedLocale::ZhCn);
     assert_eq!(welcome.display_name_with_fallback("未命名"), "欢迎使用 ZMark.md");
-    assert_eq!(
-        welcome.status,
-        zmark_core::document::DocumentStatus::Clean
-    );
-
-    let mut state = AppState::new_with_preferences_at(
-        welcome,
-        Preferences::default(),
-        prefs_path.clone(),
-    );
-    state.open_onboarding();
-    assert!(state.onboarding_open);
-    assert_eq!(state.onboarding_step, 0);
-
-    let (workspace, cx) = cx.add_window_view(|_window, cx| WorkspaceView::new(state, cx));
-
-    workspace.update(cx, |ws, cx| {
-        ws.step_onboarding(2, cx);
-        assert_eq!(ws.state.onboarding_step, 2);
-        ws.finish_onboarding(cx);
-        assert!(!ws.state.onboarding_open);
-        assert!(ws.state.preferences.onboarding_completed);
-    });
-
-    assert!(
-        Preferences::load_or_default_from_path(&prefs_path).onboarding_completed,
-        "dismissing onboarding must persist completion to config.toml"
-    );
-
-    workspace.update(cx, |ws, cx| {
-        ws.start_onboarding(cx);
-        assert!(ws.state.onboarding_open);
-        assert_eq!(ws.state.onboarding_step, 0);
-    });
+    assert_eq!(welcome.status, zmark_core::document::DocumentStatus::Clean);
 }

@@ -235,3 +235,22 @@ fn image_source_ranges_identify_one_occurrence_and_reject_references() {
     assert!(image_source_target_range(source, found[3].0.clone(), &found[3].1).is_none());
     assert!(image_source_target_range(source, found[0].0.clone(), "D:stale").is_none());
 }
+
+#[test]
+fn parses_toc_markers_and_html_line_breaks_cleanly() {
+    let source = "[toc]\n\n# Intro\n\n<br/>\n\nLine 1<br />Line 2\n\n[[TOC]]\n\n<div>raw</div>\n\n## Details";
+    let doc = parse_markdown(source);
+
+    assert_eq!(doc.blocks[0], BlockElement::TableOfContents);
+    assert!(matches!(doc.blocks[1], BlockElement::Heading { level: 1, .. }));
+    assert_eq!(doc.blocks[2], BlockElement::Spacer { lines: 1 });
+    match &doc.blocks[3] {
+        BlockElement::Paragraph(inlines) => {
+            assert_eq!(inlines.plain_text(), "Line 1\nLine 2");
+            assert!(inlines.0.contains(&InlineItem::LineBreak));
+        }
+        other => panic!("expected paragraph with inline LineBreak, got {other:?}"),
+    }
+    assert_eq!(doc.blocks[4], BlockElement::TableOfContents);
+    assert!(matches!(doc.blocks[5], BlockElement::Heading { level: 2, .. }));
+}

@@ -598,3 +598,19 @@ fn large_jpeg_thumbnail_applies_exif_orientation_to_pixels_and_natural_size() {
     assert!(top[0] > 200 && top[1] < 40);
     assert!(bottom[1] > 200 && bottom[0] < 40);
 }
+
+#[test]
+fn embedded_welcome_svgs_load_and_validate_without_document_path() {
+    for asset in [
+        "zmark-asset://welcome/hero.svg",
+        "zmark-asset://welcome/workflow.svg",
+        "zmark-asset://welcome/syntax-playground.svg",
+        "zmark-asset://welcome/lightbox-badge.svg",
+    ] {
+        let image = load_image(asset, None).unwrap_or_else(|e| panic!("{asset}: {e}"));
+        assert!(image.snapshot.as_ref().is_some_and(|s| s.path().exists()));
+        assert!(image.natural_size.0 > 100.0 && image.natural_size.1 > 50.0);
+    }
+    assert!(load_image("zmark-asset://welcome/missing.svg", None).is_err());
+    assert!(load_image("zmark-asset://../secret.svg", None).is_err());
+}
