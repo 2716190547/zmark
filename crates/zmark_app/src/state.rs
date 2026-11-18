@@ -440,6 +440,8 @@ pub struct AppState {
     pub search_in_progress: bool,
     #[allow(dead_code)]
     pub search_truncated: bool,
+    pub onboarding_open: bool,
+    pub onboarding_step: usize,
 }
 
 impl AppState {
@@ -539,6 +541,8 @@ impl AppState {
             search_generation: 0,
             search_in_progress: false,
             search_truncated: false,
+            onboarding_open: false,
+            onboarding_step: 0,
         };
         state.refresh_all_roots();
         state
@@ -650,6 +654,44 @@ impl AppState {
         self.preferences.locale = locale;
         let _ = self.preferences.save_to_path(&self.preferences_path);
         self.strings = get_strings(locale);
+    }
+
+    pub fn set_shortcut(
+        &mut self,
+        action: zmark_core::config::ShortcutActionId,
+        spec: Option<String>,
+    ) {
+        self.preferences.set_shortcut(action, spec);
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
+    pub fn reset_shortcut(&mut self, action: zmark_core::config::ShortcutActionId) {
+        self.preferences.reset_shortcut(action);
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
+    pub fn reset_all_shortcuts(&mut self) {
+        self.preferences.reset_all_shortcuts();
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
+    pub const ONBOARDING_STEP_COUNT: usize = 4;
+
+    pub fn open_onboarding(&mut self) {
+        self.onboarding_open = true;
+        self.onboarding_step = 0;
+    }
+
+    pub fn set_onboarding_step(&mut self, step: usize) {
+        self.onboarding_step = step.min(Self::ONBOARDING_STEP_COUNT - 1);
+    }
+
+    pub fn finish_onboarding(&mut self, persist: bool) {
+        self.onboarding_open = false;
+        if persist && !self.preferences.onboarding_completed {
+            self.preferences.onboarding_completed = true;
+            let _ = self.preferences.save_to_path(&self.preferences_path);
+        }
     }
 
     pub fn update_appearance(&mut self, is_dark: bool) {

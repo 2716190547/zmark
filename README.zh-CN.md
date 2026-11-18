@@ -1,103 +1,139 @@
+<div align="center">
+
+<img src="assets/icon.iconset/icon_256x256.png" alt="ZMark Logo" width="112" height="112" />
+
 # ZMark
 
-<img src="assets/icon.iconset/icon_256x256.png" alt="ZMark 图标" width="128">
+**基于 Rust 与 GPUI 打造的原生极速本地 Markdown 编辑器、阅读工作台与 Mermaid 图表工作室。**
 
-[English](README.md)
+[![Release](https://img.shields.io/github/v/release/2716190547/zmark-releases?label=Release&color=E06C44&style=flat-square)](https://github.com/2716190547/zmark-releases/releases)
+[![Build Desktop](https://img.shields.io/github/actions/workflow/status/2716190547/zmark/build-desktop.yml?branch=dev&label=CI%20Build&style=flat-square)](https://github.com/2716190547/zmark/actions/workflows/build-desktop.yml)
+[![Rust](https://img.shields.io/badge/Rust-1.100.0-DEA584?logo=rust&logoColor=white&style=flat-square)](rust-toolchain.toml)
+[![GPUI](https://img.shields.io/badge/UI-GPUI%20GPU%20Native-3B82F6?style=flat-square)](https://crates.io/crates/gpui)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-4B5563?style=flat-square)](#下载与安装)
+[![Languages](https://img.shields.io/badge/i18n-10%20%E7%A7%8D%E8%AF%AD%E8%A8%80-10B981?style=flat-square)](#核心特性)
 
-[源码与问题反馈](https://github.com/2716190547/zmark) · [安装包与签名更新](https://github.com/2716190547/zmark-releases)
+[简体中文](README.zh-CN.md) · [English](README.md) · [下载安装包](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10) · [Gitee 国内镜像](https://gitee.com/zeng_sc/zmark-releases/releases) · [源码仓库 (`dev`)](https://github.com/2716190547/zmark)
 
-ZMark 是一款面向本地文件的桌面 Markdown 编辑器与阅读器，也支持常见代码与文本文件的源码编辑。可以编辑源码、阅读排版预览，或在分屏中同时使用两者；通过侧栏整理文件夹，文档保存在你选择的位置。
+</div>
 
-## 下载与安装
+---
 
-**当前版本：0.2.10** · [版本更新说明](https://github.com/2716190547/zmark/blob/dev/docs/releases/v0.2.10.md) · [本版源码 `309d05e`](https://github.com/2716190547/zmark/tree/309d05eb6b934c0d94430d40ca42f71525a798c3)
+## 为什么选择 ZMark？
 
-从 [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10) 下载。[Gitee 发行镜像](https://gitee.com/zeng_sc/zmark-releases/releases) 可能稍后同步。 Gitee 保证同步 macOS ZIP、Windows 安装程序及签名更新清单；DMG 和 Linux 包请从 GitHub 下载。
+**ZMark** 是一款专注于**本机文件、瞬时响应与原生排印质感**的桌面 Markdown 与纯文本工作台，告别浏览器内核高内存占用与云端账号绑定。
 
-| 平台 | 安装包 | 安装方式 |
-| --- | --- | --- |
-| macOS（Apple Silicon） | ZIP / DMG | 将 `ZMark.app` 移到“应用程序”。 |
-| Windows x86_64 | Setup EXE | 运行安装程序。 |
-| Linux x86_64 | DEB / tar.gz | 安装 DEB，或解压 tar.gz 后运行 `usr/bin/zmark_app`。 |
+- **GPU 原生桌面界面**：采用 Rust 与 **GPUI** 构建，冷启动毫秒级响应，长篇技术文档、多代码块与复杂流程图滚动丝滑跟手。
+- **按语法块对齐的分屏预览**：支持**源码 / 分屏 / 预览**三大视图随时切换，分屏模式下双侧按语法块位置精确对齐并平滑同步滚动。
+- **原生 Mermaid 图表与高清灯箱**：无需外接浏览器，全本机将 Mermaid 流程图渲染为矢量 SVG；点击任意本地图片或流程图即可开启支持缩放与拖拽的高清灯箱。
+- **纯本地文件夹与草稿工作流**：在一个侧栏里同时管理多个工作区文件夹、外部单文件与未保存草稿，数据完全保存在您的磁盘中。
 
-macOS 应用使用 Ad-Hoc 签名，未做 Apple 公证；Windows 安装包未做发布者代码签名。不同平台的实际行为可能存在差异。
+---
 
-## 快速上手
+## 核心特性
 
-1. 在 macOS 上按 **Cmd+O**，在 Windows 或 Linux 上按 **Ctrl+O** 打开 Markdown 或支持的文本文件；也可以直接编辑欢迎草稿。
-2. 在工具栏选择**源码**、**分屏**或**预览**。分屏时两个窗格支持同步滚动。
-3. 按 **Cmd+B** 或 **Ctrl+B** 打开侧栏。将文件或文件夹拖入窗口即可添加到侧栏，可按名称筛选文件，并通过 Markdown 文档大纲跳转到标题。
-4. 按 **Cmd+S** 或 **Ctrl+S** 保存。首次保存草稿时选择位置；双击文档标题可以重命名。
-5. 按 **Cmd+,** 或 **Ctrl+,** 打开设置，调整外观、编辑、保存与语言。
-
-## 使用文档
-
-### 文件和文件夹
-
-侧栏分组显示工作区文件夹、工作区之外打开的文件和草稿。通过工具栏添加文件夹，或从桌面拖入文件和文件夹。支持 Markdown、纯文本、Rust、Python、JavaScript/TypeScript、C/C++、Java、Go、HTML/CSS、JSON、YAML、TOML、Shell 等常见文件；非 Markdown 文件使用源码模式，并按语言高亮。
-
-单击文件夹行展开或收起，双击名称重命名。按住 **Shift** 连选，按住 macOS **Cmd** / Windows 和 Linux **Ctrl** 增减单个选择；多选后使用右上角批量按钮，按 **Esc** 退出。**移除**仅隐藏侧栏项目，不删除磁盘文件，撤销入口保留 5 秒；**删除**将项目移到系统废纸篓，可从右键菜单或批量工具栏操作。
-
-侧栏搜索框筛选的是**名称**。搜索当前文档正文时，点击右上角搜索图标或按 **Cmd+F** / **Ctrl+F**；点击结果可跳转，使用 **Enter / Shift+Enter** 或 **F3 / Shift+F3** 切换下一个、上一个匹配项，查找输入框内也支持上下方向键。大纲显示 Markdown 文档的标题。
-
-已有文件可以在编辑后或窗口失焦时自动保存，两项行为都可以在设置中调整。新草稿需要先选择保存位置才会成为文件；关闭时会提示处理未保存的修改。
-
-### Markdown 与图表
-
-预览支持标题、段落、强调、链接、列表、任务列表标记、表格、引用、代码块、本地图片和 Mermaid 图表。围栏代码块可显示语法高亮和复制按钮。在源码中修改任务标记后，预览会随之更新。
-
-图片使用本地路径：可以相对于已保存的 Markdown 文件，也可以使用绝对路径。预览不加载网络图片 URL。点击图片或使用图表的放大按钮，可以查看大图。
-
-可以在分屏中试试：
-
-````markdown
-# 项目笔记
-
-- [ ] 检查初稿
-- [x] 创建文档
-
-| 项目 | 状态 |
+| 模块 | 能力说明 |
 | --- | --- |
-| 预览 | 已就绪 |
+| **写作视图与同步滚动** | 支持 **源码**、**左右分屏** 与 **纯净预览** 一键切换；分屏模式提供按语法块精确对齐的平滑同步滚动；支持将 `.md` 文件、文件夹或本地图片直接拖拽进窗口打开；支持定时自动保存与窗口失焦保存。 |
+| **Markdown 与源码支持** | 完整支持标题、粗体/斜体/删除线、引用块、多层有序与无序列表、交互式任务清单（`[ ]` / `[x]`）、对齐表格、分隔线及多语言代码块高亮（右上角一键复制）；非 Markdown 文件（Rust、Python、TypeScript/JS、C/C++、Java、Go、JSON、YAML、TOML、HTML/CSS、Shell 等）自动进入带行号的源码编辑模式。 |
+| **Mermaid 与本地媒体** | 基于 `rusty-mermaid` 本机渲染流程图（内置 UTF-8 中文节点修复）；支持 PNG / JPEG / GIF / WebP 本地图片（相对文档路径或绝对路径，macOS 大图使用原生 ImageIO 缩略解码）；点击任意图表或图片进入 HiDPI 灯箱放大检视。 |
+| **工作区侧栏与大纲检索** | 侧栏分工作区文件夹、外部文件与草稿三组展示；支持按文件名实时模糊过滤，并可通过快捷键在**文件夹树**与**文档标题大纲**间快速互切；支持 Shift / Cmd / Ctrl 多选、批量移除（5 秒内可撤销）、移入废纸篓、双击标题原地重命名以及文档内高亮查找。 |
+| **主题调色板与字体排印** | 支持浅色 / 深色 / 跟随系统；内置 **7 套精选主题**（克劳德温润、macOS 原生、东京之夜、北欧极简、GitHub 浅色、柔和浅黄、暗色极客）并提供浅色/深色独立的 **19 项完整颜色自定义编辑器**；可调节字体、字号、阅读栏宽、行高、Tab 缩进、行号显示与减少动态效果。 |
+| **可自定义快捷键与引导** | 内置 **17 项可点击重录快捷键**，支持 `Backspace` 清空、`Esc` 取消以及冲突检测一键覆盖；首次启动提供具名欢迎示范文档（`欢迎使用 ZMark.md`）与 4 步交互式新手引导（可在「设置 → 关于」中随时重新观看）。 |
+| **多语言与 HTML 导出** | 界面与欢迎文档全面覆盖 **10 种语言**（跟随系统、简体中文、繁體中文、English、日本語、한국어、Français、Deutsch、Español、Русский、Português），并支持一键导出排版美观的独立 HTML。 |
+
+---
+
+## 架构与技术栈
 
 ```mermaid
 flowchart LR
-    Write --> Preview --> Share
+    Files["本地 Markdown 与代码文件"] --> Core["zmark_core"]
+    subgraph CoreEngine["核心解析与工具层 (zmark_core)"]
+        Core --> AST["pulldown-cmark (SIMD AST 与源行锚点)"]
+        Core --> Syntax["syntect + two-face 多语言高亮"]
+        Core --> Mermaid["rusty-mermaid (本地 SVG 图表)"]
+        Core --> Export["独立 HTML 导出器"]
+        Core --> Config["TOML 配置、10 语种 i18n 与键位映射"]
+    end
+    AST --> App["zmark_app (GPUI 桌面工作台)"]
+    Syntax --> App
+    Mermaid --> App
+    Config --> App
+    App --> Views["源码 · 分屏 · 预览 · 侧栏与大纲 · 灯箱 · 设置"]
 ```
-````
 
-Mermaid 语法支持范围取决于渲染器；如果图表无法显示，可以先检查语法并简化示例。
+| 层级 | 核心组件 | 在 ZMark 中的职责 |
+| --- | --- | --- |
+| **语言与工具链** | **Rust `1.100.0`** | 统一产出 macOS、Windows 与 Linux 原生二进制（版本由 `rust-toolchain.toml` 锁定）。 |
+| **桌面 UI 引擎** | **GPUI** (`gpui-pre =0.3.12`, `gpui-component =0.9.1`) | GPU 硬件加速窗口绘制、跨平台文字排版、动作级快捷键分发与取色器组件。 |
+| **Markdown 与同步锚点** | **`pulldown-cmark 0.13`** (SIMD) | 高性能 CommonMark / GFM 解析并生成源码行锚点，驱动分屏平滑对齐滚动。 |
+| **代码语法高亮** | **`syntect 5.3`** + **`two-face 0.5.2`** | 覆盖主流编程语言与标记语言高亮（macOS 启用 `onig`，Windows/Linux 启用 `fancy-regex`）。 |
+| **Mermaid 与矢量渲染** | **`rusty-mermaid 0.2.0`** + **`usvg 0.45.1`** | 本地将 Mermaid 转为 SVG（附带仓库内中文 UTF-8 修复补丁）并按显示尺寸 HiDPI 栅格化。 |
+| **本地图像解码** | **`image 0.25.10`** + macOS ImageIO | 高效解码 PNG、JPEG、GIF、WebP，按纹理预算控制内存并在切走或隐藏时及时释放。 |
+| **配置与发布校验** | **`serde`**, **`toml 0.8`**, **`serde_json`**, **`ring`** | 管理 `config.toml` 用户偏好、稀疏快捷键覆写与带签名更新校验。 |
 
-### 导出 HTML
+### 代码目录结构
 
-点击工具栏的**导出 HTML**，或按 **Cmd+Shift+E** / **Ctrl+Shift+E**，然后选择保存位置。导出的 HTML 内含样式，但图片仍以路径引用、不会嵌入文件；Mermaid 块会作为代码导出，不会自动变成图表。分享文件时请确保引用的图片仍然可访问。
+```text
+ZMark/
+├── crates/
+│   ├── zmark_core/        # Markdown AST 与行锚点、HTML 导出、Mermaid、syntect、i18n、配置持久化
+│   ├── zmark_app/         # GPUI 桌面工作台、源码/分屏/预览、侧栏与大纲、灯箱与设置窗口
+│   └── release_tool/      # 发行打包与签名更新清单工具
+├── vendor/
+│   └── rusty-mermaid-diagrams/  # 修复 Mermaid 非 ASCII / 中文字符切片越界问题的本地补丁
+├── packaging/             # macOS Bundle、Windows Inno Setup 与 Linux 桌面打包配置
+├── scripts/               # 本机打包脚本 (bundle_macos.sh)、全量门禁 (full_gate.sh) 与发布脚本
+└── docs/                  # 版本更新说明、架构决策记录 (ADR) 与测试维护规范
+```
 
-### 外观与编辑
+---
 
-设置中可以调整浅色、深色及跟随系统外观，选择调色板和语言，开启减少动态效果，以及调整行号、缩进、行高和自动保存。**关于**页面显示版本与更新状态。
+## 下载与安装
 
-## 快捷键
+**当前最新版本：`v0.2.10`** · [版本更新说明](https://github.com/2716190547/zmark/blob/dev/docs/releases/v0.2.10.md) · [对应源码 `309d05e`](https://github.com/2716190547/zmark/tree/309d05eb6b934c0d94430d40ca42f71525a798c3)
+
+可从 [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10) 下载对应系统安装包；国内网络也可通过 [Gitee 发行镜像](https://gitee.com/zeng_sc/zmark-releases/releases) 获取 macOS ZIP、Windows 安装包与签名更新清单（DMG 与 Linux 安装包请前往 GitHub 下载）。
+
+| 平台 | 架构 | 安装包格式 | 安装说明 |
+| --- | --- | --- | --- |
+| **macOS** | Apple Silicon (`arm64`) | `.zip` / `.dmg` | 解压或打开镜像，将 `ZMark.app` 拖入「应用程序」目录即可。 |
+| **Windows** | `x86_64` | Setup `.exe` | 双击运行安装向导完成安装。 |
+| **Linux** | `x86_64` | `.deb` / `.tar.gz` | 通过 `apt` / `dpkg` 安装 `.deb`，或解压压缩包后运行 `usr/bin/zmark_app`。 |
+
+> [!NOTE]
+> macOS 应用包当前为 Ad-Hoc 本地签名（未经过 Apple 公证），Windows 安装程序暂无商业发布者代码签名。预览窗格出于隐私与性能考虑不请求远程网络图片 URL，请使用相对当前文档路径或绝对路径引用本地图片。导出 HTML 会内嵌排版样式表，图片路径保持引用不变，Mermaid 块保留为代码形式。
+
+---
+
+## 默认快捷键速查
+
+以下所有操作均可在应用内「**设置 → 快捷键**」中点击按钮重新录制（`Backspace` 清空、`Esc` 取消，支持冲突替换）：
 
 | 操作 | macOS | Windows / Linux |
 | --- | --- | --- |
-| 打开文件 | Cmd+O | Ctrl+O |
-| 保存 | Cmd+S | Ctrl+S |
-| 文档内查找 | Cmd+F | Ctrl+F |
-| 下一个 / 上一个匹配项 | F3 / Shift+F3 | F3 / Shift+F3 |
-| 撤销侧栏移除（5 秒内） | Cmd+Option+Z | Ctrl+Alt+Z |
-| 退出多选 / 关闭查找 | Esc | Esc |
-| 源码 / 分屏 / 预览 | Cmd+1 / 2 / 3 | Ctrl+1 / 2 / 3 |
-| 展开或收起侧栏 | Cmd+B | Ctrl+B |
-| 设置 | Cmd+, | Ctrl+, |
-| 导出 HTML | Cmd+Shift+E | Ctrl+Shift+E |
+| 打开文件 | `Cmd+O` | `Ctrl+O` |
+| 新建草稿 | `Cmd+N` | `Ctrl+N` |
+| 保存文档 | `Cmd+S` | `Ctrl+S` |
+| 关闭当前文档 | `Cmd+W` | `Ctrl+W` |
+| 导出独立 HTML | `Cmd+Shift+E` | `Ctrl+Shift+E` |
+| 源码 / 分屏 / 预览模式 | `Cmd+1` / `Cmd+2` / `Cmd+3` | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` |
+| 展开 / 收起侧栏 | `Cmd+Shift+B` | `Ctrl+Shift+B` |
+| 切换文件夹与文档大纲 | `Cmd+Shift+O` | `Ctrl+Shift+O` |
+| 撤销侧栏移除（5 秒内） | `Cmd+Option+Z` | `Ctrl+Alt+Z` |
+| 打开设置窗口 | `Cmd+,` | `Ctrl+,` |
+| 当前文档内查找 | `Cmd+F` | `Ctrl+F` |
+| 下一个 / 上一个匹配 | `Cmd+G` / `Cmd+Shift+G`（或 `F3` / `Shift+F3`） | `Ctrl+G` / `Ctrl+Shift+G`（或 `F3` / `Shift+F3`） |
+| 加粗（Markdown） | `Cmd+B` | `Ctrl+B` |
+| 有序列表（Markdown） | `Cmd+Shift+7` | `Ctrl+Shift+7` |
+| 退出多选 / 关闭查找 / 关闭弹窗 | `Esc` | `Esc` |
 
-## 技术栈
-
-ZMark 使用 **Rust** 和 **GPUI** 构建桌面应用，使用 **pulldown-cmark** 解析 Markdown、**syntect** 实现代码高亮，并用 **rusty-mermaid** 渲染图表。本地图片由 Rust 的 `image` 库解码，macOS 大尺寸不透明 PNG/JPEG 预览使用原生 ImageIO 缩略解码。预览图表按实际显示尺寸栅格化，不再使用的纹理及时释放。测量与剩余限制见[内存分析报告](https://github.com/2716190547/zmark/blob/dev/docs/plans/theme-selection-and-memory-audit.md)；占用会随文档、媒体和窗口尺寸变化。
+---
 
 ## 从源码构建
 
-开发请使用公开源码仓库的 `dev` 分支，安装 rustup 和平台依赖。`rust-toolchain.toml` 固定 **Rust 1.100.0**，通过 rustup 运行 Cargo 时自动使用该工具链：
+开发分支位于公开仓库的 `dev` 分支。项目通过 `rust-toolchain.toml` 锁定 **Rust `1.100.0`**，`rustup` 会自动切换到正确版本：
 
 ```sh
 git clone --branch dev https://github.com/2716190547/zmark.git
@@ -105,6 +141,16 @@ cd zmark
 cargo run -p zmark_app
 ```
 
-`.github/workflows/build-desktop.yml` 列出了各平台的构建依赖与打包步骤。在 macOS 上，`./scripts/bundle_macos.sh` 会生成待发布的应用程序包；如需手动安装，可添加 `--install` 参数。
+Linux 等平台的系统构建依赖见 [`.github/workflows/build-desktop.yml`](.github/workflows/build-desktop.yml)。
 
-本机迭代使用 `./scripts/bundle_macos.sh --install` 构建安装；推送新版本前运行 `scripts/full_gate.sh --bundle`。构建产物核验与发布步骤见[发布指南](https://github.com/2716190547/zmark/blob/dev/docs/releases/README.md)。
+### 常用开发与构建脚本
+
+- **macOS 本机构建并安装到 `/Applications/ZMark.app`**：
+  ```sh
+  ./scripts/bundle_macos.sh --install
+  ```
+- **发布前全量门禁校验（workspace 全量测试 + Phase H/I 专项 + 打包）**：
+  ```sh
+  ./scripts/full_gate.sh --bundle
+  ```
+- **发布与性能文档**：参阅 [`docs/releases/README.md`](docs/releases/README.md) 与 [`docs/plans/theme-selection-and-memory-audit.md`](docs/plans/theme-selection-and-memory-audit.md)。

@@ -136,3 +136,179 @@ fn native_source_worker_keeps_multiline_state_across_calling_threads() {
         "cancelled work must not produce stale tokens"
     );
 }
+
+#[gpui::test]
+fn toggle_sidebar_tab_expands_and_cycles_via_default_and_custom_shortcut(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gpui::{AppContext, Keystroke};
+    use zmark_app::{
+        actions,
+        state::{AppState, DrawerTab, SettingsTab},
+        views::{settings::SettingsWindowView, workspace::WorkspaceView},
+    };
+    use zmark_core::{
+        config::{Preferences, ShortcutActionId},
+        document::Document,
+    };
+
+    let mut fixture = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+        let mut state = AppState::new_isolated(Document::new_scratch());
+        state.drawer_open = false;
+        state.drawer_tab = DrawerTab::Files;
+        let workspace = cx.new(|cx| WorkspaceView::new(state, cx));
+        let (focus_handle, prefs, theme, strings) = {
+            let ws_ref = workspace.read(cx);
+            (
+                ws_ref.focus_handle.clone(),
+                ws_ref.state.preferences.clone(),
+                ws_ref.state.theme.clone(),
+                ws_ref.state.strings,
+            )
+        };
+        window.focus(&focus_handle, cx);
+        let settings = cx.new(|cx| {
+            SettingsWindowView::new(
+                workspace.downgrade(),
+                SettingsTab::Shortcuts,
+                prefs,
+                theme,
+                strings,
+                cx,
+            )
+        });
+        let root = gpui_component::Root::new(workspace.clone(), window, cx);
+        fixture = Some((workspace, settings));
+        root
+    });
+    let (workspace, settings) = fixture.unwrap();
+    let prefs_path = workspace.read_with(cx, |ws, _| ws.state.preferences_path.clone());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // Collapsed Files -> default shortcut expands drawer and switches straight to Outline.
+    cx.simulate_keystrokes("secondary-shift-o");
+    cx.run_until_parked();
+    assert!(workspace.read_with(cx, |ws, _| ws.state.drawer_open));
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.state.drawer_tab),
+        DrawerTab::Outline
+    );
+
+    // Pressing again switches back to Files.
+    cx.simulate_keystrokes("secondary-shift-o");
+    cx.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.state.drawer_tab),
+        DrawerTab::Files
+    );
+
+    // Reject bare letter without modifiers, detect conflict against SaveFile, then rebind cleanly.
+    cx.update(|_, cx| {
+        let os = cx.platform_info().os;
+        settings.update(cx, |s, cx| {
+            s.recording_shortcut = Some(ShortcutActionId::ToggleSidebarTab);
+            assert!(s.handle_recorded_keystroke(&Keystroke::parse("k").unwrap(), os, cx));
+            assert!(s.shortcut_notice.is_some());
+            assert_eq!(s.recording_shortcut, Some(ShortcutActionId::ToggleSidebarTab));
+
+            assert!(s.handle_recorded_keystroke(&Keystroke::parse("secondary-s").unwrap_or_else(|_| Keystroke::parse_with_os("secondary-s", os).unwrap()), os, cx));
+            assert_eq!(
+                s.shortcut_conflict.as_ref().map(|(a, _, c)| (*a, *c)),
+                Some((ShortcutActionId::ToggleSidebarTab, ShortcutActionId::SaveFile))
+            );
+
+            s.recording_shortcut = Some(ShortcutActionId::ToggleSidebarTab);
+            let custom_ks = Keystroke::parse_with_os("secondary-shift-k", os).unwrap();
+            assert!(s.handle_recorded_keystroke(&custom_ks, os, cx));
+            assert!(s.shortcut_conflict.is_none());
+        });
+    });
+    cx.run_until_parked();
+
+    let saved = Preferences::load_or_default_from_path(&prefs_path);
+    assert!(saved.is_shortcut_customized(ShortcutActionId::ToggleSidebarTab));
+
+    // Old default shortcut no longer fires; new customized shortcut toggles immediately.
+    cx.simulate_keystrokes("secondary-shift-o");
+    cx.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.state.drawer_tab),
+        DrawerTab::Files
+    );
+
+    cx.simulate_keystrokes("secondary-shift-k");
+    cx.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.state.drawer_tab),
+        DrawerTab::Outline
+    );
+
+    // Verify conflict replacement and unbind + reset all.
+    cx.update(|_, cx| {
+        let os = cx.platform_info().os;
+        let conflict_spec =
+            actions::recordable_shortcut_spec(&Keystroke::parse_with_os("secondary-s", os).unwrap(), ShortcutActionId::ToggleSidebarTab.default_spec(), os)
+                .unwrap();
+        settings.update(cx, |s, cx| {
+            s.replace_shortcut_conflict(
+                ShortcutActionId::ToggleSidebarTab,
+                conflict_spec,
+                ShortcutActionId::SaveFile,
+                cx,
+            );
+            assert_eq!(s.preferences.shortcut_spec(ShortcutActionId::SaveFile), "");
+            s.reset_all_shortcuts(cx);
+            assert!(s.preferences.shortcuts.is_empty());
+        });
+    });
+    cx.run_until_parked();
+    assert!(Preferences::load_or_default_from_path(&prefs_path).shortcuts.is_empty());
+}
+
+#[gpui::test]
+fn onboarding_lifecycle_blocks_shortcuts_steps_and_persists_completion(
+    cx: &mut gpui::TestAppContext,
+) {
+    use zmark_app::{state::AppState, views::workspace::WorkspaceView};
+    use zmark_core::{config::Preferences, i18n::SupportedLocale};
+
+    let dir = tempfile::tempdir().unwrap();
+    let prefs_path = dir.path().join("config.toml");
+    let welcome = zmark_app::welcome::initial_document(None, SupportedLocale::ZhCn);
+    assert_eq!(welcome.display_name_with_fallback("未命名"), "欢迎使用 ZMark.md");
+    assert_eq!(
+        welcome.status,
+        zmark_core::document::DocumentStatus::Clean
+    );
+
+    let mut state = AppState::new_with_preferences_at(
+        welcome,
+        Preferences::default(),
+        prefs_path.clone(),
+    );
+    state.open_onboarding();
+    assert!(state.onboarding_open);
+    assert_eq!(state.onboarding_step, 0);
+
+    let (workspace, cx) = cx.add_window_view(|_window, cx| WorkspaceView::new(state, cx));
+
+    workspace.update(cx, |ws, cx| {
+        ws.step_onboarding(2, cx);
+        assert_eq!(ws.state.onboarding_step, 2);
+        ws.finish_onboarding(cx);
+        assert!(!ws.state.onboarding_open);
+        assert!(ws.state.preferences.onboarding_completed);
+    });
+
+    assert!(
+        Preferences::load_or_default_from_path(&prefs_path).onboarding_completed,
+        "dismissing onboarding must persist completion to config.toml"
+    );
+
+    workspace.update(cx, |ws, cx| {
+        ws.start_onboarding(cx);
+        assert!(ws.state.onboarding_open);
+        assert_eq!(ws.state.onboarding_step, 0);
+    });
+}

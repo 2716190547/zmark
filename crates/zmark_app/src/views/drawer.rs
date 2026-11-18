@@ -36,6 +36,9 @@ pub struct DrawerSearchParams {
     pub rename_input: Option<Entity<SearchInput>>,
     pub on_select_directory: Option<Arc<dyn Fn(&PathBuf, bool, &mut Window, &mut App)>>,
     pub on_cancel_rename: Option<Arc<dyn Fn(&mut Window, &mut App)>>,
+    pub collapse_shortcut_hint: Option<String>,
+    pub switch_tab_shortcut_hint: Option<String>,
+    pub new_draft_shortcut_hint: Option<String>,
 }
 
 pub fn render_drawer_with_search(
@@ -236,7 +239,10 @@ pub fn render_drawer_with_search(
                 .gap_1()
                 .child(render_icon_btn(
                     "drawer_collapse_btn",
-                    &format!("{} ({})", strings.collapse_sidebar, crate::platform::shortcut_hint("Shift+B")),
+                    &match &search.collapse_shortcut_hint {
+                        Some(hint) => format!("{} ({hint})", strings.collapse_sidebar),
+                        None => strings.collapse_sidebar.to_string(),
+                    },
                     "icons/panel-left.svg",
                     false,
                     theme,
@@ -244,7 +250,10 @@ pub fn render_drawer_with_search(
                 ))
                 .child(render_icon_btn(
                     "drawer_tab_files",
-                    strings.tab_files,
+                    &match &search.switch_tab_shortcut_hint {
+                        Some(hint) => format!("{} ({hint})", strings.tab_files),
+                        None => strings.tab_files.to_string(),
+                    },
                     "icons/folder.svg",
                     active_tab == DrawerTab::Files,
                     theme,
@@ -252,7 +261,10 @@ pub fn render_drawer_with_search(
                 ))
                 .child(render_icon_btn(
                     "drawer_tab_outline",
-                    strings.tab_outline,
+                    &match &search.switch_tab_shortcut_hint {
+                        Some(hint) => format!("{} ({hint})", strings.tab_outline),
+                        None => strings.tab_outline.to_string(),
+                    },
                     "icons/list.svg",
                     active_tab == DrawerTab::Outline,
                     theme,
@@ -342,7 +354,10 @@ pub fn render_drawer_with_search(
                                         .child("×"),
                                 );
 
-                            let draft_tooltip_text = format!("{} ({})", strings.draft_focus_hint, crate::platform::shortcut_hint("N"));
+                            let draft_tooltip_text = match &search.new_draft_shortcut_hint {
+                                Some(hint) => format!("{} ({hint})", strings.draft_focus_hint),
+                                None => strings.draft_focus_hint.to_string(),
+                            };
                             let sel_key = d_key.clone();
                             let row_handler = search.on_row.clone();
                             let mut draft_item = div().relative()

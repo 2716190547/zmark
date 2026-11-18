@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -202,6 +203,147 @@ impl CustomThemePalette {
     }
 }
 
+/// Groups customizable shortcuts cleanly in the Settings UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShortcutGroup {
+    FilesAndDocuments,
+    ViewAndSidebar,
+    FindAndFormatting,
+}
+
+impl ShortcutGroup {
+    pub const ALL: [Self; 3] = [
+        Self::FilesAndDocuments,
+        Self::ViewAndSidebar,
+        Self::FindAndFormatting,
+    ];
+}
+
+/// Stable identifiers and built-in defaults for all customizable shortcuts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShortcutActionId {
+    OpenFileDialog,
+    NewDraft,
+    SaveFile,
+    CloseActiveDoc,
+    ExportHtml,
+    ToggleDrawer,
+    ToggleSidebarTab,
+    UndoSidebarRemoval,
+    ToggleSourceMode,
+    ToggleSplitMode,
+    TogglePreviewMode,
+    ToggleSettings,
+    FindInFile,
+    FindNext,
+    FindPrevious,
+    SourceBold,
+    SourceNumberedList,
+}
+
+impl ShortcutActionId {
+    pub const ALL: [Self; 17] = [
+        Self::OpenFileDialog,
+        Self::NewDraft,
+        Self::SaveFile,
+        Self::CloseActiveDoc,
+        Self::ExportHtml,
+        Self::ToggleDrawer,
+        Self::ToggleSidebarTab,
+        Self::UndoSidebarRemoval,
+        Self::ToggleSourceMode,
+        Self::ToggleSplitMode,
+        Self::TogglePreviewMode,
+        Self::ToggleSettings,
+        Self::FindInFile,
+        Self::FindNext,
+        Self::FindPrevious,
+        Self::SourceBold,
+        Self::SourceNumberedList,
+    ];
+
+    /// Stable TOML key persisted in `[shortcuts]`.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::OpenFileDialog => "open_file",
+            Self::NewDraft => "new_draft",
+            Self::SaveFile => "save_file",
+            Self::CloseActiveDoc => "close_document",
+            Self::ExportHtml => "export_html",
+            Self::ToggleDrawer => "toggle_sidebar",
+            Self::ToggleSidebarTab => "toggle_sidebar_tab",
+            Self::UndoSidebarRemoval => "undo_sidebar_removal",
+            Self::ToggleSourceMode => "source_mode",
+            Self::ToggleSplitMode => "split_mode",
+            Self::TogglePreviewMode => "preview_mode",
+            Self::ToggleSettings => "open_settings",
+            Self::FindInFile => "find_in_file",
+            Self::FindNext => "find_next",
+            Self::FindPrevious => "find_previous",
+            Self::SourceBold => "format_bold",
+            Self::SourceNumberedList => "format_numbered_list",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|action| action.id() == id)
+    }
+
+    /// Built-in GPUI keybinding specification (`secondary` resolves per OS).
+    pub const fn default_spec(self) -> &'static str {
+        match self {
+            Self::OpenFileDialog => "secondary-o",
+            Self::NewDraft => "secondary-n",
+            Self::SaveFile => "secondary-s",
+            Self::CloseActiveDoc => "secondary-w",
+            Self::ExportHtml => "secondary-shift-e",
+            Self::ToggleDrawer => "secondary-shift-b",
+            Self::ToggleSidebarTab => "secondary-shift-o",
+            Self::UndoSidebarRemoval => "secondary-alt-z",
+            Self::ToggleSourceMode => "secondary-1",
+            Self::ToggleSplitMode => "secondary-2",
+            Self::TogglePreviewMode => "secondary-3",
+            Self::ToggleSettings => "secondary-,",
+            Self::FindInFile => "secondary-f",
+            Self::FindNext => "secondary-g",
+            Self::FindPrevious => "secondary-shift-g",
+            Self::SourceBold => "secondary-b",
+            Self::SourceNumberedList => "secondary-shift-7",
+        }
+    }
+
+    /// Optional extra built-in fallback alias active unless explicitly bound elsewhere.
+    pub const fn secondary_fallback_spec(self) -> Option<&'static str> {
+        match self {
+            Self::FindNext => Some("f3"),
+            Self::FindPrevious => Some("shift-f3"),
+            _ => None,
+        }
+    }
+
+    pub const fn group(self) -> ShortcutGroup {
+        match self {
+            Self::OpenFileDialog
+            | Self::NewDraft
+            | Self::SaveFile
+            | Self::CloseActiveDoc
+            | Self::ExportHtml => ShortcutGroup::FilesAndDocuments,
+            Self::ToggleDrawer
+            | Self::ToggleSidebarTab
+            | Self::UndoSidebarRemoval
+            | Self::ToggleSourceMode
+            | Self::ToggleSplitMode
+            | Self::TogglePreviewMode
+            | Self::ToggleSettings => ShortcutGroup::ViewAndSidebar,
+            Self::FindInFile
+            | Self::FindNext
+            | Self::FindPrevious
+            | Self::SourceBold
+            | Self::SourceNumberedList => ShortcutGroup::FindAndFormatting,
+        }
+    }
+}
+
 /// Separate light and dark custom theme color sets stored in `config.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct CustomThemePreferences {
@@ -313,6 +455,12 @@ pub struct Preferences {
     pub sidebar_hidden_paths: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "CustomThemePreferences::is_empty")]
     pub custom_theme: CustomThemePreferences,
+    /// Sparse shortcut overrides (`action_id -> GPUI keystroke spec`; `""` means unbound).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub shortcuts: BTreeMap<String, String>,
+    /// Whether the user has dismissed or completed the first-launch onboarding tour.
+    #[serde(default)]
+    pub onboarding_completed: bool,
 }
 
 impl Default for Preferences {
@@ -335,11 +483,49 @@ impl Default for Preferences {
             workspace_roots: Vec::new(),
             sidebar_hidden_paths: Vec::new(),
             custom_theme: CustomThemePreferences::default(),
+            shortcuts: BTreeMap::new(),
+            onboarding_completed: false,
         }
     }
 }
 
 impl Preferences {
+    /// Returns the active keybinding specification for `action` (`""` means unbound).
+    pub fn shortcut_spec(&self, action: ShortcutActionId) -> &str {
+        self.shortcuts
+            .get(action.id())
+            .map(String::as_str)
+            .unwrap_or_else(|| action.default_spec())
+    }
+
+    pub fn is_shortcut_customized(&self, action: ShortcutActionId) -> bool {
+        self.shortcuts.contains_key(action.id())
+    }
+
+    /// Sets or unbinds (`None` / `Some("")`) a shortcut override.
+    pub fn set_shortcut(&mut self, action: ShortcutActionId, spec: Option<String>) {
+        match spec {
+            Some(s) if !s.trim().is_empty() => {
+                let normalized = s.trim().to_string();
+                if normalized == action.default_spec() {
+                    self.shortcuts.remove(action.id());
+                } else {
+                    self.shortcuts.insert(action.id().to_string(), normalized);
+                }
+            }
+            _ => {
+                self.shortcuts.insert(action.id().to_string(), String::new());
+            }
+        }
+    }
+
+    pub fn reset_shortcut(&mut self, action: ShortcutActionId) {
+        self.shortcuts.remove(action.id());
+    }
+
+    pub fn reset_all_shortcuts(&mut self) {
+        self.shortcuts.clear();
+    }
     pub fn sanitize_line_height(val: f32) -> f32 {
         if !(1.3..=1.7).contains(&val) || val.is_nan() {
             1.6
@@ -651,5 +837,43 @@ mod tests {
             Some("#ff8800")
         );
         assert!(parsed.custom_theme.variant(true).is_empty());
+    }
+
+    #[test]
+    fn shortcuts_sparse_overrides_and_unbind_round_trip() {
+        let mut prefs = Preferences::default();
+        assert!(!toml::to_string(&prefs).unwrap().contains("shortcuts"));
+        assert_eq!(
+            prefs.shortcut_spec(ShortcutActionId::ToggleSidebarTab),
+            "secondary-shift-o"
+        );
+
+        prefs.set_shortcut(
+            ShortcutActionId::ToggleSidebarTab,
+            Some("cmd-alt-o".to_string()),
+        );
+        prefs.set_shortcut(ShortcutActionId::ExportHtml, None);
+        prefs.set_shortcut(
+            ShortcutActionId::SaveFile,
+            Some(ShortcutActionId::SaveFile.default_spec().to_string()),
+        );
+        assert!(!prefs.is_shortcut_customized(ShortcutActionId::SaveFile));
+
+        let parsed: Preferences = toml::from_str(&toml::to_string(&prefs).unwrap()).unwrap();
+        assert_eq!(
+            parsed.shortcut_spec(ShortcutActionId::ToggleSidebarTab),
+            "cmd-alt-o"
+        );
+        assert_eq!(parsed.shortcut_spec(ShortcutActionId::ExportHtml), "");
+        assert!(parsed.is_shortcut_customized(ShortcutActionId::ExportHtml));
+
+        let mut reset = parsed;
+        reset.reset_shortcut(ShortcutActionId::ExportHtml);
+        assert_eq!(
+            reset.shortcut_spec(ShortcutActionId::ExportHtml),
+            "secondary-shift-e"
+        );
+        reset.reset_all_shortcuts();
+        assert!(reset.shortcuts.is_empty());
     }
 }

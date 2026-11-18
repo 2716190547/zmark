@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::actions::{
-    CancelRename, ExportHtml, OpenFileDialog, SaveFile, ToggleDrawer, TogglePreviewMode, ToggleSettings,
-    ToggleSourceMode, ToggleSplitMode,
+    CancelRename, CloseActiveDoc, ExportHtml, NewDraft, OpenFileDialog, SaveFile, ToggleDrawer,
+    TogglePreviewMode, ToggleSettings, ToggleSidebarTab, ToggleSourceMode, ToggleSplitMode,
 };
 use crate::state::{parse_debounce, AppState, CloseDecision, ViewMode};
 use crate::views::editor::render_editor_pane;
@@ -288,6 +288,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> Self {
         crate::theme::init_components(cx);
+        crate::actions::ensure_key_bindings(&state.preferences, cx);
         let mut preview_list = PreviewScrollState::new();
         preview_list.reset(state.doc().parsed.blocks.len());
         let mut view = Self {
@@ -2416,6 +2417,44 @@ impl WorkspaceView {
         }
     }
 
+    /// Toggles the sidebar tab between Files and Outline, expanding the sidebar if collapsed.
+    pub fn toggle_sidebar_tab(&mut self, cx: &mut Context<Self>) {
+        self.drawer_close_task = None;
+        self.drawer_closing = false;
+        self.state.drawer_open = true;
+        let next = match self.state.drawer_tab {
+            crate::state::DrawerTab::Files => crate::state::DrawerTab::Outline,
+            crate::state::DrawerTab::Outline => crate::state::DrawerTab::Files,
+        };
+        self.state.set_drawer_tab(next);
+        cx.notify();
+    }
+
+    fn workspace_shortcut_blocked(&self) -> bool {
+        self.sidebar_busy
+            || self.lightbox.is_open
+            || self.is_renaming
+            || self.state.onboarding_open
+            || self.state.pending_close.is_some()
+            || self.state.pending_remove_root.is_some()
+    }
+
+    pub fn start_onboarding(&mut self, cx: &mut Context<Self>) {
+        self.state.open_onboarding();
+        self.settings_window = None;
+        cx.notify();
+    }
+
+    pub fn step_onboarding(&mut self, step: usize, cx: &mut Context<Self>) {
+        self.state.set_onboarding_step(step);
+        cx.notify();
+    }
+
+    pub fn finish_onboarding(&mut self, cx: &mut Context<Self>) {
+        self.state.finish_onboarding(true);
+        cx.notify();
+    }
+
     pub fn open_settings_window(&mut self, cx: &mut Context<Self>) {
         if let Some(existing) = &self.settings_window {
             if existing
@@ -3279,6 +3318,51 @@ impl WorkspaceView {
         let is_renaming = self.is_renaming && !self.rename_in_sidebar;
         let rename_input = self.rename_input.clone();
 
+        let os = cx.platform_info().os;
+        let prefs = &self.state.preferences;
+        let tip_expand = crate::actions::label_with_shortcut(
+            strings.directory_drawer,
+            prefs,
+            zmark_core::config::ShortcutActionId::ToggleDrawer,
+            os,
+        );
+        let tip_source = crate::actions::label_with_shortcut(
+            strings.source_mode,
+            prefs,
+            zmark_core::config::ShortcutActionId::ToggleSourceMode,
+            os,
+        );
+        let tip_split = crate::actions::label_with_shortcut(
+            strings.split_mode,
+            prefs,
+            zmark_core::config::ShortcutActionId::ToggleSplitMode,
+            os,
+        );
+        let tip_preview = crate::actions::label_with_shortcut(
+            strings.preview_mode,
+            prefs,
+            zmark_core::config::ShortcutActionId::TogglePreviewMode,
+            os,
+        );
+        let tip_find = crate::actions::label_with_shortcut(
+            strings.find_in_file,
+            prefs,
+            zmark_core::config::ShortcutActionId::FindInFile,
+            os,
+        );
+        let tip_export = crate::actions::label_with_shortcut(
+            strings.export_html,
+            prefs,
+            zmark_core::config::ShortcutActionId::ExportHtml,
+            os,
+        );
+        let tip_settings = crate::actions::label_with_shortcut(
+            strings.settings,
+            prefs,
+            zmark_core::config::ShortcutActionId::ToggleSettings,
+            os,
+        );
+
         let viewport_w = f32::from(window.viewport_size().width);
         let col_w = self.state.preferences.max_column_width;
         let header_pl = px(calculate_title_header_padding(
@@ -3337,7 +3421,7 @@ impl WorkspaceView {
                     .when(!drawer_open, |el| {
                         el.child(render_icon_button(
                             "btn_expand_drawer",
-                            format!("{} ({})", strings.directory_drawer, crate::platform::shortcut_hint("Shift+B")),
+                            tip_expand,
                             false,
                             theme,
                             render_sidebar_icon(theme.text_muted),
@@ -3475,7 +3559,7 @@ impl WorkspaceView {
                             .gap_1()
                             .child(render_mode_icon_tab(
                                 "btn_mode_source",
-                                format!("{} ({})", strings.source_mode, crate::platform::shortcut_hint("1")),
+                                tip_source,
                                 view_mode == ViewMode::Source,
                                 theme,
                                 render_source_mode_icon(
@@ -3488,7 +3572,7 @@ impl WorkspaceView {
                             .when(self.state.doc().path.as_ref().is_none_or(|p| zmark_core::file_ops::is_markdown(p)), |el| { el
                             .child(render_mode_icon_tab(
                                 "btn_mode_split",
-                                format!("{} ({})", strings.split_mode, crate::platform::shortcut_hint("2")),
+                                tip_split,
                                 view_mode == ViewMode::Split,
                                 theme,
                                 render_split_mode_icon(
@@ -3500,7 +3584,7 @@ impl WorkspaceView {
                             ))
                             .child(render_mode_icon_tab(
                                 "btn_mode_preview",
-                                format!("{} ({})", strings.preview_mode, crate::platform::shortcut_hint("3")),
+                                tip_preview,
                                 view_mode == ViewMode::Preview,
                                 theme,
                                 render_preview_mode_icon(
@@ -3553,14 +3637,14 @@ impl WorkspaceView {
                                 },
                             )
                             .child(render_animated_icon_button(
-                                "btn_find", format!("{} · {}", strings.find_in_file, crate::platform::shortcut_hint("F")), theme,
+                                "btn_find", tip_find, theme,
                                 svg().path("icons/search.svg").size(px(16.)).text_color(theme.text_muted),
                                 reduce_motion, 0,
                                 cx.listener(|this, _,window,cx| this.open_find(window,cx)),
                             ))
                             .child(render_animated_icon_button(
                                 "btn_export",
-                                format!("{} (⇧{})", strings.export_html, crate::platform::shortcut_hint("E")),
+                                tip_export,
                                 theme,
                                 render_export_icon(theme.text_muted),
                                 reduce_motion,
@@ -3573,7 +3657,7 @@ impl WorkspaceView {
                             ))
                             .child(render_animated_icon_button(
                                 "btn_settings",
-                                format!("{} ({})", strings.settings, crate::platform::shortcut_hint(",")),
+                                tip_settings,
                                 theme,
                                 render_settings_icon(theme.text_muted),
                                 reduce_motion,
@@ -3770,6 +3854,302 @@ impl WorkspaceView {
                                     this.handle_modal_save(&key_save, window, cx);
                                 }),
                             )),
+                    ),
+            )
+    }
+
+    fn render_onboarding_modal(
+        &self,
+        theme: &crate::theme::ThemeColors,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use zmark_core::config::ShortcutActionId;
+        let strings = self.state.strings;
+        let prefs = &self.state.preferences;
+        let os = cx.platform_info().os;
+        let step = self
+            .state
+            .onboarding_step
+            .min(AppState::ONBOARDING_STEP_COUNT - 1);
+
+        let key_chip = |label: &'static str, action: Option<ShortcutActionId>| {
+            let shortcut_text = action
+                .and_then(|id| crate::actions::shortcut_display_for_action(prefs, id, os));
+            div()
+                .px_2p5()
+                .py_1()
+                .rounded(px(6.))
+                .bg(theme.surface)
+                .border_1()
+                .border_color(theme.border)
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(label),
+                )
+                .when_some(shortcut_text, |el, key| {
+                    el.child(
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded(px(4.))
+                            .bg(theme.accent.opacity(0.12))
+                            .font_family(crate::platform::MONO_FONT)
+                            .text_size(px(11.))
+                            .text_color(theme.accent)
+                            .child(key),
+                    )
+                })
+        };
+
+        let (icon_path, title, desc, chips): (&'static str, &'static str, &'static str, Vec<AnyElement>) = match step {
+            0 => (
+                "icons/columns-2.svg",
+                strings.onboarding_step1_title,
+                strings.onboarding_step1_desc,
+                vec![
+                    key_chip(strings.source_mode, Some(ShortcutActionId::ToggleSourceMode)).into_any_element(),
+                    key_chip(strings.split_mode, Some(ShortcutActionId::ToggleSplitMode)).into_any_element(),
+                    key_chip(strings.preview_mode, Some(ShortcutActionId::TogglePreviewMode)).into_any_element(),
+                ],
+            ),
+            1 => (
+                "icons/folder.svg",
+                strings.onboarding_step2_title,
+                strings.onboarding_step2_desc,
+                vec![
+                    key_chip(strings.directory_drawer, Some(ShortcutActionId::ToggleDrawer)).into_any_element(),
+                    key_chip(strings.shortcut_toggle_sidebar_tab, Some(ShortcutActionId::ToggleSidebarTab)).into_any_element(),
+                    key_chip(strings.find_in_file, Some(ShortcutActionId::FindInFile)).into_any_element(),
+                ],
+            ),
+            2 => (
+                "icons/image.svg",
+                strings.onboarding_step3_title,
+                strings.onboarding_step3_desc,
+                vec![
+                    key_chip(strings.open_file, Some(ShortcutActionId::OpenFileDialog)).into_any_element(),
+                    key_chip(strings.export_html, Some(ShortcutActionId::ExportHtml)).into_any_element(),
+                    key_chip("Mermaid · Lightbox", None).into_any_element(),
+                ],
+            ),
+            _ => (
+                "icons/keyboard.svg",
+                strings.onboarding_step4_title,
+                strings.onboarding_step4_desc,
+                vec![
+                    key_chip(strings.settings, Some(ShortcutActionId::ToggleSettings)).into_any_element(),
+                    key_chip(strings.shortcut_new_draft, Some(ShortcutActionId::NewDraft)).into_any_element(),
+                    key_chip(strings.shortcut_format_bold, Some(ShortcutActionId::SourceBold)).into_any_element(),
+                ],
+            ),
+        };
+
+        let is_first = step == 0;
+        let is_last = step + 1 >= AppState::ONBOARDING_STEP_COUNT;
+        let step_counter = format!("{} / {}", step + 1, AppState::ONBOARDING_STEP_COUNT);
+
+        div()
+            .id("onboarding_modal_backdrop")
+            .absolute()
+            .inset_0()
+            .bg(rgba(0x00000066))
+            .occlude()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .id("onboarding_modal_card")
+                    .w(px(520.))
+                    .max_w(px(520.))
+                    .p_6()
+                    .rounded_xl()
+                    .bg(theme.surface)
+                    .border_1()
+                    .border_color(theme.border)
+                    .shadow_2xl()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(
+                                        div()
+                                            .w(px(36.))
+                                            .h(px(36.))
+                                            .rounded_lg()
+                                            .bg(theme.accent.opacity(0.12))
+                                            .border_1()
+                                            .border_color(theme.accent.opacity(0.28))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                svg()
+                                                    .path(icon_path)
+                                                    .size(px(18.))
+                                                    .text_color(theme.accent),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_0p5()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(theme.accent)
+                                                    .child(strings.onboarding_kicker),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(11.))
+                                                    .font_family(crate::platform::MONO_FONT)
+                                                    .text_color(theme.text_muted)
+                                                    .child(step_counter),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("btn_onboarding_skip")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(6.))
+                                    .text_xs()
+                                    .text_color(theme.text_muted)
+                                    .cursor_pointer()
+                                    .hover(|s| {
+                                        s.bg(theme.hover_bg())
+                                            .text_color(theme.text_primary)
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.finish_onboarding(cx);
+                                        }),
+                                    )
+                                    .child(strings.onboarding_skip),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_base()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.text_primary)
+                                    .child(title),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .line_height(relative(1.6))
+                                    .text_color(theme.text_muted)
+                                    .child(desc),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_3()
+                            .rounded_lg()
+                            .bg(theme.bg)
+                            .border_1()
+                            .border_color(theme.border)
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .children(chips),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .pt_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .children((0..AppState::ONBOARDING_STEP_COUNT).map(|idx| {
+                                        let active = idx == step;
+                                        div()
+                                            .id(SharedString::from(format!("onboarding_dot_{idx}")))
+                                            .w(px(if active { 18. } else { 6. }))
+                                            .h(px(6.))
+                                            .rounded_full()
+                                            .bg(if active {
+                                                theme.accent
+                                            } else {
+                                                theme.text_muted.opacity(0.35)
+                                            })
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, _window, cx| {
+                                                    this.step_onboarding(idx, cx);
+                                                }),
+                                            )
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .when(!is_first, |el| {
+                                        el.child(render_modal_button(
+                                            "btn_onboarding_prev",
+                                            strings.onboarding_prev.to_string(),
+                                            theme,
+                                            ModalButtonRole::Secondary,
+                                            cx.listener(move |this, _, _window, cx| {
+                                                this.step_onboarding(step.saturating_sub(1), cx);
+                                            }),
+                                        ))
+                                    })
+                                    .child(render_modal_button(
+                                        if is_last {
+                                            "btn_onboarding_finish"
+                                        } else {
+                                            "btn_onboarding_next"
+                                        },
+                                        if is_last {
+                                            strings.onboarding_finish.to_string()
+                                        } else {
+                                            strings.onboarding_next.to_string()
+                                        },
+                                        theme,
+                                        ModalButtonRole::Primary,
+                                        cx.listener(move |this, _, _window, cx| {
+                                            if is_last {
+                                                this.finish_onboarding(cx);
+                                            } else {
+                                                this.step_onboarding(step + 1, cx);
+                                            }
+                                        }),
+                                    )),
+                            ),
                     ),
             )
     }
@@ -4394,21 +4774,39 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleSourceMode, _window, cx| {
-                this.set_view_mode(ViewMode::Source, cx);
+                if !this.workspace_shortcut_blocked() {
+                    this.set_view_mode(ViewMode::Source, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &ToggleSplitMode, _window, cx| {
-                this.set_view_mode(ViewMode::Split, cx);
+                if !this.workspace_shortcut_blocked() {
+                    this.set_view_mode(ViewMode::Split, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &TogglePreviewMode, _window, cx| {
-                this.set_view_mode(ViewMode::Preview, cx);
+                if !this.workspace_shortcut_blocked() {
+                    this.set_view_mode(ViewMode::Preview, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &ToggleDrawer, _window, cx| {
-                this.toggle_drawer(cx);
+                if !this.workspace_shortcut_blocked() {
+                    this.toggle_drawer(cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleSidebarTab, _window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    this.toggle_sidebar_tab(cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &ToggleSettings, _window, cx| {
-                this.open_settings_window(cx);
+                if !this.workspace_shortcut_blocked() {
+                    this.open_settings_window(cx);
+                }
             }))
-            .on_action(cx.listener(|_this, _: &OpenFileDialog, _window, cx| {
+            .on_action(cx.listener(|this, _: &OpenFileDialog, _window, cx| {
+                if this.workspace_shortcut_blocked() {
+                    return;
+                }
                 let rx = cx.prompt_for_paths(PathPromptOptions {
                     files: true,
                     directories: false,
@@ -4422,7 +4820,7 @@ impl Render for WorkspaceView {
                                 this.restore_sidebar_path(&path, cx);
                                 match this.state.load_file(path) {
                                     Ok(()) => this.on_document_swapped(None, cx),
-                                    Err(error) => this.error_banner = Some(error.to_string()),
+                                    Err(error) => this.error_banner = Some(format!("打开失败：{error}")),
                                 }
                                 cx.notify();
                             });
@@ -4431,26 +4829,51 @@ impl Render for WorkspaceView {
                 })
                 .detach();
             }))
+            .on_action(cx.listener(|this, _: &NewDraft, window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    this.trigger_draft(Some(window), cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &CloseActiveDoc, window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    this.trigger_close_active(Some(window), cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &CancelRename, window, cx| {
                 window.focus(&this.focus_handle, cx);
                 this.finish_rename(false, cx);
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _window, cx| {
-                this.trigger_save(cx);
+                if !this.workspace_shortcut_blocked() {
+                    this.trigger_save(cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &ExportHtml, window, cx| {
-                this.trigger_export_html(window, cx);
+                if !this.workspace_shortcut_blocked() {
+                    this.trigger_export_html(window, cx);
+                }
             }))
-            .on_action(cx.listener(|this, _: &crate::actions::FindInFile, window,cx| {
-                this.open_find(window,cx);
+            .on_action(cx.listener(|this, _: &crate::actions::FindInFile, window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    this.open_find(window, cx);
+                }
             }))
-            .on_action(cx.listener(|this, _: &crate::actions::CloseFind, window,cx| this.close_find(window,cx)))
-            .on_action(cx.listener(|this, _: &crate::actions::FindNext, window,cx| this.step_find(false,window,cx)))
-            .on_action(cx.listener(|this, _: &crate::actions::FindPrevious, window,cx| this.step_find(true,window,cx)))
-            .on_action(cx.listener(|this, _: &crate::actions::UndoSidebarRemoval, _,cx| {
-                if !this.sidebar_busy && !this.is_renaming && !this.lightbox.is_open
-                    && this.state.pending_close.is_none() && this.state.pending_remove_root.is_none() {
-                    if let Some(paths) = this.sidebar_undo.clone() { this.persist_sidebar_hidden(paths,false,cx); }
+            .on_action(cx.listener(|this, _: &crate::actions::CloseFind, window, cx| this.close_find(window, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::FindNext, window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    this.step_find(false, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::FindPrevious, window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    this.step_find(true, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::UndoSidebarRemoval, _, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    if let Some(paths) = this.sidebar_undo.clone() {
+                        this.persist_sidebar_hidden(paths, false, cx);
+                    }
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::actions::SourceUndo, window, cx| this.source_command(SourceCommand::Undo, window, cx)))
@@ -4472,6 +4895,33 @@ impl Render for WorkspaceView {
                         cx.notify();
                     }
                     // Skip hidden-source editing without swallowing native window shortcuts.
+                    return;
+                }
+
+                if this.state.onboarding_open {
+                    match event.keystroke.key.as_str() {
+                        "escape" => {
+                            this.finish_onboarding(cx);
+                            cx.stop_propagation();
+                        }
+                        "left" => {
+                            let step = this.state.onboarding_step;
+                            if step > 0 {
+                                this.step_onboarding(step - 1, cx);
+                            }
+                            cx.stop_propagation();
+                        }
+                        "right" | "enter" => {
+                            let step = this.state.onboarding_step;
+                            if step + 1 >= AppState::ONBOARDING_STEP_COUNT {
+                                this.finish_onboarding(cx);
+                            } else {
+                                this.step_onboarding(step + 1, cx);
+                            }
+                            cx.stop_propagation();
+                        }
+                        _ => {}
+                    }
                     return;
                 }
 
@@ -4507,25 +4957,14 @@ impl Render for WorkspaceView {
                     }
                 }
 
-                let mods = event.keystroke.modifiers;
                 let key = event.keystroke.key.as_str();
                 if key == "escape" && !this.is_renaming && this.sidebar_selection.lock().unwrap().selected.len() > 1 {
                     this.exit_sidebar_multiselect(cx);
                     cx.stop_propagation();
                     return;
                 }
-                if !this.is_renaming && (mods.secondary(cx) || mods.control) && !mods.alt && !mods.shift && key.eq_ignore_ascii_case("f") {
-                    this.open_find(window,cx); cx.stop_propagation(); return;
-                }
-                if (mods.secondary(cx) || mods.control) && mods.alt && key.eq_ignore_ascii_case("z") && !this.is_renaming {
-                    if let Some(paths) = this.sidebar_undo.clone() { this.persist_sidebar_hidden(paths,false,cx); }
-                    cx.stop_propagation(); return;
-                }
                 if this.find.open {
                     if key == "escape" { this.close_find(window,cx); cx.stop_propagation(); return; }
-                    if key == "f3" || ((mods.secondary(cx) || mods.control) && key.eq_ignore_ascii_case("g")) {
-                        this.step_find(mods.shift,window,cx); cx.stop_propagation(); return;
-                    }
                     if this.find.input.as_ref().is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window)) { return; }
                 }
                 this.search_focused = this.search_input.as_ref()
@@ -4563,65 +5002,19 @@ impl Render for WorkspaceView {
                     }
                 }
 
-                if mods.secondary(cx) {
-                    match key {
-                        "s" => {
-                            this.trigger_save(cx);
-                        }
-                        "w" => {
-                            this.trigger_close_active(Some(window), cx);
-                        }
-                        "n" => {
-                            this.trigger_draft(Some(window), cx);
-                        }
-                        "o" => {
-                            let rx = cx.prompt_for_paths(PathPromptOptions {
-                                files: true,
-                                directories: false,
-                                multiple: false,
-                                prompt: None,
-                            });
-                            cx.spawn(async move |this, app| {
-                                if let Ok(Ok(Some(mut paths))) = rx.await {
-                                    if let Some(path) = paths.pop() {
-                                        let _ = this.update(app, |this, cx| {
-                                            this.restore_sidebar_path(&path, cx);
-                                            match this.state.load_file(path) {
-                                                Ok(()) => this.on_document_swapped(None, cx),
-                                                Err(error) => this.error_banner = Some(format!("打开失败：{error}")),
-                                            }
-                                            cx.notify();
-                                        });
-                                    }
-                                }
-                            })
-                            .detach();
-                        }
-                        "," => {
-                            this.open_settings_window(cx);
-                        }
-                        "b" if mods.shift => {
-                            this.toggle_drawer(cx);
-                        }
-                        "1" => {
-                            this.set_view_mode(ViewMode::Source, cx);
-                        }
-                        "2" => {
-                            this.set_view_mode(ViewMode::Split, cx);
-                        }
-                        "c" | "C" => {
-                            let preview = this.state.view_mode == ViewMode::Preview || (this.state.view_mode == ViewMode::Split && this.preview_focused);
-                            if preview {
-                                if let Some(selection) = this.preview_selection {
-                                    let text = crate::views::preview::serialize_preview_selection(&this.state.doc().parsed, selection);
-                                    if !text.is_empty() { cx.write_to_clipboard(ClipboardItem::new_string(text)); }
-                                }
+                if mods.secondary(cx) && key.eq_ignore_ascii_case("c") {
+                    let preview = this.state.view_mode == ViewMode::Preview
+                        || (this.state.view_mode == ViewMode::Split && this.preview_focused);
+                    if preview {
+                        if let Some(selection) = this.preview_selection {
+                            let text = crate::views::preview::serialize_preview_selection(
+                                &this.state.doc().parsed,
+                                selection,
+                            );
+                            if !text.is_empty() {
+                                cx.write_to_clipboard(ClipboardItem::new_string(text));
                             }
                         }
-                        "3" => {
-                            this.set_view_mode(ViewMode::Preview, cx);
-                        }
-                        _ => {}
                     }
                     return;
                 }
@@ -4697,6 +5090,7 @@ impl Render for WorkspaceView {
                                             if let Some(paths) = this.sidebar_undo.clone() { this.persist_sidebar_hidden(paths,false,cx); }
                                         });
                                     });
+                                    let os = cx.platform_info().os;
                                     let search_params = crate::views::drawer::DrawerSearchParams {
                                         search_query: self.state.search_query.clone(),
                                         has_search_matches: self.state.has_search_matches(),
@@ -4720,6 +5114,21 @@ impl Render for WorkspaceView {
                                         rename_input: self.rename_input.clone().filter(|_| self.is_renaming && self.rename_in_sidebar),
                                         on_select_directory: Some(on_select_directory),
                                         on_cancel_rename: Some(on_cancel_rename),
+                                        collapse_shortcut_hint: crate::actions::shortcut_display_for_action(
+                                            &self.state.preferences,
+                                            zmark_core::config::ShortcutActionId::ToggleDrawer,
+                                            os,
+                                        ),
+                                        switch_tab_shortcut_hint: crate::actions::shortcut_display_for_action(
+                                            &self.state.preferences,
+                                            zmark_core::config::ShortcutActionId::ToggleSidebarTab,
+                                            os,
+                                        ),
+                                        new_draft_shortcut_hint: crate::actions::shortcut_display_for_action(
+                                            &self.state.preferences,
+                                            zmark_core::config::ShortcutActionId::NewDraft,
+                                            os,
+                                        ),
                                     };
                                     crate::views::drawer::render_drawer_with_search(
                                         is_fullscreen,
@@ -5450,6 +5859,9 @@ impl Render for WorkspaceView {
                     })
                     .when(self.state.pending_close.is_some(), |root| {
                         root.child(self.render_close_modal(theme, cx))
+                    })
+                    .when(self.state.onboarding_open, |root| {
+                        root.child(self.render_onboarding_modal(theme, cx))
                     });
 
         self.complete_local_image_decode(window, cx);

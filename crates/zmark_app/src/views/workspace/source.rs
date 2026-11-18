@@ -339,8 +339,6 @@ impl WorkspaceView {
                 "x" => Some(SourceCommand::Cut),
                 "v" => Some(SourceCommand::Paste),
                 "a" => Some(SourceCommand::SelectAll),
-                "b" if !modifiers.shift => Some(SourceCommand::Bold),
-                "7" if modifiers.shift => Some(SourceCommand::NumberedList),
                 _ => None,
             }
         } else if key == "tab" {

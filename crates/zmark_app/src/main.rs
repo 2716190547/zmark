@@ -27,7 +27,7 @@ fn main() {
         // ivar to the plain NSApplication and panic at startup.
         zmark_app::theme::init_components(cx);
         zmark_app::platform::register_application_icon();
-        zmark_app::actions::init_key_bindings(cx);
+        zmark_app::actions::sync_key_bindings(&preferences, cx);
 
         let window_options = WindowOptions {
             titlebar: zmark_app::platform::titlebar_options("ZMark", 12.0),
@@ -45,6 +45,9 @@ fn main() {
             // Launch with the file sidebar open. Tests build AppState directly and
             // keep the closed default so their layout assumptions stay stable.
             state.drawer_open = true;
+            if !state.preferences.onboarding_completed {
+                state.open_onboarding();
+            }
             let update_config = zmark_app::updater::UpdateConfig::production();
             let view = cx.new(|cx| {
                 WorkspaceView::new_with_update_config(state, update_config, cx)

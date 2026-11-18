@@ -5,9 +5,12 @@ use gpui_component::color_picker::{ColorPickerEvent, ColorPickerState, ColorSele
 use std::collections::HashMap;
 use std::sync::Arc;
 use zmark_core::config::{
-    CustomColorSlot, CustomThemePreferences, Preferences, ThemeMode, CUSTOM_PALETTE_ID,
+    CustomColorSlot, CustomThemePreferences, Preferences, ShortcutActionId, ShortcutGroup,
+    ThemeMode, CUSTOM_PALETTE_ID,
 };
-use zmark_core::i18n::{I18nStrings, SupportedLocale};
+use zmark_core::i18n::{
+    localize_shortcut_action, localize_shortcut_group, I18nStrings, SupportedLocale,
+};
 
 use crate::state::SettingsTab;
 use crate::theme::{ThemeColors, ALL_PALETTES};
@@ -29,6 +32,10 @@ pub struct SettingsWindowView {
     pub custom_preset_open: bool,
     custom_pickers: HashMap<CustomColorSlot, Entity<ColorPickerState>>,
     custom_picker_subs: Vec<Subscription>,
+    pub recording_shortcut: Option<ShortcutActionId>,
+    pub shortcut_conflict: Option<(ShortcutActionId, String, ShortcutActionId)>,
+    pub shortcut_notice: Option<(ShortcutActionId, &'static str)>,
+    shortcut_interceptor: Option<Subscription>,
 }
 
 impl SettingsWindowView {
@@ -79,7 +86,170 @@ impl SettingsWindowView {
             custom_preset_open: false,
             custom_pickers: HashMap::new(),
             custom_picker_subs: Vec::new(),
+            recording_shortcut: None,
+            shortcut_conflict: None,
+            shortcut_notice: None,
+            shortcut_interceptor: None,
         }
+    }
+
+    /// Applies or clears a customized shortcut, updates GPUI's keymap live, and saves config.
+    pub fn apply_shortcut(
+        &mut self,
+        action: ShortcutActionId,
+        spec: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.preferences.set_shortcut(action, spec.clone());
+        crate::actions::sync_key_bindings(&self.preferences, cx);
+        if let Some(ws) = self.workspace.upgrade() {
+            ws.update(cx, |ws, cx| {
+                ws.state.set_shortcut(action, spec);
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
+    pub fn replace_shortcut_conflict(
+        &mut self,
+        action: ShortcutActionId,
+        spec: String,
+        conflict: ShortcutActionId,
+        cx: &mut Context<Self>,
+    ) {
+        self.preferences.set_shortcut(conflict, None);
+        self.preferences.set_shortcut(action, Some(spec.clone()));
+        self.shortcut_conflict = None;
+        self.shortcut_notice = None;
+        crate::actions::sync_key_bindings(&self.preferences, cx);
+        if let Some(ws) = self.workspace.upgrade() {
+            ws.update(cx, |ws, cx| {
+                ws.state.set_shortcut(conflict, None);
+                ws.state.set_shortcut(action, Some(spec));
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
+    pub fn reset_shortcut(&mut self, action: ShortcutActionId, cx: &mut Context<Self>) {
+        self.stop_recording_shortcut();
+        self.shortcut_conflict = None;
+        self.shortcut_notice = None;
+        self.preferences.reset_shortcut(action);
+        crate::actions::sync_key_bindings(&self.preferences, cx);
+        if let Some(ws) = self.workspace.upgrade() {
+            ws.update(cx, |ws, cx| {
+                ws.state.reset_shortcut(action);
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
+    pub fn reset_all_shortcuts(&mut self, cx: &mut Context<Self>) {
+        self.stop_recording_shortcut();
+        self.shortcut_conflict = None;
+        self.shortcut_notice = None;
+        self.preferences.reset_all_shortcuts();
+        crate::actions::sync_key_bindings(&self.preferences, cx);
+        if let Some(ws) = self.workspace.upgrade() {
+            ws.update(cx, |ws, cx| {
+                ws.state.reset_all_shortcuts();
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
+    pub fn stop_recording_shortcut(&mut self) {
+        self.recording_shortcut = None;
+        self.shortcut_interceptor = None;
+    }
+
+    /// Captures the next non-modifier keystroke in Settings to record a shortcut.
+    pub fn handle_recorded_keystroke(
+        &mut self,
+        keystroke: &Keystroke,
+        os: OperatingSystem,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(action) = self.recording_shortcut else {
+            return false;
+        };
+        if keystroke.is_modifier_key() {
+            return false;
+        }
+        let no_primary = !keystroke.modifiers.platform
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.alt;
+        if no_primary && keystroke.key.eq_ignore_ascii_case("escape") {
+            self.stop_recording_shortcut();
+            self.shortcut_notice = None;
+            cx.notify();
+            return true;
+        }
+        if no_primary
+            && (keystroke.key.eq_ignore_ascii_case("backspace")
+                || keystroke.key.eq_ignore_ascii_case("delete"))
+        {
+            self.stop_recording_shortcut();
+            self.shortcut_conflict = None;
+            self.shortcut_notice = None;
+            self.apply_shortcut(action, None, cx);
+            return true;
+        }
+        let Some(spec) =
+            crate::actions::recordable_shortcut_spec(keystroke, action.default_spec(), os)
+        else {
+            self.shortcut_notice = Some((action, self.strings.shortcut_invalid_hint));
+            cx.notify();
+            return true;
+        };
+        self.shortcut_notice = None;
+        if let Some(parsed) = crate::actions::parse_shortcut_spec(&spec, os) {
+            if let Some(conflict) =
+                crate::actions::find_shortcut_conflict(&self.preferences, action, &parsed, os)
+            {
+                self.stop_recording_shortcut();
+                self.shortcut_conflict = Some((action, spec, conflict));
+                cx.notify();
+                return true;
+            }
+        }
+        self.stop_recording_shortcut();
+        self.shortcut_conflict = None;
+        self.apply_shortcut(action, Some(spec), cx);
+        true
+    }
+
+    pub fn begin_recording_shortcut(
+        &mut self,
+        action: ShortcutActionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.recording_shortcut = Some(action);
+        self.shortcut_conflict = None;
+        self.shortcut_notice = None;
+        let view = cx.entity().downgrade();
+        let target_window = window.window_handle();
+        let sub = cx.intercept_keystrokes(move |event, event_window, app| {
+            if event_window.window_handle() != target_window || event.keystroke.is_modifier_key() {
+                return;
+            }
+            let os = app.platform_info().os;
+            let ks = event.keystroke.clone();
+            let handled = view
+                .update(app, |this, cx| this.handle_recorded_keystroke(&ks, os, cx))
+                .unwrap_or(false);
+            if handled {
+                app.stop_propagation();
+            }
+        });
+        self.shortcut_interceptor = Some(sub);
+        cx.notify();
     }
 
     fn ensure_custom_pickers(
@@ -206,6 +376,11 @@ impl Render for SettingsWindowView {
         let view_tab = cx.entity().clone();
         let on_set_tab = Arc::new(move |tab: SettingsTab, _window: &mut Window, cx: &mut App| {
             view_tab.update(cx, |this, cx| {
+                if tab != SettingsTab::Shortcuts {
+                    this.stop_recording_shortcut();
+                    this.shortcut_conflict = None;
+                    this.shortcut_notice = None;
+                }
                 this.current_tab = tab;
                 cx.notify();
             });
@@ -419,6 +594,13 @@ impl Render for SettingsWindowView {
             .flex()
             .flex_row()
             .overflow_hidden()
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _window, cx| {
+                if this.recording_shortcut.is_some() {
+                    this.stop_recording_shortcut();
+                    this.shortcut_notice = None;
+                    cx.notify();
+                }
+            }))
             // Left Sidebar Navigation (Edge-to-Edge full height with traffic-lights safe insets)
             .child(
                 div()
@@ -543,20 +725,87 @@ impl Render for SettingsWindowView {
                         )
                         .into_any_element(),
                         SettingsTab::Shortcuts => {
-                            render_shortcuts_tab(&theme, strings).into_any_element()
+                            let view_rec = cx.entity().clone();
+                            let on_start_record: Arc<
+                                dyn Fn(ShortcutActionId, &mut Window, &mut App),
+                            > = Arc::new(move |action, window, cx| {
+                                view_rec.update(cx, |this, cx| {
+                                    this.begin_recording_shortcut(action, window, cx);
+                                });
+                            });
+                            let view_res = cx.entity().clone();
+                            let on_reset_shortcut: Arc<
+                                dyn Fn(ShortcutActionId, &mut Window, &mut App),
+                            > = Arc::new(move |action, _window, cx| {
+                                view_res.update(cx, |this, cx| {
+                                    this.reset_shortcut(action, cx);
+                                });
+                            });
+                            let view_rep = cx.entity().clone();
+                            let on_replace_conflict: Arc<
+                                dyn Fn(ShortcutActionId, String, ShortcutActionId, &mut Window, &mut App),
+                            > = Arc::new(move |action, spec, conflict, _window, cx| {
+                                view_rep.update(cx, |this, cx| {
+                                    this.replace_shortcut_conflict(action, spec, conflict, cx);
+                                });
+                            });
+                            let view_can = cx.entity().clone();
+                            let on_cancel_conflict: Arc<dyn Fn(&mut Window, &mut App)> =
+                                Arc::new(move |_window, cx| {
+                                    view_can.update(cx, |this, cx| {
+                                        this.shortcut_conflict = None;
+                                        this.shortcut_notice = None;
+                                        cx.notify();
+                                    });
+                                });
+                            let view_all = cx.entity().clone();
+                            let on_reset_all: Arc<dyn Fn(&mut Window, &mut App)> =
+                                Arc::new(move |_window, cx| {
+                                    view_all.update(cx, |this, cx| {
+                                        this.reset_all_shortcuts(cx);
+                                    });
+                                });
+                            render_shortcuts_tab(
+                                &self.preferences,
+                                cx.platform_info().os,
+                                self.recording_shortcut,
+                                self.shortcut_conflict.as_ref(),
+                                self.shortcut_notice,
+                                &theme,
+                                strings,
+                                ShortcutsTabHandlers {
+                                    on_start_record,
+                                    on_reset_shortcut,
+                                    on_replace_conflict,
+                                    on_cancel_conflict,
+                                    on_reset_all,
+                                },
+                            )
+                            .into_any_element()
                         }
-                        SettingsTab::About => render_about_tab(
-                            &theme,
-                            strings,
-                            &update_status,
-                            update_enabled,
-                            update_reason.as_deref(),
-                            on_check_update,
-                            move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
-                                cx.open_url("https://github.com/2716190547/zmark-releases");
-                            },
-                        )
-                        .into_any_element(),
+                        SettingsTab::About => {
+                            let ws_onboarding = self.workspace.clone();
+                            render_about_tab(
+                                &theme,
+                                strings,
+                                &update_status,
+                                update_enabled,
+                                update_reason.as_deref(),
+                                on_check_update,
+                                move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+                                    cx.open_url("https://github.com/2716190547/zmark-releases");
+                                },
+                                move |_: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+                                    if let Some(ws) = ws_onboarding.upgrade() {
+                                        ws.update(cx, |ws, cx| {
+                                            ws.start_onboarding(cx);
+                                        });
+                                    }
+                                    window.remove_window();
+                                },
+                            )
+                            .into_any_element()
+                        }
                     }),
             )
             .when(cfg!(target_os = "windows"), |el| {
@@ -1440,27 +1689,332 @@ pub fn shortcut_rows(strings: &I18nStrings) -> [(String, String); 6] {
     ]
 }
 
-fn render_shortcuts_tab(theme: &ThemeColors, strings: &I18nStrings) -> impl IntoElement {
+struct ShortcutsTabHandlers {
+    on_start_record: Arc<dyn Fn(ShortcutActionId, &mut Window, &mut App)>,
+    on_reset_shortcut: Arc<dyn Fn(ShortcutActionId, &mut Window, &mut App)>,
+    on_replace_conflict: Arc<dyn Fn(ShortcutActionId, String, ShortcutActionId, &mut Window, &mut App)>,
+    on_cancel_conflict: Arc<dyn Fn(&mut Window, &mut App)>,
+    on_reset_all: Arc<dyn Fn(&mut Window, &mut App)>,
+}
+
+fn render_shortcuts_tab(
+    preferences: &Preferences,
+    os: OperatingSystem,
+    recording: Option<ShortcutActionId>,
+    conflict: Option<&(ShortcutActionId, String, ShortcutActionId)>,
+    notice: Option<(ShortcutActionId, &'static str)>,
+    theme: &ThemeColors,
+    strings: &'static I18nStrings,
+    handlers: ShortcutsTabHandlers,
+) -> impl IntoElement {
+    let has_overrides = !preferences.shortcuts.is_empty();
+    let on_reset_all = handlers.on_reset_all.clone();
+
     div()
         .flex()
         .flex_col()
-        .gap_5()
+        .gap_4()
         .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(render_section_title(strings.shortcuts_label, theme))
+                .when(has_overrides, |el| {
+                    el.child(render_secondary_button(
+                        "btn_reset_all_shortcuts",
+                        strings.shortcut_reset_all,
+                        theme,
+                        move |_, window, cx| on_reset_all(window, cx),
+                    ))
+                }),
+        )
+        .child(
+            div()
+                .w_full()
+                .px_3()
+                .py_2()
+                .rounded(px(8.))
+                .bg(theme.text_primary.opacity(0.04))
+                .border_1()
+                .border_color(theme.border)
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    svg()
+                        .path("icons/keyboard.svg")
+                        .size(px(14.))
+                        .flex_shrink_0()
+                        .text_color(theme.accent),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(strings.shortcut_help_banner),
+                ),
+        )
+        .children(ShortcutGroup::ALL.into_iter().map(|group| {
+            let group_actions: Vec<ShortcutActionId> = ShortcutActionId::ALL
+                .into_iter()
+                .filter(|a| a.group() == group)
+                .collect();
             div()
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(render_section_title(strings.shortcuts_label, theme))
+                .child(render_section_title(localize_shortcut_group(group, strings), theme))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .children(shortcut_rows(strings).into_iter().map(|(keys, desc)| {
-                            render_shortcut_row(keys, desc, theme)
+                        .children(group_actions.into_iter().map(|action| {
+                            let is_recording = recording == Some(action);
+                            let is_customized = preferences.is_shortcut_customized(action);
+                            let spec = preferences.shortcut_spec(action);
+                            let key_label = if is_recording {
+                                strings.shortcut_recording_prompt.to_string()
+                            } else {
+                                crate::actions::format_shortcut_spec(spec, os)
+                                    .unwrap_or_else(|| strings.shortcut_unbound.to_string())
+                            };
+                            let row_conflict =
+                                conflict.filter(|(target, _, _)| *target == action).cloned();
+                            let row_notice = notice.filter(|(target, _)| *target == action).map(|(_, msg)| msg);
+
+                            let on_rec = handlers.on_start_record.clone();
+                            let on_res = handlers.on_reset_shortcut.clone();
+                            let on_rep = handlers.on_replace_conflict.clone();
+                            let on_can = handlers.on_cancel_conflict.clone();
+
+                            let pill_bg = if is_recording {
+                                theme.accent.opacity(0.18)
+                            } else if is_customized {
+                                theme.accent.opacity(0.10)
+                            } else {
+                                theme.text_primary.opacity(0.05)
+                            };
+                            let pill_border = if is_recording {
+                                theme.accent
+                            } else if is_customized {
+                                theme.accent.opacity(0.55)
+                            } else {
+                                theme.text_primary.opacity(0.16)
+                            };
+                            let pill_text = if is_recording {
+                                theme.accent
+                            } else if spec.trim().is_empty() {
+                                theme.text_muted
+                            } else {
+                                theme.text_primary
+                            };
+                            let edit_icon_color = if is_recording {
+                                theme.accent
+                            } else if is_customized {
+                                theme.accent.opacity(0.85)
+                            } else {
+                                theme.text_muted
+                            };
+                            let edit_hint = strings.shortcut_edit_hint;
+
+                            let btn_id = format!("shortcut_btn_{}", action.id());
+                            let btn_sel = btn_id.clone();
+                            let res_id = format!("shortcut_reset_{}", action.id());
+                            let rep_id = format!("shortcut_replace_{}", action.id());
+                            let can_id = format!("shortcut_cancel_{}", action.id());
+
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .py_1()
+                                .px_1()
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(theme.text_primary)
+                                                        .child(localize_shortcut_action(action, strings)),
+                                                )
+                                                .when(is_customized && !is_recording, |el| {
+                                                    el.child(
+                                                        div()
+                                                            .px_1p5()
+                                                            .py_0p5()
+                                                            .rounded(px(4.))
+                                                            .bg(theme.accent.opacity(0.12))
+                                                            .text_size(px(10.))
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(theme.accent)
+                                                            .child(strings.shortcut_custom_badge),
+                                                    )
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .child(
+                                                    div()
+                                                        .id(SharedString::from(btn_id))
+                                                        .debug_selector(move || btn_sel.clone())
+                                                        .px_2p5()
+                                                        .py_1()
+                                                        .rounded(px(6.))
+                                                        .border_1()
+                                                        .border_color(pill_border)
+                                                        .bg(pill_bg)
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1p5()
+                                                        .text_xs()
+                                                        .font_family(crate::platform::MONO_FONT)
+                                                        .text_color(pill_text)
+                                                        .cursor_pointer()
+                                                        .hover(|s| {
+                                                            s.border_color(theme.accent)
+                                                                .bg(theme.accent.opacity(0.12))
+                                                        })
+                                                        .tooltip(move |_, cx| {
+                                                            cx.new(|_| crate::views::workspace::TooltipView {
+                                                                text: edit_hint.to_string(),
+                                                            })
+                                                            .into()
+                                                        })
+                                                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                                            cx.stop_propagation();
+                                                            on_rec(action, window, cx);
+                                                        })
+                                                        .child(key_label)
+                                                        .child(
+                                                            svg()
+                                                                .path("icons/pencil.svg")
+                                                                .size(px(11.))
+                                                                .flex_shrink_0()
+                                                                .text_color(edit_icon_color),
+                                                        ),
+                                                )
+                                                .when(is_customized && !is_recording, |el| {
+                                                    let res_sel = res_id.clone();
+                                                    el.child(
+                                                        div()
+                                                            .id(SharedString::from(res_id))
+                                                            .debug_selector(move || res_sel.clone())
+                                                            .px_1p5()
+                                                            .py_0p5()
+                                                            .rounded(px(4.))
+                                                            .text_xs()
+                                                            .text_color(theme.text_muted)
+                                                            .cursor_pointer()
+                                                            .hover(|s| {
+                                                                s.bg(theme.hover_bg())
+                                                                    .text_color(theme.text_primary)
+                                                            })
+                                                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                                                cx.stop_propagation();
+                                                                on_res(action, window, cx);
+                                                            })
+                                                            .child(strings.shortcut_reset),
+                                                    )
+                                                }),
+                                        ),
+                                )
+                                .when_some(row_notice, |el, msg| {
+                                    el.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.accent)
+                                            .child(msg),
+                                    )
+                                })
+                                .when_some(row_conflict, |el, (target, new_spec, conflicting)| {
+                                    let conflict_name = localize_shortcut_action(conflicting, strings);
+                                    let key_display = crate::actions::format_shortcut_spec(&new_spec, os)
+                                        .unwrap_or_else(|| new_spec.clone());
+                                    let conflict_msg = format!(
+                                        "{} ({key_display})",
+                                        strings.shortcut_conflict_hint.replace("{action}", conflict_name)
+                                    );
+                                    let rep_sel = rep_id.clone();
+                                    let can_sel = can_id.clone();
+                                    el.child(
+                                        div()
+                                            .w_full()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded(px(6.))
+                                            .bg(theme.accent.opacity(0.08))
+                                            .border_1()
+                                            .border_color(theme.accent.opacity(0.35))
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.text_primary)
+                                                    .child(conflict_msg),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1p5()
+                                                    .child(
+                                                        div()
+                                                            .id(SharedString::from(rep_id))
+                                                            .debug_selector(move || rep_sel.clone())
+                                                            .px_2()
+                                                            .py_0p5()
+                                                            .rounded(px(4.))
+                                                            .bg(theme.accent)
+                                                            .text_xs()
+                                                            .text_color(rgb(0xffffff))
+                                                            .cursor_pointer()
+                                                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                                                cx.stop_propagation();
+                                                                on_rep(target, new_spec.clone(), conflicting, window, cx);
+                                                            })
+                                                            .child(strings.shortcut_replace),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id(SharedString::from(can_id))
+                                                            .debug_selector(move || can_sel.clone())
+                                                            .px_1p5()
+                                                            .py_0p5()
+                                                            .rounded(px(4.))
+                                                            .text_xs()
+                                                            .text_color(theme.text_muted)
+                                                            .cursor_pointer()
+                                                            .hover(|s| s.bg(theme.hover_bg()))
+                                                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                                                cx.stop_propagation();
+                                                                on_can(window, cx);
+                                                            })
+                                                            .child(strings.modal_cancel),
+                                                    ),
+                                            ),
+                                    )
+                                })
                         })),
-                ),
-        )
+                )
+        }))
 }
 
 fn render_about_tab(
@@ -1471,6 +2025,7 @@ fn render_about_tab(
     update_reason: Option<&str>,
     on_check_update: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     on_open_github: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    on_replay_onboarding: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let update_text = match update_status {
         UpdateStatus::Checking | UpdateStatus::Installing => strings.update_checking.to_string(),
@@ -1546,44 +2101,22 @@ fn render_about_tab(
                 .gap_2()
                 .child(render_section_title(strings.open_source_label, theme))
                 .child(render_setting_row(
+                    strings.onboarding_replay_label,
+                    Some(strings.onboarding_replay_desc.into()),
+                    render_secondary_button(
+                        "btn_replay_onboarding",
+                        strings.onboarding_replay_button,
+                        theme,
+                        on_replay_onboarding,
+                    ),
+                    theme,
+                ))
+                .child(render_setting_row(
                     "github.com/2716190547/zmark-releases",
                     Some(strings.footer_credit.into()),
                     render_secondary_button("btn_open_github", "GitHub", theme, on_open_github),
                     theme,
                 )),
-        )
-}
-
-fn render_shortcut_row(
-    keys: impl Into<String>,
-    desc: impl Into<String>,
-    theme: &ThemeColors,
-) -> impl IntoElement {
-    let desc_str = desc.into();
-    let keys_str = keys.into();
-    div()
-        .w_full()
-        .py_1p5()
-        .px_1()
-        .flex()
-        .items_center()
-        .justify_between()
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.text_muted)
-                .child(desc_str),
-        )
-        .child(
-            div()
-                .px_1p5()
-                .py_0p5()
-                .rounded(px(4.))
-                .bg(theme.control_selection_bg())
-                .text_xs()
-                .font_family(crate::platform::MONO_FONT)
-                .text_color(theme.text_primary)
-                .child(keys_str),
         )
 }
 

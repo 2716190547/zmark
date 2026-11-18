@@ -11,7 +11,8 @@ pub fn initial_document(path: Option<PathBuf>, locale: SupportedLocale) -> Docum
             } else {
                 "Ctrl+"
             };
-            Document::new_scratch_with_text(text(locale).replace("Cmd+", modifier))
+            let title = zmark_core::i18n::get_strings(locale).welcome_doc_title;
+            Document::new_named_scratch_with_text(title, text(locale).replace("Cmd+", modifier))
         }
     }
 }
@@ -73,6 +74,11 @@ mod tests {
             welcome.buffer,
             text(SupportedLocale::ZhCn).replace("Cmd+", modifier)
         );
+        assert_eq!(
+            welcome.display_name_with_fallback("Untitled"),
+            zmark_core::i18n::get_strings(SupportedLocale::ZhCn).welcome_doc_title
+        );
+        assert!(welcome.path.is_none());
         assert_eq!(
             welcome.status,
             zmark_core::document::DocumentStatus::Clean,

@@ -65,6 +65,7 @@ pub enum DocumentStatus {
 pub struct Document {
     pub path: Option<PathBuf>,
     scratch_name: Option<String>,
+    scratch_name_dirty: bool,
     pub buffer: String,
     pub status: DocumentStatus,
     pub parsed: Arc<ParsedDocument>,
@@ -87,6 +88,7 @@ impl Document {
         Self {
             path: None,
             scratch_name: None,
+            scratch_name_dirty: false,
             last_saved_content: buffer.clone(),
             observed_disk_content: None,
             buffer,
@@ -94,6 +96,17 @@ impl Document {
             parsed,
             parse_stale: false,
         }
+    }
+
+    /// Creates a named scratchpad (such as the welcome document) whose initial
+    /// title and body start clean until edited or explicitly renamed.
+    pub fn new_named_scratch_with_text(name: &str, buffer: String) -> Self {
+        let mut doc = Self::new_scratch_with_text(buffer);
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            doc.scratch_name = Some(crate::file_ops::markdown_name(trimmed));
+        }
+        doc
     }
 
     /// Loads a document from the local filesystem.
@@ -116,6 +129,7 @@ impl Document {
         Ok(Self {
             path: Some(path),
             scratch_name: None,
+            scratch_name_dirty: false,
             last_saved_content: buffer.clone(),
             observed_disk_content: None,
             buffer,
@@ -147,6 +161,7 @@ impl Document {
             ));
         }
         self.scratch_name = Some(crate::file_ops::markdown_name(name));
+        self.scratch_name_dirty = true;
         self.status = DocumentStatus::Modified;
         Ok(())
     }
@@ -160,7 +175,7 @@ impl Document {
         self.parsed = Arc::new(parse_document(&self.buffer, self.path.as_deref()));
         self.parse_stale = false;
         if self.status != DocumentStatus::ConflictOnDisk {
-            if self.buffer == self.last_saved_content && self.scratch_name.is_none() {
+            if self.buffer == self.last_saved_content && !self.scratch_name_dirty {
                 self.status = DocumentStatus::Clean;
             } else {
                 self.status = DocumentStatus::Modified;
@@ -176,7 +191,7 @@ impl Document {
         self.buffer = new_text;
         self.parse_stale = true;
         if self.status != DocumentStatus::ConflictOnDisk {
-            if self.buffer == self.last_saved_content && self.scratch_name.is_none() {
+            if self.buffer == self.last_saved_content && !self.scratch_name_dirty {
                 self.status = DocumentStatus::Clean;
             } else {
                 self.status = DocumentStatus::Modified;
@@ -245,6 +260,7 @@ impl Document {
         crate::file_ops::atomic_write(&path, self.buffer.as_bytes(), false)?;
         self.path = Some(path);
         self.scratch_name = None;
+        self.scratch_name_dirty = false;
         self.last_saved_content.clone_from(&self.buffer);
         self.observed_disk_content = None;
         self.status = DocumentStatus::Clean;
