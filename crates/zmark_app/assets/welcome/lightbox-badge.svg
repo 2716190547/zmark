@@ -1,9 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="172" viewBox="0 0 640 172">
   <defs>
+    <clipPath id="cardClip">
+      <rect x="4" y="4" width="632" height="164" rx="18"/>
+    </clipPath>
     <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#1E3A5F"/>
       <stop offset="55%" stop-color="#2D6A7B"/>
-      <stop offset="100%" stop-color="#F29E4C"/>
+      <stop offset="100%" stop-color="#E79346"/>
     </linearGradient>
     <linearGradient id="peak1" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#48B5A3"/>
@@ -14,35 +17,38 @@
       <stop offset="100%" stop-color="#153243"/>
     </linearGradient>
   </defs>
-  <rect x="4" y="4" width="632" height="164" rx="18" fill="url(#sky)"/>
-  <!-- Stars & Sun -->
-  <circle cx="96" cy="40" r="2" fill="#FFFFFF" opacity="0.8"/>
-  <circle cx="164" cy="28" r="1.5" fill="#FFFFFF" opacity="0.7"/>
-  <circle cx="248" cy="52" r="2.2" fill="#FDE68A" opacity="0.9"/>
-  <circle cx="386" cy="34" r="1.8" fill="#FFFFFF" opacity="0.8"/>
-  <circle cx="514" cy="64" r="26" fill="#FDE68A" opacity="0.95"/>
-  <circle cx="514" cy="64" r="36" fill="#FDE68A" opacity="0.22"/>
-  <!-- Soft Geometric Clouds -->
-  <rect x="116" y="44" width="74" height="18" rx="9" fill="#FFFFFF" opacity="0.22"/>
-  <rect x="132" y="36" width="42" height="16" rx="8" fill="#FFFFFF" opacity="0.28"/>
-  <rect x="404" y="42" width="64" height="15" rx="7.5" fill="#FFFFFF" opacity="0.20"/>
-  <!-- Vector Peaks -->
-  <path d="M4 168 L138 78 L254 148 L368 62 L512 152 L636 96 L636 168 Z" fill="url(#peak2)"/>
-  <path d="M368 62 L396 92 L378 86 L364 96 L354 84 Z" fill="#F8FAFC" opacity="0.9"/>
-  <path d="M138 78 L158 98 L145 94 L132 102 L124 90 Z" fill="#E2E8F0" opacity="0.85"/>
-  <path d="M72 168 L224 94 L378 168 Z" fill="url(#peak1)"/>
-  <path d="M312 168 L452 104 L610 168 Z" fill="#2A7B74" opacity="0.92"/>
-  <!-- Playful Origami Paper Plane -->
-  <g transform="translate(278 44) rotate(-14)">
-    <polygon points="0,16 56,0 16,26" fill="#FFFFFF"/>
-    <polygon points="16,26 56,0 24,34" fill="#FDBA74"/>
-    <polygon points="16,26 24,34 32,25" fill="#EA580C"/>
+  <g clip-path="url(#cardClip)">
+    <rect x="4" y="4" width="632" height="164" fill="url(#sky)"/>
+    <!-- Stars & Sun -->
+    <circle cx="96" cy="40" r="2" fill="#FFFFFF" opacity="0.8"/>
+    <circle cx="164" cy="28" r="1.5" fill="#FFFFFF" opacity="0.7"/>
+    <circle cx="248" cy="52" r="2.2" fill="#FDE68A" opacity="0.9"/>
+    <circle cx="386" cy="34" r="1.8" fill="#FFFFFF" opacity="0.8"/>
+    <circle cx="514" cy="64" r="26" fill="#FDE68A" opacity="0.95"/>
+    <circle cx="514" cy="64" r="36" fill="#FDE68A" opacity="0.22"/>
+    <!-- Soft Geometric Clouds -->
+    <rect x="116" y="44" width="74" height="18" rx="9" fill="#FFFFFF" opacity="0.22"/>
+    <rect x="132" y="36" width="42" height="16" rx="8" fill="#FFFFFF" opacity="0.28"/>
+    <rect x="404" y="42" width="64" height="15" rx="7.5" fill="#FFFFFF" opacity="0.20"/>
+    <!-- Vector Peaks cleanly clipped to rounded corners -->
+    <path d="M0 172 L138 78 L254 148 L368 62 L512 152 L640 94 L640 172 Z" fill="url(#peak2)"/>
+    <path d="M368 62 L396 92 L378 86 L364 96 L354 84 Z" fill="#F8FAFC" opacity="0.9"/>
+    <path d="M138 78 L158 98 L145 94 L132 102 L124 90 Z" fill="#E2E8F0" opacity="0.85"/>
+    <path d="M72 172 L224 94 L378 172 Z" fill="url(#peak1)"/>
+    <path d="M312 172 L452 104 L618 172 Z" fill="#2A7B74" opacity="0.92"/>
+    <!-- Origami Paper Plane -->
+    <g transform="translate(278 44) rotate(-14)">
+      <polygon points="0,16 56,0 16,26" fill="#FFFFFF"/>
+      <polygon points="16,26 56,0 24,34" fill="#FDBA74"/>
+      <polygon points="16,26 24,34 32,25" fill="#EA580C"/>
+    </g>
+    <path d="M174 88 C210 88, 240 76, 272 64" fill="none" stroke="#FDE68A" stroke-width="2" stroke-dasharray="5 5" stroke-linecap="round" opacity="0.85"/>
+    <!-- Zoom Loupe Badge -->
+    <circle cx="592" cy="132" r="20" fill="#FFFFFF" opacity="0.96"/>
+    <circle cx="589" cy="129" r="7.5" fill="none" stroke="#1E3A5F" stroke-width="2.4"/>
+    <line x1="594.5" y1="134.5" x2="601" y2="141" stroke="#1E3A5F" stroke-width="2.6" stroke-linecap="round"/>
+    <line x1="586" y1="129" x2="592" y2="129" stroke="#C24128" stroke-width="2" stroke-linecap="round"/>
+    <line x1="589" y1="126" x2="589" y2="132" stroke="#C24128" stroke-width="2" stroke-linecap="round"/>
   </g>
-  <path d="M174 88 C210 88, 240 76, 272 64" fill="none" stroke="#FDE68A" stroke-width="2" stroke-dasharray="5 5" stroke-linecap="round" opacity="0.85"/>
-  <!-- Zoom Loupe Badge (bottom right hint) -->
-  <circle cx="592" cy="132" r="20" fill="#FFFFFF" opacity="0.95"/>
-  <circle cx="589" cy="129" r="7.5" fill="none" stroke="#1E3A5F" stroke-width="2.4"/>
-  <line x1="594.5" y1="134.5" x2="601" y2="141" stroke="#1E3A5F" stroke-width="2.6" stroke-linecap="round"/>
-  <line x1="586" y1="129" x2="592" y2="129" stroke="#E56B45" stroke-width="2" stroke-linecap="round"/>
-  <line x1="589" y1="126" x2="589" y2="132" stroke="#E56B45" stroke-width="2" stroke-linecap="round"/>
+  <rect x="4" y="4" width="632" height="164" rx="18" fill="none" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="1.2"/>
 </svg>

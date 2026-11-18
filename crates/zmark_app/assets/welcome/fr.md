@@ -10,8 +10,6 @@
 
 ## 1. Prise en main : capacités clés de ZMark
 
-![Capacités principales de ZMark](zmark-asset://welcome/workflow.svg)
-
 1. **Fichiers locaux et brouillons** : `Cmd+O` ouvre un `.md`, `Cmd+N` crée un brouillon, ou **glissez-déposez des fichiers Markdown, dossiers et images** dans la fenêtre.
 2. **Trois modes de vue** : alternez entre **Source** (`Cmd+1`), **Vue partagée** (`Cmd+2`) et **Aperçu** (`Cmd+3`) avec défilement fluide et synchronisé.
 3. **Barre latérale et sommaire interactif** : `Cmd+Shift+B` ouvre la barre latérale et `Cmd+Shift+O` bascule entre **Fichiers** et **Plan** ; un marqueur `[toc]` génère aussi un bloc sommaire cliquable dans le document.
@@ -22,8 +20,6 @@
 ---
 
 ## 2. Galerie interactive de syntaxe Markdown
-
-![Aperçu de la syntaxe Markdown](zmark-asset://welcome/syntax-playground.svg)
 
 ### 1. Mise en forme, retours à la ligne, citations et liens
 

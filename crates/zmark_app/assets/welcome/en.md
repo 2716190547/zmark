@@ -10,8 +10,6 @@
 
 ## 1. What ZMark Can Do
 
-![ZMark Core Capabilities](zmark-asset://welcome/workflow.svg)
-
 1. **Open Files & Manage Drafts**: Press `Cmd+O` to open a local `.md` file, press `Cmd+N` to start a draft, or simply **drag & drop Markdown files, folders, and local images** straight into the window.
 2. **Three Instant View Modes**: Switch effortlessly between **Source** (`Cmd+1`), **Split** (`Cmd+2`), and **Preview** (`Cmd+3`) with smooth block-aligned synchronized scrolling.
 3. **Workspace Sidebar & Interactive TOC**: Press `Cmd+Shift+B` to toggle the sidebar, attach folders with instant fuzzy search, and press `Cmd+Shift+O` to flip between **Files** and **Outline** — plus inline `[toc]` markers render as clickable directory cards right inside your document.
@@ -22,8 +20,6 @@
 ---
 
 ## 2. Common Markdown Syntax Playground
-
-![Common Markdown Building Blocks](zmark-asset://welcome/syntax-playground.svg)
 
 ### 1. Text Formatting, Line Breaks, Quotes & Links
 

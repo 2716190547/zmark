@@ -10,8 +10,6 @@
 
 ## 1. O que o ZMark pode fazer
 
-![Principais recursos do ZMark](zmark-asset://welcome/workflow.svg)
-
 1. **Arquivos locais e rascunhos**: pressione `Cmd+O` para abrir `.md`, `Cmd+N` para criar um rascunho ou **arraste e solte arquivos, pastas e imagens** direto na janela.
 2. **Três modos de visualização**: alterne entre **Código-fonte** (`Cmd+1`), **Dividido** (`Cmd+2`) e **Prévia** (`Cmd+3`) com rolagem suave sincronizada.
 3. **Barra lateral e sumário clicável `[toc]`**: `Cmd+Shift+B` abre pastas com filtro rápido e `Cmd+Shift+O` alterna para o **Sumário**; o marcador `[toc]` também renderiza um índice clicável no documento.
@@ -22,8 +20,6 @@
 ---
 
 ## 2. Demonstração interativa da sintaxe Markdown
-
-![Visão geral da sintaxe Markdown](zmark-asset://welcome/syntax-playground.svg)
 
 ### 1. Formatação, quebras `<br/>`, citações e links
 

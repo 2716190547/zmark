@@ -603,8 +603,6 @@ fn large_jpeg_thumbnail_applies_exif_orientation_to_pixels_and_natural_size() {
 fn embedded_welcome_svgs_load_and_validate_without_document_path() {
     for asset in [
         "zmark-asset://welcome/hero.svg",
-        "zmark-asset://welcome/workflow.svg",
-        "zmark-asset://welcome/syntax-playground.svg",
         "zmark-asset://welcome/lightbox-badge.svg",
     ] {
         let image = load_image(asset, None).unwrap_or_else(|e| panic!("{asset}: {e}"));

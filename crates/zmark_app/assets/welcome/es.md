@@ -10,8 +10,6 @@
 
 ## 1. Qué puedes hacer con ZMark
 
-![Capacidades clave de ZMark](zmark-asset://welcome/workflow.svg)
-
 1. **Archivos locales y borradores**: pulsa `Cmd+O` para abrir un `.md`, `Cmd+N` para crear un borrador o **arrastra y suelta archivos, carpetas e imágenes** dentro de la ventana.
 2. **Tres modos de vista**: cambia al instante entre **Código** (`Cmd+1`), **Dividida** (`Cmd+2`) y **Vista previa** (`Cmd+3`) con sincronización fluida por bloques.
 3. **Barra lateral y tabla de contenidos `[toc]`**: `Cmd+Shift+B` abre las carpetas y `Cmd+Shift+O` alterna con **Esquema**; además, `[toc]` crea un índice compacto clicable en el documento.
@@ -22,8 +20,6 @@
 ---
 
 ## 2. Demostración de sintaxis Markdown
-
-![Bloques habituales de sintaxis Markdown](zmark-asset://welcome/syntax-playground.svg)
 
 ### 1. Estilos de texto, saltos `<br/>`, citas y enlaces
 

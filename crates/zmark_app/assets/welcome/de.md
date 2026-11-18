@@ -10,8 +10,6 @@
 
 ## 1. Was ZMark alles kann
 
-![ZMark Kernfunktionen](zmark-asset://welcome/workflow.svg)
-
 1. **Dateien & Entwürfe verwalten**: Öffnen Sie mit `Cmd+O` lokale `.md`-Dateien, erstellen Sie mit `Cmd+N` Entwürfe oder **ziehen Sie Dateien, Ordner und Bilder per Drag & Drop** direkt ins Fenster.
 2. **Drei Ansichtsmodi**: Wechseln Sie blitzschnell zwischen **Quelltext** (`Cmd+1`), **Geteilt** (`Cmd+2`) und **Vorschau** (`Cmd+3`) mit weichem Synchronscrollen.
 3. **Seitenleiste & Klickbares Inhaltsverzeichnis**: `Cmd+Shift+B` öffnet die Seitenleiste, `Cmd+Shift+O` wechselt zwischen **Dateien** und **Gliederung** — und `[toc]` rendert direkt eine kompakte Sprungliste im Text.
@@ -22,8 +20,6 @@
 ---
 
 ## 2. Interaktiver Markdown-Syntax-Baukasten
-
-![Gängige Markdown-Syntax im Überblick](zmark-asset://welcome/syntax-playground.svg)
 
 ### 1. Textformatierung, Zeilenumbrüche, Zitate & Links
 
