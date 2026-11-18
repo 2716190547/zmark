@@ -10,9 +10,9 @@ ZMark 是一款面向本地文件的桌面 Markdown 编辑器与阅读器，也�
 
 ## 下载与安装
 
-**当前版本：0.2.9** · [版本更新说明](https://github.com/2716190547/zmark/blob/dev/docs/releases/v0.2.9.md) · [本版源码 `033fb5d`](https://github.com/2716190547/zmark/tree/033fb5d7ca478afc06c15d902a7a516d7336e813)
+**当前版本：0.2.10** · [版本更新说明](https://github.com/2716190547/zmark/blob/dev/docs/releases/v0.2.10.md) · [本版源码 `309d05e`](https://github.com/2716190547/zmark/tree/309d05eb6b934c0d94430d40ca42f71525a798c3)
 
-从 [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.9) 下载。[Gitee 发行镜像](https://gitee.com/zeng_sc/zmark-releases/releases) 可能稍后同步。 Gitee 保证同步 macOS ZIP、Windows 安装程序及签名更新清单；DMG 和 Linux 包请从 GitHub 下载。
+从 [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10) 下载。[Gitee 发行镜像](https://gitee.com/zeng_sc/zmark-releases/releases) 可能稍后同步。 Gitee 保证同步 macOS ZIP、Windows 安装程序及签名更新清单；DMG 和 Linux 包请从 GitHub 下载。
 
 | 平台 | 安装包 | 安装方式 |
 | --- | --- | --- |

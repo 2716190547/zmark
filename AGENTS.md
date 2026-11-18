@@ -65,6 +65,7 @@ GPUI 0.2 的窗口装饰、拖拽与灯箱变换限制已记录在 `docs/adr/002
 ## 构建与交付
 
 - 全量测试通过后运行 `./scripts/bundle_macos.sh`，确认 `target/bundle/ZMark.app` 已生成；仅在用户明确要求安装时添加 `--install`，不自动替换 `/Applications/ZMark.app`。
+- 发布与分发规范（2026-11-18 用户更新）：执行版本发布时，不再下载校验 CI `.sha256` 文件，也不对草稿、GitHub 公开 Release 或镜像产物做回下载 SHA-256 二次比对（详见 `docs/releases/README.md`）；仅在本地为 `latest.json` / `latest-windows.json` 计算待上传产物的 SHA-256 并签名，上传后通过 API 确认资产清单完整即可。
 - 构建失败不要报告完成。
 - 报告 commit hash、改动文件、`cargo test --workspace` 的 passed/failed 数量。
 - 逐条对照需求说明：已完成 / 替代实现 / 未完成。

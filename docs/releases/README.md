@@ -1,6 +1,6 @@
 # 版本与发布
 
-当前版本：**0.2.9**。更新说明：[v0.2.9](v0.2.9.md)。
+当前版本：**0.2.10**。更新说明：[v0.2.10](v0.2.10.md)。
 
 [源码仓库 `2716190547/zmark`](https://github.com/2716190547/zmark) 与[发行仓库 `2716190547/zmark-releases`](https://github.com/2716190547/zmark-releases) 均已公开，属于同一个 ZMark 项目。源码、问题反馈和开发集中在前者；安装包、签名更新清单及历史发行版本集中在后者。`dev` 是当前开发分支，每次发行须记录实际构建使用的 source commit，避免将发行仓库的文档提交误认为应用源码。
 
@@ -24,7 +24,7 @@ bash scripts/test_release_assets.sh
 
 ## 公开发行
 
-仅使用同一次成功 CI、同一 source commit 的产物。将 Actions 产物下载到 `target/` 下的独立目录，核对 macOS ZIP、Windows 安装程序及 Linux 包的 SHA-256，然后执行：
+仅使用同一次成功 CI、同一 source commit 的产物。将 Actions 产物下载到 `target/` 下的独立目录后直接传入脚本（**无需额外下载 `.sha256` 校验文件或回下载产物核对 SHA-256**；macOS 也可在同 source commit 下由 `release.sh` 直接调用 `./scripts/bundle_macos.sh` 打包），执行：
 
 ```sh
 ZMARK_MACOS_ZIP=/absolute/path/ZMark-<version>-macos.zip \
@@ -33,6 +33,6 @@ ZMARK_LINUX_ASSETS_DIR=/absolute/path/linux-artifacts \
 ./scripts/release.sh <version>
 ```
 
-发布脚本会再次运行测试门禁，核验 macOS 签名和版本，创建 DMG、签名 macOS/Windows 更新清单，创建草稿并回下载核对，最后转为公开发行并验证公开下载。发布说明默认读取 `docs/releases/v<version>.md`；可用 `ZMARK_RELEASE_NOTES` 指定文件。签名密钥保留在仓库外，禁止输出或提交。
+发布脚本会再次运行测试门禁，核验 macOS 签名和版本，创建 DMG、仅基于本地待上传产物计算 SHA-256 并签名 macOS/Windows 更新清单（供应用内自动更新验签使用），随后直接创建公开发行并用 GitHub API 核对资产条目完整即可，**不再回下载草稿或公开下载产物二次比对 SHA-256**。发布说明默认读取 `docs/releases/v<version>.md`；可用 `ZMARK_RELEASE_NOTES` 指定文件。签名密钥保留在仓库外，禁止输出或提交。
 
-Gitee 镜像保证同步 macOS ZIP、Windows 安装程序和两份签名更新清单，DMG 与 Linux 包以 GitHub 为准。镜像上传使用 runner 预装的 curl；每个文件仍须回下载核对 SHA-256，已有文件先核验后复用。GitHub 发布成功不代表镜像已经更新。发布记录须写明 source commit、CI run、各测试结果和公开校验结果。CI 通过不能替代 Windows/Linux 桌面实机体验验收。
+Gitee 镜像保证同步 macOS ZIP、Windows 安装程序和两份签名更新清单，DMG 与 Linux 包以 GitHub 为准。镜像上传使用 runner 预装的 curl；**无需回下载核对已上传或既有资产的 SHA-256**。GitHub 发布成功不代表镜像已经更新。发布记录须写明 source commit、CI run、各测试结果与发布资产条目确认结果。CI 通过不能替代 Windows/Linux 桌面实机体验验收。
