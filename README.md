@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/icon.iconset/icon_256x256.png" alt="ZMark Logo" width="112" height="112" />
+<img src="assets/macos-icon.png" alt="ZMark Logo" width="112" height="112" />
 
 # ZMark
 
