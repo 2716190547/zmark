@@ -12,6 +12,14 @@ resolver = "2"
 [patch.crates-io]
 rusty-mermaid-diagrams = { path = "vendor/rusty-mermaid-diagrams" }
 
+# Speed up incremental dev/test builds and runtime SVG/syntax/image test execution.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1
+debug = false
+
 # Release binaries ship icons, a text renderer and a UI toolkit; keep them small.
 [profile.release]
 strip = true

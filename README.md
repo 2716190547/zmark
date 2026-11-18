@@ -145,6 +145,10 @@ Platform build dependencies (such as Ubuntu `wayland` / `x11` / `fontconfig` lib
 
 ### Useful Development & Release Scripts
 
+- **Fast parallel & grouped development tests (`all|fast|core|state|editor|preview|media|lightbox|obs`)**:
+  ```sh
+  ./scripts/dev_check.sh fast
+  ```
 - **macOS staging bundle (install into `/Applications/ZMark.app`)**:
   ```sh
   ./scripts/bundle_macos.sh --install

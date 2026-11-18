@@ -145,6 +145,10 @@ Linux 等平台的系统构建依赖见 [`.github/workflows/build-desktop.yml`](
 
 ### 常用开发与构建脚本
 
+- **开发期并行与分组快速测试（支持 `all|fast|core|state|editor|preview|media|lightbox|obs`）**：
+  ```sh
+  ./scripts/dev_check.sh fast
+  ```
 - **macOS 本机构建并安装到 `/Applications/ZMark.app`**：
   ```sh
   ./scripts/bundle_macos.sh --install

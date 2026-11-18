@@ -47,7 +47,7 @@ pub fn ensure_key_bindings(preferences: &Preferences, cx: &mut App) {
         .key_bindings()
         .borrow()
         .bindings()
-        .any(|b| b.action().name().starts_with("zmark::"));
+        .any(|b| is_managed_zmark_action(b.action()));
     if !already_loaded {
         sync_key_bindings(preferences, cx);
     }
@@ -99,7 +99,10 @@ pub fn sync_key_bindings(preferences: &Preferences, cx: &mut App) {
             ShortcutActionId::UndoSidebarRemoval
             | ShortcutActionId::SourceBold
             | ShortcutActionId::SourceNumberedList => workspace_no_input_ctx.clone(),
-            _ => workspace_ctx.clone(),
+            ShortcutActionId::FindInFile
+            | ShortcutActionId::FindNext
+            | ShortcutActionId::FindPrevious => workspace_ctx.clone(),
+            _ => None,
         };
         if let Ok(binding) = KeyBinding::load(&spec, boxed_action(action), ctx, false, None, cx) {
             bindings.push(binding);
