@@ -13,7 +13,7 @@
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-4B5563?style=flat-square)](#下载与安装)
 [![Languages](https://img.shields.io/badge/i18n-10%20%E7%A7%8D%E8%AF%AD%E8%A8%80-10B981?style=flat-square)](#核心特性)
 
-[简体中文](README.zh-CN.md) · [English](README.md) · [下载安装包](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10) · [Gitee 国内镜像](https://gitee.com/zeng_sc/zmark-releases/releases) · [源码仓库 (`dev`)](https://github.com/2716190547/zmark)
+[简体中文](README.zh-CN.md) · [English](README.md) · [下载安装包](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10) · [Gitee 国内镜像](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub 源码仓库](https://github.com/2716190547/zmark)
 
 </div>
 
@@ -92,7 +92,7 @@ ZMark/
 
 ## 下载与安装
 
-**当前最新版本：`v0.2.10`** · [版本更新说明](https://github.com/2716190547/zmark/blob/dev/docs/releases/v0.2.10.md) · [对应源码 `309d05e`](https://github.com/2716190547/zmark/tree/309d05eb6b934c0d94430d40ca42f71525a798c3)
+**当前最新版本：`v0.2.10`** · [版本更新说明](docs/releases/v0.2.10.md) · [对应源码 `309d05e`](https://github.com/2716190547/zmark/tree/309d05eb6b934c0d94430d40ca42f71525a798c3)
 
 可从 [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10) 下载对应系统安装包；国内网络也可通过 [Gitee 发行镜像](https://gitee.com/zeng_sc/zmark-releases/releases) 获取 macOS ZIP、Windows 安装包与签名更新清单（DMG 与 Linux 安装包请前往 GitHub 下载）。
 
@@ -103,7 +103,7 @@ ZMark/
 | **Linux** | `x86_64` | `.deb` / `.tar.gz` | 通过 `apt` / `dpkg` 安装 `.deb`，或解压压缩包后运行 `usr/bin/zmark_app`。 |
 
 > [!NOTE]
-> macOS 应用包当前为 Ad-Hoc 本地签名（未经过 Apple 公证），Windows 安装程序暂无商业发布者代码签名。预览窗格出于隐私与性能考虑不请求远程网络图片 URL，请使用相对当前文档路径或绝对路径引用本地图片。导出 HTML 会内嵌排版样式表，图片路径保持引用不变，Mermaid 块保留为代码形式。
+> macOS 应用包当前为 Ad-Hoc 本地签名（未经过 Apple 公证），Windows 安装程序暂无商业发布者代码签名。预览窗格出于隐私与性能考虑不请求远程网络图片 URL，请使用相对当前文档路径或绝对路径引用本地图片（内置欢迎页矢量图通过 `zmark-asset://` 加载）。导出 HTML 会内嵌排版样式表、`[toc]` 锚点导航与 `<br>` 换行，图片路径保持引用不变，Mermaid 块保留为代码形式。
 
 ---
 
@@ -133,10 +133,10 @@ ZMark/
 
 ## 从源码构建
 
-开发分支位于公开仓库的 `dev` 分支。项目通过 `rust-toolchain.toml` 锁定 **Rust `1.100.0`**，`rustup` 会自动切换到正确版本：
+日常开发位于公开仓库的 `dev` 分支，并定期合入 `master`。项目通过 `rust-toolchain.toml` 锁定 **Rust `1.100.0`**，`rustup` 会自动切换到正确版本：
 
 ```sh
-git clone --branch dev https://github.com/2716190547/zmark.git
+git clone https://github.com/2716190547/zmark.git
 cd zmark
 cargo run -p zmark_app
 ```

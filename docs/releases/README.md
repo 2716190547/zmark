@@ -20,7 +20,7 @@ scripts/full_gate.sh --bundle
 bash scripts/test_release_assets.sh
 ```
 
-门禁覆盖 workspace 测试、串行的 Phase H/I 六目标、rename 检查及 macOS bundle。完成自行审查后提交并推送 `dev`，GitHub Actions `build-desktop` 生成三个平台的产物。保持现有 PR 打开，不自动合并。
+门禁覆盖 workspace 测试、串行的 Phase H/I 六目标、rename 检查及 macOS bundle。完成自行审查后提交并推送至 `dev`（按用户指令同步合入 `master`），GitHub Actions `build-desktop` 生成三个平台的产物。
 
 ## 公开发行
 

@@ -13,7 +13,7 @@
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-4B5563?style=flat-square)](#download-and-install)
 [![Languages](https://img.shields.io/badge/i18n-10%20Locales-10B981?style=flat-square)](#highlights)
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Download Installers](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10) · [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) · [Source (`dev`)](https://github.com/2716190547/zmark)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Download Installers](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10) · [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub Repo](https://github.com/2716190547/zmark)
 
 </div>
 
@@ -92,7 +92,7 @@ ZMark/
 
 ## Download and Install
 
-**Current release: `v0.2.10`** · [Release Notes](https://github.com/2716190547/zmark/blob/dev/docs/releases/v0.2.10.md) · [Tagged Source `309d05e`](https://github.com/2716190547/zmark/tree/309d05eb6b934c0d94430d40ca42f71525a798c3)
+**Current release: `v0.2.10`** · [Release Notes](docs/releases/v0.2.10.md) · [Tagged Source `309d05e`](https://github.com/2716190547/zmark/tree/309d05eb6b934c0d94430d40ca42f71525a798c3)
 
 Download installers directly from [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10). Users in mainland China can also download the macOS ZIP, Windows installer, and update feeds via the [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) (DMG and Linux packages are hosted on GitHub).
 
@@ -103,7 +103,7 @@ Download installers directly from [GitHub Releases](https://github.com/271619054
 | **Linux** | `x86_64` | `.deb` / `.tar.gz` | Install via `apt` / `dpkg`, or extract the archive and run `usr/bin/zmark_app`. |
 
 > [!NOTE]
-> The macOS bundle is Ad-Hoc signed (not Apple-notarized), and the Windows installer has no publisher code signature. Native local image previews do not fetch remote HTTP/HTTPS URLs; reference images locally relative to your Markdown file or via an absolute disk path. Exported HTML embeds typography CSS while keeping image paths as references and Mermaid blocks as fenced code.
+> The macOS bundle is Ad-Hoc signed (not Apple-notarized), and the Windows installer has no publisher code signature. Native local image previews do not fetch remote HTTP/HTTPS URLs; reference images locally relative to your Markdown file or via an absolute disk path (plus built-in `zmark-asset://` welcome SVGs). Exported HTML embeds typography CSS, interactive `[toc]` anchor navigation, and `<br>` line breaks, while keeping image paths as references and Mermaid blocks as fenced code.
 
 ---
 
@@ -133,10 +133,10 @@ Every shortcut below can be inspected and rebound interactively in **Settings �
 
 ## Build from Source
 
-Development lives on the `dev` branch. `rust-toolchain.toml` pins **Rust `1.100.0`** so Cargo selects the exact toolchain automatically under `rustup`.
+Active development lives on the `dev` branch and syncs to `master`. `rust-toolchain.toml` pins **Rust `1.100.0`** so Cargo selects the exact toolchain automatically under `rustup`.
 
 ```sh
-git clone --branch dev https://github.com/2716190547/zmark.git
+git clone https://github.com/2716190547/zmark.git
 cd zmark
 cargo run -p zmark_app
 ```
