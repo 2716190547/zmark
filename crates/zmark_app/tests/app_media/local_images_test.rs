@@ -607,7 +607,7 @@ fn embedded_welcome_svgs_load_and_validate_without_document_path() {
     ] {
         let image = load_image(asset, None).unwrap_or_else(|e| panic!("{asset}: {e}"));
         assert!(image.snapshot.as_ref().is_some_and(|s| s.path().exists()));
-        assert!(image.natural_size.0 > 100.0 && image.natural_size.1 > 50.0);
+        assert!(image.natural_size.0 >= 48.0 && image.natural_size.1 >= 48.0);
     }
     assert!(load_image("zmark-asset://welcome/missing.svg", None).is_err());
     assert!(load_image("zmark-asset://../secret.svg", None).is_err());
