@@ -92,7 +92,7 @@ ZMark/
 
 ## 下载与安装
 
-**当前最新版本：`v0.2.11`** · [版本更新说明](docs/releases/v0.2.11.md)
+**当前最新版本：`v0.2.11`** · [版本更新说明](docs/releases/v0.2.11.md) · [发布源码 `ec5101d`](https://github.com/2716190547/zmark/commit/ec5101d737f068bbfc51a43f36606b64a4c8b38d)
 
 可从 [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.11) 下载对应系统安装包；国内网络也可通过 [Gitee 发行镜像](https://gitee.com/zeng_sc/zmark-releases/releases) 获取 macOS ZIP、Windows 安装包与签名更新清单（DMG 与 Linux 安装包请前往 GitHub 下载）。
 

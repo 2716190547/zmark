@@ -92,7 +92,7 @@ ZMark/
 
 ## Download and Install
 
-**Current release: `v0.2.11`** · [Release Notes](docs/releases/v0.2.11.md)
+**Current release: `v0.2.11`** · [Release Notes](docs/releases/v0.2.11.md) · [Release Source `ec5101d`](https://github.com/2716190547/zmark/commit/ec5101d737f068bbfc51a43f36606b64a4c8b38d)
 
 Download installers directly from [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.11). Users in mainland China can also download the macOS ZIP, Windows installer, and update feeds via the [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) (DMG and Linux packages are hosted on GitHub).
 
