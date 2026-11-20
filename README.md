@@ -13,7 +13,7 @@
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-4B5563?style=flat-square)](#download-and-install)
 [![Languages](https://img.shields.io/badge/i18n-10%20Locales-10B981?style=flat-square)](#highlights)
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Download Installers](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10) · [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub Repo](https://github.com/2716190547/zmark)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Download Installers](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.11) · [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub Repo](https://github.com/2716190547/zmark)
 
 </div>
 
@@ -92,9 +92,9 @@ ZMark/
 
 ## Download and Install
 
-**Current release: `v0.2.10`** · [Release Notes](docs/releases/v0.2.10.md) · [Tagged Source `309d05e`](https://github.com/2716190547/zmark/tree/309d05eb6b934c0d94430d40ca42f71525a798c3)
+**Current release: `v0.2.11`** · [Release Notes](docs/releases/v0.2.11.md)
 
-Download installers directly from [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.10). Users in mainland China can also download the macOS ZIP, Windows installer, and update feeds via the [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) (DMG and Linux packages are hosted on GitHub).
+Download installers directly from [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.11). Users in mainland China can also download the macOS ZIP, Windows installer, and update feeds via the [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) (DMG and Linux packages are hosted on GitHub).
 
 | Platform | Architecture | Package | Install Instructions |
 | --- | --- | --- | --- |
