@@ -1,0 +1,46 @@
+<template>
+  <section class="shot" data-composition-id="split" data-width="1280" data-height="720">
+    <div class="stamp"><img src="assets/zmark-icon.png" alt="">ZMark</div>
+    <h1 class="shot-copy">下笔，即见<span>成稿。</span></h1>
+    <div class="workbench" data-palette="default"></div>
+    <div class="opening-line">#</div>
+    <div class="caret"></div>
+    <div class="shortcut">⌘ 2</div>
+    <div class="rail"><b>Markdown 原生编辑器</b><span>RUST / GPUI</span></div>
+  </section>
+  <script>
+    {
+      const { timeline: tl, find } = sceneTimeline('split');
+      const windowView = find('.workbench');
+      buildWorkbench(windowView);
+      const line = find('.opening-line');
+      const caret = find('.caret');
+      const key = find('.shortcut');
+      const papers = gsap.utils.toArray(windowView.querySelectorAll('.pane-content'));
+      const sequence = ['# Z', '# ZM', '# ZMa', '# ZMar', '# ZMark'];
+
+      tl.set(windowView, { opacity: 0, scale: .9 }, 0)
+        .set(key, { opacity: 0 }, 0)
+        .set(find('.shot-copy'), { opacity: 0 }, 0);
+      sequence.forEach((text, i) => {
+        tl.set(line, { textContent: text }, .22 + i * .1);
+        tl.set(caret, { x: 35 + i * 36 }, .22 + i * .1);
+      });
+      tl.fromTo(key, { opacity: 0, y: 4 }, { opacity: 1, y: 0, duration: .16, ease: 'power3.out' }, .78)
+        .to(key, { scale: .9, duration: .08 }, 1.4)
+        .to(windowView, { opacity: 1, scale: 1, duration: .44, ease: 'expo.out' }, 1.5)
+        .to([line, key], { opacity: 0, duration: .16 }, 1.5)
+        .to(windowView, { '--cut': '50%', duration: .7, ease: 'expo.out' }, 1.5)
+        .to(caret, { x: 139, scaleY: 6.15, y: 61, opacity: .8, duration: .38, ease: 'power4.out' }, 1.5)
+        .to(caret, { opacity: 0, duration: .16 }, 1.88)
+        .set(find('.source-tool'), { className: 'source-tool' }, 1.55)
+        .set(find('.split-tool'), { className: 'split-tool selected' }, 1.55)
+        .to(find('.shot-copy'), { opacity: 1, duration: .26 }, 2.0)
+        .to(papers, { y: -325, duration: .92, ease: 'power2.inOut' }, 4)
+        .set(find('.shot-copy'), { innerHTML: '两栏同步<span>滚动。</span>' }, 4.5)
+        .to(papers, { y: -650, duration: .95, ease: 'power2.inOut' }, 8)
+        .to(find('.expand'), { scale: 1.18, duration: .22, ease: 'power3.out' }, 11.5)
+        .to(find('.expand'), { scale: 1, duration: .15, ease: 'power2.in' }, 11.75);
+    }
+  </script>
+</template>

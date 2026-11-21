@@ -1,0 +1,33 @@
+<template>
+  <section class="shot" data-composition-id="workspace" data-width="1280" data-height="720">
+    <div class="stamp"><img src="assets/zmark-icon.png" alt="">ZMark</div>
+    <h2 class="shot-copy">从文件，<span>到章节。</span></h2>
+    <div class="workbench" data-palette="default" style="--cut:50%"></div>
+    <div class="rail"><b>工作区侧栏</b><span>文件树 / 文档大纲</span></div>
+  </section>
+  <script>
+    {
+      const { timeline: tl, find } = sceneTimeline('workspace');
+      const windowView = find('.workbench');
+      buildWorkbench(windowView, true);
+      find('.split-tool').classList.add('selected');
+      find('.source-tool').classList.remove('selected');
+      const papers = windowView.querySelectorAll('.pane-content');
+
+      tl.set(papers, { y: -650 }, 0)
+        .set(find('.sidebar'), { visibility: 'visible' }, .5)
+        .to(windowView, { '--side': '220px', duration: .55, ease: 'power4.out' }, .5)
+        .to(papers, { y: 0, duration: .62, ease: 'power3.inOut' }, 1)
+        .set(find('.tree'), { display: 'none' }, 2.5)
+        .set(find('.outline'), { display: 'block' }, 2.5)
+        .set(find('.files-tab'), { className: 'files-tab' }, 2.5)
+        .set(find('.outline-tab'), { className: 'outline-tab selected' }, 2.5)
+        .set(find('.outline .active'), { className: '' }, 4)
+        .set(find('.flow-link'), { className: 'file flow-link active' }, 4)
+        .to(papers, { y: -650, duration: .62, ease: 'power3.inOut' }, 4)
+        .to(windowView, { '--side': '0px', duration: .46, ease: 'power3.inOut' }, 5.5)
+        .to(papers, { y: -325, duration: .46, ease: 'power3.inOut' }, 5.5)
+        .set(find('.sidebar'), { visibility: 'hidden' }, 5.96);
+    }
+  </script>
+</template>
