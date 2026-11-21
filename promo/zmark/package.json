@@ -1,0 +1,11 @@
+{
+  "name": "zmark-promo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "postinstall": "node -e \"require('node:fs').copyFileSync('node_modules/gsap/dist/gsap.min.js','assets/gsap.min.js')\""
+  },
+  "dependencies": {
+    "gsap": "3.15.1"
+  }
+}
