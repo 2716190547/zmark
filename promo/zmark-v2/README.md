@@ -23,4 +23,10 @@ export HYPERFRAMES_BROWSER_PATH=/path/to/chrome-headless-shell
 ZMARK_HYPERFRAMES_DIST="$(npm root -g)/hyperframes/dist" node render.mjs
 ```
 
+英文版沿用同一套分镜、画面和母带，翻译片中文字和演示文档。使用上面的本机渲染脚本并加 `--en`，即可生成独立文件 `renders/ZMark-Lightning-Draft-EN-1440p60.mp4`。
+
+```sh
+ZMARK_HYPERFRAMES_DIST="$(npm root -g)/hyperframes/dist" node render.mjs --en
+```
+
 重新混音时，从 [音乐来源](CREDITS.md) 下载原始 MP3，然后运行 `python3 mix_audio.py /path/to/Galactic-Rap.mp3`。原生 Mermaid 图由 ZMark 的 `zmark_core::mermaid::render_to_svg_themed` 生成，源图在 `assets/workflow.mmd`。

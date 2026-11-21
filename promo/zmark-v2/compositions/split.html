@@ -1,12 +1,12 @@
 <template>
   <section class="shot" data-composition-id="split" data-width="1280" data-height="720">
     <div class="stamp"><img src="assets/zmark-icon.png" alt="">ZMark</div>
-    <h1 class="shot-copy">下笔，即见<span>成稿。</span></h1>
+    <h1 class="shot-copy"><span data-en="From draft ">下笔，即见</span><span class="accent" data-en="to preview.">成稿。</span></h1>
     <div class="workbench" data-palette="default"></div>
     <div class="opening-line">#</div>
     <div class="caret"></div>
     <div class="shortcut">⌘ 2</div>
-    <div class="rail"><b>Markdown 原生编辑器</b><span>RUST / GPUI</span></div>
+    <div class="rail"><b data-en="Native Markdown editor">Markdown 原生编辑器</b><span>RUST / GPUI</span></div>
   </section>
   <script>
     {
@@ -37,7 +37,7 @@
         .set(find('.split-tool'), { className: 'split-tool selected' }, 1.55)
         .to(find('.shot-copy'), { opacity: 1, duration: .26 }, 2.0)
         .to(papers, { y: -325, duration: .92, ease: 'power2.inOut' }, 4)
-        .set(find('.shot-copy'), { innerHTML: '两栏同步<span>滚动。</span>' }, 4.5)
+        .set(find('.shot-copy'), { innerHTML: copy('两栏同步<span class="accent">滚动。</span>', 'Scroll both panes <span class="accent">in sync.</span>') }, 4.5)
         .to(papers, { y: -650, duration: .95, ease: 'power2.inOut' }, 8)
         .to(find('.expand'), { scale: 1.18, duration: .22, ease: 'power3.out' }, 11.5)
         .to(find('.expand'), { scale: 1, duration: .15, ease: 'power2.in' }, 11.75);

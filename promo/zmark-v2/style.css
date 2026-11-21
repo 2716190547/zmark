@@ -41,7 +41,7 @@ body { font-family: "Promo Sans", system-ui, sans-serif; }
 .stamp { top: 35px; left: 64px; display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 690; }
 .stamp img { display: block; width: 28px; height: 28px; }
 .shot-copy { top: 78px; left: 64px; margin: 0; font-size: 46px; font-weight: 720; letter-spacing: -2px; line-height: 1.18; }
-.shot-copy span { color: var(--brand); }
+.shot-copy .accent { color: var(--brand); }
 .rail {
   bottom: 30px; left: 64px; right: 64px; display: flex; justify-content: space-between;
   border-top: 1px solid color-mix(in srgb, var(--quiet) 35%, transparent); padding-top: 11px;
