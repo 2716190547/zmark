@@ -17,14 +17,21 @@ function buildWorkbench(target, withSidebar = false) {
   target.innerHTML = `
     <header class="toolbar">
       <span class="traffic"><i></i><i></i><i></i></span>
-      <span class="tool sidebar-tool">${icon('panel-left')}</span>
-      <span class="file-label">${icon('file', '星图发布手记.md')}</span>
+      <div class="drawer-tools">
+        <span class="tool sidebar-tool" title="侧栏">${icon('panel-left')}</span>
+        ${withSidebar ? `<div class="drawer-tabs" style="visibility:hidden">
+          <span class="tool files-tab selected" title="文件">${icon('folder')}</span>
+          <span class="tool outline-tab" title="大纲">${icon('list')}</span>
+          <span class="tool" title="打开文件或文件夹">${icon('folder-plus')}</span>
+        </div>` : ""}
+      </div>
+      <span class="file-label">星图发布手记.md</span>
       <div class="mode"><span class="selected source-tool">${icon('code')}</span><span class="split-tool">${icon('columns-2')}</span><span>${icon('book-open')}</span></div>
-      <div class="tools"><span>${icon('search')}</span><span>${icon('palette')}</span><span>${icon('settings')}</span></div>
+      <div class="tools"><span>${icon('search')}</span><span>${icon('download')}</span><span>${icon('settings')}</span></div>
     </header>
     <div class="body">
       ${withSidebar ? `<aside class="sidebar" data-layout-allow-overflow style="visibility:hidden">
-        <div class="side-head"><span class="files-tab selected">${icon('files', '文件')}</span><span class="outline-tab">${icon('list', '大纲')}</span></div>
+        <div class="file-search">${icon('search', '搜索文件...')}</div>
         <div class="tree">
           <div class="folder">${icon('folder-open', '星图发布')}</div>
           <div class="file active">${icon('file', '星图发布手记.md')}</div>
