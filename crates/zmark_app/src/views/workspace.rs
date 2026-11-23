@@ -2507,6 +2507,7 @@ impl WorkspaceView {
                 }
                 let dirty = this.state.open_docs.iter().any(|doc| {
                     doc.key == save_key
+                        && doc.doc.path.is_some()
                         && doc.doc.status == zmark_core::document::DocumentStatus::Modified
                 });
                 if dirty {

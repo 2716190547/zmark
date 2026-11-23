@@ -66,6 +66,75 @@ fn manual_and_automatic_save_failures_keep_text_and_show_an_error(cx: &mut gpui:
 }
 
 #[gpui::test]
+fn scratch_auto_save_waits_for_manual_save_as(cx: &mut gpui::TestAppContext) {
+    use zmark_app::views::workspace::WorkspaceView;
+    for document in [
+        Document::new_scratch(),
+        Document::new_named_scratch_with_text("欢迎使用 ZMark.md", "Welcome".into()),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("draft.md");
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let mut state = AppState::new_isolated(document);
+            state.preferences.reduce_motion = true;
+            state.preferences.auto_save = true;
+            state.preferences.auto_save_delay_ms = 1000;
+            state.preferences.auto_save_on_blur = false;
+            WorkspaceView::new(state, cx)
+        });
+        cx.update(|_, cx| view.update(cx, |ws, cx| {
+            ws.state.editor.insert_text(" local");
+            ws.state.mark_editor_dirty();
+            ws.trigger_auto_save(cx);
+        }));
+        cx.executor().advance_clock(std::time::Duration::from_millis(1100));
+        cx.run_until_parked();
+        let edited = cx.update(|_, cx| {
+            let ws = view.read(cx);
+            assert!(ws.error_banner.is_none(), "draft auto-save must not report a missing path");
+            assert!(ws.state.doc().path.is_none());
+            assert!(ws.state.is_dirty());
+            assert!(ws.state.editor.can_undo());
+            assert_eq!(ws.state.doc().buffer, ws.state.editor.to_text());
+            ws.state.editor.to_text()
+        });
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+
+        cx.update(|_, cx| view.update(cx, |ws, cx| ws.trigger_save(cx)));
+        cx.simulate_new_path_selection(|_| None);
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let ws = view.read(cx);
+            assert!(ws.state.doc().path.is_none());
+            assert!(ws.state.is_dirty());
+            assert_eq!(ws.state.editor.to_text(), edited);
+            assert!(ws.error_banner.is_none());
+        });
+
+        cx.update(|_, cx| view.update(cx, |ws, cx| ws.trigger_save(cx)));
+        let selected = target.clone();
+        cx.simulate_new_path_selection(move |_| Some(selected.clone()));
+        cx.run_until_parked();
+        assert_eq!(fs::read_to_string(&target).unwrap(), edited);
+        cx.update(|_, cx| view.update(cx, |ws, cx| {
+            assert!(!ws.state.is_dirty());
+            ws.state.editor.insert_text(" saved edit");
+            ws.state.mark_editor_dirty();
+            ws.trigger_auto_save(cx);
+        }));
+        cx.executor().advance_clock(std::time::Duration::from_millis(1100));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let ws = view.read(cx);
+            assert!(ws.error_banner.is_none());
+            assert!(!ws.state.is_dirty());
+            assert_eq!(fs::read_to_string(&target).unwrap(), ws.state.editor.to_text());
+            assert_ne!(ws.state.editor.to_text(), edited);
+        });
+    }
+}
+
+#[gpui::test]
 fn reactivation_detects_disk_changes_without_overwriting_editor_input(cx: &mut gpui::TestAppContext) {
     use zmark_app::views::workspace::WorkspaceView;
     let dir = tempfile::tempdir().unwrap();

@@ -34,7 +34,7 @@
 
 | Area | Capabilities |
 | --- | --- |
-| **Writing & Sync Scroll** | Instant switching between **Source**, **Split**, and **Preview** modes; block-aligned smooth synchronized scrolling; drag & drop `.md` files, folders, and local images directly into the window; auto-save on idle or window blur. |
+| **Writing & Sync Scroll** | Instant switching between **Source**, **Split**, and **Preview** modes; block-aligned smooth synchronized scrolling; drag & drop `.md` files, folders, and local images directly into the window; auto-save on idle or window blur for files with a saved path; drafts choose a destination on their first manual save. |
 | **Markdown & Code Engine** | GitHub-style adaptive tables, clickable inline `[toc]` outline cards, `<br>` / `<br/>` line breaks, interactive task lists (`- [ ]` / `- [x]`), nested lists, blockquotes, horizontal rules, multi-language fenced code syntax highlighting with one-click copy, and source mode editing for Rust, Python, TypeScript/JS, C/C++, Java, Go, JSON, YAML, TOML, HTML/CSS, shell scripts, and plain text. |
 | **Mermaid & Local Media** | Native local `rusty-mermaid` SVG rendering with UTF-8/CJK label support; local PNG/JPEG/GIF/WebP/SVG previews (relative to document, absolute path, or built-in `zmark-asset://` vector illustrations); click any diagram or image to zoom and pan in the HiDPI Lightbox. |
 | **Workspace & Navigation** | Multi-root folder tree, loose external files, and scratch drafts; fast filename filtering (`Files`) and one-click toggle to document heading tree (`Outline`); Shift / Cmd / Ctrl multi-select, batch hide with 5-second undo, Move to Trash, inline double-click rename, and in-document highlighted Find (`Cmd+F` / `Ctrl+F`). |
