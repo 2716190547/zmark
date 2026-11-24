@@ -26,7 +26,7 @@
 - Inline styling: **Bold text**, *italic text*, ~~strikethrough~~, and `inline code`.
 - HTML `<br/>` support: Use `<br/>` inline to force a line break, or on its own line to add clean vertical breathing room.
 - Editing & search shortcuts: `Cmd+B` toggles bold, `Cmd+Shift+7` toggles numbered lists; `Cmd+F` finds in document (`Cmd+G` / `Cmd+Shift+G` next/previous).
-- Project links: [ZMark on GitHub](https://github.com/2716190547/zmark) · [Releases](https://github.com/2716190547/zmark-releases)
+- Project links: [ZMark on GitHub](https://github.com/2716190547/zmark) · [Releases](https://github.com/2716190547/zmark/releases)
 
 > **Local-first by design:** ZMark renders adaptive tables, task lists, multi-language code blocks, vector SVGs, and Mermaid diagrams 100% locally in milliseconds.
 

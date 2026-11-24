@@ -26,7 +26,7 @@
 - Styles en ligne : **gras**, *italique*, ~~barré~~ et `code en ligne`.
 - Balises HTML `<br/>` : utilisez `<br/>` dans un paragraphe pour forcer un retour ou seul sur une ligne pour aérer.
 - Édition et recherche : `Cmd+B` pour le gras, `Cmd+Shift+7` pour liste numérotée, `Cmd+F` (`Cmd+G` / `Cmd+Shift+G`) pour chercher.
-- Liens : [Dépôt GitHub ZMark](https://github.com/2716190547/zmark) · [Versions publiées](https://github.com/2716190547/zmark-releases)
+- Liens : [Dépôt GitHub ZMark](https://github.com/2716190547/zmark) · [Versions publiées](https://github.com/2716190547/zmark/releases)
 
 > **100 % local :** ZMark rend tableaux adaptatifs, tâches, code coloré, SVG vectoriels et diagrammes Mermaid hors ligne en quelques millisecondes.
 

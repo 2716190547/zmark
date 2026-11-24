@@ -6,14 +6,14 @@
 
 **基于 Rust 与 GPUI 打造的原生极速本地 Markdown 编辑器、阅读工作台与 Mermaid 图表工作室。**
 
-[![Release](https://img.shields.io/github/v/release/2716190547/zmark-releases?label=Release&color=E06C44&style=flat-square)](https://github.com/2716190547/zmark-releases/releases)
+[![Release](https://img.shields.io/github/v/release/2716190547/zmark?label=Release&color=E06C44&style=flat-square)](https://github.com/2716190547/zmark/releases)
 [![Build Desktop](https://img.shields.io/github/actions/workflow/status/2716190547/zmark/build-desktop.yml?branch=dev&label=CI%20Build&style=flat-square)](https://github.com/2716190547/zmark/actions/workflows/build-desktop.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-DEA584?logo=rust&logoColor=white&style=flat-square)](rust-toolchain.toml)
 [![GPUI](https://img.shields.io/badge/UI-GPUI%20GPU%20Native-3B82F6?style=flat-square)](https://crates.io/crates/gpui)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-4B5563?style=flat-square)](#下载与安装)
 [![Languages](https://img.shields.io/badge/i18n-10%20%E7%A7%8D%E8%AF%AD%E8%A8%80-10B981?style=flat-square)](#核心特性)
 
-[简体中文](README.zh-CN.md) · [English](README.md) · [下载安装包](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.12) · [Gitee 国内镜像](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub 源码仓库](https://github.com/2716190547/zmark)
+[简体中文](README.zh-CN.md) · [English](README.md) · [下载安装包](https://github.com/2716190547/zmark/releases/tag/v0.2.13) · [Gitee 国内镜像](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub 源码仓库](https://github.com/2716190547/zmark)
 
 </div>
 
@@ -92,9 +92,9 @@ ZMark/
 
 ## 下载与安装
 
-**当前最新版本：`v0.2.12`** · [版本更新说明](docs/releases/v0.2.12.md)
+**当前最新版本：`v0.2.13`** · [版本更新说明](docs/releases/v0.2.13.md)
 
-可从 [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.12) 下载对应系统安装包；国内网络也可通过 [Gitee 发行镜像](https://gitee.com/zeng_sc/zmark-releases/releases) 获取 macOS ZIP、Windows 安装包与签名更新清单（DMG 与 Linux 安装包请前往 GitHub 下载）。
+可从 [GitHub Releases](https://github.com/2716190547/zmark/releases/tag/v0.2.13) 下载对应系统安装包；国内网络也可通过 [Gitee 发行镜像](https://gitee.com/zeng_sc/zmark-releases/releases) 获取 macOS ZIP、Windows 安装包与签名更新清单（DMG 与 Linux 安装包请前往 GitHub 下载）。v0.2.12 及更早版本保留在已归档的 [zmark-releases](https://github.com/2716190547/zmark-releases/releases) 仓库。
 
 | 平台 | 架构 | 安装包格式 | 安装说明 |
 | --- | --- | --- | --- |

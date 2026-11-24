@@ -26,7 +26,7 @@
 - Auszeichnungen: **Fett**, *Kursiv*, ~~Durchgestrichen~~ und `Inline-Code`.
 - HTML `<br/>`: `<br/>` im Fließtext erzwingt einen Umbruch, allein in einer Zeile schafft es großzügigen Abstand.
 - Kürzel & Suche: `Cmd+B` für Fett, `Cmd+Shift+7` für nummerierte Listen, `Cmd+F` (`Cmd+G` / `Cmd+Shift+G`) für Suche.
-- Links: [ZMark auf GitHub](https://github.com/2716190547/zmark) · [Releases](https://github.com/2716190547/zmark-releases)
+- Links: [ZMark auf GitHub](https://github.com/2716190547/zmark) · [Releases](https://github.com/2716190547/zmark/releases)
 
 > **100 % lokal:** ZMark rendert adaptive Tabellen, Aufgabenlisten, mehrsprachiges Syntax-Highlighting, SVGs und Mermaid-Diagramme offline in Millisekunden.
 

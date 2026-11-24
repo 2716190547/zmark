@@ -17,7 +17,7 @@ pub use windows::{run_check, spawn_install_helper};
 /// Stable release feed. Kept as a constant so a future mirror can be added
 /// without changing the updater's state machine.
 pub const UPDATE_FEED_URL: &str =
-    "https://github.com/2716190547/zmark-releases/releases/latest/download/latest.json";
+    "https://github.com/2716190547/zmark/releases/latest/download/latest.json";
 const GITEE_RELEASE_API: &str =
     "https://gitee.com/api/v5/repos/zeng_sc/zmark-releases/releases/latest";
 const GITEE_RELEASE_BASE: &str = "https://gitee.com/zeng_sc/zmark-releases/releases/download";
@@ -46,7 +46,7 @@ fn gitee_asset_url(manifest: &ReleaseManifest, windows: bool) -> Option<String> 
     let suffix = if windows { "-setup.exe" } else { ".zip" };
     let name = format!("ZMark-{}{suffix}", manifest.version);
     let expected = format!(
-        "https://github.com/2716190547/zmark-releases/releases/download/v{}/{name}",
+        "https://github.com/2716190547/zmark/releases/download/v{}/{name}",
         manifest.version
     );
     (manifest.url == expected).then(|| format!("{GITEE_RELEASE_BASE}/v{}/{name}", manifest.version))
@@ -407,12 +407,12 @@ fn download_to(url: &str, path: &Path, max_time: &str, max_size: &str) -> Result
 fn github_release_api_url(manifest: &ReleaseManifest) -> Option<String> {
     parse_version(&manifest.version)?;
     let expected = format!(
-        "https://github.com/2716190547/zmark-releases/releases/download/v{0}/ZMark-{0}.zip",
+        "https://github.com/2716190547/zmark/releases/download/v{0}/ZMark-{0}.zip",
         manifest.version
     );
     (manifest.url == expected).then(|| {
         format!(
-            "https://api.github.com/repos/2716190547/zmark-releases/releases/tags/v{}",
+            "https://api.github.com/repos/2716190547/zmark/releases/tags/v{}",
             manifest.version
         )
     })
@@ -432,7 +432,7 @@ fn github_asset_api_url(
     })?;
     let id = asset.get("id")?.as_u64()?;
     Some(format!(
-        "https://api.github.com/repos/2716190547/zmark-releases/releases/assets/{id}"
+        "https://api.github.com/repos/2716190547/zmark/releases/assets/{id}"
     ))
 }
 
@@ -730,7 +730,7 @@ mod tests {
         assert!(gitee_latest_feed(r#"{"tag_name":"v../../evil"}"#, false).is_err());
         let (mut manifest, _) = signed_manifest();
         manifest.version = version;
-        manifest.url = "https://github.com/2716190547/zmark-releases/releases/download/v0.2.5/ZMark-0.2.5-setup.exe".into();
+        manifest.url = "https://github.com/2716190547/zmark/releases/download/v0.2.5/ZMark-0.2.5-setup.exe".into();
         assert_eq!(gitee_asset_url(&manifest, true).as_deref(), Some("https://gitee.com/zeng_sc/zmark-releases/releases/download/v0.2.5/ZMark-0.2.5-setup.exe"));
         assert!(gitee_asset_url(&manifest, false).is_none());
         manifest.url.push_str("?redirect=evil");
@@ -742,13 +742,13 @@ mod tests {
         let (mut manifest, _) = signed_manifest();
         manifest.version = "0.2.2".into();
         manifest.url =
-            "https://github.com/2716190547/zmark-releases/releases/download/v0.2.2/ZMark-0.2.2.zip"
+            "https://github.com/2716190547/zmark/releases/download/v0.2.2/ZMark-0.2.2.zip"
                 .into();
         let metadata = serde_json::json!({"assets": [{"id": 726074161u64, "name": "ZMark-0.2.2.zip", "browser_download_url": manifest.url, "state": "uploaded"}]});
         assert_eq!(
             github_asset_api_url(&manifest, &metadata).as_deref(),
             Some(
-                "https://api.github.com/repos/2716190547/zmark-releases/releases/assets/726074161"
+                "https://api.github.com/repos/2716190547/zmark/releases/assets/726074161"
             )
         );
         manifest.url.push_str("?unexpected=1");

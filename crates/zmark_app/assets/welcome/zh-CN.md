@@ -26,7 +26,7 @@
 - 常用行内修饰：**粗体文字**、*斜体文字*、~~删除线~~、以及 `行内代码`。
 - HTML 轻量换行：支持段内 `<br/>` 强制换行，也支持独立成行的 `<br/>` 留白间距。
 - 快捷排版与查找：`Cmd+B` 快速加粗选中文字，`Cmd+Shift+7` 快速切换有序列表；`Cmd+F` 查找、`Cmd+G` / `Cmd+Shift+G` 跳转上下匹配项。
-- 项目主页：[ZMark GitHub 仓库](https://github.com/2716190547/zmark) · [版本发布页](https://github.com/2716190547/zmark-releases)
+- 项目主页：[ZMark GitHub 仓库](https://github.com/2716190547/zmark) · [版本发布页](https://github.com/2716190547/zmark/releases)
 
 > **小贴士：** ZMark 100% 在本机运行、无需联网，原生解析 GFM 表格、任务清单、多语言代码块与 Mermaid 流程图。
 

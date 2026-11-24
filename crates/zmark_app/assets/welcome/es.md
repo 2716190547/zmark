@@ -26,7 +26,7 @@
 - Formato en línea: **negrita**, *cursiva*, ~~tachado~~ y `código en línea`.
 - HTML `<br/>`: añade `<br/>` dentro de un párrafo para saltar de línea o en su propia línea para dar respiro vertical.
 - Escritura y búsqueda: `Cmd+B` negrita, `Cmd+Shift+7` lista numerada, `Cmd+F` (`Cmd+G` / `Cmd+Shift+G`) buscar.
-- Enlaces: [ZMark en GitHub](https://github.com/2716190547/zmark) · [Versiones](https://github.com/2716190547/zmark-releases)
+- Enlaces: [ZMark en GitHub](https://github.com/2716190547/zmark) · [Versiones](https://github.com/2716190547/zmark/releases)
 
 > **100 % local:** ZMark renderiza tablas adaptativas, listas de tareas, resaltado de código, SVG y Mermaid sin conexión en milisegundos.
 

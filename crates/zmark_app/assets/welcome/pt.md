@@ -26,7 +26,7 @@
 - Formatação em linha: **negrito**, *itálico*, ~~tachado~~ e `código em linha`.
 - HTML `<br/>`: use `<br/>` no meio do texto para quebrar linha ou isolado em uma linha para dar espaçamento extra.
 - Atalhos e busca: `Cmd+B` para negrito, `Cmd+Shift+7` para lista numerada, `Cmd+F` (`Cmd+G` / `Cmd+Shift+G`) para localizar.
-- Links: [ZMark no GitHub](https://github.com/2716190547/zmark) · [Lançamentos](https://github.com/2716190547/zmark-releases)
+- Links: [ZMark no GitHub](https://github.com/2716190547/zmark) · [Lançamentos](https://github.com/2716190547/zmark/releases)
 
 > **100% local:** o ZMark renderiza tabelas adaptativas, listas de tarefas, realce de código, SVGs e Mermaid offline em milissegundos.
 

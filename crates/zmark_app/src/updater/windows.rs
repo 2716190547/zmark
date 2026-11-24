@@ -2,7 +2,7 @@ use super::*;
 use std::os::windows::process::CommandExt;
 
 const WINDOWS_FEED: &str =
-    "https://github.com/2716190547/zmark-releases/releases/latest/download/latest-windows.json";
+    "https://github.com/2716190547/zmark/releases/latest/download/latest-windows.json";
 const NO_WINDOW: u32 = 0x08000000;
 
 pub(super) fn production() -> UpdateConfig {
@@ -89,7 +89,7 @@ pub fn run_check(config: &UpdateConfig) -> Result<Option<PreparedUpdate>, Update
         return Ok(None);
     }
     let expected_url = format!(
-        "https://github.com/2716190547/zmark-releases/releases/download/v{0}/ZMark-{0}-setup.exe",
+        "https://github.com/2716190547/zmark/releases/download/v{0}/ZMark-{0}-setup.exe",
         manifest.version
     );
     if manifest.url != expected_url {

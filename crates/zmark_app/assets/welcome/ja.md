@@ -26,7 +26,7 @@
 - インライン装飾：**太字**、*斜体*、~~打ち消し線~~、`インラインコード`
 - HTML `<br/>` 改行：段落内の `<br/>` で強制改行、単独行の `<br/>` で心地よい余白を作れます。
 - 編集と検索：`Cmd+B` で太字、`Cmd+Shift+7` で番号付きリスト切替、`Cmd+F`（`Cmd+G` / `Cmd+Shift+G`）でファイル内検索。
-- リンク：[ZMark GitHub](https://github.com/2716190547/zmark) · [リリース一覧](https://github.com/2716190547/zmark-releases)
+- リンク：[ZMark GitHub](https://github.com/2716190547/zmark) · [リリース一覧](https://github.com/2716190547/zmark/releases)
 
 > **完全ローカル設計：** ZMark は適応幅テーブル、タスクリスト、多言語シンタックスハイライト、SVG、Mermaid 図をオフライン・ミリ秒単位で描画します。
 

@@ -791,7 +791,7 @@ impl Render for SettingsWindowView {
                             update_reason.as_deref(),
                             on_check_update,
                             move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
-                                cx.open_url("https://github.com/2716190547/zmark-releases");
+                                cx.open_url("https://github.com/2716190547/zmark");
                             },
                         )
                         .into_any_element(),
@@ -2069,7 +2069,7 @@ fn render_about_tab(
                 .gap_2()
                 .child(render_section_title(strings.open_source_label, theme))
                 .child(render_setting_row(
-                    "github.com/2716190547/zmark-releases",
+                    "github.com/2716190547/zmark",
                     Some(strings.footer_credit.into()),
                     render_secondary_button("btn_open_github", "GitHub", theme, on_open_github),
                     theme,

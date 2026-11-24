@@ -26,7 +26,7 @@
 - 인라인 서식: **굵게**, *기울임*, ~~취소선~~, `인라인 코드`
 - HTML `<br/>` 지원: 문장 안 `<br/>` 줄바꿈은 물론 단독 행 `<br/>`로 깔끔한 여백을 넣을 수 있습니다.
 - 편집 & 찾기: `Cmd+B` 굵게 토글, `Cmd+Shift+7` 번호 목록 토글, `Cmd+F`(`Cmd+G` / `Cmd+Shift+G`) 문서 내 찾기.
-- 링크: [ZMark GitHub](https://github.com/2716190547/zmark) · [릴리스 페이지](https://github.com/2716190547/zmark-releases)
+- 링크: [ZMark GitHub](https://github.com/2716190547/zmark) · [릴리스 페이지](https://github.com/2716190547/zmark/releases)
 
 > **100% 로컬 동작:** ZMark는 자동 비율 표, 체크리스트, 다국어 코드 강조, SVG, Mermaid 다이어그램을 오프라인에서 밀리초 단위로 렌더링합니다.
 

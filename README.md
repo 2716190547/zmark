@@ -6,14 +6,14 @@
 
 **Fast, native local-first Markdown editor, reader, and Mermaid diagram workspace built with Rust & GPUI.**
 
-[![Release](https://img.shields.io/github/v/release/2716190547/zmark-releases?label=Release&color=E06C44&style=flat-square)](https://github.com/2716190547/zmark-releases/releases)
+[![Release](https://img.shields.io/github/v/release/2716190547/zmark?label=Release&color=E06C44&style=flat-square)](https://github.com/2716190547/zmark/releases)
 [![Build Desktop](https://img.shields.io/github/actions/workflow/status/2716190547/zmark/build-desktop.yml?branch=dev&label=CI%20Build&style=flat-square)](https://github.com/2716190547/zmark/actions/workflows/build-desktop.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-DEA584?logo=rust&logoColor=white&style=flat-square)](rust-toolchain.toml)
 [![GPUI](https://img.shields.io/badge/UI-GPUI%20GPU%20Native-3B82F6?style=flat-square)](https://crates.io/crates/gpui)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-4B5563?style=flat-square)](#download-and-install)
 [![Languages](https://img.shields.io/badge/i18n-10%20Locales-10B981?style=flat-square)](#highlights)
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Download Installers](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.12) · [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub Repo](https://github.com/2716190547/zmark)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Download Installers](https://github.com/2716190547/zmark/releases/tag/v0.2.13) · [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub Repo](https://github.com/2716190547/zmark)
 
 </div>
 
@@ -92,9 +92,9 @@ ZMark/
 
 ## Download and Install
 
-**Current release: `v0.2.12`** · [Release Notes](docs/releases/v0.2.12.md)
+**Current release: `v0.2.13`** · [Release Notes](docs/releases/v0.2.13.md)
 
-Download installers directly from [GitHub Releases](https://github.com/2716190547/zmark-releases/releases/tag/v0.2.12). Users in mainland China can also download the macOS ZIP, Windows installer, and update feeds via the [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) (DMG and Linux packages are hosted on GitHub).
+Download installers directly from [GitHub Releases](https://github.com/2716190547/zmark/releases/tag/v0.2.13). Users in mainland China can also download the macOS ZIP, Windows installer, and update feeds via the [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) (DMG and Linux packages are hosted on GitHub). Releases up to v0.2.12 remain in the archived [zmark-releases](https://github.com/2716190547/zmark-releases/releases) repository.
 
 | Platform | Architecture | Package | Install Instructions |
 | --- | --- | --- | --- |

@@ -26,7 +26,7 @@
 - 常用行內樣式：**粗體文字**、*斜體文字*、~~刪除線~~ 以及 `行內程式碼`。
 - HTML 輕量換行：支援段內 `<br/>` 強制換行，也支援獨立成行的 `<br/>` 留白間距。
 - 快速排版與尋找：`Cmd+B` 快速粗體選取文字，`Cmd+Shift+7` 切換有序清單；`Cmd+F` 尋找、`Cmd+G`／`Cmd+Shift+G` 跳轉上下符合項目。
-- 專案主頁：[ZMark GitHub 儲存庫](https://github.com/2716190547/zmark) · [版本發佈頁](https://github.com/2716190547/zmark-releases)
+- 專案主頁：[ZMark GitHub 儲存庫](https://github.com/2716190547/zmark) · [版本發佈頁](https://github.com/2716190547/zmark/releases)
 
 > **小提示：** ZMark 100% 於本機運作、無需連網，原生解析 GFM 表格、任務清單、多語言程式碼高亮與 Mermaid 流程圖。
 

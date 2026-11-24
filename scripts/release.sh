@@ -1,11 +1,12 @@
 #!/bin/bash
 # Builds, verifies, signs and publishes a ZMark release to the public
-# zmark-releases repository. The private key stays outside the repository.
+# zmark repository. The private key stays outside the repository.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-}"
-RELEASES_REPO="${ZMARK_RELEASES_REPO:-2716190547/zmark-releases}"
+SOURCE_REPO="2716190547/zmark"
+RELEASES_REPO="${ZMARK_RELEASES_REPO:-$SOURCE_REPO}"
 RELEASE_KEY="${ZMARK_RELEASE_KEY:-$HOME/.config/zmark/release.key}"
 WINDOWS_SETUP="${ZMARK_WINDOWS_SETUP:-}"
 LINUX_DIR="${ZMARK_LINUX_ASSETS_DIR:-}"
@@ -148,9 +149,21 @@ WINDOWS_MANIFEST="$VERIFY_DIR/latest-windows.json"
 cargo run -q -p release_tool -- manifest --version "$VERSION" --url "$WINDOWS_URL" \
     --sha256 "$WINDOWS_SHA256" --published-at "$PUBLISHED_AT" --signature "$WINDOWS_SIGNATURE" > "$WINDOWS_MANIFEST"
 
+TARGET_ARGS=()
+if [ "$RELEASES_REPO" = "$SOURCE_REPO" ]; then
+    # The tag is created in the source repository, so pin it to the built commit.
+    SOURCE_COMMIT="$(git -C "$DIR" rev-parse HEAD)"
+    if ! git -C "$DIR" branch -r --contains "$SOURCE_COMMIT" | grep -q 'origin/'; then
+        echo "error: source commit $SOURCE_COMMIT is not pushed" >&2
+        exit 1
+    fi
+    TARGET_ARGS=(--target "$SOURCE_COMMIT")
+fi
+
 echo "==> Publishing v$VERSION to $RELEASES_REPO..."
 gh release create "v$VERSION" \
     --repo "$RELEASES_REPO" \
+    ${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"} \
     --title "ZMark v$VERSION" \
     --notes-file "$RELEASE_NOTES" \
     "$ZIP" "$MANIFEST" "$WINDOWS_ASSET" "$WINDOWS_MANIFEST" \
