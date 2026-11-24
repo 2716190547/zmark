@@ -7,8 +7,8 @@
   </style>
   <section id="outline" class="stage studio" data-composition-id="outline" data-width="1280" data-height="720">
     <div class="workbench" data-palette="default"></div>
-    <div class="key k-outline" style="left:550px;top:640px"><span>⌘</span><span>⇧</span><span>O</span></div>
-    <div class="key k-save" style="left:574px;top:640px"><span>⌘</span><span>S</span></div>
+    <div class="key top k-outline"><span>⌘</span><span>⇧</span><span>O</span></div>
+    <div class="key top k-save"><span>⌘</span><span>S</span></div>
     <div class="cursor"></div>
   </section>
   <script>
@@ -37,24 +37,25 @@
       win.style.setProperty('--side', '0px');
 
       // "文件夹和大纲一键切换": open the Drawer, then ⌘⇧O flips it to Outline.
-      tl.to(cursor, { opacity: 1, duration: 0.15 }, 0.05);
-      click(tl, cursor, toggle.x + 12, toggle.y + 10, 0.85, 0.75);
-      tl.set(tabs, { visibility: 'visible' }, 0.9)
-        .to(win, { '--side': '230px', duration: 0.55, ease: 'power4.out' }, 0.9)
-        .to(pre, { y: -P1b, duration: 0.55, ease: 'power4.out' }, 0.9);
-      pressKey(tl, find('.k-outline'), 2.0, 0.8);
-      tl.set(win.querySelector('.tree'), { display: 'none' }, 2.02)
-        .set(win.querySelector('.outline'), { display: 'block' }, 2.02)
-        .set(win.querySelector('.ol-limits'), { className: 'sub ol-limits active' }, 2.02)
-        .set(win.querySelector('.files-tab'), { className: 'tool files-tab' }, 2.02)
-        .set(win.querySelector('.outline-tab'), { className: 'tool outline-tab selected' }, 2.02);
+      tl.to(cursor, { opacity: 1, duration: 0.12 }, 0.0);
+      click(tl, cursor, toggle.x + 12, toggle.y + 10, 0.35, 0.35);
+      tl.set(tabs, { visibility: 'visible' }, 0.38)
+        .to(win, { '--side': '230px', duration: 0.5, ease: 'power4.out' }, 0.38)
+        .to(pre, { y: -P1b, duration: 0.5, ease: 'power4.out' }, 0.38);
+      title(tl, root, '大纲<em>一键</em>跳转', 0.95, 2.5);
+      pressKey(tl, find('.k-outline'), 1.125, 0.7);
+      tl.set(win.querySelector('.tree'), { display: 'none' }, 1.15)
+        .set(win.querySelector('.outline'), { display: 'block' }, 1.15)
+        .set(win.querySelector('.ol-limits'), { className: 'sub ol-limits active' }, 1.15)
+        .set(win.querySelector('.files-tab'), { className: 'tool files-tab' }, 1.15)
+        .set(win.querySelector('.outline-tab'), { className: 'tool outline-tab selected' }, 1.15);
 
       // "点哪个标题，就跳到哪一节".
-      click(tl, cursor, target.x + 40, target.y + 12, 3.9, 0.8);
-      tl.set(win.querySelector('.ol-limits'), { className: 'sub ol-limits' }, 3.92)
-        .set(win.querySelector('.ol-v12'), { className: 'sub ol-v12 active' }, 3.92)
-        .to(src, { y: -S1, duration: 0.62, ease: 'power3.inOut' }, 3.95)
-        .to(pre, { y: -P1, duration: 0.62, ease: 'power3.inOut' }, 3.95);
+      click(tl, cursor, target.x + 40, target.y + 12, 1.9, 0.6);
+      tl.set(win.querySelector('.ol-limits'), { className: 'sub ol-limits' }, 1.92)
+        .set(win.querySelector('.ol-v12'), { className: 'sub ol-v12 active' }, 1.92)
+        .to(src, { y: -S1, duration: 0.5, ease: 'power3.inOut' }, 1.95)
+        .to(pre, { y: -P1, duration: 0.5, ease: 'power3.inOut' }, 1.95);
 
       // "第一次保存时选好位置": ⌘S drops the system save sheet.
       const sheet = document.createElement('div');
@@ -68,31 +69,32 @@
       win.appendChild(sheet);
       const name = sheet.querySelector('.name');
       const save = stageRect(sheet.querySelector('.primary'), root);
-      pressKey(tl, find('.k-save'), 7.4, 0.7);
-      tl.fromTo(sheet, { scaleY: 0, opacity: 0 }, { scaleY: 1, opacity: 1, duration: 0.3, ease: 'power3.out' }, 7.45)
-        .set(name, { className: 'name' }, 8.1);
-      TEXT.set(name, '', 8.1);
-      typeInto(tl, name, 'release', 8.12, 0.07);
-      click(tl, cursor, save.x + 30, save.y + 14, 9.4, 0.7);
-      TEXT.set(label, 'release.md', 9.6);
-      tl.to(sheet, { scaleY: 0, opacity: 0, duration: 0.22, ease: 'power3.in' }, 9.5)
-        .set(label, { className: 'file-label' }, 9.6)
-        .to(cursor, { x: 900, y: 600, opacity: 0, duration: 0.5, ease: 'power2.in' }, 9.8);
+      title(tl, root, '存一次，之后<em>自动</em>存', 2.65);
+      pressKey(tl, find('.k-save'), 2.65, 0.6);
+      tl.fromTo(sheet, { scaleY: 0, opacity: 0 }, { scaleY: 1, opacity: 1, duration: 0.28, ease: 'power3.out' }, 2.7)
+        .set(name, { className: 'name' }, 3.08);
+      TEXT.set(name, '', 3.08);
+      typeInto(tl, name, 'release', 3.1, 0.06);
+      click(tl, cursor, save.x + 30, save.y + 14, 3.85, 0.4);
+      TEXT.set(label, 'release.md', 3.95);
+      tl.to(sheet, { scaleY: 0, opacity: 0, duration: 0.2, ease: 'power3.in' }, 3.9)
+        .set(label, { className: 'file-label' }, 3.95)
+        .to(cursor, { x: 900, y: 600, opacity: 0, duration: 0.4, ease: 'power2.in' }, 4.05);
 
       // "之后每次停笔，都会自动存好": a new line dims the title, a second of quiet saves it.
       const late = win.querySelector('.source [data-ln="12"]');
       const lateLi = win.querySelector('.preview .late');
-      tl.set(label, { className: 'file-label dirty' }, 10.3)
-        .set(lateLi, { display: 'list-item' }, 10.3);
-      TEXT.set(lateLi, '', 10.3);
+      tl.set(label, { className: 'file-label dirty' }, 4.3)
+        .set(lateLi, { display: 'list-item' }, 4.3);
+      TEXT.set(lateLi, '', 4.3);
       const chars = Array.from(LATE_TEXT);
       chars.forEach((_, k) => {
         const typed = chars.slice(0, k + 1).join('');
-        TEXT.set(late, '<span class="typing">' + lineHTML('li', typed) + '</span>', 10.3 + k * 0.08);
-        if (k > 1) TEXT.set(lateLi, esc(typed.slice(2)), 10.3 + k * 0.08);
+        TEXT.set(late, '<span class="typing">' + lineHTML('li', typed) + '</span>', 4.3 + k * 0.06);
+        if (k > 1) TEXT.set(lateLi, esc(typed.slice(2)), 4.3 + k * 0.06);
       });
-      const quiet = 10.3 + chars.length * 0.08;
-      TEXT.set(late, lineHTML('li', LATE_TEXT), quiet + 0.5);
+      const quiet = 4.3 + chars.length * 0.06;
+      TEXT.set(late, lineHTML('li', LATE_TEXT), quiet + 0.4);
       const underline = document.createElement('div');
       underline.className = 'underline';
       win.appendChild(underline);
@@ -100,7 +102,7 @@
       Object.assign(underline.style, { left: lr.x + 'px', top: (lr.y + lr.h + 2) + 'px', width: '96px' });
       tl.set(label, { className: 'file-label' }, quiet + 1.0)
         .fromTo(underline, { scaleX: 0, opacity: 1 }, { scaleX: 1, duration: 0.35, ease: 'power3.out' }, quiet + 1.0)
-        .to(underline, { opacity: 0, duration: 0.3 }, quiet + 2.2);
+        .to(underline, { opacity: 0, duration: 0.25 }, quiet + 1.65);
     });
   </script>
 </template>

@@ -195,8 +195,29 @@ function click(tl, cursor, x, y, at, travel = 0.7) {
 
 // A shortcut key cap: appear, press, leave.
 function pressKey(tl, key, at, hold = 0.9) {
+  // Key caps sit at the right end of the title row.
   tl.fromTo(key, { opacity: 0, filter: 'blur(6px)' }, { opacity: 1, filter: 'blur(0px)', duration: 0.16, ease: 'power3.out' }, at - 0.4)
     .to(key, { scale: 0.92, duration: 0.06 }, at)
     .to(key, { scale: 1, duration: 0.1 }, at + 0.06)
     .to(key, { opacity: 0, filter: 'blur(6px)', duration: 0.18, ease: 'power2.in' }, at + hold);
+}
+
+// A shot title: per-character blur-in, then dead still until it leaves.
+// html may wrap one word in <em> for the brand accent.
+function title(tl, root, html, at, until) {
+  const el = document.createElement('h2');
+  el.className = 'shot-title';
+  const parts = html.split(/(<em>.*?<\/em>)/).filter(Boolean);
+  el.innerHTML = parts.map((p) => {
+    const accent = p.startsWith('<em>');
+    const text = accent ? p.slice(4, -5) : p;
+    return Array.from(text).map((c) => `<span class="ch${accent ? ' accent' : ''}">${c === ' ' ? '&nbsp;' : esc(c)}</span>`).join('');
+  }).join('');
+  root.appendChild(el);
+  const chars = el.querySelectorAll('.ch');
+  tl.set(el, { opacity: 1 }, at);
+  chars.forEach((c, i) => tl.fromTo(c, { opacity: 0, filter: 'blur(8px)' }, { opacity: 1, filter: 'blur(0px)', duration: 0.14, ease: 'power2.out' }, at + i * 0.035));
+  if (until !== undefined) tl.to(el, { opacity: 0, filter: 'blur(6px)', duration: 0.18, ease: 'power2.in' }, until - 0.18);
+  tl.set(el, { opacity: 0 }, 0);
+  return el;
 }

@@ -14,18 +14,14 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #1c1d21; }
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0f1117; }
 body { font-family: "Promo Sans", sans-serif; }
-#film { position: absolute; inset: 0; overflow: hidden; background: #1c1d21; }
+#film { position: absolute; inset: 0; overflow: hidden; background: #0f1117; }
 
 /* Stage grounds: the night desk and the light ZMark studio. */
 .stage { position: absolute; inset: 0; overflow: hidden; color: #1b1d21; }
-.studio {
-  background-color: #ecedef;
-  background-image: linear-gradient(#161d2910 1px, transparent 1px), linear-gradient(90deg, #161d2910 1px, transparent 1px);
-  background-size: 32px 32px;
-}
-.night { background: #1c1d21; color: #f2f1ee; }
+.studio { background: #f4f2ee; }
+.night { background: #0f1117; color: #f2f1ee; }
 .grain::after {
   content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .05; mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='.9' numOctaves='2' seed='7'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -51,7 +47,7 @@ canvas.gl { position: absolute; inset: 0; width: 100%; height: 100%; display: bl
 /* The ZMark window, rebuilt from the app's layout and theme tokens. */
 .icon { display: inline-block; flex: 0 0 auto; width: 16px; height: 16px; mask: var(--icon) center / contain no-repeat; -webkit-mask: var(--icon) center / contain no-repeat; background: currentColor; }
 .workbench {
-  position: absolute; left: 96px; top: 52px; width: 1088px; height: 566px;
+  position: absolute; left: 96px; top: 136px; width: 1088px; height: 512px;
   border: 1px solid var(--border); border-radius: 13px; color: var(--text-primary); background: var(--surface); overflow: hidden;
   box-shadow: 0 26px 68px #18212e2e, 0 2px 6px #0a101b20;
   --side: 0px; --cut: 100%;
@@ -148,3 +144,13 @@ canvas.gl { position: absolute; inset: 0; width: 100%; height: 100%; display: bl
 .wordmark { position: absolute; z-index: 6; left: 0; right: 0; top: 270px; display: flex; justify-content: center; align-items: center; gap: 26px; }
 .wordmark img { width: 120px; height: 120px; }
 .wordmark h1 { margin: 0; font: 800 104px/1 "Promo Sans", sans-serif; letter-spacing: -5px; color: #1b1d21; }
+
+/* Shot titles carry the story; one accent word takes the icon gradient. */
+.shot-title {
+  position: absolute; z-index: 8; left: 96px; top: 66px; margin: 0; opacity: 0;
+  font: 800 46px/1.1 "Promo Sans", sans-serif; letter-spacing: -1.5px; color: #15171c; white-space: nowrap;
+}
+.night .shot-title { color: #f6f5f2; }
+.shot-title .ch { display: inline-block; }
+.shot-title .accent { background: linear-gradient(135deg, #c24127, #f49d0b); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.key.top { top: 70px; right: 96px; left: auto; }

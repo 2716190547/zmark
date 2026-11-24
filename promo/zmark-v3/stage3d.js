@@ -18,6 +18,18 @@
     in2: (k) => k * k,
     in3: (k) => k * k * k,
   };
+  // Seeded hash in [0, 1): the same index always gives the same value.
+  const hash = (i, salt = 0) => {
+    const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  };
+
+  function onSeek(start, end, draw) {
+    window.addEventListener('hf-seek', (e) => {
+      const t = e.detail.time;
+      if (t >= start - 0.001 && t < end + 0.001) draw(t - start);
+    });
+  }
 
   // Registers a scene's async setup. setup resolves to draw(localTime), which
   // is called on every seek inside [start, end) of the root film.
@@ -34,36 +46,81 @@
     return promise;
   }
 
-  function renderer(THREE, canvas) {
+  // Neutral tone mapping keeps the brand hues saturated; the studio room
+  // environment gives the clear coat clean reflections instead of grey falloff.
+  function renderer(THREE, canvas, world) {
     const r = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
     r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     r.setSize(1280, 720, false);
     r.outputColorSpace = THREE.SRGBColorSpace;
-    r.toneMapping = THREE.ACESFilmicToneMapping;
-    r.toneMappingExposure = 1.05;
+    r.toneMapping = THREE.NeutralToneMapping;
+    r.toneMappingExposure = 1.0;
     r.shadowMap.enabled = true;
     r.shadowMap.type = THREE.PCFShadowMap;
     r.setClearColor(0x000000, 0);
+    if (world) {
+      const pmrem = new THREE.PMREMGenerator(r);
+      world.environment = pmrem.fromScene(new window.THREE_EXTRA.RoomEnvironment(), 0.04).texture;
+      world.environmentIntensity = 0.9;
+    }
     return r;
   }
 
-  // Warm key from the upper left, cool rim from behind, soft fill.
-  function paperLights(THREE, scene, { shadow = false } = {}) {
-    scene.add(new THREE.HemisphereLight(0xf4efe6, 0x2a2b31, 0.85));
-    const key = new THREE.DirectionalLight(0xffe6c4, 2.4);
-    key.position.set(-4, 5, 6);
+  // One warm key from the upper left and a cool rim from behind.
+  function studioLights(THREE, world, { shadow = false, key = 1.6, rim = 0.8 } = {}) {
+    const k = new THREE.DirectionalLight(0xfff3e4, key);
+    k.position.set(-4, 5, 6);
     if (shadow) {
-      key.castShadow = true;
-      key.shadow.mapSize.set(2048, 2048);
-      key.shadow.radius = 6;
-      key.shadow.bias = -0.0004;
-      Object.assign(key.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 0.5, far: 30 });
+      k.castShadow = true;
+      k.shadow.mapSize.set(2048, 2048);
+      k.shadow.bias = -0.0004;
+      Object.assign(k.shadow.camera, { left: -8, right: 8, top: 8, bottom: -8, near: 0.5, far: 40 });
     }
-    scene.add(key);
-    const rim = new THREE.DirectionalLight(0xbcd2ff, 1.3);
-    rim.position.set(3, 2, -6);
-    scene.add(rim);
-    return key;
+    world.add(k);
+    const r = new THREE.DirectionalLight(0xd8e4ff, rim);
+    r.position.set(3, 2, -6);
+    world.add(r);
+    return k;
+  }
+
+  // The app icon's gradient, #C24127 → #F49D0B, as a texture.
+  function brandTexture(THREE) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 256;
+    const g = c.getContext('2d');
+    const lg = g.createLinearGradient(0, 0, 256, 256);
+    lg.addColorStop(0, '#c24127');
+    lg.addColorStop(1, '#f49d0b');
+    g.fillStyle = lg;
+    g.fillRect(0, 0, 256, 256);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+  const BRAND = ['#c24127', '#d4572a', '#e0702a', '#ea8620', '#f49d0b'];
+
+  // Glossy lacquer: a saturated base under a clear coat.
+  function lacquer(THREE, color, extra = {}) {
+    return new THREE.MeshPhysicalMaterial({ color, roughness: 0.32, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.06, ...extra });
+  }
+  const porcelain = (THREE) => lacquer(THREE, 0xfbfaf7, { roughness: 0.4 });
+
+  // Markdown marks built from rounded bars, so no font file is needed.
+  function glyph(THREE, kind, material, depth = 0.36) {
+    const { RoundedBoxGeometry } = window.THREE_EXTRA;
+    const g = new THREE.Group();
+    const bar = (w, h, x, y, rz) => {
+      const m = new THREE.Mesh(new RoundedBoxGeometry(w, h, depth, 4, Math.min(w, h, depth) * 0.3), material);
+      m.position.set(x, y, 0); m.rotation.z = rz; m.castShadow = true; g.add(m);
+    };
+    const T = 0.32;
+    if (kind === '#') { bar(T, 2.4, -0.42, 0, -0.16); bar(T, 2.4, 0.5, 0, -0.16); bar(2.2, T, 0.06, 0.45, 0); bar(2.2, T, -0.06, -0.45, 0); }
+    if (kind === '*') { for (let i = 0; i < 3; i += 1) bar(T, 2.0, 0, 0, i * Math.PI / 3); }
+    if (kind === '>') { bar(1.5, T, 0.05, 0.42, -0.62); bar(1.5, T, 0.05, -0.42, 0.62); }
+    if (kind === '-') { bar(1.6, T, 0, 0, 0); }
+    if (kind === '[]') { [-1, 1].forEach((s) => { bar(T, 2.2, s * 0.9, 0, 0); bar(0.6, T, s * 0.68, 0.94, 0); bar(0.6, T, s * 0.68, -0.94, 0); }); }
+    if (kind === '`') { [-0.55, 0, 0.55].forEach((x) => bar(T * 0.9, 0.9, x, 0.4, -0.35)); }
+    return g;
   }
 
   // A label drawn with the film's own font into a texture.
@@ -87,13 +144,8 @@
     return tex;
   }
 
-  // Draws on every seek inside [start, end); outside it the canvas is left alone.
-  function onSeek(start, end, draw) {
-    window.addEventListener('hf-seek', (e) => {
-      const t = e.detail.time;
-      if (t >= start - 0.001 && t < end + 0.001) draw(t - start);
-    });
-  }
+  // World units per screen pixel on the z = 0 plane for a camera at distance d.
+  const perPx = (THREE, fov, d) => (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2)) * d) / 720;
 
-  window.Stage3D = { ready, build, renderer, paperLights, labelTexture, onSeek, clamp, seg, lerp, ease };
+  window.Stage3D = { ready, build, renderer, studioLights, brandTexture, BRAND, lacquer, porcelain, glyph, labelTexture, onSeek, perPx, clamp, seg, lerp, ease, hash };
 })();
