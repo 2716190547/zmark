@@ -21,7 +21,7 @@
 
 ## 实际交付验证
 
-- `./scripts/bundle_macos.sh --install` 成功：release 编译、应用包签名及校验、安装到 `/Applications/ZMark.app`，版本 0.2.11。
+- `./scripts/bundle_macos.sh --install` 成功：release 编译、应用包签名及校验、安装到 `/Applications/ZMark.app`，版本 0.2.11（修复随 0.2.12 发布，发布门禁见 `docs/releases/v0.2.12.md`）。
 - `git diff --check` 通过。构建仍有 vendor 未使用项、objc 宏 cfg 和 block future-incompatibility 警告，不在本轮修复范围。
 - 回归测试未运行（按用户要求），未宣称 RED/GREEN 或 Windows 实机验证通过。后续可运行 `cargo test -p zmark_app --test app_state scratch_auto_save_waits_for_manual_save_as -- --test-threads=1`。
 - 自查最终 diff：仅增加自动保存资格的物理路径检查，保留缓冲区同步、任务清理和真实文件错误提示；用户已有的 `AGENTS.md` 修改和三个未跟踪 SVG 不纳入提交。
