@@ -1,0 +1,114 @@
+<template>
+  <style>
+    #finale { position: absolute; inset: 0; }
+    #finale .flood { position: absolute; inset: 0; z-index: 6; background: #1c1d21; }
+    #finale canvas.gl { z-index: 7; }
+    #finale .lock { position: absolute; z-index: 8; left: 556px; top: 250px; color: #f4f2ee; }
+    #finale .lock h1 { margin: 0; font: 800 96px/1 "Promo Sans", sans-serif; letter-spacing: -4.5px; }
+    #finale .lock .platforms { margin-top: 18px; font: 600 26px/1.2 "Promo Sans", sans-serif; color: #c9c6bf; }
+    #finale .cta { position: absolute; z-index: 8; left: 0; right: 0; top: 520px; display: flex; justify-content: center; align-items: center; gap: 12px; font: 600 24px/1 "Promo Mono", monospace; color: #f4f2ee; }
+    #finale .cta .icon { width: 22px; height: 22px; color: #e9a23b; }
+  </style>
+  <section id="finale" class="stage studio" data-composition-id="finale" data-width="1280" data-height="720">
+    <div class="workbench" data-palette="default"></div>
+    <div class="key" style="left:574px;top:640px"><span>⌘</span><span>3</span></div>
+    <div class="flood"></div>
+    <canvas class="gl" id="finale-gl" data-layout-ignore data-motion-blur="off"></canvas>
+    <div class="lock" data-hold><h1>ZMark</h1><div class="platforms"><span>macOS</span> · <span>Windows</span> · <span>Linux</span></div></div>
+    <div class="cta" data-hold><i class="icon" style="--icon:url(assets/icons/download.svg)"></i>github.com/2716190547/zmark/releases</div>
+  </section>
+  <script>
+    (() => {
+      const START = 58.5, END = 72;
+      scene('finale', ({ root, tl, find, all }) => {
+        const win = find('.workbench');
+        buildWorkbench(win, { title: 'release.md', mode: 'split', sidebar: true, late: true, saved: true });
+        win.querySelector('.tree').style.display = 'none';
+        win.querySelector('.outline').style.display = 'block';
+        win.querySelector('.files-tab').classList.remove('selected');
+        win.querySelector('.outline-tab').classList.add('selected');
+        win.querySelector('.ol-v12').classList.add('active');
+        const src = win.querySelector('.source .scroll');
+        const pre = win.querySelector('.preview .scroll');
+        const S0 = sourceTop(root, 9), P0 = previewTop(root, '.pv-v12');
+        // Preview mode reflows the page wider; its end is measured there.
+        win.style.setProperty('--cut', '0%');
+        const pane = win.querySelector('.preview');
+        const bottom = Math.max(0, pre.scrollHeight + 40 - pane.offsetHeight);
+        win.style.setProperty('--cut', '50%');
+        tl.set(src, { y: -S0 }, 0).set(pre, { y: -P0 }, 0);
+
+        // ⌘3: the page alone, read top to bottom.
+        pressKey(tl, find('.key'), 0.5, 0.7);
+        tl.to(win, { '--cut': '0%', duration: 0.7, ease: 'expo.out' }, 0.52)
+          .set(win.querySelector('.mode-split'), { className: 'mode-split' }, 0.52)
+          .set(win.querySelector('.mode-preview'), { className: 'mode-preview selected' }, 0.52)
+          .to(pre, { y: 0, duration: 0.7, ease: 'power2.inOut' }, 0.52)
+          .to(pre, { y: -bottom, duration: 2.9, ease: 'power1.inOut' }, 1.4)
+          // Night returns; the window steps back for the mark.
+          .to(win, { scale: 0.96, opacity: 0, filter: 'blur(6px)', duration: 0.6, ease: 'power2.inOut' }, 4.55)
+          .fromTo(find('.flood'), { opacity: 0 }, { opacity: 1, duration: 0.6, ease: 'power2.inOut' }, 4.5)
+          .fromTo(find('.lock h1'), { clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0 0% 0 0)', duration: 0.5, ease: 'power3.out' }, 5.7);
+        all('.platforms span').forEach((el, i) => {
+          tl.fromTo(el, { color: '#55524c' }, { color: '#f4f2ee', duration: 0.12 }, 6.2 + i * 0.32);
+        });
+        tl.fromTo(find('.platforms'), { opacity: 0 }, { opacity: 1, duration: 0.15 }, 6.1)
+          .fromTo(find('.cta'), { opacity: 0, filter: 'blur(6px)' }, { opacity: 1, filter: 'blur(0px)', duration: 0.2, ease: 'power3.out' }, 7.4);
+      });
+
+      // The app icon as a white plate with the "Z" standing out of it, traced
+      // from assets/zmark-icon.png (1024 px; plate 102–921, Z 262–761).
+      Stage3D.build('finale-gl', START, END, (THREE) => {
+        const { RoundedBoxGeometry } = window.THREE_EXTRA;
+        const { seg, lerp, ease } = Stage3D;
+        const canvas = document.getElementById('finale-gl');
+        const renderer = Stage3D.renderer(THREE, canvas);
+        const world = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(30, 1280 / 720, 0.1, 100);
+        camera.position.set(0, 0, 12);
+        Stage3D.paperLights(THREE, world);
+        const P = (x, y) => new THREE.Vector2((x - 512) / 820, -(y - 512) / 820);
+        const shape = (pts) => new THREE.Shape(pts.map(([x, y]) => P(x, y)));
+        const upper = shape([[262, 262], [761, 262], [574, 511], [262, 511]]);
+        const lower = shape([[449, 512], [761, 512], [761, 761], [262, 761]]);
+        const grad = document.createElement('canvas');
+        grad.width = grad.height = 256;
+        const g = grad.getContext('2d');
+        const lg = g.createLinearGradient(0, 0, 256, 256);
+        lg.addColorStop(0, '#c24127');
+        lg.addColorStop(1, '#f49d0b');
+        g.fillStyle = lg;
+        g.fillRect(0, 0, 256, 256);
+        const tex = new THREE.CanvasTexture(grad);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const zMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.42 });
+        const zGeo = new THREE.ExtrudeGeometry([upper, lower], { depth: 0.07, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.006, bevelSegments: 2 });
+        // Map UVs across the Z's bounding box so the gradient runs corner to corner.
+        const uv = zGeo.attributes.uv, xy = zGeo.attributes.position;
+        for (let i = 0; i < uv.count; i += 1) uv.setXY(i, (xy.getX(i) + 0.305) / 0.61, 1 - (0.305 - xy.getY(i)) / 0.61);
+        const plate = new THREE.Group();
+        const body = new THREE.Mesh(new RoundedBoxGeometry(1, 1, 0.16, 6, 0.075), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.45 }));
+        const z = new THREE.Mesh(zGeo, zMat);
+        z.position.z = 0.08;
+        plate.add(body, z);
+        world.add(plate);
+
+        // Screen size of the plate in the lockup: 150 px, centred at (440, 318).
+        const halfH = Math.tan(THREE.MathUtils.degToRad(15)) * 12;
+        const perPx = (2 * halfH) / 720;
+        const at = (sx, sy) => [(sx - 640) * perPx, -(sy - 360) * perPx];
+        const [ex, ey] = at(450, 318);
+        const [sx, sy] = at(640, 420);
+        const draw = (t) => {
+          const k = ease.out4(seg(t, 4.6, 5.65));
+          canvas.style.opacity = t >= 4.6 ? '1' : '0';
+          plate.position.set(lerp(sx, ex, k), lerp(sy, ey, k), lerp(-3, 0, k));
+          plate.rotation.set(lerp(-1.45, 0, k), lerp(0.5, 0, k), lerp(-0.25, 0, k));
+          plate.scale.setScalar(lerp(40, 150, k) * perPx);
+          renderer.render(world, camera);
+        };
+        return renderer.compileAsync(world, camera).then(() => { draw(5.7); return draw; });
+      });
+    })();
+  </script>
+</template>
