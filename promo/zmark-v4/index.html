@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>ZMark · 一秒变排版</title>
+<script src="assets/vendor/gsap.min.js"></script>
+<style>
+  @font-face { font-family: "Promo Sans"; src: url("assets/fonts/noto-sans-sc-500.woff2") format("woff2"); font-weight: 500; }
+  @font-face { font-family: "Promo Sans"; src: url("assets/fonts/noto-sans-sc-800.woff2") format("woff2"); font-weight: 800; }
+  @font-face { font-family: "Promo Mono"; src: url("assets/fonts/jetbrains-mono.woff2") format("woff2"); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #f6f3ee; }
+  #film { position: relative; width: 1280px; height: 720px; overflow: hidden; background: #f6f3ee;
+    font-family: "Promo Sans", sans-serif; color: #1f2329; }
+  .bg { position: absolute; inset: 0; background: #f6f3ee; }
+  .layer { position: absolute; inset: 0; }
+
+  /* Short titles: one per shot, top-left band y 36–110. Canvas 1280×720, rendered at 2× (2560×1440). */
+  .title { position: absolute; left: 64px; top: 36px; margin: 0; opacity: 0;
+    font: 800 52px/1.2 "Promo Sans", sans-serif; letter-spacing: -0.5px; white-space: nowrap; }
+  .title .ch { display: inline-block; }
+  .accent, .title .accent { background: linear-gradient(120deg, #c24127, #f49d0b); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+  /* Real side-by-side split: left 40–638, cut line 638–642, right 642–1240; y 130–700. */
+  .pane { position: absolute; top: 130px; width: 598px; height: 570px; overflow: hidden; }
+  .pane.top { left: 40px; } .pane.bot { left: 642px; }
+  .cut { position: absolute; left: 638px; top: 130px; width: 4px; height: 570px; background: linear-gradient(180deg, #c24127, #f49d0b); transform-origin: 50% 50%; }
+  .chip { position: absolute; z-index: 6; top: 652px; padding: 6px 14px; border-radius: 999px; background: rgba(31,35,41,.82); color: #fff;
+    font: 500 20px/1 "Promo Sans", sans-serif; opacity: 0; }
+  .chip.top { right: 660px; } .chip.bot { left: 660px; }
+  .key { position: absolute; left: 560px; top: 50px; z-index: 6; padding: 8px 16px; border-radius: 10px; background: #fff; color: #1f2329;
+    box-shadow: 0 4px 14px rgba(0,0,0,.12); font: 800 22px/1 "Promo Sans", sans-serif; opacity: 0; }
+  .note { position: absolute; right: 40px; top: 58px; padding: 6px 14px; border-radius: 999px; background: #fff; z-index: 6; font: 500 20px/1 "Promo Sans", sans-serif; color: #6a6a6a; opacity: 0; }
+
+  /* Hook text: raw on the left, the right half wipes to rendered. */
+  .raw, .ren { position: absolute; width: 540px; }
+  .raw { font: 400 28px/1.6 "Promo Mono", "Promo Sans", monospace; color: #3a3d42; white-space: pre; }
+  .raw b { color: #d9532f; font-weight: 400; }
+  .ren h1 { margin: 0 0 10px; font: 800 40px/1.15 "Promo Sans", sans-serif; }
+  .ren blockquote { margin: 0 0 12px; padding: 2px 0 2px 16px; border-left: 6px solid #d9532f; color: #6b6b6b; font: 500 26px/1.45 "Promo Sans", sans-serif; }
+  .ren ul { margin: 0; padding-left: 32px; font: 500 26px/1.5 "Promo Sans", sans-serif; }
+  .ren strong { font-weight: 800; }
+  .plain { position: absolute; left: 680px; width: 520px; top: 200px; height: 200px; background: #fff; border: 2px solid #c8c8c8; }
+  .plain .bar { height: 34px; border-bottom: 2px solid #e0e0e0; background: #efefef; color: #8a8a8a; font: 500 20px/32px "Promo Sans", sans-serif; padding-left: 14px; }
+  .caret { display: inline-block; width: 3px; height: 30px; margin-left: 3px; vertical-align: -6px; background: #1f2329; }
+
+  /* Footage: crop windows over the Retina window captures (panes 1440 wide, full window 2880×2000). */
+  .mover { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  .mover video, .mover img { position: absolute; left: 0; top: 0; width: 2880px; }
+  .pane .mover video { width: 1440px; }
+  .mover .tall { height: 2000px; } .mover .short { height: 1280px; }
+  .full { position: absolute; inset: 0; overflow: hidden; }
+  .full .mover img, .full .mover video { border-radius: 40px; }
+  .shadow { position: absolute; left: 0; top: 0; width: 2880px; height: 2000px; border-radius: 40px; box-shadow: 0 60px 160px rgba(40,30,20,.28); background: #f5f4f0; }
+
+  /* Logo, facts, end card. */
+  .logo { position: absolute; left: 500px; top: 120px; width: 280px; height: 280px; }
+  .word { position: absolute; left: 0; right: 0; top: 420px; text-align: center; font: 800 84px/1 "Promo Sans", sans-serif; letter-spacing: -2px; opacity: 0; }
+  .fact { position: absolute; left: 120px; font: 800 72px/1.1 "Promo Sans", sans-serif; opacity: 0; }
+  .fact.small { font-size: 40px; font-weight: 500; color: #4a4d52; }
+  .end-sub { position: absolute; left: 0; right: 0; top: 540px; text-align: center; font: 500 28px/1 "Promo Sans", sans-serif; color: #4a4d52; opacity: 0; }
+  .url { position: absolute; left: 430px; right: 430px; top: 468px; padding: 14px 0; text-align: center; border-radius: 999px; background: #1f2329; color: #fff;
+    font: 500 22px/1 "Promo Mono", monospace; opacity: 0; }
+  .credit { position: absolute; left: 0; right: 0; top: 600px; text-align: center; font: 500 20px/1.5 "Promo Sans", sans-serif; color: #666; opacity: 0; }
+</style>
+</head>
+<body>
+<main id="film" data-composition-id="film" data-start="0" data-duration="55.08" data-width="1280" data-height="720" data-fps="60">
+  <div class="bg"></div>
+
+  <!-- 1–3 hook, pain, reveal (0–11.80) -->
+  <section id="s-hook" class="clip layer" data-start="0" data-duration="11.80" data-track-index="1">
+    <div id="raw-top" class="raw" style="left:80px;top:200px"># 学而篇笔记
+&gt; 学而时习之，不亦说乎
+- <b>**</b>学<b>**</b>：按时温习</div>
+    <div id="bot-raw" class="layer">
+      <div class="raw" style="left:680px;top:200px"># 学而篇笔记
+&gt; 学而时习之，不亦说乎
+- <b>**</b>学<b>**</b>：按时温习</div>
+    </div>
+    <div id="bot-ren" class="layer">
+      <div class="ren" style="left:680px;top:196px">
+        <h1>学而篇笔记</h1>
+        <blockquote>学而时习之，不亦说乎</blockquote>
+        <ul><li><strong>学</strong>：按时温习</li></ul>
+      </div>
+    </div>
+    <div id="plain" class="plain">
+      <div class="bar">笔记.txt</div>
+      <div class="raw" style="left:16px;top:44px;font-size:24px;line-height:1.5;color:#555"># 学而篇笔记
+&gt; 学而时习之，不亦说乎
+- **学**：按时温习<span id="caret" class="caret"></span></div>
+    </div>
+    <div id="hook-cut" class="cut"></div>
+    <svg id="logo" class="logo" data-layout-allow-overflow viewBox="0 0 1024 1024" aria-label="ZMark">
+      <defs><linearGradient id="zg" x1="262" y1="262" x2="762" y2="762" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#c24127"/><stop offset="1" stop-color="#f49d0b"/></linearGradient>
+        <filter id="tileShadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="18" stdDeviation="26" flood-color="#3a2a1a" flood-opacity=".16"/></filter></defs>
+      <rect id="tile" x="102" y="102" width="820" height="820" rx="190" fill="#fff" filter="url(#tileShadow)"/>
+      <polygon id="zTop" points="262,262 762,262 575,512 262,512" fill="url(#zg)"/>
+      <polygon id="zBot" points="450,512 762,512 762,762 262,762" fill="url(#zg)"/>
+    </svg>
+    <div id="word" class="word">ZMark</div>
+    <h2 id="t1a" class="title">这是<span class="accent">你写的</span></h2>
+    <h2 id="t1b" class="title">这是<span class="accent">别人看到的</span></h2>
+    <h2 id="t2" class="title">写完还得<span class="accent">再排一遍</span>？</h2>
+  </section>
+
+  <!-- 4–6 side-by-side split footage (11.80–33.44) -->
+  <section id="s-split" class="clip layer" data-start="11.80" data-duration="21.64" data-track-index="1">
+    <div class="cut"></div>
+    <div id="chip-t" class="chip top">你写的</div>
+    <div id="chip-b" class="chip bot">别人看到的</div>
+    <div id="key2" class="key">⌘2 分屏</div>
+    <div id="note4" class="note" data-layout-allow-safe-zone>演示画面已加速</div>
+    <h2 id="t4" class="title">边写，<span class="accent">边成稿</span></h2>
+    <h2 id="t5" class="title">长文也<span class="accent">对得齐</span></h2>
+    <h2 id="t6" class="title">图，也是<span class="accent">写出来的</span></h2>
+  </section>
+  <div class="pane top" style="z-index:3">
+    <div id="mt" class="mover">
+      <video id="v4t" class="clip tall" src="assets/footage/takeA-src.mp4" muted playsinline data-start="11.80" data-duration="7.87" data-media-start="1.8" data-playback-rate="2" data-track-index="3"></video>
+      <video id="v5t" class="clip short" src="assets/footage/takeC-src.mp4" muted playsinline data-start="19.67" data-duration="5.90" data-media-start="0.9" data-track-index="3"></video>
+      <video id="v6t" class="clip tall" src="assets/footage/takeB-src.mp4" muted playsinline data-start="25.57" data-duration="7.87" data-media-start="2.4" data-playback-rate="1.2" data-track-index="3"></video>
+    </div>
+  </div>
+  <div class="pane bot" style="z-index:3">
+    <div id="mb" class="mover">
+      <video id="v4b" class="clip tall" src="assets/footage/takeA-pre.mp4" muted playsinline data-start="11.80" data-duration="7.87" data-media-start="1.8" data-playback-rate="2" data-track-index="4"></video>
+      <video id="v5b" class="clip short" src="assets/footage/takeC-pre.mp4" muted playsinline data-start="19.67" data-duration="5.90" data-media-start="0.9" data-track-index="4"></video>
+      <video id="v6b" class="clip tall" src="assets/footage/takeB-pre.mp4" muted playsinline data-start="25.57" data-duration="7.87" data-media-start="2.4" data-playback-rate="1.2" data-track-index="4"></video>
+    </div>
+  </div>
+
+  <!-- 7–8 whole window: 8 palettes, then ⌘3 and pull back (33.44–45.25) -->
+  <div class="full" style="z-index:2">
+    <div id="mf" class="mover">
+      <div id="winShadow" class="clip shadow" data-start="33.44" data-duration="11.81" data-track-index="5"></div>
+      <img id="p1" class="clip" src="assets/palettes/1-default-light.jpg" alt="Default" data-start="33.44" data-duration="0.4918" data-track-index="6">
+      <img id="p2" class="clip" src="assets/palettes/2-tokyo-night-dark.jpg" alt="Tokyo Night" data-start="33.9318" data-duration="0.4918" data-track-index="6">
+      <img id="p3" class="clip" src="assets/palettes/3-claude-light.jpg" alt="Claude Warm" data-start="34.4236" data-duration="0.4918" data-track-index="6">
+      <img id="p4" class="clip" src="assets/palettes/4-one-dark-dark.jpg" alt="One Dark Pro" data-start="34.9154" data-duration="0.4918" data-track-index="6">
+      <img id="p5" class="clip" src="assets/palettes/5-solarized-light.jpg" alt="Solarized" data-start="35.4072" data-duration="0.4918" data-track-index="6">
+      <img id="p6" class="clip" src="assets/palettes/6-nord-dark.jpg" alt="Nord" data-start="35.899" data-duration="0.4918" data-track-index="6">
+      <img id="p7" class="clip" src="assets/palettes/7-github-light.jpg" alt="GitHub" data-start="36.3908" data-duration="0.4918" data-track-index="6">
+      <img id="p8" class="clip" src="assets/palettes/8-macos-dark.jpg" alt="macOS" data-start="36.8826" data-duration="0.4918" data-track-index="6">
+      <img id="p9" class="clip" src="assets/palettes/1-default-light.jpg" alt="Default" data-start="37.3744" data-duration="1.4756" data-track-index="6">
+      <video id="v8" class="clip tall" src="assets/footage/takeD.mp4" muted playsinline data-start="38.85" data-duration="2.95" data-media-start="1.71" data-track-index="6"></video>
+      <img id="still8" data-hold class="clip tall" src="assets/footage/preview-still.jpg" alt="ZMark 预览模式" data-start="41.80" data-duration="3.45" data-track-index="6">
+    </div>
+  </div>
+  <section id="s-full" class="clip layer" data-start="33.44" data-duration="11.81" data-track-index="2" style="z-index:4">
+    <div id="pal-name" class="note" style="left:330px;right:auto;top:56px;font-size:22px;color:#4a4d52"></div>
+    <div id="key3" class="key">⌘3 预览</div>
+    <h2 id="t7" class="title"><span class="accent">8</span> 套配色</h2>
+    <h2 id="t8a" class="title">写的是<span class="accent">纯文本</span></h2>
+    <h2 id="t8b" class="title">读的是<span class="accent">成稿</span></h2>
+  </section>
+
+  <!-- 9–10 facts and end card (45.25–55.08) -->
+  <section id="s-end" class="clip layer" data-start="45.25" data-duration="9.83" data-track-index="1">
+    <div id="f1" class="fact" style="top:170px">本地文件</div>
+    <div id="f2" class="fact" style="top:270px"><span class="accent">开源免费</span></div>
+    <div id="f3" class="fact small" style="top:400px">macOS · Windows · Linux</div>
+    <svg id="logo2" class="logo" viewBox="0 0 1024 1024" style="left:550px;top:70px;width:180px;height:180px" aria-label="ZMark">
+      <defs><linearGradient id="zg2" x1="262" y1="262" x2="762" y2="762" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#c24127"/><stop offset="1" stop-color="#f49d0b"/></linearGradient>
+        <filter id="tileShadow2" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="18" stdDeviation="26" flood-color="#3a2a1a" flood-opacity=".16"/></filter></defs>
+      <rect x="102" y="102" width="820" height="820" rx="190" fill="#fff" filter="url(#tileShadow2)"/>
+      <polygon points="262,262 762,262 575,512 262,512" fill="url(#zg2)"/>
+      <polygon points="450,512 762,512 762,762 262,762" fill="url(#zg2)"/>
+    </svg>
+    <div id="word2" class="word" style="top:270px">ZMark</div>
+    <div id="endsub" class="end-sub">免费下载 · 开源</div>
+    <div id="url" class="url">github.com/2716190547/zmark</div>
+    <div id="credit" class="credit">音乐：Voxel Revolution<br>Kevin MacLeod · CC BY 4.0</div>
+  </section>
+
+  <audio id="master" class="clip" src="assets/audio/master.m4a" data-start="0" data-duration="55.08" data-track-index="7" data-volume="1"></audio>
+</main>
+
+<script>
+const B = 1.967, b = B / 4;
+const tl = gsap.timeline({ paused: true });
+const E = 'power3.out';
+
+function split(el) {
+  const walk = (node) => Array.from(node.childNodes).forEach((n) => {
+    if (n.nodeType === 3) {
+      const frag = document.createDocumentFragment();
+      Array.from(n.textContent).forEach((c) => { const s = document.createElement('span'); s.className = 'ch'; s.textContent = c; frag.appendChild(s); });
+      n.replaceWith(frag);
+    } else walk(n);
+  });
+  walk(el);
+  // Each char keeps the parent's gradient by carrying the accent class itself.
+  el.querySelectorAll('.accent .ch').forEach((c) => c.classList.add('accent'));
+  el.querySelectorAll('.accent').forEach((a) => { if (!a.classList.contains('ch')) a.classList.remove('accent'); });
+  return el.querySelectorAll('.ch');
+}
+function title(id, at, until, instant = false) {
+  const el = document.getElementById(id), chars = split(el);
+  tl.set(el, { opacity: 1 }, at);
+  if (!instant) chars.forEach((c, i) => tl.fromTo(c, { opacity: 0, y: 26, filter: 'blur(10px)' }, { opacity: 1, y: 0, filter: 'blur(0px)', duration: 0.22, ease: E }, at + i * 0.03));
+  tl.to(el, { opacity: 0, duration: 0.16, ease: 'power2.in' }, until - 0.16);
+}
+function show(sel, at, from = { opacity: 0, y: 24 }) { tl.fromTo(sel, from, { opacity: 1, y: 0, scale: 1, duration: 0.3, ease: E }, at); }
+tl.set(['.title', '.chip', '.key', '.note', '.word', '.fact', '.end-sub', '.url', '.credit'], { opacity: 0 }, 0);
+
+// 1 Hook: the whole frame is raw text; on beat 3 a vertical cut wipes the right half into its rendered form.
+title('t1a', 0, 2 * b, true); // on screen from frame 0 until the cut on beat 3
+title('t1b', 2 * b, 2 * B);
+tl.fromTo('#bot-ren', { clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0 0% 0 0)', duration: 0.26, ease: 'power4.out' }, 2 * b);
+tl.fromTo('#bot-raw', { clipPath: 'inset(0 0 0 0%)' }, { clipPath: 'inset(0 0 0 100%)', duration: 0.26, ease: 'power4.out' }, 2 * b);
+tl.fromTo('#hook-cut', { scaleY: 0 }, { scaleY: 1, duration: 0.26, ease: 'power4.out' }, 2 * b);
+tl.fromTo('#raw-top', { scale: 1.06, opacity: 0.6 }, { scale: 1, opacity: 1, duration: 0.5, ease: E }, 0);
+
+// 2 Pain: an ordinary text box shows the same note, still raw.
+title('t2', 2 * B, 4 * B);
+tl.set('#bot-ren', { opacity: 1 }, 0).to('#bot-ren', { opacity: 0, duration: 0.2 }, 2 * B);
+tl.fromTo('#plain', { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.3, ease: E }, 2 * B);
+tl.to('#raw-top', { opacity: 0.25, duration: 0.3 }, 2 * B);
+for (let i = 0; i < 8; i++) tl.set('#caret', { opacity: i % 2 ? 1 : 0 }, 2 * B + 0.25 + i * 0.45);
+tl.set('#plain', { opacity: 0 }, 0);
+
+// 3 Reveal: the cut line turns into the slash of the Z; the halves lock on the bar at 9.835.
+const R = 4 * B;
+tl.to(['#raw-top', '#plain'], { opacity: 0, y: -20, duration: 0.25, ease: 'power2.in' }, R - 0.1);
+tl.to('#hook-cut', { y: -155, scaleY: 0.4, rotation: 36.8, duration: 0.7, ease: 'power3.inOut' }, R);
+tl.to('#hook-cut', { opacity: 0, duration: 0.15 }, 5 * B - 0.05);
+tl.fromTo('#tile', { scale: 0.2, opacity: 0, svgOrigin: '512 512' }, { scale: 1, opacity: 1, duration: 0.6, ease: 'back.out(1.6)' }, R + 0.55);
+tl.fromTo('#zTop', { x: -520, y: 0, opacity: 0 }, { x: 0, opacity: 1, duration: 0.75, ease: 'power4.out' }, 5 * B - 0.75);
+tl.fromTo('#zBot', { x: 520, y: 0, opacity: 0 }, { x: 0, opacity: 1, duration: 0.75, ease: 'power4.out' }, 5 * B - 0.75);
+tl.fromTo('#logo', { scale: 1 }, { scale: 1.08, duration: 0.08, yoyo: true, repeat: 1, ease: 'power2.out' }, 5 * B);
+tl.set('#logo', { opacity: 0 }, 0).set('#logo', { opacity: 1 }, R + 0.5);
+show('#word', 5 * B + b);
+tl.to(['#logo', '#word'], { opacity: 0, y: -30, duration: 0.25, ease: 'power2.in' }, 6 * B - 0.25);
+
+// 4–6 Split. Pane camera: source file at x0 = 90, preview file at x0 = 5, scale 0.46; y in recording pixels.
+const S = 0.46;
+const cam = (id, x0, y0, at, dur = 0, ease = 'power2.inOut') => dur
+  ? tl.to(id, { x: -x0 * S, y: -y0 * S, scale: S, duration: dur, ease }, at)
+  : tl.set(id, { x: -x0 * S, y: -y0 * S, scale: S }, at);
+const T4 = 6 * B, T5 = 10 * B, T6 = 13 * B, T7 = 17 * B;
+// The newest typed line (measured per 0.5 s from the recordings) stays about 70% down each pane (1239 recording px tall).
+cam('#mt', 90, 0, 0); cam('#mb', 5, 0, 0);
+cam('#mt', 90, 0, 11.902);
+cam('#mt', 90, 129, 16.152, 0.5, 'power1.inOut');
+cam('#mt', 90, 193, 16.652, 0.5, 'power1.inOut');
+cam('#mt', 90, 269, 17.152, 0.75, 'power1.inOut');
+cam('#mt', 90, 337, 17.902, 0.5, 'power1.inOut');
+cam('#mt', 90, 409, 18.402, 0.75, 'power1.inOut');
+cam('#mb', 5, 0, 11.902);
+cam('#mb', 5, 444, 18.152, 0.25, 'power1.inOut');
+cam('#mb', 5, 564, 18.402, 0.5, 'power1.inOut');
+cam('#mb', 5, 761, 18.902, 0.8, 'power1.inOut');
+cam('#mt', 90, 20, T5); cam('#mb', 5, 20, T5);
+// Shot 6: follow the fence as it is typed, then push in on the rendered flowchart.
+cam('#mt', 90, 640, T6); cam('#mt', 90, 761, T6 + 0.3, 4.6, 'power1.inOut');
+cam('#mb', 5, 761, T6);
+title('t4', T4, T5); title('t5', T5, T6); title('t6', T6, T7);
+show('#chip-t', T4 + 0.1); show('#chip-b', T4 + 0.2);
+tl.to(['#chip-t', '#chip-b'], { opacity: 0, duration: 0.2 }, T4 + 0.9); // gone before the panes start to follow the typing
+show('#key2', T4, { opacity: 0, scale: 0.8, y: 0 }); tl.to('#key2', { opacity: 0, duration: 0.2 }, T4 + 2 * B);
+show('#note4', T4 + 2 * B, { opacity: 0, y: 0 }); tl.to('#note4', { opacity: 0, duration: 0.2 }, T5 - 0.2);
+
+// 7 Eight palettes, one per beat, on the whole window.
+const full = (x, y, s) => ({ x, y, scale: s });
+const WIDE = full(222, 125, 0.29), CLOSE = full(6, 130, 0.44);
+tl.set('#mf', WIDE, 0);
+title('t7', T7, 38.85);
+const names = ['Default', 'Tokyo Night', 'Claude Warm', 'One Dark Pro', 'Solarized Light', 'Nord', 'GitHub Light', 'macOS Vibrant'];
+const pal = document.getElementById('pal-name');
+tl.set('#pal-name', { opacity: 1 }, T7);
+names.forEach((n, i) => tl.call(() => { pal.textContent = n; }, null, T7 + i * b));
+tl.call(() => { pal.textContent = 'Default'; }, null, T7 + 8 * b);
+tl.to('#pal-name', { opacity: 0, duration: 0.2 }, 38.85 - 0.2);
+
+// 8 Climax: close on the window, ⌘3 flips it to the rendered page on the bar at 39.34, then pull back.
+const T8 = 38.85, HIT = 20 * B;
+tl.set('#mf', CLOSE, T8);
+title('t8a', T8, 21 * B);
+title('t8b', 21 * B, 23 * B);
+show('#key3', HIT - 0.1, { opacity: 0, scale: 0.8, y: 0 }); tl.to('#key3', { opacity: 0, duration: 0.2 }, HIT + 1.2);
+// The close-up holds the full window width, so the centred preview page stays in frame; punch on the hit, then pull back.
+tl.fromTo('#mf', CLOSE, { ...full(20, 136, 0.43), duration: 0.12, yoyo: true, repeat: 1, ease: 'power2.out' }, HIT);
+tl.to('#mf', { ...WIDE, duration: 1.6, ease: 'power3.inOut' }, HIT + 0.5);
+
+// 9 Facts on the beat.
+const T9 = 23 * B;
+show('#f1', T9); show('#f2', T9 + b); show('#f3', T9 + 2 * b);
+tl.to(['#f1', '#f2', '#f3'], { opacity: 0, y: -24, duration: 0.25, ease: 'power2.in' }, 25 * B - 0.25);
+
+// 10 End card.
+const T10 = 25 * B;
+tl.set('#logo2', { opacity: 0 }, 0);
+tl.fromTo('#logo2', { opacity: 0, scale: 0.6 }, { opacity: 1, scale: 1, duration: 0.5, ease: 'back.out(1.7)' }, T10);
+show('#word2', T10 + b); show('#endsub', T10 + 2 * b); show('#url', T10 + B); show('#credit', T10 + B + b, { opacity: 0, y: 0 });
+
+window.__timelines = window.__timelines || {};
+window.__timelines.film = tl;
+</script>
+</body>
+</html>

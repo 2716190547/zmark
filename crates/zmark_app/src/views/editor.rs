@@ -289,6 +289,102 @@ pub struct DocumentLayoutCache {
     pub metrics: VisualLayoutMetrics,
 }
 
+const MAX_CORE_TEXT_SHAPE_BYTES: usize = 2048;
+const MAX_SYNC_SHAPE_LINES: usize = 250;
+
+#[derive(Clone, Copy)]
+struct MonoMetrics {
+    ascii_width: f32,
+    cjk_width: f32,
+}
+
+impl MonoMetrics {
+    fn measure(text_system: &gpui::WindowTextSystem, font_size: f32) -> Self {
+        let run = |len| TextRun {
+            len,
+            font: gpui::font(crate::platform::MONO_FONT),
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let ascii_sample = "MMMMMMMMMM";
+        let cjk_sample = "中中中中中";
+        let ascii_width = (f32::from(
+            text_system
+                .shape_line(ascii_sample.into(), px(font_size), &[run(ascii_sample.len())], None)
+                .width,
+        ) / 10.0)
+            .max((font_size * 0.5).max(1.0));
+        let cjk_width = (f32::from(
+            text_system
+                .shape_line(cjk_sample.into(), px(font_size), &[run(cjk_sample.len())], None)
+                .width,
+        ) / 5.0)
+            .max(ascii_width);
+        Self { ascii_width, cjk_width }
+    }
+
+    fn char_width(self, ch: char) -> f32 {
+        if crate::editor_engine::char_unit_width(ch) >= 2 {
+            self.cjk_width
+        } else {
+            self.ascii_width
+        }
+    }
+}
+
+fn wrap_line_fast_monospace(
+    physical_line_idx: usize,
+    line: &str,
+    is_fenced: bool,
+    max_width_px: f32,
+    metrics: MonoMetrics,
+) -> CachedLineEntry {
+    let natural_width_px: f32 = line.chars().map(|ch| metrics.char_width(ch)).sum();
+    let visual_lines = crate::editor_engine::wrap_line_to_visual_measured(
+        physical_line_idx,
+        line,
+        max_width_px,
+        |_, ch| metrics.char_width(ch),
+    );
+    let spans = visual_lines
+        .into_iter()
+        .map(|v| LineVisualSpan {
+            char_start: v.char_start,
+            char_len: v.char_len,
+            is_first: v.is_first,
+        })
+        .collect();
+    let (text_hash, text_len) = line_fingerprint(line);
+    CachedLineEntry {
+        text_hash,
+        text_len,
+        is_fenced,
+        spans,
+        natural_width_px,
+    }
+}
+
+fn shape_single_line_with_budget(
+    text_system: &gpui::WindowTextSystem,
+    i: usize,
+    line: &str,
+    is_fenced: bool,
+    total_lines: usize,
+    max_width_px: f32,
+    font_size: f32,
+    mono_metrics: &mut Option<MonoMetrics>,
+) -> CachedLineEntry {
+    let use_fast_path = line.len() > MAX_CORE_TEXT_SHAPE_BYTES
+        || (total_lines > MAX_SYNC_SHAPE_LINES && (is_fenced || i >= MAX_SYNC_SHAPE_LINES));
+    if use_fast_path {
+        let metrics = *mono_metrics.get_or_insert_with(|| MonoMetrics::measure(text_system, font_size));
+        return wrap_line_fast_monospace(i, line, is_fenced, max_width_px, metrics);
+    }
+    shape_single_line(text_system, i, line, is_fenced, max_width_px, font_size)
+}
+
 fn shape_single_line(
     text_system: &gpui::WindowTextSystem,
     i: usize,
@@ -336,10 +432,12 @@ fn evaluate_matching_line(
     i: usize,
     line: &str,
     is_fenced: bool,
+    total_lines: usize,
     width_changed: bool,
     max_width_px: f32,
     font_size: f32,
     text_system: &gpui::WindowTextSystem,
+    mono_metrics: &mut Option<MonoMetrics>,
 ) -> (CachedLineEntry, bool) {
     if !width_changed {
         (old, true)
@@ -360,7 +458,16 @@ fn evaluate_matching_line(
         )
     } else {
         (
-            shape_single_line(text_system, i, line, is_fenced, max_width_px, font_size),
+            shape_single_line_with_budget(
+                text_system,
+                i,
+                line,
+                is_fenced,
+                total_lines,
+                max_width_px,
+                font_size,
+                mono_metrics,
+            ),
             false,
         )
     }
@@ -394,6 +501,8 @@ impl DocumentLayoutCache {
 
         let mut shaped_count = 0;
         let mut reused_count = 0;
+        let total_lines = lines.len();
+        let mut mono_metrics: Option<MonoMetrics> = None;
 
         let old_entries = std::mem::take(&mut self.entries);
         let mut new_entries = Vec::with_capacity(lines.len());
@@ -415,10 +524,12 @@ impl DocumentLayoutCache {
                         i,
                         line,
                         is_fenced,
+                        total_lines,
                         width_changed,
                         max_width_px,
                         font_size,
                         text_system,
+                        &mut mono_metrics,
                     );
                     new_entries.push(entry);
                     if is_reused {
@@ -427,13 +538,15 @@ impl DocumentLayoutCache {
                         shaped_count += 1;
                     }
                 } else {
-                    new_entries.push(shape_single_line(
+                    new_entries.push(shape_single_line_with_budget(
                         text_system,
                         i,
                         line,
                         is_fenced,
+                        total_lines,
                         max_width_px,
                         font_size,
+                        &mut mono_metrics,
                     ));
                     shaped_count += 1;
                 }
@@ -474,10 +587,12 @@ impl DocumentLayoutCache {
                     i,
                     &lines[i],
                     fenced_lines[i],
+                    total_lines,
                     width_changed,
                     max_width_px,
                     font_size,
                     text_system,
+                    &mut mono_metrics,
                 );
                 new_entries.push(entry);
                 if is_reused {
@@ -489,13 +604,15 @@ impl DocumentLayoutCache {
 
             let middle_end = lines.len() - suffix;
             for i in prefix..middle_end {
-                new_entries.push(shape_single_line(
+                new_entries.push(shape_single_line_with_budget(
                     text_system,
                     i,
                     &lines[i],
                     fenced_lines[i],
+                    total_lines,
                     max_width_px,
                     font_size,
+                    &mut mono_metrics,
                 ));
                 shaped_count += 1;
             }
@@ -507,10 +624,12 @@ impl DocumentLayoutCache {
                     i,
                     &lines[i],
                     fenced_lines[i],
+                    total_lines,
                     width_changed,
                     max_width_px,
                     font_size,
                     text_system,
+                    &mut mono_metrics,
                 );
                 new_entries.push(entry);
                 if is_reused {
@@ -525,13 +644,15 @@ impl DocumentLayoutCache {
                 .zip(fenced_lines.iter())
                 .enumerate()
             {
-                new_entries.push(shape_single_line(
+                new_entries.push(shape_single_line_with_budget(
                     text_system,
                     i,
                     line,
                     is_fenced,
+                    total_lines,
                     max_width_px,
                     font_size,
+                    &mut mono_metrics,
                 ));
                 shaped_count += 1;
             }
@@ -712,6 +833,7 @@ pub fn render_editor_pane(
                     }
                 }
 
+                let mut cached_phys_tokens: Option<(usize, Vec<MarkdownToken>)> = None;
                 range
                     .map(|vis_idx| {
                         let vl = list_visual_lines.get(vis_idx);
@@ -738,17 +860,24 @@ pub fn render_editor_pane(
                             String::new()
                         };
 
-                        let phys_tokens = if plain_text && (!is_ast_in_sync || code_blocks.is_empty()) {
-                            vec![MarkdownToken { text: phys_line_str.to_owned(), kind: MarkdownTokenKind::Plain }]
-                        } else {
-                            physical_line_tokens(phys_idx, phys_line_str, &code_blocks, is_ast_in_sync, &block_spans)
+                        let phys_tokens = match &cached_phys_tokens {
+                            Some((cached_idx, tokens)) if *cached_idx == phys_idx => tokens,
+                            _ => {
+                                let tokens = if plain_text && (!is_ast_in_sync || code_blocks.is_empty()) {
+                                    vec![MarkdownToken { text: phys_line_str.to_owned(), kind: MarkdownTokenKind::Plain }]
+                                } else {
+                                    physical_line_tokens(phys_idx, phys_line_str, &code_blocks, is_ast_in_sync, &block_spans)
+                                };
+                                cached_phys_tokens = Some((phys_idx, tokens));
+                                &cached_phys_tokens.as_ref().unwrap().1
+                            }
                         };
                         let (sub_start, sub_len) = if let Some(v) = vl {
                             (v.char_start, v.char_len)
                         } else {
                             (0, phys_line_str.chars().count())
                         };
-                        let tokens = slice_tokens_for_visual_subline(&phys_tokens, sub_start, sub_len);
+                        let tokens = slice_tokens_for_visual_subline(phys_tokens, sub_start, sub_len);
 
                         let row_h = calculate_line_row_height(font_size, sanitized_lh);
                         let click_left = list_source.clone();

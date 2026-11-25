@@ -128,6 +128,7 @@ if ! codesign --verify --deep --strict "$APP_DEST"; then
     echo "error: installed bundle failed signature verification" >&2
     exit 1
 fi
+if [ "$HAD_OLD" -eq 1 ]; then rm -rf "$BACKUP"; fi
 touch "$APP_DEST"
 
 echo "==> Registering with macOS LaunchServices..."
