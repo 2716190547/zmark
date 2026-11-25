@@ -275,3 +275,18 @@ fn leading_edge_continuations_render_with_classes_and_unicode_labels() {
         assert!(svg.contains(label), "missing node: {label}");
     }
 }
+
+#[test]
+fn non_ascii_flowchart_node_ids_render_to_svg() {
+    let diagram = r#"flowchart LR
+  学 --> 习 --> 悦
+  友 --> 乐
+  悦 --> 君子
+  乐 --> 君子
+"#;
+    let svg = render_to_svg(diagram).expect("CJK node IDs in flowchart should render");
+    assert!(svg.contains("<svg") && svg.contains("</svg>"));
+    for node in ["学", "习", "悦", "友", "乐", "君子"] {
+        assert!(svg.contains(node), "missing node in SVG: {node}");
+    }
+}

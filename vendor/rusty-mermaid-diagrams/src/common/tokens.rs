@@ -48,11 +48,11 @@ pub fn separator(input: &mut &str) -> ModalResult<()> {
         .parse_next(input)
 }
 
-/// Parse an identifier: `[a-zA-Z_][a-zA-Z0-9_]*`.
+/// Parse an identifier: `[a-zA-Z_][a-zA-Z0-9_]*` (including Unicode letters/digits).
 pub fn identifier<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     (
-        any.verify(|c: &char| c.is_ascii_alphabetic() || *c == '_'),
-        take_while(0.., |c: char| c.is_ascii_alphanumeric() || c == '_'),
+        any.verify(|c: &char| c.is_alphabetic() || *c == '_'),
+        take_while(0.., |c: char| c.is_alphanumeric() || c == '_'),
     )
         .take()
         .parse_next(input)
@@ -62,10 +62,8 @@ pub fn identifier<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
 /// More permissive than `identifier` to match mermaid's node ID rules.
 pub fn node_id<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     (
-        any.verify(|c: &char| c.is_ascii_alphanumeric() || *c == '_'),
-        take_while(0.., |c: char| {
-            c.is_ascii_alphanumeric() || c == '_' || c == '-'
-        }),
+        any.verify(|c: &char| c.is_alphanumeric() || *c == '_'),
+        take_while(0.., |c: char| c.is_alphanumeric() || c == '_' || c == '-'),
     )
         .take()
         .parse_next(input)
