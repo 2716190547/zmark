@@ -1,4 +1,6 @@
-# ZMark《今晚要发版》
+# ZMark《今晚要发版》（已弃用）
+
+> 2026-11-24 起弃用，由竖屏版 [promo/zmark-v4](../zmark-v4/) 替代。本目录仅供回溯。
 
 58.8 秒无旁白宣传片，讲一位开发者在发版前夜，用 ZMark 从空白草稿写到可发布的说明。故事由每个镜头的一句短标题和画面推进，配乐与音效卡在 128 BPM 的小节线上。分镜在 [SPEC.md](SPEC.md)（r3 为当前版本），另外两条故事线在 [STORYLINES.md](STORYLINES.md)，审片记录在 [REVIEW.md](REVIEW.md)。上一期《光速成稿》在 [promo/zmark-v2](../zmark-v2/)。
 
