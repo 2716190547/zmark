@@ -78,24 +78,17 @@ def make_effects(path):
     add(4 * B + 0.1, 0.8, riser(0.09, 0.8))
     add(5 * B, 0.9, thump(0.36, 55, 0.24, 1.0))
     add(5 * B, 0.07, tick(0.18, 0.012, 0.6))
-    # 4 Typing (footage at 2x): keys from the recorded line changes.
-    keys = json.loads((HERE / 'assets' / 'footage' / 'keys.json').read_text())
-    for i, (t, _) in enumerate(keys['A']):
-        f = 6 * B + (t - 1.8) / 2
-        if 6 * B < f < 10 * B - 0.1:
-            add(f, 0.05, tick(0.05 * (0.8 + 0.4 * RNG.random()), 0.006, 0.92), (-0.15, 0.15)[i % 2])
-    add(6 * B, 0.09, tick(0.12, 0.012, 0.7))  # ⌘2 chip
-    # 5 Scroll down and back up.
-    add(10 * B + 0.2, 1.1, swoosh(0.07, 1.1, 0.1), -0.2)
-    add(10 * B + 3.8, 1.1, swoosh(0.07, 1.1, 0.1), 0.2)
-    # 6 Mermaid typed, then rendered.
-    for i, (t, _) in enumerate(keys['B']):
-        f = 13 * B + (t - 2.4) / 1.2
-        if 13 * B < f < 17 * B:
-            add(f, 0.05, tick(0.05, 0.006, 0.92), (-0.15, 0.15)[i % 2])
-    render = 13 * B + (7.7 - 2.4) / 1.2
-    add(render, 0.5, thump(0.14, 90, 0.14))
-    add(render, 0.25, swoosh(0.06, 0.25, 0.4))
+    # 4–6 Typing: the same segments as SEG in index.html, about 12 keys a second.
+    for a, z in ((6 * B + 0.6, 10 * B - 0.5), (10 * B + 0.25, 13 * B - 0.5), (13 * B + 0.25, 13 * B + 3.6)):
+        t, i = a, 0
+        while t < z:
+            add(t, 0.05, tick(0.05 * (0.8 + 0.4 * RNG.random()), 0.006, 0.92), (-0.15, 0.15)[i % 2])
+            t += 0.083 * (0.75 + 0.5 * RNG.random())
+            i += 1
+    add(6 * B, 0.09, tick(0.12, 0.012, 0.7))  # ⌘2 key
+    # 6 The diagram renders (RENDER = T6 + 2 bars in index.html).
+    add(15 * B, 0.5, thump(0.14, 90, 0.14))
+    add(15 * B, 0.25, swoosh(0.06, 0.25, 0.4))
     # 7 One click per palette.
     for i in range(9):
         add(17 * B + i * b, 0.04, tick(0.09, 0.007, 0.85), (-0.3, 0.3)[i % 2])

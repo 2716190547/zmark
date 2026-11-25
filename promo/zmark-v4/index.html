@@ -9,58 +9,96 @@
   @font-face { font-family: "Promo Sans"; src: url("assets/fonts/noto-sans-sc-800.woff2") format("woff2"); font-weight: 800; }
   @font-face { font-family: "Promo Mono"; src: url("assets/fonts/jetbrains-mono.woff2") format("woff2"); }
   * { box-sizing: border-box; }
-  html, body { margin: 0; background: #f6f3ee; }
-  #film { position: relative; width: 1280px; height: 720px; overflow: hidden; background: #f6f3ee;
-    font-family: "Promo Sans", sans-serif; color: #1f2329; }
-  .bg { position: absolute; inset: 0; background: #f6f3ee; }
+  html, body { margin: 0; background: #ecedef; }
+  #film { position: relative; width: 1280px; height: 720px; overflow: hidden; background: #ecedef;
+    font-family: "Promo Sans", sans-serif; color: #191b20; }
+  .bg { position: absolute; inset: 0; background-color: #ecedef;
+    background-image: linear-gradient(rgba(22,29,41,.065) 1px, transparent 1px), linear-gradient(90deg, rgba(22,29,41,.065) 1px, transparent 1px);
+    background-size: 32px 32px; background-position: 0 16px; }
   .layer { position: absolute; inset: 0; }
+  .rail { position: absolute; left: 88px; right: 88px; bottom: 22px; z-index: 8; display: flex; justify-content: space-between;
+    border-top: 1px solid rgba(25,27,32,.14); padding-top: 10px;
+    font: 500 13px/1.2 "Promo Mono", "Promo Sans", monospace; letter-spacing: .08em; color: #525760; opacity: 0; }
+  .rail b { color: #191b20; font-weight: 800; }
 
-  /* Short titles: one per shot, top-left band y 36–110. Canvas 1280×720, rendered at 2× (2560×1440). */
-  .title { position: absolute; left: 64px; top: 36px; margin: 0; opacity: 0;
-    font: 800 52px/1.2 "Promo Sans", sans-serif; letter-spacing: -0.5px; white-space: nowrap; }
-  .title .ch { display: inline-block; }
-  .accent, .title .accent { background: linear-gradient(120deg, #c24127, #f49d0b); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  /* Titles: crisp ink with terracotta brand accent. Canvas 1280×720 at 2× = 2560×1440. */
+  .title { position: absolute; left: 88px; top: 28px; margin: 0; opacity: 0; z-index: 8;
+    font: 800 44px/1.18 "Promo Sans", sans-serif; color: #191b20; letter-spacing: -1px; white-space: nowrap; }
+  .title .ch { display: inline-block; white-space: pre; }
+  .title .accent, .accent { color: #d95433; font-weight: 800; }
+  .key { position: absolute; right: 88px; top: 34px; z-index: 8; padding: 9px 16px; border-radius: 10px; background: #191b20; color: #fff;
+    font: 500 20px/1 "Promo Sans", sans-serif; letter-spacing: 1px; opacity: 0; }
+  .cut { position: absolute; left: 638px; top: 130px; width: 4px; height: 570px; background: #d9532f; transform-origin: 50% 50%; }
 
-  /* Real side-by-side split: left 40–638, cut line 638–642, right 642–1240; y 130–700. */
-  .pane { position: absolute; top: 130px; width: 598px; height: 570px; overflow: hidden; }
-  .pane.top { left: 40px; } .pane.bot { left: 642px; }
-  .cut { position: absolute; left: 638px; top: 130px; width: 4px; height: 570px; background: linear-gradient(180deg, #c24127, #f49d0b); transform-origin: 50% 50%; }
-  .chip { position: absolute; z-index: 6; top: 652px; padding: 6px 14px; border-radius: 999px; background: rgba(31,35,41,.82); color: #fff;
-    font: 500 20px/1 "Promo Sans", sans-serif; opacity: 0; }
-  .chip.top { right: 660px; } .chip.bot { left: 660px; }
-  .key { position: absolute; left: 560px; top: 50px; z-index: 6; padding: 8px 16px; border-radius: 10px; background: #fff; color: #1f2329;
-    box-shadow: 0 4px 14px rgba(0,0,0,.12); font: 800 22px/1 "Promo Sans", sans-serif; opacity: 0; }
-  .note { position: absolute; right: 40px; top: 58px; padding: 6px 14px; border-radius: 999px; background: #fff; z-index: 6; font: 500 20px/1 "Promo Sans", sans-serif; color: #6a6a6a; opacity: 0; }
-
-  /* Hook text: raw on the left, the right half wipes to rendered. */
+  /* Hook text. */
   .raw, .ren { position: absolute; width: 540px; }
   .raw { font: 400 28px/1.6 "Promo Mono", "Promo Sans", monospace; color: #3a3d42; white-space: pre; }
-  .raw b { color: #d9532f; font-weight: 400; }
+  .raw b { color: #8c8f94; font-weight: 400; }
   .ren h1 { margin: 0 0 10px; font: 800 40px/1.15 "Promo Sans", sans-serif; }
-  .ren blockquote { margin: 0 0 12px; padding: 2px 0 2px 16px; border-left: 6px solid #d9532f; color: #6b6b6b; font: 500 26px/1.45 "Promo Sans", sans-serif; }
+  .ren blockquote { margin: 0 0 12px; padding: 2px 0 2px 16px; border-left: 5px solid #d8d6d0; color: #6b6b6b; font: 500 26px/1.45 "Promo Sans", sans-serif; }
   .ren ul { margin: 0; padding-left: 32px; font: 500 26px/1.5 "Promo Sans", sans-serif; }
   .ren strong { font-weight: 800; }
   .plain { position: absolute; left: 680px; width: 520px; top: 200px; height: 200px; background: #fff; border: 2px solid #c8c8c8; }
   .plain .bar { height: 34px; border-bottom: 2px solid #e0e0e0; background: #efefef; color: #8a8a8a; font: 500 20px/32px "Promo Sans", sans-serif; padding-left: 14px; }
   .caret { display: inline-block; width: 3px; height: 30px; margin-left: 3px; vertical-align: -6px; background: #1f2329; }
-
-  /* Footage: crop windows over the Retina window captures (panes 1440 wide, full window 2880×2000). */
-  .mover { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-  .mover video, .mover img { position: absolute; left: 0; top: 0; width: 2880px; }
-  .pane .mover video { width: 1440px; }
-  .mover .tall { height: 2000px; } .mover .short { height: 1280px; }
-  .full { position: absolute; inset: 0; overflow: hidden; }
-  .full .mover img, .full .mover video { border-radius: 40px; }
-  .shadow { position: absolute; left: 0; top: 0; width: 2880px; height: 2000px; border-radius: 40px; box-shadow: 0 60px 160px rgba(40,30,20,.28); background: #f5f4f0; }
-
-  /* Logo, facts, end card. */
   .logo { position: absolute; left: 500px; top: 120px; width: 280px; height: 280px; }
   .word { position: absolute; left: 0; right: 0; top: 420px; text-align: center; font: 800 84px/1 "Promo Sans", sans-serif; letter-spacing: -2px; opacity: 0; }
-  .fact { position: absolute; left: 120px; font: 800 72px/1.1 "Promo Sans", sans-serif; opacity: 0; }
-  .fact.small { font-size: 40px; font-weight: 500; color: #4a4d52; }
-  .end-sub { position: absolute; left: 0; right: 0; top: 540px; text-align: center; font: 500 28px/1 "Promo Sans", sans-serif; color: #4a4d52; opacity: 0; }
-  .url { position: absolute; left: 430px; right: 430px; top: 468px; padding: 14px 0; text-align: center; border-radius: 999px; background: #1f2329; color: #fff;
-    font: 500 22px/1 "Promo Mono", monospace; opacity: 0; }
+
+  /* The ZMark window, drawn from the app's layout and theme tokens (crates/zmark_app/src/theme.rs). */
+  #view { position: absolute; left: 0; right: 0; top: 96px; bottom: 0; overflow: hidden; z-index: 3; }
+  #cam { position: absolute; left: 88px; top: 24px; width: 1104px; height: 534px; transform-origin: 50% 50%; z-index: 3; }
+  #win { position: absolute; inset: 0; border-radius: 14px; overflow: hidden; background: var(--surface); color: var(--text);
+    box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 26px 68px rgba(24,33,46,.18), 0 2px 6px rgba(10,16,27,.10); }
+  .tb { position: absolute; left: 0; right: 0; top: 0; height: 40px; display: flex; align-items: center; padding: 0 16px; background: var(--surface); }
+  .tb .dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
+  .tb .name { margin-left: 26px; font: 800 16px/1 "Promo Sans", sans-serif; color: var(--text); }
+  .tb .tools { margin-left: auto; display: flex; gap: 6px; }
+  .tb .tools i { width: 28px; height: 26px; border-radius: 6px; display: grid; place-items: center; }
+  .tb .tools i.on { background: var(--hover); }
+  .tb svg { width: 16px; height: 16px; fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .side { position: absolute; left: 92px; top: 12px; width: 16px; height: 16px; }
+  .pane { position: absolute; top: 40px; bottom: 0; overflow: hidden; }
+  #src { left: 0; width: 552px; }
+  #pre { left: 552px; width: 552px; border-left: 1px solid var(--border); }
+  .scroll { position: absolute; left: 0; right: 0; top: 0; }
+  #srcIn { padding: 18px 24px 0 36px; font: 500 15px/25px "Promo Sans", sans-serif; white-space: pre; }
+  #srcIn .h { color: var(--heading); } #srcIn .m { color: var(--bullet); } #srcIn .e { color: var(--emph); }
+  #srcIn .q { color: color-mix(in srgb, var(--text) 55%, var(--muted)); } #srcIn .c { color: var(--code); }
+  .tcaret { display: inline-block; width: 2px; height: 18px; margin-left: 1px; vertical-align: -3px; background: var(--accent); }
+  .pill { position: absolute; right: 16px; bottom: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface);
+    font: 500 12px/1 "Promo Sans", sans-serif; color: color-mix(in srgb, var(--text) 60%, var(--muted)); }
+  #preIn { width: 432px; margin: 0 auto; padding-top: 22px; }
+  #preIn > * { margin: 0; }
+  #preIn .p1 { height: 54px; padding-bottom: 10px; border-bottom: 1px solid var(--border); margin-bottom: 14px; font: 800 26px/42px "Promo Sans", sans-serif; }
+  #preIn .pq { height: 40px; margin-bottom: 16px; padding-left: 12px; border-left: 3px solid var(--border); background: var(--hover); color: var(--text); font: 500 15px/40px "Promo Sans", sans-serif; }
+  #preIn .p2 { height: 38px; margin-bottom: 8px; border-bottom: 1px solid var(--border); font: 800 20px/32px "Promo Sans", sans-serif; }
+  #preIn .pl { height: 28px; font: 500 15.5px/28px "Promo Sans", sans-serif; }
+  #preIn .pl::before { content: "–"; color: var(--muted); margin-right: 10px; }
+  #preIn .pl b { font-weight: 800; }
+  #preIn .pl + .p2 { margin-top: 14px; }
+  #preIn .gap { height: 14px; }
+  #preIn .tr { height: 34px; display: grid; grid-template-columns: 38% 62%; padding: 0 14px; border: 1px solid var(--border); border-top: 0; font: 500 15px/34px "Promo Sans", sans-serif; }
+  #preIn .tr.th { border-top: 1px solid var(--border); border-radius: 8px 8px 0 0; background: var(--hover); font-weight: 800; }
+  #preIn .tr.last { border-radius: 0 0 8px 8px; }
+  #preIn .pc { padding: 10px 14px; border-radius: 8px; background: var(--codebg); color: var(--code); font: 400 13px/20px "Promo Mono", "Promo Sans", monospace; white-space: pre; }
+  #preIn .pm { position: relative; height: 164px; border: 1px solid var(--border); border-radius: 10px; }
+  #preIn .pm .src { position: absolute; inset: 0; }
+  #mm { position: absolute; left: 16px; top: 10px; width: 400px; height: 144px; overflow: visible; }
+  #mm rect { fill: var(--node); stroke: var(--heading); stroke-width: 1.4; }
+  #mm text { fill: var(--text); font: 500 15px "Promo Sans", sans-serif; text-anchor: middle; dominant-baseline: central; }
+  #mm path { fill: none; stroke: var(--muted); stroke-width: 1.4; }
+  #mm .ah { fill: var(--muted); stroke: none; }
+  #palnames { position: absolute; right: 88px; top: 34px; z-index: 8; }
+  #palnames span { position: absolute; right: 0; white-space: nowrap; opacity: 0; padding: 8px 15px; border-radius: 999px;
+    background: #fff; border: 1px solid rgba(25,27,32,.12); color: #191b20; font: 600 18px/1 "Promo Sans", sans-serif;
+    box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+
+  /* Facts and end card. */
+  .fact-bar { position: absolute; left: 96px; top: 174px; width: 4px; height: 274px; background: linear-gradient(180deg, #c24127, #f49d0b); transform-origin: 50% 0%; opacity: 0; }
+  .fact { position: absolute; left: 124px; font: 800 72px/1.1 "Promo Sans", sans-serif; opacity: 0; }
+  .fact.small { font-size: 36px; font-weight: 500; color: #6b6f76; display: flex; gap: 14px; align-items: center; }
+  .fact.small .plat { padding: 8px 18px; border-radius: 999px; background: #fff; border: 1px solid #e2dfd8; color: #1f2329; font-size: 26px; font-weight: 500; }
+  .url { position: absolute; left: 0; right: 0; top: 452px; text-align: center; font: 500 26px/1 "Promo Mono", monospace; color: #1f2329; letter-spacing: .5px; opacity: 0; }
   .credit { position: absolute; left: 0; right: 0; top: 600px; text-align: center; font: 500 20px/1.5 "Promo Sans", sans-serif; color: #666; opacity: 0; }
 </style>
 </head>
@@ -106,63 +144,40 @@
     <h2 id="t2" class="title">写完还得<span class="accent">再排一遍</span>？</h2>
   </section>
 
-  <!-- 4–6 side-by-side split footage (11.80–33.44) -->
-  <section id="s-split" class="clip layer" data-start="11.80" data-duration="21.64" data-track-index="1">
-    <div class="cut"></div>
-    <div id="chip-t" class="chip top">你写的</div>
-    <div id="chip-b" class="chip bot">别人看到的</div>
-    <div id="key2" class="key">⌘2 分屏</div>
-    <div id="note4" class="note" data-layout-allow-safe-zone>演示画面已加速</div>
-    <h2 id="t4" class="title">边写，<span class="accent">边成稿</span></h2>
-    <h2 id="t5" class="title">长文也<span class="accent">对得齐</span></h2>
-    <h2 id="t6" class="title">图，也是<span class="accent">写出来的</span></h2>
-  </section>
-  <div class="pane top" style="z-index:3">
-    <div id="mt" class="mover">
-      <video id="v4t" class="clip tall" src="assets/footage/takeA-src.mp4" muted playsinline data-start="11.80" data-duration="7.87" data-media-start="1.8" data-playback-rate="2" data-track-index="3"></video>
-      <video id="v5t" class="clip short" src="assets/footage/takeC-src.mp4" muted playsinline data-start="19.67" data-duration="5.90" data-media-start="0.9" data-track-index="3"></video>
-      <video id="v6t" class="clip tall" src="assets/footage/takeB-src.mp4" muted playsinline data-start="25.57" data-duration="7.87" data-media-start="2.4" data-playback-rate="1.2" data-track-index="3"></video>
-    </div>
-  </div>
-  <div class="pane bot" style="z-index:3">
-    <div id="mb" class="mover">
-      <video id="v4b" class="clip tall" src="assets/footage/takeA-pre.mp4" muted playsinline data-start="11.80" data-duration="7.87" data-media-start="1.8" data-playback-rate="2" data-track-index="4"></video>
-      <video id="v5b" class="clip short" src="assets/footage/takeC-pre.mp4" muted playsinline data-start="19.67" data-duration="5.90" data-media-start="0.9" data-track-index="4"></video>
-      <video id="v6b" class="clip tall" src="assets/footage/takeB-pre.mp4" muted playsinline data-start="25.57" data-duration="7.87" data-media-start="2.4" data-playback-rate="1.2" data-track-index="4"></video>
-    </div>
-  </div>
 
-  <!-- 7–8 whole window: 8 palettes, then ⌘3 and pull back (33.44–45.25) -->
-  <div class="full" style="z-index:2">
-    <div id="mf" class="mover">
-      <div id="winShadow" class="clip shadow" data-start="33.44" data-duration="11.81" data-track-index="5"></div>
-      <img id="p1" class="clip" src="assets/palettes/1-default-light.jpg" alt="Default" data-start="33.44" data-duration="0.4918" data-track-index="6">
-      <img id="p2" class="clip" src="assets/palettes/2-tokyo-night-dark.jpg" alt="Tokyo Night" data-start="33.9318" data-duration="0.4918" data-track-index="6">
-      <img id="p3" class="clip" src="assets/palettes/3-claude-light.jpg" alt="Claude Warm" data-start="34.4236" data-duration="0.4918" data-track-index="6">
-      <img id="p4" class="clip" src="assets/palettes/4-one-dark-dark.jpg" alt="One Dark Pro" data-start="34.9154" data-duration="0.4918" data-track-index="6">
-      <img id="p5" class="clip" src="assets/palettes/5-solarized-light.jpg" alt="Solarized" data-start="35.4072" data-duration="0.4918" data-track-index="6">
-      <img id="p6" class="clip" src="assets/palettes/6-nord-dark.jpg" alt="Nord" data-start="35.899" data-duration="0.4918" data-track-index="6">
-      <img id="p7" class="clip" src="assets/palettes/7-github-light.jpg" alt="GitHub" data-start="36.3908" data-duration="0.4918" data-track-index="6">
-      <img id="p8" class="clip" src="assets/palettes/8-macos-dark.jpg" alt="macOS" data-start="36.8826" data-duration="0.4918" data-track-index="6">
-      <img id="p9" class="clip" src="assets/palettes/1-default-light.jpg" alt="Default" data-start="37.3744" data-duration="1.4756" data-track-index="6">
-      <video id="v8" class="clip tall" src="assets/footage/takeD.mp4" muted playsinline data-start="38.85" data-duration="2.95" data-media-start="1.71" data-track-index="6"></video>
-      <img id="still8" data-hold class="clip tall" src="assets/footage/preview-still.jpg" alt="ZMark 预览模式" data-start="41.80" data-duration="3.45" data-track-index="6">
+  <!-- 4–8 the ZMark window, typed and rendered live (11.80–45.25) -->
+  <div id="view">
+  <div id="cam" class="clip" data-start="11.80" data-duration="33.45" data-track-index="3">
+    <div id="win">
+      <div class="tb"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span>
+        <span class="name">学而.md</span><span class="tools"><i class=""><svg viewBox="0 0 16 16"><path d="M5 4 1.5 8 5 12M11 4l3.5 4L11 12"/></svg></i><i id="tSplit" class="on"><svg viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M8 2.5v11"/></svg></i><i id="tPrev" class=""><svg viewBox="0 0 16 16"><path d="M8 4c-2-1.3-4-1.5-6-1v10c2-.5 4-.3 6 1 2-1.3 4-1.5 6-1V3c-2-.5-4-.3-6 1zM8 4v10"/></svg></i><i class=""><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg></i><i class=""><svg viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M2.5 11v2.5h11V11"/></svg></i><i class=""><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg></i></span></div>
+      <div id="src" class="pane"><div id="srcIn" class="scroll" data-layout-ignore></div><div id="pill" class="pill">行 1</div></div>
+      <div id="pre" class="pane"><div id="preIn" class="scroll"></div></div>
     </div>
   </div>
-  <section id="s-full" class="clip layer" data-start="33.44" data-duration="11.81" data-track-index="2" style="z-index:4">
-    <div id="pal-name" class="note" style="left:330px;right:auto;top:56px;font-size:22px;color:#4a4d52"></div>
+  </div>
+  <svg id="mmTpl" style="display:none"><g><g class="nd" id="n0"><rect x="8.0" y="22" width="64" height="36" rx="3"/><text x="40" y="40">学</text></g><g class="nd" id="n1"><rect x="118.0" y="22" width="64" height="36" rx="3"/><text x="150" y="40">习</text></g><g class="nd" id="n2"><rect x="228.0" y="22" width="64" height="36" rx="3"/><text x="260" y="40">悦</text></g><g class="nd" id="n3"><rect x="350.0" y="67" width="80" height="36" rx="3"/><text x="390" y="85">君子</text></g><g class="nd" id="n4"><rect x="118.0" y="112" width="64" height="36" rx="3"/><text x="150" y="130">友</text></g><g class="nd" id="n5"><rect x="228.0" y="112" width="64" height="36" rx="3"/><text x="260" y="130">乐</text></g><path class="ed" id="e0" d="M72 40H112" pathLength="1"/><polygon class="ah" id="a0" points="112,35 122,40 112,45"/><path class="ed" id="e1" d="M182 40H222" pathLength="1"/><polygon class="ah" id="a1" points="222,35 232,40 222,45"/><path class="ed" id="e2" d="M182 130H222" pathLength="1"/><polygon class="ah" id="a2" points="222,125 232,130 222,135"/><path class="ed" id="e3" d="M292 40C325 40 320 78 340 78" pathLength="1"/><polygon class="ah" id="a3" points="340,73 350,78 340,83"/><path class="ed" id="e4" d="M292 130C325 130 320 92 340 92" pathLength="1"/><polygon class="ah" id="a4" points="340,87 350,92 340,97"/></g></svg>
+
+  <section id="s-win" class="clip layer" data-start="11.80" data-duration="33.45" data-track-index="2" style="z-index:8">
+    <div id="key2" class="key">⌘2 分屏</div>
     <div id="key3" class="key">⌘3 预览</div>
+    <div id="palnames"><span id="pn0">Default</span><span id="pn1">Claude Warm</span><span id="pn2">Solarized Light</span><span id="pn3">GitHub Light</span><span id="pn4">Tokyo Night</span><span id="pn5">One Dark Pro</span><span id="pn6">Nord</span><span id="pn7">macOS Vibrant</span></div>
+    <h2 id="t4" class="title">边写，<span class="accent">边成稿</span></h2>
+    <h2 id="t5" class="title">表格，<span class="accent">写完就齐</span></h2>
+    <h2 id="t6" class="title">图，也是<span class="accent">写出来的</span></h2>
     <h2 id="t7" class="title"><span class="accent">8</span> 套配色</h2>
     <h2 id="t8a" class="title">写的是<span class="accent">纯文本</span></h2>
     <h2 id="t8b" class="title">读的是<span class="accent">成稿</span></h2>
+    <div id="win-rail" class="rail"><span><b>ZMark</b> · 所写即所得</span><span>学而.md · 本地 Markdown</span></div>
   </section>
 
   <!-- 9–10 facts and end card (45.25–55.08) -->
   <section id="s-end" class="clip layer" data-start="45.25" data-duration="9.83" data-track-index="1">
+    <div id="fact-bar" class="fact-bar"></div>
     <div id="f1" class="fact" style="top:170px">本地文件</div>
-    <div id="f2" class="fact" style="top:270px"><span class="accent">开源免费</span></div>
-    <div id="f3" class="fact small" style="top:400px">macOS · Windows · Linux</div>
-    <svg id="logo2" class="logo" viewBox="0 0 1024 1024" style="left:550px;top:70px;width:180px;height:180px" aria-label="ZMark">
+    <div id="f2" class="fact" style="top:270px">开源<span style="color:#d95433">免费</span></div>
+    <div id="f3" class="fact small" style="top:396px"><span class="plat">macOS</span><span class="plat">Windows</span><span class="plat">Linux</span></div>
+    <svg id="logo2" class="logo" viewBox="0 0 1024 1024" style="left:550px;top:110px;width:180px;height:180px" aria-label="ZMark">
       <defs><linearGradient id="zg2" x1="262" y1="262" x2="762" y2="762" gradientUnits="userSpaceOnUse">
         <stop offset="0" stop-color="#c24127"/><stop offset="1" stop-color="#f49d0b"/></linearGradient>
         <filter id="tileShadow2" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="18" stdDeviation="26" flood-color="#3a2a1a" flood-opacity=".16"/></filter></defs>
@@ -170,10 +185,9 @@
       <polygon points="262,262 762,262 575,512 262,512" fill="url(#zg2)"/>
       <polygon points="450,512 762,512 762,762 262,762" fill="url(#zg2)"/>
     </svg>
-    <div id="word2" class="word" style="top:270px">ZMark</div>
-    <div id="endsub" class="end-sub">免费下载 · 开源</div>
+    <div id="word2" class="word" style="top:318px">ZMark</div>
     <div id="url" class="url">github.com/2716190547/zmark</div>
-    <div id="credit" class="credit">音乐：Voxel Revolution<br>Kevin MacLeod · CC BY 4.0</div>
+    <div id="credit" class="credit">音乐：Voxel Revolution · Kevin MacLeod · CC BY 4.0</div>
   </section>
 
   <audio id="master" class="clip" src="assets/audio/master.m4a" data-start="0" data-duration="55.08" data-track-index="7" data-volume="1"></audio>
@@ -193,19 +207,16 @@ function split(el) {
     } else walk(n);
   });
   walk(el);
-  // Each char keeps the parent's gradient by carrying the accent class itself.
-  el.querySelectorAll('.accent .ch').forEach((c) => c.classList.add('accent'));
-  el.querySelectorAll('.accent').forEach((a) => { if (!a.classList.contains('ch')) a.classList.remove('accent'); });
   return el.querySelectorAll('.ch');
 }
 function title(id, at, until, instant = false) {
   const el = document.getElementById(id), chars = split(el);
   tl.set(el, { opacity: 1 }, at);
-  if (!instant) chars.forEach((c, i) => tl.fromTo(c, { opacity: 0, y: 26, filter: 'blur(10px)' }, { opacity: 1, y: 0, filter: 'blur(0px)', duration: 0.22, ease: E }, at + i * 0.03));
+  if (!instant) chars.forEach((c, i) => tl.fromTo(c, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.18, ease: E }, at + i * 0.025));
   tl.to(el, { opacity: 0, duration: 0.16, ease: 'power2.in' }, until - 0.16);
 }
-function show(sel, at, from = { opacity: 0, y: 24 }) { tl.fromTo(sel, from, { opacity: 1, y: 0, scale: 1, duration: 0.3, ease: E }, at); }
-tl.set(['.title', '.chip', '.key', '.note', '.word', '.fact', '.end-sub', '.url', '.credit'], { opacity: 0 }, 0);
+function show(sel, at, from = { opacity: 0, y: 16 }) { tl.fromTo(sel, from, { opacity: 1, y: 0, scale: 1, duration: 0.3, ease: E }, at); }
+tl.set(['.title', '.key', '.word', '.fact', '.url', '.credit'], { opacity: 0 }, 0);
 
 // 1 Hook: the whole frame is raw text; on beat 3 a vertical cut wipes the right half into its rendered form.
 title('t1a', 0, 2 * b, true); // on screen from frame 0 until the cut on beat 3
@@ -236,66 +247,139 @@ tl.set('#logo', { opacity: 0 }, 0).set('#logo', { opacity: 1 }, R + 0.5);
 show('#word', 5 * B + b);
 tl.to(['#logo', '#word'], { opacity: 0, y: -30, duration: 0.25, ease: 'power2.in' }, 6 * B - 0.25);
 
-// 4–6 Split. Pane camera: source file at x0 = 90, preview file at x0 = 5, scale 0.46; y in recording pixels.
-const S = 0.46;
-const cam = (id, x0, y0, at, dur = 0, ease = 'power2.inOut') => dur
-  ? tl.to(id, { x: -x0 * S, y: -y0 * S, scale: S, duration: dur, ease }, at)
-  : tl.set(id, { x: -x0 * S, y: -y0 * S, scale: S }, at);
-const T4 = 6 * B, T5 = 10 * B, T6 = 13 * B, T7 = 17 * B;
-// The newest typed line (measured per 0.5 s from the recordings) stays about 70% down each pane (1239 recording px tall).
-cam('#mt', 90, 0, 0); cam('#mb', 5, 0, 0);
-cam('#mt', 90, 0, 11.902);
-cam('#mt', 90, 129, 16.152, 0.5, 'power1.inOut');
-cam('#mt', 90, 193, 16.652, 0.5, 'power1.inOut');
-cam('#mt', 90, 269, 17.152, 0.75, 'power1.inOut');
-cam('#mt', 90, 337, 17.902, 0.5, 'power1.inOut');
-cam('#mt', 90, 409, 18.402, 0.75, 'power1.inOut');
-cam('#mb', 5, 0, 11.902);
-cam('#mb', 5, 444, 18.152, 0.25, 'power1.inOut');
-cam('#mb', 5, 564, 18.402, 0.5, 'power1.inOut');
-cam('#mb', 5, 761, 18.902, 0.8, 'power1.inOut');
-cam('#mt', 90, 20, T5); cam('#mb', 5, 20, T5);
-// Shot 6: follow the fence as it is typed, then push in on the rendered flowchart.
-cam('#mt', 90, 640, T6); cam('#mt', 90, 761, T6 + 0.3, 4.6, 'power1.inOut');
-cam('#mb', 5, 761, T6);
+
+// 4–8 The window. One state object drives the document: n characters typed, m diagram reveal, follow = autoscroll.
+const DOC = "# 《论语·学而》读书笔记\n\n> 学而时习之，不亦说乎？有朋自远方来，不亦乐乎？\n\n## 三句要点\n\n- **学**：学了要按时温习\n- **友**：朋友从远方来\n- **君子**：人不知而不愠\n\n## 每日三省\n\n| 省什么 | 原文 |\n| --- | --- |\n| 做事 | 为人谋而不忠乎 |\n| 交友 | 与朋友交而不信乎 |\n| 学习 | 传不习乎 |\n\n```mermaid\nflowchart LR\n学 --> 习 --> 悦\n友 --> 乐\n悦 --> 君子\n乐 --> 君子\n```";
+const CH = Array.from(DOC);
+const PAL = [
+  {"bg": "#f5f4f0", "surface": "#ffffff", "border": "#e6e4de", "text_primary": "#2c2c2c", "text_muted": "#8c8c8c", "accent": "#d9532f", "code_bg": "#f6f5ef", "syntax_heading": "#5e3db3", "syntax_emphasis": "#7a5f12", "syntax_bullet": "#8c8c8c", "syntax_code": "#3e4a56"},
+  {"bg": "#faf9f6", "surface": "#f3efea", "border": "#e6dfd5", "text_primary": "#2a2723", "text_muted": "#797369", "accent": "#d97706", "code_bg": "#f6f5ef", "syntax_heading": "#7d56b3", "syntax_emphasis": "#995b2b", "syntax_bullet": "#d97706", "syntax_code": "#6b4e1b"},
+  {"bg": "#fdf6e3", "surface": "#eee8d5", "border": "#93a1a1", "text_primary": "#586e75", "text_muted": "#93a1a1", "accent": "#268bd2", "code_bg": "#eee8d5", "syntax_heading": "#586e00", "syntax_emphasis": "#b53900", "syntax_bullet": "#268bd2", "syntax_code": "#475b62"},
+  {"bg": "#f4f6f8", "surface": "#ffffff", "border": "#d0d7de", "text_primary": "#1f2328", "text_muted": "#656d76", "accent": "#0969da", "code_bg": "#f1f5f9", "syntax_heading": "#cf222e", "syntax_emphasis": "#953800", "syntax_bullet": "#0969da", "syntax_code": "#24292f"},
+  {"bg": "#1a1b26", "surface": "#1f2335", "border": "#292e42", "text_primary": "#c0caf5", "text_muted": "#7aa2f7", "accent": "#7aa2f7", "code_bg": "#24283b", "syntax_heading": "#bb9af7", "syntax_emphasis": "#ff9e64", "syntax_bullet": "#7aa2f7", "syntax_code": "#8ba4e8"},
+  {"bg": "#21252b", "surface": "#282c34", "border": "#353b45", "text_primary": "#abb2bf", "text_muted": "#5c6370", "accent": "#61afef", "code_bg": "#1e2227", "syntax_heading": "#c678dd", "syntax_emphasis": "#d19a66", "syntax_bullet": "#61afef", "syntax_code": "#abb2bf"},
+  {"bg": "#2e3440", "surface": "#3b4252", "border": "#434c5e", "text_primary": "#eceff4", "text_muted": "#d8dee9", "accent": "#88c0d0", "code_bg": "#3b4252", "syntax_heading": "#cdabe1", "syntax_emphasis": "#ebcb8b", "syntax_bullet": "#88c0d0", "syntax_code": "#98c4d8"},
+  {"bg": "#1c1c1e", "surface": "#2c2c2e", "border": "#3a3a3c", "text_primary": "#f5f5f7", "text_muted": "#8e8e93", "accent": "#2997ff", "code_bg": "#252528", "syntax_heading": "#c76cf5", "syntax_emphasis": "#ff9f0a", "syntax_bullet": "#0a84ff", "syntax_code": "#70b0ff"}
+];
+const lineEnd = (k) => { const ls = DOC.split('\n'); return Array.from(ls.slice(0, k + 1).join('\n')).length + 1; };
+const T4 = 6 * B, T5 = 10 * B, T6 = 13 * B, T7 = 17 * B, T8 = 38.85, HIT = 20 * B, T9 = 23 * B, T10 = 25 * B;
+// Typing segments [start, end, last line]; mix_audio.py ticks the same schedule.
+const SEG = [[T4 + 0.6, T5 - 0.5, 9], [T5 + 0.25, T6 - 0.5, 17], [T6 + 0.25, T6 + 3.6, 24]];
+const RENDER = T6 + 2 * B;
+const S = { n: 0, m: 0, follow: 1 };
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function srcLine(l, inCode) {
+  const t = esc(l);
+  if (inCode || l.startsWith('```')) return `<span class="${l.startsWith('```') ? 'm' : 'c'}">${t}</span>`;
+  if (/^#/.test(l)) return `<span class="h">${t}</span>`;
+  if (l.startsWith('>')) return `<span class="q">${t}</span>`;
+  if (l.startsWith('|')) return t.replace(/\|/g, '<span class="m">|</span>').replace(/---/g, '<span class="m">---</span>');
+  let h = t.replace(/\*\*([^*]*)(\*\*)?/g, (_, a, z) => `<span class="m">**</span><span class="e">${a}</span>${z ? '<span class="m">**</span>' : ''}`);
+  return h.replace(/^- /, '<span class="m">- </span>');
+}
+const tpl = document.querySelector('#mmTpl g').innerHTML;
+function preview(lines, m) {
+  let out = '', inCode = false, code = [], rows = [], closed = false;
+  const flushRows = () => { if (!rows.length) return; rows.forEach((r, i) => { out += `<div class="tr${i === 0 ? ' th' : ''}${i === rows.length - 1 && i ? ' last' : ''}"><span>${r[0] || ''}</span><span>${r[1] || ''}</span></div>`; }); rows = []; };
+  lines.forEach((l) => {
+    if (inCode) {
+      if (l.startsWith('```')) { inCode = false; closed = true; }
+      else if (l !== '`' && l !== '``') code.push(esc(l));
+      return;
+    }
+    if (!l.startsWith('|')) flushRows();
+    if (l.startsWith('```')) { inCode = true; return; }
+    if (l.startsWith('## ')) out += `<h2 class="p2">${esc(l.slice(3))}</h2>`;
+    else if (l.startsWith('# ')) out += `<h1 class="p1">${esc(l.slice(2))}</h1>`;
+    else if (l.startsWith('> ')) out += `<blockquote class="pq">${esc(l.slice(2))}</blockquote>`;
+    else if (l.startsWith('- ')) out += `<div class="pl">${esc(l.slice(2)).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/\*/g, '')}</div>`;
+    else if (l.startsWith('|')) { if (!/^\|\s*[-:\s|]*$/.test(l)) rows.push(l.split('|').slice(1).map((c) => esc(c.trim()))); }
+    else if (l === '' ) out += '';
+  });
+  flushRows();
+  if ((inCode && code.length > 0) || closed) {
+    out += '<div class="gap"></div><div class="pm">';
+    if (m < 1) out += `<div class="src pc" style="opacity:${1 - Math.min(1, m * 3)}">${code.join('\n')}</div>`;
+    if (closed && m > 0) out += `<svg id="mm" viewBox="0 0 460 164">${tpl}</svg>`;
+    out += '</div>';
+  }
+  return out;
+}
+const srcIn = document.getElementById('srcIn'), preIn = document.getElementById('preIn'), pill = document.getElementById('pill');
+let lastN = -1, lastM = -1;
+function draw() {
+  const n = Math.round(S.n), m = S.m;
+  if (n !== lastN || m !== lastM) {
+    lastN = n; lastM = m;
+    const typed = CH.slice(0, n).join('');
+    const lines = typed.split('\n');
+    let inCode = false;
+    srcIn.innerHTML = lines.map((l, i) => { const h = srcLine(l, inCode && !l.startsWith('```')); if (l.startsWith('```')) inCode = !inCode; return h + (i === lines.length - 1 && n < CH.length ? '<span class="tcaret"></span>' : ''); }).join('\n') || '<span class="tcaret"></span>';
+    pill.textContent = `行 ${lines.length}`;
+    preIn.innerHTML = preview(lines, m);
+    preIn.querySelectorAll('#mm .nd').forEach((g, i) => { const k = Math.max(0, Math.min(1, m * 6 - i * 0.6)); g.style.opacity = k; g.style.transform = `scale(${0.85 + 0.15 * k})`; g.style.transformBox = 'fill-box'; g.style.transformOrigin = 'center'; });
+    preIn.querySelectorAll('#mm .ed').forEach((p, i) => { const k = Math.max(0, Math.min(1, m * 4 - 1.2 - i * 0.35)); p.style.strokeDasharray = 1; p.style.strokeDashoffset = 1 - k; });
+    preIn.querySelectorAll('#mm .ah').forEach((p, i) => { p.style.opacity = m * 4 - 1.2 - i * 0.35 >= 1 ? 1 : 0; });
+  }
+  // Autoscroll: the caret line and the newest preview block stay in view (pane is 494 px tall).
+  const sMax = Math.max(0, srcIn.offsetHeight + 80 - 494), pMax = Math.max(0, preIn.offsetHeight + 40 - 494);
+  srcIn.style.transform = `translateY(${-sMax * S.follow}px)`;
+  preIn.style.transform = `translateY(${-pMax * S.follow}px)`;
+}
+const upd = { onUpdate: draw };
+tl.set(S, { n: 0, m: 0, follow: 1, ...upd }, 0);
+let from = 0;
+SEG.forEach(([a, z, ln]) => { const to = Math.min(CH.length, lineEnd(ln)); tl.fromTo(S, { n: from }, { n: to, duration: z - a, ease: 'none', ...upd }, a); from = to; });
+tl.fromTo(S, { m: 0 }, { m: 1, duration: 1.0, ease: 'power1.out', ...upd }, RENDER);
+tl.fromTo(S, { follow: 1 }, { follow: 0, duration: 0.6, ease: 'power2.inOut', ...upd }, T7 - 0.6);
+
+// Camera on the window, clipped by #view (film y ≥ 100). Keep 1:1 native pixel crispness (no blurry CSS upscaling).
+const cam = (x, y, s) => ({ x, y, scale: s });
+tl.fromTo('#cam', { ...cam(0, 32, 1), opacity: 0 }, { ...cam(0, 0, 1), opacity: 1, duration: 0.5, ease: E }, T4);
+tl.set('#win-rail', { opacity: 0 }, 0).to('#win-rail', { opacity: 1, duration: 0.35, ease: E }, T4 + 0.15).to('#win-rail', { opacity: 0, duration: 0.25 }, T9 - 0.25);
 title('t4', T4, T5); title('t5', T5, T6); title('t6', T6, T7);
-show('#chip-t', T4 + 0.1); show('#chip-b', T4 + 0.2);
-tl.to(['#chip-t', '#chip-b'], { opacity: 0, duration: 0.2 }, T4 + 0.9); // gone before the panes start to follow the typing
-show('#key2', T4, { opacity: 0, scale: 0.8, y: 0 }); tl.to('#key2', { opacity: 0, duration: 0.2 }, T4 + 2 * B);
-show('#note4', T4 + 2 * B, { opacity: 0, y: 0 }); tl.to('#note4', { opacity: 0, duration: 0.2 }, T5 - 0.2);
+show('#key2', T4 + 0.1, { opacity: 0, scale: 0.85, y: 0 }); tl.to('#key2', { opacity: 0, duration: 0.2 }, T4 + 2 * B);
+// Shot 6: stay at 1:1 crisp framing so both the closing ``` and the Mermaid diagram render razor-sharp.
+tl.to('#cam', { ...cam(0, 0, 1), duration: 0.6, ease: 'power3.inOut' }, T7 - 0.6);
 
-// 7 Eight palettes, one per beat, on the whole window.
-const full = (x, y, s) => ({ x, y, scale: s });
-const WIDE = full(222, 125, 0.29), CLOSE = full(6, 130, 0.44);
-tl.set('#mf', WIDE, 0);
-title('t7', T7, 38.85);
-const names = ['Default', 'Tokyo Night', 'Claude Warm', 'One Dark Pro', 'Solarized Light', 'Nord', 'GitHub Light', 'macOS Vibrant'];
-const pal = document.getElementById('pal-name');
-tl.set('#pal-name', { opacity: 1 }, T7);
-names.forEach((n, i) => tl.call(() => { pal.textContent = n; }, null, T7 + i * b));
-tl.call(() => { pal.textContent = 'Default'; }, null, T7 + 8 * b);
-tl.to('#pal-name', { opacity: 0, duration: 0.2 }, 38.85 - 0.2);
+// 7 Eight palettes, one per beat.
+const VARS = (p) => ({ '--bg': p.bg, '--surface': p.surface, '--border': p.border, '--text': p.text_primary, '--muted': p.text_muted, '--accent': p.accent,
+  '--codebg': p.code_bg, '--heading': p.syntax_heading, '--emph': p.syntax_emphasis, '--bullet': p.syntax_bullet, '--code': p.syntax_code,
+  '--hover': `color-mix(in srgb, ${p.text_primary} 5%, transparent)`, '--node': `color-mix(in srgb, ${p.syntax_heading} 10%, ${p.surface})` });
+tl.set('#win', VARS(PAL[0]), 0);
+title('t7', T7, T8);
+PAL.forEach((p, i) => {
+  tl.set('#win', VARS(p), T7 + i * b);
+  tl.set(`#pn${i}`, { opacity: 1 }, T7 + i * b).set(`#pn${i}`, { opacity: 0 }, T7 + (i + 1) * b);
+});
+tl.set('#palnames span', { opacity: 0 }, 0);
+tl.set('#win', VARS(PAL[0]), T7 + 8 * b);
+tl.set('#pn0', { opacity: 1 }, T7 + 8 * b).to('#pn0', { opacity: 0, duration: 0.2 }, T8 - 0.2);
 
-// 8 Climax: close on the window, ⌘3 flips it to the rendered page on the bar at 39.34, then pull back.
-const T8 = 38.85, HIT = 20 * B;
-tl.set('#mf', CLOSE, T8);
-title('t8a', T8, 21 * B);
-title('t8b', 21 * B, 23 * B);
-show('#key3', HIT - 0.1, { opacity: 0, scale: 0.8, y: 0 }); tl.to('#key3', { opacity: 0, duration: 0.2 }, HIT + 1.2);
-// The close-up holds the full window width, so the centred preview page stays in frame; punch on the hit, then pull back.
-tl.fromTo('#mf', CLOSE, { ...full(20, 136, 0.43), duration: 0.12, yoyo: true, repeat: 1, ease: 'power2.out' }, HIT);
-tl.to('#mf', { ...WIDE, duration: 1.6, ease: 'power3.inOut' }, HIT + 0.5);
+// 8 Climax: ⌘3 on the bar at 39.34 turns the window into the centred page at 1:1 native sharpness.
+title('t8a', T8, 21 * B); title('t8b', 21 * B, 23 * B);
+show('#key3', HIT - 0.1, { opacity: 0, scale: 0.85, y: 0 }); tl.to('#key3', { opacity: 0, duration: 0.2 }, HIT + 1.2);
+tl.set('#src', { opacity: 1 }, 0).set('#pill', { opacity: 1 }, 0).set('#pre', { x: 0, borderLeftColor: 'var(--border)' }, 0).set('#preIn', { width: 432 }, 0);
+tl.to('#pill', { opacity: 0, duration: 0.14, ease: 'power2.in' }, HIT - 0.25);
+tl.to('#src', { opacity: 0, duration: 0.16, ease: 'power2.in' }, HIT - 0.12);
+// The page slides from the right pane to the window centre, and widens slightly like a real document page.
+tl.to('#pre', { x: -276, borderLeftColor: 'rgba(0,0,0,0)', duration: 0.4, ease: 'power3.out' }, HIT);
+tl.to('#preIn', { width: 496, duration: 0.4, ease: 'power3.out' }, HIT);
+tl.set('#tSplit', { className: '' }, HIT).set('#tPrev', { className: 'on' }, HIT);
+tl.set('#tSplit', { className: 'on' }, 0).set('#tPrev', { className: '' }, 0);
+tl.to('#cam', { y: -6, duration: 4.0, ease: 'sine.inOut' }, HIT + 0.5);
+tl.to('#cam', { opacity: 0, y: -16, duration: 0.3, ease: 'power2.in' }, T9 - 0.3);
 
 // 9 Facts on the beat.
-const T9 = 23 * B;
+tl.set('#fact-bar', { opacity: 0, scaleY: 0 }, 0);
+tl.to('#fact-bar', { opacity: 1, scaleY: 1, duration: 0.35, ease: 'power3.out' }, T9);
 show('#f1', T9); show('#f2', T9 + b); show('#f3', T9 + 2 * b);
-tl.to(['#f1', '#f2', '#f3'], { opacity: 0, y: -24, duration: 0.25, ease: 'power2.in' }, 25 * B - 0.25);
+tl.to(['#fact-bar', '#f1', '#f2', '#f3'], { opacity: 0, y: -16, duration: 0.25, ease: 'power2.in' }, T10 - 0.25);
 
 // 10 End card.
-const T10 = 25 * B;
 tl.set('#logo2', { opacity: 0 }, 0);
 tl.fromTo('#logo2', { opacity: 0, scale: 0.6 }, { opacity: 1, scale: 1, duration: 0.5, ease: 'back.out(1.7)' }, T10);
-show('#word2', T10 + b); show('#endsub', T10 + 2 * b); show('#url', T10 + B); show('#credit', T10 + B + b, { opacity: 0, y: 0 });
+show('#word2', T10 + b); show('#url', T10 + 2 * b); show('#credit', T10 + B, { opacity: 0, y: 0 });
 
 window.__timelines = window.__timelines || {};
 window.__timelines.film = tl;

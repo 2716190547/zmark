@@ -2,3 +2,5 @@ assets/audio/raw/
 music-previews/
 renders/
 .hyperframes/
+*.mp4
+*.mov
