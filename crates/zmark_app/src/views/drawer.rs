@@ -1327,6 +1327,11 @@ fn path_context_menu<E: InteractiveElement + ParentElement + Styled + IntoElemen
             menu = menu.item(PopupMenuItem::new(strings.remove_from_sidebar)
                 .on_click(move |_,window,cx| callback(&path,window,cx)));
         }
+        {
+            let path = path.clone();
+            menu = menu.item(PopupMenuItem::new(strings.reveal_in_finder)
+                .on_click(move |_, _, cx| cx.reveal_path(&path)));
+        }
         if let Some(callback) = &trash {
             let callback = callback.clone(); let path = path.clone();
             menu = menu.item(PopupMenuItem::element(move |_,_| div().text_color(danger).child(strings.trash_file))

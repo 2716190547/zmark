@@ -1,0 +1,48 @@
+<template>
+  <style>
+    #draft { position: absolute; inset: 0; }
+    #draft .flood { position: absolute; inset: 0; z-index: 7; background: #ffffff; pointer-events: none; }
+    #draft .welcome-line { color: var(--syntax-heading); font-weight: 700; }
+    #draft .wordmark { top: 290px; }
+  </style>
+  <section id="draft" class="stage studio" data-composition-id="draft" data-width="1280" data-height="720">
+    <div class="wordmark"><img src="assets/zmark-icon.png" alt=""><h1>ZMark</h1></div>
+    <div class="workbench" data-palette="default"></div>
+    <div class="key top"><span>⌘</span><span>N</span></div>
+    <div class="flood"></div>
+  </section>
+  <script>
+    // Scene starts on the drop (14.0 s); bars fall every 1.875 s.
+    scene('draft', ({ root, tl, find }) => {
+      const win = find('.workbench');
+      buildWorkbench(win, { title: '欢迎使用 ZMark.md', lines: 0 });
+      const label = win.querySelector('.file-label');
+      const first = win.querySelector('.source [data-ln="0"]');
+      const second = win.querySelector('.source [data-ln="2"]');
+      first.innerHTML = '<span class="welcome-line"># 欢迎使用 ZMark</span>';
+      second.textContent = '一款基于 Rust + GPUI 构建的原生本地 Markdown 编辑器。';
+      const mark = find('.wordmark');
+
+      // The drop: a white flash, and the name lands hard.
+      tl.fromTo(find('.flood'), { opacity: 1 }, { opacity: 0, duration: 0.45, ease: 'power2.out' }, 0)
+        .fromTo(mark, { scale: 1.6, opacity: 0, filter: 'blur(14px)' }, { scale: 1, opacity: 1, filter: 'blur(0px)', duration: 0.42, ease: 'expo.out' }, 0)
+        // One bar later the name lifts away and the window it names arrives.
+        .to(mark, { y: -90, opacity: 0, filter: 'blur(8px)', duration: 0.3, ease: 'power3.in' }, 1.6)
+        .fromTo(win, { opacity: 0, scale: 0.92, y: 40 }, { opacity: 1, scale: 1, y: 0, duration: 0.6, ease: 'expo.out' }, 1.875);
+
+      // ⌘N on the next bar opens an untitled draft.
+      title(tl, root, '先写，<em>不管</em>存哪', 3.75);
+      pressKey(tl, find('.key'), 3.75, 0.8);
+      TEXT.set(label, '未命名', 3.8);
+      TEXT.set(second, '', 3.8);
+      TEXT.set(first, '<span class="typing"></span>', 3.8);
+      tl.set(label, { className: 'file-label dirty' }, 4.1);
+      let t = typeLine(tl, root, 0, 4.1, 0.045);
+      t = typeLine(tl, root, 2, t + 0.15, 0.03);
+      t = typeLine(tl, root, 4, t + 0.15, 0.04);
+      t = typeLine(tl, root, 5, t + 0.08, 0.022);
+      t = typeLine(tl, root, 6, t + 0.04, 0.022);
+      typeLine(tl, root, 7, t + 0.04, 0.022);
+    });
+  </script>
+</template>

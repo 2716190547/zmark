@@ -1,0 +1,120 @@
+<template>
+  <style>
+    #night { position: absolute; inset: 0; }
+  </style>
+  <section id="night" class="stage night" data-composition-id="night" data-width="1280" data-height="720">
+    <div class="plain">
+      <div class="plain-bar"><i></i><i></i><i></i><span>release.md</span></div>
+      <div class="plain-body"><div class="plain-text"></div><div class="plain-caret"></div></div>
+    </div>
+    <div class="scrap" style="left:70px;top:300px">变更记录.txt<small>~/Downloads</small></div>
+    <div class="scrap" style="left:1010px;top:170px">CI 日志<small>~/Desktop</small></div>
+    <div class="scrap" style="left:1030px;top:470px">待办.md<small>~/Documents/notes</small></div>
+    <div class="scrap" style="left:120px;top:540px">0.2.12 修复.md<small>~/工作区/zmark</small></div>
+    <canvas class="gl" id="night-gl" style="z-index:5" data-layout-ignore data-motion-blur="off"></canvas>
+  </section>
+  <script>
+    (() => {
+      // Root-film seconds of this scene's slot; 1.8125 s is the slam, on a beat.
+      const START = 0, END = 14.0, SLAM = 1.8125;
+      const RAW = [
+        '# ZMark 发布说明', '今晚发两个版本 先把要点写下来', '## 0.2.13', '- 安装包和自动更新迁回源码仓库',
+        '- 关于页和欢迎页链接同步更新', '- 旧仓库归档 历史版本保留', '## 0.2.12', '- 草稿编辑后不再误报保存错误',
+        '- 首次保存时再选位置', '## 已知限制', '- macOS 应用未经 Apple 公证', '- Windows 安装包未做代码签名',
+        '## 下载', '- macOS · Windows · Linux', '## 发布流程', '```mermaid', 'flowchart LR', 'A[写草稿] --> B{校对}',
+        'B -->|修改| A', 'B -->|通过| C[打包构建]', 'C --> D[发布]', '```',
+      ];
+
+      scene('night', ({ root, tl, find, all }) => {
+        const plain = find('.plain');
+        const text = find('.plain-text');
+        const caret = find('.plain-caret');
+        const scraps = all('.scrap');
+        tl.set(scraps, { opacity: 0 }, 0).set(caret, { opacity: 0 }, 0)
+          .fromTo(plain, { opacity: 0, scale: 0.94 }, { opacity: 1, scale: 1, duration: 0.3, ease: 'power3.out' }, 1.45);
+        // The slam: the "#" becomes the page's first character and the window jolts.
+        TEXT.set(text, '#', SLAM);
+        tl.set(caret, { opacity: 1, x: 14 }, SLAM);
+        [10, -8, 6, -3, 0].forEach((y, i) => tl.set(plain, { y }, SLAM + i * 0.033));
+        for (let t = SLAM + 0.5; t < 6.5; t += 0.46875) tl.set(caret, { opacity: Math.round((t - SLAM - 0.5) / 0.46875) % 2 ? 1 : 0 }, t);
+
+        title(tl, root, '<em>22:00</em>，发布说明还是空的', 2.75, 6.4);
+        title(tl, root, '资料散了一桌', 6.5, 8.3);
+        scraps.forEach((el, i) => {
+          tl.fromTo(el, { opacity: 0, x: (i % 2 ? 110 : -110), rotation: (i % 2 ? 10 : -9) },
+            { opacity: 1, x: 0, rotation: (i % 2 ? 3 : -4), duration: 0.55, ease: 'power4.out' }, 6.5 + i * 0.234);
+        });
+        title(tl, root, '越写越<em>乱</em>', 8.375, 12.1);
+        tl.set(caret, { opacity: 0 }, 8.375);
+        RAW.forEach((_, i) => TEXT.set(text, esc(RAW.slice(0, i + 1).join('\n')), 8.375 + i * 0.06));
+        tl.fromTo(text, { y: 0 }, { y: -560, duration: 3.6, ease: 'power1.in' }, 8.9)
+          .to(text, { filter: 'blur(3px)', opacity: 0.55, duration: 0.9, ease: 'power2.inOut' }, 10.25)
+          .to(scraps, { opacity: 0.35, filter: 'blur(2px)', duration: 0.9, ease: 'power2.inOut' }, 10.25)
+          // The build peaks: everything is pulled into the centre before the drop.
+          .to(plain, { scale: 1.05, duration: 1.4, ease: 'power1.in' }, 12.125)
+          ;
+        [plain, ...scraps].forEach((el) => {
+          const r = stageRect(el, root);
+          tl.to(el, { x: 640 - (r.x + r.w / 2), y: 360 - (r.y + r.h / 2), scale: 0, rotation: 0, opacity: 0, filter: 'blur(10px)', duration: 0.36, ease: 'power3.in' }, 13.52);
+        });
+      });
+
+      // The symbol storm: Markdown marks rush past the camera, and the
+      // hero "#" breaks out of them and slams into the empty page.
+      Stage3D.build('night-gl', START, END, (THREE) => {
+        const { seg, lerp, ease, hash, glyph, lacquer, porcelain, BRAND } = Stage3D;
+        const canvas = document.getElementById('night-gl');
+        const world = new THREE.Scene();
+        const renderer = Stage3D.renderer(THREE, canvas, world);
+        const camera = new THREE.PerspectiveCamera(40, 1280 / 720, 0.1, 120);
+        camera.position.set(0, 0, 10);
+        Stage3D.studioLights(THREE, world);
+        const kinds = ['#', '*', '>', '-', '[]', '`'];
+        const mats = BRAND.map((c) => lacquer(THREE, c)).concat([porcelain(THREE)]);
+        const storm = [];
+        for (let i = 0; i < 46; i += 1) {
+          const g = glyph(THREE, kinds[i % kinds.length], mats[i % 3 === 2 ? 5 : Math.floor(hash(i, 4) * 5)]);
+          const a = hash(i, 1) * Math.PI * 2;
+          const r = 1.6 + hash(i, 2) * 6.5;
+          storm.push({ g, x: Math.cos(a) * r, y: Math.sin(a) * r * 0.62, z0: -58 + hash(i, 3) * 60, v: 44 + hash(i, 5) * 10, spin: [hash(i, 6) * 4 - 2, hash(i, 7) * 4 - 2, hash(i, 8) * 3 - 1.5], s: 0.55 + hash(i, 9) * 0.5 });
+          world.add(g);
+        }
+        const tex = Stage3D.brandTexture(THREE);
+        const hero = glyph(THREE, '#', lacquer(THREE, 0xffffff, { map: tex }), 0.5);
+        // Planar UVs so the icon gradient runs corner to corner over the whole mark.
+        hero.children.forEach((m) => {
+          const geo = m.geometry.clone();
+          const p = geo.attributes.position, uv = geo.attributes.uv, v = new THREE.Vector3();
+          for (let k = 0; k < p.count; k += 1) {
+            v.fromBufferAttribute(p, k).applyEuler(m.rotation).add(m.position);
+            uv.setXY(k, (v.x + 1.3) / 2.6, (v.y + 1.3) / 2.6);
+          }
+          m.geometry = geo;
+        });
+        world.add(hero);
+
+        // The page's first character, on the z = 0 plane.
+        const px = Stage3D.perPx(THREE, 40, 10);
+        const tx = (336 - 640) * px, ty = -(266 - 360) * px;
+        const draw = (t) => {
+          storm.forEach((o, i) => {
+            const z = o.z0 + o.v * t;
+            o.g.visible = z < 9.6;
+            o.g.position.set(o.x, o.y, z);
+            o.g.rotation.set(0.4 + o.spin[0] * t, o.spin[1] * t, o.spin[2] * t + i);
+            o.g.scale.setScalar(o.s);
+          });
+          const rush = ease.out3(seg(t, 0, 1.15));
+          const slam = ease.in3(seg(t, 1.15, SLAM));
+          hero.visible = t < SLAM;
+          hero.position.set(lerp(lerp(0.4, 0, rush), tx, slam), lerp(lerp(0.6, 0.15, rush), ty, slam), lerp(lerp(-36, 3.2, rush), 0, slam));
+          hero.rotation.set(lerp(lerp(0.9, 0.2, rush), 0, slam), lerp(lerp(-2.2, -0.35, rush), 0, slam), lerp(lerp(0.6, 0.05, rush), 0, slam));
+          hero.scale.setScalar(lerp(1, 0.08, slam));
+          world.environmentRotation.y = t * 0.6;
+          renderer.render(world, camera);
+        };
+        return renderer.compileAsync(world, camera).then(() => { draw(0); return draw; });
+      });
+    })();
+  </script>
+</template>

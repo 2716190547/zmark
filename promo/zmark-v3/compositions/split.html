@@ -1,0 +1,67 @@
+<template>
+  <style>
+    #split { position: absolute; inset: 0; }
+  </style>
+  <section id="split" class="stage studio" data-composition-id="split" data-width="1280" data-height="720">
+    <div class="workbench" data-palette="default"></div>
+    <div class="key top"><span>⌘</span><span>2</span></div>
+    <div class="cursor"></div>
+  </section>
+  <script>
+    scene('split', ({ root, tl, find }) => {
+      const win = find('.workbench');
+      buildWorkbench(win, { dirty: true, mode: 'source', lines: 9, mermaid: false });
+      const src = win.querySelector('.source .scroll');
+      const pre = win.querySelector('.preview .scroll');
+      const grow = win.querySelector('.code-grow');
+      const card = win.querySelector('.mermaid-card');
+      // Scroll targets are measured in the split layout the scrolls happen in.
+      win.style.setProperty('--cut', '50%');
+      const at = {};
+      [[9, '.pv-v12'], [4, '.pv-v13'], [14, '.pv-limits']].forEach(([line, sel]) => { at[sel] = [sourceTop(root, line), previewTop(root, sel)]; });
+      card.style.display = 'block';
+      const r = stageRect(win.querySelector('.expand'), root);
+      card.style.display = 'none';
+      win.style.setProperty('--cut', '100%');
+      const scrollTo = (line, sel, when, dur = 0.95) => tl
+        .to(src, { y: -at[sel][0], duration: dur, ease: 'power2.inOut' }, when)
+        .to(pre, { y: -at[sel][1], duration: dur, ease: 'power2.inOut' }, when);
+
+      // ⌘2: the caret column opens into Source | Preview.
+      title(tl, root, '两栏<em>同步</em>排版', 0.05, 5.45);
+      pressKey(tl, find('.key'), 0.45, 0.7);
+      tl.to(win, { '--cut': '50%', duration: 0.7, ease: 'expo.out' }, 0.47)
+        .set(win.querySelector('.mode-source'), { className: 'mode-source' }, 0.47)
+        .set(win.querySelector('.mode-split'), { className: 'mode-split selected' }, 0.47);
+      [9, 10, 11, 14, 15, 16, 18, 19].forEach((line, i) => revealLine(tl, root, line, 0.9 + i * 0.16));
+      // Scrolls land on the bars at 1.875 and 3.75 s.
+      scrollTo(9, '.pv-v12', 1.875 - 0.6, 0.75);
+      scrollTo(4, '.pv-v13', 3.75 - 0.6, 0.7);
+      scrollTo(14, '.pv-limits', 4.6, 0.75);
+
+      // The Mermaid fence, typed fast, renders on the bar at 7.5 s (29.0 s).
+      title(tl, root, '流程图，<em>本机</em>画出', 5.625);
+      let t = typeLine(tl, root, 21, 5.4, 0.04);
+      tl.set(grow, { display: 'block' }, t + 0.05);
+      t = typeLine(tl, root, 22, t + 0.05, 0.03);
+      const code = [];
+      for (let line = 23; line <= 27; line += 1) {
+        t = typeLine(tl, root, line, t + 0.05, 0.018);
+        code.push(DOC[line][1]);
+        TEXT.set(grow, esc(code.join('\n')), t);
+      }
+      typeLine(tl, root, 28, Math.min(t + 0.08, 7.35), 0.04);
+      tl.set(grow, { display: 'none' }, 7.5)
+        .set(card, { display: 'block' }, 7.5)
+        .fromTo(card, { opacity: 0, scale: 0.94 }, { opacity: 1, scale: 1, duration: 0.4, ease: 'expo.out' }, 7.5);
+
+      // The cursor comes in for the expand button.
+      const cursor = find('.cursor');
+      const btn = win.querySelector('.expand');
+      const scrollY = at['.pv-limits'][1];
+      tl.set(cursor, { x: 1320, y: 760 }, 0);
+      click(tl, cursor, r.x + 6, r.y - scrollY + 8, 9.3, 1.0);
+      tl.to(btn, { scale: 0.9, duration: 0.06 }, 9.3).to(btn, { scale: 1, duration: 0.12 }, 9.36);
+    });
+  </script>
+</template>
