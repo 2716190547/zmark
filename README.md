@@ -158,3 +158,9 @@ Platform build dependencies (such as Ubuntu `wayland` / `x11` / `fontconfig` lib
   ./scripts/full_gate.sh --bundle
   ```
 - **Release & artifact guide**: see [`docs/releases/README.md`](docs/releases/README.md) and [`docs/plans/theme-selection-and-memory-audit.md`](docs/plans/theme-selection-and-memory-audit.md).
+
+---
+
+## Friends
+
+- [LINUX DO](https://linux.do/): a sincere, friendly and professional tech community

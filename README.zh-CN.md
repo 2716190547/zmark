@@ -158,3 +158,9 @@ Linux 等平台的系统构建依赖见 [`.github/workflows/build-desktop.yml`](
   ./scripts/full_gate.sh --bundle
   ```
 - **发布与性能文档**：参阅 [`docs/releases/README.md`](docs/releases/README.md) 与 [`docs/plans/theme-selection-and-memory-audit.md`](docs/plans/theme-selection-and-memory-audit.md)。
+
+---
+
+## 友情链接
+
+- [LINUX DO](https://linux.do/)：真诚、友善、团结、专业的技术社区
