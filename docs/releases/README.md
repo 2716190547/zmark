@@ -1,6 +1,6 @@
 # 版本与发布
 
-当前版本：**0.2.14**。更新说明：[v0.2.14](v0.2.14.md)。
+当前版本：**0.2.15**。更新说明：[v0.2.15](v0.2.15.md)。
 
 从 0.2.13 起，安装包、签名更新清单和发布说明统一发布在公开源码仓库 [`2716190547/zmark` 的 Releases](https://github.com/2716190547/zmark/releases)。v0.2.12 及更早版本留在已归档的 [`2716190547/zmark-releases`](https://github.com/2716190547/zmark-releases/releases)，以保留旧下载链接，详见 [ADR 0038](../adr/0038-move-releases-into-the-source-repository.md)。`dev` 是当前开发分支，Release 标签由 `scripts/release.sh` 固定到实际构建的已推送 source commit。
 
