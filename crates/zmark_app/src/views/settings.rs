@@ -1113,7 +1113,7 @@ fn render_segmented(theme: &ThemeColors) -> Div {
         .h(px(tk::CONTROL_H))
         .p(px(tk::TRACK_INSET))
         .rounded(px(tk::RADIUS))
-        .bg(theme.segmented_track_bg())
+        .bg(theme.control_bg())
         .flex()
         .gap(px(tk::TRACK_INSET))
 }
@@ -1433,7 +1433,7 @@ fn render_appearance_tab(
         .flex_col()
         .gap(px(tk::SECTION_GAP))
         .child(render_section(
-            Some(strings.theme_mode_label.into()),
+            None,
             div()
                 .flex()
                 .gap_3()
@@ -1650,54 +1650,52 @@ fn render_editor_save_tab(
             ],
             theme,
         ))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    render_section_title(strings.tab_size_label, theme),
-                )
-                .child(
+        .child(render_setting_group(
+            None,
+            vec![
+                render_setting_row(
+                    strings.tab_size_label,
+                    None,
                     render_segmented(theme)
+                        .w(px(168.))
                         .child(render_segment(
                             "tab_size_2".into(),
-                            "2 Spaces",
+                            "2",
                             tab_size == 2,
                             theme,
                             move |_, window, cx| t_ts2(2, window, cx),
                         ))
                         .child(render_segment(
                             "tab_size_4".into(),
-                            "4 Spaces",
+                            "4",
                             tab_size == 4,
                             theme,
                             move |_, window, cx| t_ts4(4, window, cx),
                         )),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    render_section_title(strings.line_height_label, theme),
+                    theme,
                 )
-                .child(
+                .into_any_element(),
+                render_setting_row(
+                    strings.line_height_label,
+                    None,
                     render_segmented(theme)
+                        .w(px(260.))
                         .children([1.3f32, 1.4, 1.5, 1.6, 1.7].into_iter().map(|lh_opt| {
                             let on_set = on_set_line_height.clone();
                             render_segment(
                                 format!("line_height_{lh_opt:.1}").into(),
-                                format!("{lh_opt:.1}x"),
+                                format!("{lh_opt:.1}"),
                                 (line_height - lh_opt).abs() < 0.05,
                                 theme,
                                 move |_, window, cx| on_set(lh_opt, window, cx),
                             )
                         })),
-                ),
-        )
+                    theme,
+                )
+                .into_any_element(),
+            ],
+            theme,
+        ))
 }
 
 fn render_language_tab(
@@ -2082,39 +2080,44 @@ fn render_about_tab(
         .flex()
         .flex_col()
         .gap(px(tk::SECTION_GAP))
-        // Product header: centered logo, name, tagline.
-        .child(
-            div()
-                .w_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap_2()
-                .pt_2()
-                .child(img("brand/logo.png").w(px(64.)).h(px(64.)).flex_shrink_0())
-                .child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.text_primary)
-                        .child("ZMark"),
-                )
-                .child(render_help_text(strings.about_tagline, theme)),
-        )
+        // App identity and the update check share one card, like other pages.
         .child(render_setting_group(
-            Some(strings.software_updates.into()),
-            vec![render_setting_row(
-                format!("{} {}", strings.version_label, crate::APP_VERSION),
-                Some(update_text).filter(|text| !text.is_empty()).map(Into::into),
-                render_secondary_button(
-                    "btn_check_updates",
-                    check_label,
+            None,
+            vec![
+                div()
+                    .py(px(tk::ROW_PY))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(img("brand/logo.png").size(px(44.)).flex_shrink_0())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_size(px(tk::TEXT_LABEL + 2.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.text_primary)
+                                    .child("ZMark"),
+                            )
+                            .child(render_help_text(strings.about_tagline, theme)),
+                    )
+                    .into_any_element(),
+                render_setting_row(
+                    format!("{} {}", strings.version_label, crate::APP_VERSION),
+                    Some(update_text).filter(|text| !text.is_empty()).map(Into::into),
+                    render_secondary_button(
+                        "btn_check_updates",
+                        check_label,
+                        theme,
+                        on_check_update,
+                    ),
                     theme,
-                    on_check_update,
-                ),
-                theme,
-            )
-            .into_any_element()],
+                )
+                .into_any_element(),
+            ],
             theme,
         ))
         .child(render_setting_group(
@@ -2174,10 +2177,13 @@ enum ModePreview {
 
 /// A small drawn window in the palette's light or dark colors; "Auto" shows
 /// the light window on the left and the dark one on the right.
-fn render_window_sketch(colors: &ThemeColors) -> Div {
+fn render_window_sketch(colors: &ThemeColors, radius: f32) -> Div {
+    // GPUI clips overflow to a rectangle, not the parent's rounded corners, so
+    // the sketch paints its own rounded fill and title bar.
     let line = |w: f32, c: Hsla| div().w(px(w)).h(px(3.)).rounded_full().bg(c);
     div()
         .size_full()
+        .rounded(px(radius))
         .bg(colors.bg)
         .flex()
         .flex_col()
@@ -2185,6 +2191,7 @@ fn render_window_sketch(colors: &ThemeColors) -> Div {
             div()
                 .h(px(12.))
                 .px(px(6.))
+                .rounded_t(px(radius))
                 .flex()
                 .items_center()
                 .gap(px(3.))
@@ -2222,13 +2229,14 @@ where
 {
     let light = ThemeColors::resolve(palette, false);
     let dark = ThemeColors::resolve(palette, true);
+    let r = tk::RADIUS_CARD - 2.0;
     let picture = match mode {
-        ModePreview::Light => render_window_sketch(&light),
-        ModePreview::Dark => render_window_sketch(&dark),
+        ModePreview::Light => render_window_sketch(&light, r),
+        ModePreview::Dark => render_window_sketch(&dark, r),
         ModePreview::Auto => div()
             .size_full()
             .relative()
-            .child(render_window_sketch(&light))
+            .child(render_window_sketch(&light, r))
             .child(
                 div()
                     .absolute()
@@ -2243,8 +2251,8 @@ where
                             .top_0()
                             .bottom_0()
                             .right_0()
-                            .w(px(108.))
-                            .child(render_window_sketch(&dark)),
+                            .w(px(104.))
+                            .child(render_window_sketch(&dark, r)),
                     ),
             ),
     };
@@ -2266,13 +2274,19 @@ where
                 .border_2()
                 .border_color(if active { theme.accent } else { gpui::transparent_black() })
                 .child(
+                    // Outline drawn on top so light and dark sketches both get an edge.
                     div()
                         .size_full()
-                        .rounded(px(tk::RADIUS_CARD - 2.0))
-                        .overflow_hidden()
-                        .border_1()
-                        .border_color(theme.hairline())
-                        .child(picture),
+                        .relative()
+                        .child(picture)
+                        .child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .rounded(px(r))
+                                .border_1()
+                                .border_color(theme.text_primary.opacity(0.14)),
+                        ),
                 ),
         )
         .child(
