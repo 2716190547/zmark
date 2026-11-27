@@ -249,6 +249,14 @@ impl LightboxState {
         self.set_zoom(self.zoom * factor);
     }
 
+    /// Trackpad pinch: `delta` is the fractional change GPUI reports (0.1 = +10%).
+    pub fn apply_pinch_zoom(&mut self, delta: f32) {
+        if !delta.is_finite() || delta == 0.0 {
+            return;
+        }
+        self.set_zoom(self.zoom * (1.0 + delta).clamp(0.5, 2.0));
+    }
+
     pub fn start_drag(&mut self, mouse_x: f32, mouse_y: f32) {
         self.is_dragging = true;
         self.drag_start_mouse = Some((mouse_x, mouse_y));
@@ -377,9 +385,15 @@ pub fn render_lightbox(
                 ScrollDelta::Pixels(p) => f32::from(p.y),
                 ScrollDelta::Lines(l) => l.y * 20.0,
             };
-            // Windows wheel-up is positive; retain macOS's existing natural-scroll mapping.
-            let delta = if cfg!(target_os = "windows") { delta } else { -delta };
+            // Zoom in when the wheel or fingers move up. With macOS natural scrolling
+            // the system has already inverted the delta, so undo that first.
+            let delta = if crate::platform::scroll_direction_inverted() { -delta } else { delta };
             this.lightbox.apply_scroll_zoom(delta);
+            cx.stop_propagation();
+            cx.notify();
+        }))
+        .on_pinch(cx.listener(|this, event: &PinchEvent, _window, cx| {
+            this.lightbox.apply_pinch_zoom(event.delta);
             cx.stop_propagation();
             cx.notify();
         }))

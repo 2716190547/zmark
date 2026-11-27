@@ -1312,11 +1312,13 @@ impl AppState {
         }
 
         let new_doc = Document::from_file(path.clone())?;
-        // If single empty clean scratch document, replace it
+        // A single clean scratch that is empty or the untouched welcome page gives
+        // way to the opened file.
         if self.open_docs.len() == 1
             && self.open_docs[0].key.is_scratch()
-            && self.open_docs[0].doc.buffer.trim().is_empty()
             && self.open_docs[0].doc.status != DocumentStatus::Modified
+            && (self.open_docs[0].doc.buffer.trim().is_empty()
+                || crate::welcome::is_pristine(&self.open_docs[0].doc, self.preferences.locale))
         {
             self.open_docs[0] = OpenDoc {
                 key: target_key.clone(),

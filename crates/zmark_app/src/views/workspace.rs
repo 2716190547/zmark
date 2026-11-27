@@ -2825,6 +2825,35 @@ impl WorkspaceView {
         }
     }
 
+    /// Open files or folders handed to ZMark from outside (drag and drop, Finder "Open With").
+    pub fn open_external_paths(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let mut errors = Vec::new();
+        let mut opened_file = false;
+        for path in paths {
+            let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if path.is_dir() {
+                if let Err(msg) = self.open_or_add_workspace_dir(&path, cx) {
+                    errors.push(format!("{}: {}", path.display(), msg));
+                }
+            } else {
+                match self.state.load_file(path.clone()) {
+                    Ok(()) => {
+                        self.restore_sidebar_path(&path, cx);
+                        opened_file = true;
+                    }
+                    Err(error) => errors.push(format!("{}: {}", path.display(), error)),
+                }
+            }
+        }
+        if opened_file { self.on_document_swapped(Some(window), cx); }
+        self.drawer_close_task = None;
+        self.drawer_closing = false;
+        self.state.drawer_open = true;
+        self.state.drawer_tab = crate::state::DrawerTab::Files;
+        self.error_banner = if errors.is_empty() { None } else { Some(errors.join("\n")) };
+        cx.notify();
+    }
+
     fn restore_sidebar_path(&mut self, path: &Path, cx: &mut Context<Self>) {
         let paths = self.state.preferences.sidebar_hidden_paths.iter().filter(|hidden| path.starts_with(hidden)).cloned().collect::<Vec<_>>();
         if !paths.is_empty() { self.persist_sidebar_hidden(paths, false, cx); }
@@ -4385,31 +4414,7 @@ impl Render for WorkspaceView {
                     p.is_dir() || zmark_core::file_ops::is_supported_text(p)))
             })
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                let mut errors = Vec::new();
-                let mut opened_file = false;
-                for path in paths.paths() {
-                    let path = path.canonicalize().unwrap_or_else(|_| path.clone());
-                    if path.is_dir() {
-                        if let Err(msg) = this.open_or_add_workspace_dir(&path, cx) {
-                            errors.push(format!("{}: {}", path.display(), msg));
-                        }
-                    } else {
-                        match this.state.load_file(path.clone()) {
-                            Ok(()) => {
-                                this.restore_sidebar_path(&path, cx);
-                                opened_file = true;
-                            }
-                            Err(error) => errors.push(format!("{}: {}", path.display(), error)),
-                        }
-                    }
-                }
-                if opened_file { this.on_document_swapped(Some(window), cx); }
-                this.drawer_close_task = None;
-                this.drawer_closing = false;
-                this.state.drawer_open = true;
-                this.state.drawer_tab = crate::state::DrawerTab::Files;
-                this.error_banner = if errors.is_empty() { None } else { Some(errors.join("\n")) };
-                cx.notify();
+                this.open_external_paths(paths.paths(), window, cx);
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.source_mouse_move(event, window, cx);

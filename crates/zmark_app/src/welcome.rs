@@ -17,6 +17,14 @@ pub fn initial_document(path: Option<PathBuf>, locale: SupportedLocale) -> Docum
     }
 }
 
+/// True for the startup welcome draft the user has not edited, which may be
+/// replaced by the first opened file instead of staying as an extra tab.
+pub fn is_pristine(doc: &Document, locale: SupportedLocale) -> bool {
+    doc.path.is_none()
+        && doc.status != zmark_core::document::DocumentStatus::Modified
+        && doc.buffer == initial_document(None, locale).buffer
+}
+
 /// Welcome text is chosen once when a new startup scratch document is created.
 pub fn text(locale: SupportedLocale) -> &'static str {
     match locale.resolve() {

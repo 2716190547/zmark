@@ -303,3 +303,59 @@ pub fn text_selection_colors(dark: bool, active: bool) -> Option<(gpui::Hsla, gp
 
 #[cfg(not(target_os = "macos"))]
 pub fn text_selection_colors(_dark: bool, _active: bool) -> Option<(gpui::Hsla, gpui::Hsla)> { None }
+
+/// Whether macOS "natural scrolling" is on, i.e. scroll deltas are already
+/// inverted relative to the finger or wheel motion. Absent key means on (the
+/// macOS default).
+pub fn scroll_direction_inverted() -> bool {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::NSString;
+        use objc::{class, msg_send, sel, sel_impl};
+        let defaults: id = msg_send![class!(NSUserDefaults), standardUserDefaults];
+        let key = NSString::alloc(nil).init_str("com.apple.swipescrolldirection");
+        let value: id = msg_send![defaults, objectForKey: key];
+        let _: () = msg_send![key, release];
+        if value == nil {
+            return true;
+        }
+        let on: cocoa::base::BOOL = msg_send![value, boolValue];
+        on != cocoa::base::NO
+    }
+    // Windows wheel-up is positive. Linux keeps the inverted mapping it shipped with.
+    #[cfg(not(target_os = "macos"))]
+    {
+        !cfg!(target_os = "windows")
+    }
+}
+
+/// Turn the `file://` URLs the OS hands an open-URL handler into local paths.
+/// Other schemes are ignored; percent escapes (spaces, CJK names) are decoded.
+pub fn paths_from_open_urls(urls: &[String]) -> Vec<std::path::PathBuf> {
+    urls.iter()
+        .filter_map(|url| url.strip_prefix("file://"))
+        .map(|rest| rest.strip_prefix("localhost").unwrap_or(rest))
+        .filter_map(|path| percent_encoding::percent_decode_str(path).decode_utf8().ok())
+        .map(|path| std::path::PathBuf::from(path.into_owned()))
+        .collect()
+}
+
+#[cfg(test)]
+mod open_url_tests {
+    use super::paths_from_open_urls;
+    use std::path::PathBuf;
+
+    #[test]
+    fn decodes_file_urls_and_skips_other_schemes() {
+        let urls = vec![
+            "file:///Users/a/%E7%AC%94%E8%AE%B0%20one.md".to_string(),
+            "file://localhost/tmp/b.md".to_string(),
+            "https://example.com/c.md".to_string(),
+        ];
+        assert_eq!(
+            paths_from_open_urls(&urls),
+            vec![PathBuf::from("/Users/a/笔记 one.md"), PathBuf::from("/tmp/b.md")]
+        );
+    }
+}

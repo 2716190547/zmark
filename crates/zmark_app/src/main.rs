@@ -21,6 +21,12 @@ fn main() {
     let doc = zmark_app::welcome::initial_document(initial_path, preferences.locale);
 
     let app = gpui_platform::application().with_assets(AppAssets);
+    // Finder "Open With" and double-clicks arrive as open-URL events, not argv.
+    // Buffer them until the window exists; cold-launch events can come first.
+    let (open_tx, mut open_rx) = futures::channel::mpsc::unbounded::<Vec<String>>();
+    app.on_open_urls(move |urls| {
+        let _ = open_tx.unbounded_send(urls);
+    });
     app.run(move |cx: &mut App| {
         // GPUI creates its own NSApplication subclass during run(). Touching the
         // shared application before this point makes GPUI write its `platform`
@@ -69,6 +75,25 @@ fn main() {
             view.update(cx, |this, cx| {
                 this.install_window_activation_observer(window, cx);
             });
+
+            let open_view = view.clone();
+            window
+                .spawn(cx, async move |cx| {
+                    use futures::StreamExt;
+                    while let Some(urls) = open_rx.next().await {
+                        let paths = zmark_app::platform::paths_from_open_urls(&urls);
+                        if paths.is_empty() {
+                            continue;
+                        }
+                        let _ = cx.update(|window, cx| {
+                            open_view.update(cx, |this, cx| {
+                                this.open_external_paths(&paths, window, cx);
+                            });
+                            cx.activate(true);
+                        });
+                    }
+                })
+                .detach();
 
             zmark_app::frame_probe::start(window, view.entity_id());
             if std::env::var("ZMARK_FRAME_PROBE").is_ok() {
