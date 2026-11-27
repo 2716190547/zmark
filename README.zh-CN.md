@@ -10,6 +10,7 @@
 [![Build Desktop](https://img.shields.io/github/actions/workflow/status/2716190547/zmark/build-desktop.yml?branch=dev&label=CI%20Build&style=flat-square)](https://github.com/2716190547/zmark/actions/workflows/build-desktop.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-DEA584?logo=rust&logoColor=white&style=flat-square)](rust-toolchain.toml)
 [![GPUI](https://img.shields.io/badge/UI-GPUI%20GPU%20Native-3B82F6?style=flat-square)](https://crates.io/crates/gpui)
+[![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-6B7280?style=flat-square)](#许可协议)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-4B5563?style=flat-square)](#下载与安装)
 [![Languages](https://img.shields.io/badge/i18n-10%20%E7%A7%8D%E8%AF%AD%E8%A8%80-10B981?style=flat-square)](#核心特性)
 
@@ -158,6 +159,16 @@ Linux 等平台的系统构建依赖见 [`.github/workflows/build-desktop.yml`](
   ./scripts/full_gate.sh --bundle
   ```
 - **发布与性能文档**：参阅 [`docs/releases/README.md`](docs/releases/README.md) 与 [`docs/plans/theme-selection-and-memory-audit.md`](docs/plans/theme-selection-and-memory-audit.md)。
+
+---
+
+## 许可协议
+
+ZMark 采用 [MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE) 双许可，使用者可任选其一。
+
+除非另有声明，你提交给本项目的贡献均按上述双许可授权，不附加其他条款。
+
+第三方组件保留各自的许可：界面图标来自 [Lucide](https://lucide.dev/)（[ISC](crates/zmark_app/assets/icons/LICENSE-LUCIDE)）；`vendor/rusty-mermaid-diagrams` 是 [rusty-mermaid](https://github.com/base58ed/rusty-mermaid) 的修补副本（[MIT](vendor/rusty-mermaid-diagrams/LICENSE)）。
 
 ---
 

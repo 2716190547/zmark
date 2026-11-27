@@ -10,6 +10,7 @@
 [![Build Desktop](https://img.shields.io/github/actions/workflow/status/2716190547/zmark/build-desktop.yml?branch=dev&label=CI%20Build&style=flat-square)](https://github.com/2716190547/zmark/actions/workflows/build-desktop.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-DEA584?logo=rust&logoColor=white&style=flat-square)](rust-toolchain.toml)
 [![GPUI](https://img.shields.io/badge/UI-GPUI%20GPU%20Native-3B82F6?style=flat-square)](https://crates.io/crates/gpui)
+[![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-6B7280?style=flat-square)](#license)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-4B5563?style=flat-square)](#download-and-install)
 [![Languages](https://img.shields.io/badge/i18n-10%20Locales-10B981?style=flat-square)](#highlights)
 
@@ -158,6 +159,16 @@ Platform build dependencies (such as Ubuntu `wayland` / `x11` / `fontconfig` lib
   ./scripts/full_gate.sh --bundle
   ```
 - **Release & artifact guide**: see [`docs/releases/README.md`](docs/releases/README.md) and [`docs/plans/theme-selection-and-memory-audit.md`](docs/plans/theme-selection-and-memory-audit.md).
+
+---
+
+## License
+
+ZMark is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+Unless you explicitly state otherwise, any contribution you submit to this project is licensed as above, without any additional terms or conditions.
+
+Third-party components keep their own licenses: the UI icons come from [Lucide](https://lucide.dev/) ([ISC](crates/zmark_app/assets/icons/LICENSE-LUCIDE)), and `vendor/rusty-mermaid-diagrams` is a patched copy of [rusty-mermaid](https://github.com/base58ed/rusty-mermaid) ([MIT](vendor/rusty-mermaid-diagrams/LICENSE)).
 
 ---
 
