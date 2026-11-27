@@ -2089,7 +2089,10 @@ fn render_about_tab(
                 .flex_col()
                 .items_center()
                 .gap_2()
-                .pt_2()
+                // Other pages spend this space on their title; keep the logo
+                // from crowding the window's top edge.
+                .pt(px(28.))
+                .pb_2()
                 .child(img("brand/logo.png").w(px(64.)).h(px(64.)).flex_shrink_0())
                 .child(
                     div()
