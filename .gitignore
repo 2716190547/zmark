@@ -3,3 +3,6 @@
 Cargo.lock
 .DS_Store
 crates/zmark_app/assets/helpers/zmark_mermaid
+
+# Promo films live outside git (backup: omarchy:~/Work/zmark)
+/promo/
