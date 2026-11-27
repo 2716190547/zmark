@@ -18,6 +18,7 @@ fn main() {
     };
 
     let preferences = Preferences::load_or_default();
+    let restore_session = initial_path.is_none();
     let doc = zmark_app::welcome::initial_document(initial_path, preferences.locale);
 
     let app = gpui_platform::application().with_assets(AppAssets);
@@ -51,6 +52,11 @@ fn main() {
             // Launch with the file sidebar open. Tests build AppState directly and
             // keep the closed default so their layout assumptions stay stable.
             state.drawer_open = true;
+            // A plain launch reopens last session's files; the untouched welcome
+            // page gives way to the first of them.
+            if restore_session {
+                state.restore_session();
+            }
             let update_config = zmark_app::updater::UpdateConfig::production();
             let view = cx.new(|cx| {
                 WorkspaceView::new_with_update_config(state, update_config, cx)
@@ -74,6 +80,12 @@ fn main() {
 
             view.update(cx, |this, cx| {
                 this.install_window_activation_observer(window, cx);
+                this.on_document_swapped(Some(window), cx);
+                cx.on_app_quit(|this, _cx| {
+                    let _ = this.state.remember_session();
+                    async {}
+                })
+                .detach();
             });
 
             let open_view = view.clone();

@@ -304,6 +304,21 @@ pub fn text_selection_colors(dark: bool, active: bool) -> Option<(gpui::Hsla, gp
 #[cfg(not(target_os = "macos"))]
 pub fn text_selection_colors(_dark: bool, _active: bool) -> Option<(gpui::Hsla, gpui::Hsla)> { None }
 
+/// Folder holding ZMark's licenses and THIRD-PARTY-NOTICES.html in an installed
+/// build: `Contents/Resources/licenses` on macOS, `licenses` beside the exe on
+/// Windows, `/usr/share/doc/zmark` from the .deb. `None` for dev builds.
+pub fn licenses_dir() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = if cfg!(target_os = "macos") {
+        exe.parent()?.parent()?.join("Resources/licenses")
+    } else if cfg!(target_os = "windows") {
+        exe.parent()?.join("licenses")
+    } else {
+        std::path::PathBuf::from("/usr/share/doc/zmark")
+    };
+    dir.join("THIRD-PARTY-NOTICES.html").is_file().then_some(dir)
+}
+
 /// Whether macOS "natural scrolling" is on, i.e. scroll deltas are already
 /// inverted relative to the finger or wheel motion. Absent key means on (the
 /// macOS default).

@@ -1522,6 +1522,33 @@ impl AppState {
         }
     }
 
+    /// Record the open files so the next plain launch can reopen them. Drafts
+    /// without a path are skipped; auto-save and the close flow handle those.
+    pub fn remember_session(&mut self) -> Result<(), zmark_core::config::ConfigError> {
+        let files: Vec<PathBuf> = self.open_docs.iter().filter_map(|d| d.doc.path.clone()).collect();
+        let active = self.doc().path.clone();
+        if files == self.preferences.last_session_files && active == self.preferences.last_active_file {
+            return Ok(());
+        }
+        self.preferences.last_session_files = files;
+        self.preferences.last_active_file = active;
+        self.preferences.save_to_path(&self.preferences_path)
+    }
+
+    /// Reopen the files recorded by [`Self::remember_session`] that still exist,
+    /// then switch to the one that was active. Returns whether anything opened.
+    pub fn restore_session(&mut self) -> bool {
+        let files: Vec<PathBuf> = self.preferences.last_session_files.iter().filter(|p| p.is_file()).cloned().collect();
+        let mut opened = false;
+        for path in &files {
+            opened |= self.open_file(path.clone()).is_ok();
+        }
+        if let Some(active) = self.preferences.last_active_file.clone().filter(|p| p.is_file()) {
+            let _ = self.open_file(active);
+        }
+        opened
+    }
+
     pub fn load_file(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
         self.open_file(path)
     }
@@ -2793,4 +2820,43 @@ fn background_disk_conflict_survives_switching_without_losing_local_text() {
     assert_eq!(state.editor.to_text(), local);
     assert_eq!(fs::read_to_string(first).unwrap(), "external change");
 }
+}
+
+#[cfg(test)]
+mod session_restore_tests {
+    use super::AppState;
+    use zmark_core::config::Preferences;
+    use zmark_core::i18n::SupportedLocale;
+
+    #[test]
+    fn plain_launch_reopens_last_files_in_place_of_the_welcome_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.md");
+        let b = dir.path().join("b.md");
+        std::fs::write(&a, "# A").unwrap();
+        std::fs::write(&b, "# B").unwrap();
+        let prefs_path = dir.path().join("config.toml");
+
+        let mut first = AppState::new_with_preferences_at(
+            crate::welcome::initial_document(None, SupportedLocale::En),
+            Preferences::default(),
+            prefs_path.clone(),
+        );
+        first.open_file(a.clone()).unwrap();
+        first.open_file(b.clone()).unwrap();
+        first.open_file(a.clone()).unwrap();
+        first.remember_session().unwrap();
+
+        let prefs = Preferences::load_or_default_from_path(&prefs_path);
+        let mut next = AppState::new_with_preferences_at(
+            crate::welcome::initial_document(None, prefs.locale),
+            prefs,
+            prefs_path,
+        );
+        assert!(next.restore_session());
+        let open: Vec<_> = next.open_documents().iter().filter_map(|d| d.doc.path.clone()).collect();
+        assert_eq!(open, vec![a.canonicalize().unwrap(), b.canonicalize().unwrap()]);
+        assert_eq!(next.open_documents().len(), 2, "welcome page must be replaced, not kept");
+        assert_eq!(next.doc().path, Some(a.canonicalize().unwrap()));
+    }
 }

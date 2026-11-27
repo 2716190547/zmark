@@ -453,6 +453,12 @@ pub struct Preferences {
     pub workspace_roots: Vec<PathBuf>,
     #[serde(default)]
     pub sidebar_hidden_paths: Vec<PathBuf>,
+    /// Files open when ZMark last quit, reopened on a plain launch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub last_session_files: Vec<PathBuf>,
+    /// The file that was active when ZMark last quit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_active_file: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "CustomThemePreferences::is_empty")]
     pub custom_theme: CustomThemePreferences,
     /// Sparse shortcut overrides (`action_id -> GPUI keystroke spec`; `""` means unbound).
@@ -479,6 +485,8 @@ impl Default for Preferences {
             config_version: CURRENT_CONFIG_VERSION,
             workspace_roots: Vec::new(),
             sidebar_hidden_paths: Vec::new(),
+            last_session_files: Vec::new(),
+            last_active_file: None,
             custom_theme: CustomThemePreferences::default(),
             shortcuts: BTreeMap::new(),
         }

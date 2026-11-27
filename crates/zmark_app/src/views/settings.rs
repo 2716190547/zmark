@@ -367,9 +367,17 @@ impl Render for SettingsWindowView {
         let update_enabled = self.update_enabled;
         let update_reason = self.update_reason.clone();
         let workspace_for_update = self.workspace.clone();
-        let on_check_update = move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+        // Once an update is downloaded, the same button restarts into it, like the
+        // toolbar's update icon.
+        let on_check_update = move |_: &MouseDownEvent, window: &mut Window, cx: &mut App| {
             if let Some(ws) = workspace_for_update.upgrade() {
-                ws.update(cx, |ws, cx| ws.check_for_updates(cx, true));
+                ws.update(cx, |ws, cx| {
+                    if matches!(ws.update_status, UpdateStatus::Downloaded(_)) {
+                        ws.restart_for_update(Some(window), cx);
+                    } else {
+                        ws.check_for_updates(cx, true);
+                    }
+                });
             }
         };
 
@@ -793,6 +801,11 @@ impl Render for SettingsWindowView {
                             move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
                                 cx.open_url("https://github.com/2716190547/zmark");
                             },
+                            crate::platform::licenses_dir().map(|dir| {
+                                move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+                                    cx.open_with_system(&dir);
+                                }
+                            }),
                         )
                         .into_any_element(),
                     }),
@@ -1994,7 +2007,13 @@ fn render_about_tab(
     update_reason: Option<&str>,
     on_check_update: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     on_open_github: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    on_open_licenses: Option<impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>,
 ) -> impl IntoElement {
+    let check_label = if matches!(update_status, UpdateStatus::Downloaded(_)) {
+        strings.restart_update
+    } else {
+        strings.check_updates
+    };
     let update_text = match update_status {
         UpdateStatus::Checking | UpdateStatus::Installing => strings.update_checking.to_string(),
         UpdateStatus::Latest => strings.up_to_date.to_string(),
@@ -2055,7 +2074,7 @@ fn render_about_tab(
                     Some(update_text).filter(|text| !text.is_empty()).map(Into::into),
                     render_secondary_button(
                         "btn_check_updates",
-                        strings.check_updates,
+                        check_label,
                         theme,
                         on_check_update,
                     ),
@@ -2073,7 +2092,20 @@ fn render_about_tab(
                     Some(strings.footer_credit.into()),
                     render_secondary_button("btn_open_github", "GitHub", theme, on_open_github),
                     theme,
-                )),
+                ))
+                .when_some(on_open_licenses, |el, on_open_licenses| {
+                    el.child(render_setting_row(
+                        strings.licenses_label,
+                        Some(strings.licenses_desc.into()),
+                        render_secondary_button(
+                            "btn_open_licenses",
+                            strings.licenses_open,
+                            theme,
+                            on_open_licenses,
+                        ),
+                        theme,
+                    ))
+                }),
         )
 }
 

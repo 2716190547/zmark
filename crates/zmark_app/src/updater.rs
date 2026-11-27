@@ -669,13 +669,15 @@ pub fn spawn_install_helper(prepared: &PreparedUpdate, target: &Path) -> std::io
 }
 
 /// Shell helper that waits for the app to exit and then swaps the staged bundle
-/// into place. `ZMARK_OPEN_CMD` exists so tests can record the `open` call.
+/// into place. `ZMARK_OPEN_CMD` and `ZMARK_LSREGISTER` exist so tests can record
+/// the `open` call without registering temporary bundles with LaunchServices.
 pub fn install_script() -> &'static str {
     r#"#!/bin/sh
 set -u
 target="$1"; pid="$2"; version="$3"; staging="$4"
 backup="$target.old.$version"
 open_cmd="${ZMARK_OPEN_CMD:-open}"
+lsregister="${ZMARK_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
 while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
 restore() {
   if [ ! -d "$target" ]; then
@@ -710,7 +712,14 @@ if ! mv "$staging" "$target"; then
 fi
 trap - EXIT INT TERM
 xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$target" 2>/dev/null || true
+"$lsregister" -f "$target" 2>/dev/null || true
+# Keep the rollback copy and the emptied staging folder out of "Open With".
+"$lsregister" -u "$backup" 2>/dev/null || true
+"$lsregister" -u "$staging" 2>/dev/null || true
+staging_root=$(dirname "$(dirname "$staging")")
+case "$(basename "$staging_root")" in
+  .ZMark.staging.*) rm -rf "$staging_root" ;;
+esac
 "$open_cmd" "$target"
 "#
 }
@@ -1085,6 +1094,7 @@ mod tests {
             .arg("9.9.9")
             .arg(&staged)
             .env("ZMARK_OPEN_CMD", &open_script)
+            .env("ZMARK_LSREGISTER", "/usr/bin/true")
             .status()
             .unwrap();
         let _ = reaper.join();
@@ -1125,6 +1135,7 @@ mod tests {
             .arg("9.9.9")
             .arg(&staged2)
             .env("ZMARK_OPEN_CMD", &open_script2)
+            .env("ZMARK_LSREGISTER", "/usr/bin/true")
             .env("ZMARK_TEST_PAUSE_AFTER_BACKUP", "5")
             .spawn()
             .unwrap();
