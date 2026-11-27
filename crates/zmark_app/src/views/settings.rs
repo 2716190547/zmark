@@ -381,6 +381,13 @@ impl Render for SettingsWindowView {
             }
         };
 
+        let workspace_for_welcome = self.workspace.clone();
+        let on_restore_welcome = move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+            if let Some(ws) = workspace_for_welcome.upgrade() {
+                ws.update(cx, |ws, cx| ws.restore_welcome_guide(cx));
+            }
+        };
+
         let view_tab = cx.entity().clone();
         let on_set_tab = Arc::new(move |tab: SettingsTab, _window: &mut Window, cx: &mut App| {
             view_tab.update(cx, |this, cx| {
@@ -806,6 +813,7 @@ impl Render for SettingsWindowView {
                                     cx.open_with_system(&dir);
                                 }
                             }),
+                            on_restore_welcome,
                         )
                         .into_any_element(),
                     }),
@@ -876,8 +884,9 @@ where
 /// Section heading shared by every settings page.
 fn render_section_title(text: impl Into<SharedString>, theme: &ThemeColors) -> impl IntoElement {
     div()
+        .px_1()
         .text_xs()
-        .font_weight(FontWeight::MEDIUM)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme.text_muted)
         .child(text.into())
 }
@@ -904,7 +913,7 @@ fn render_setting_row(
                 .min_w(px(0.))
                 .child(
                     div()
-                        .text_xs()
+                        .text_sm()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text_primary)
                         .child(label.into()),
@@ -916,7 +925,39 @@ fn render_setting_row(
         .child(div().flex_shrink_0().child(trailing))
 }
 
-/// Secondary push button used for in-page actions (About -> check for updates).
+/// A titled card of related rows separated by hairlines, so each section reads
+/// as one block instead of loose lines of text.
+fn render_setting_group(
+    title: Option<SharedString>,
+    rows: Vec<AnyElement>,
+    theme: &ThemeColors,
+) -> impl IntoElement {
+    let count = rows.len();
+    div()
+        .flex()
+        .flex_col()
+        .gap_1p5()
+        .when_some(title, |el, title| el.child(render_section_title(title, theme)))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .px_3()
+                .rounded(px(10.))
+                .bg(theme.text_primary.opacity(0.03))
+                .border_1()
+                .border_color(theme.text_primary.opacity(0.08))
+                .children(rows.into_iter().enumerate().map(|(i, row)| {
+                    div()
+                        .py_0p5()
+                        .when(i + 1 < count, |el| {
+                            el.border_b_1().border_color(theme.text_primary.opacity(0.06))
+                        })
+                        .child(row)
+                })),
+        )
+}
+
 fn render_secondary_button<F>(
     id: &'static str,
     label: impl Into<SharedString>,
@@ -1444,36 +1485,39 @@ fn render_editor_save_tab(
         .flex()
         .flex_col()
         .gap_5()
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(render_setting_row(
+        .child(render_setting_group(
+            None,
+            vec![
+                render_setting_row(
                     strings.auto_save_label,
                     Some(strings.auto_save_desc.into()),
                     render_ios_toggle(auto_save, theme, move |_, window, cx| {
                         t_as(!auto_save, window, cx);
                     }),
                     theme,
-                ))
-                .child(render_setting_row(
+                )
+                .into_any_element(),
+                render_setting_row(
                     strings.auto_save_on_blur_label,
                     None,
                     render_ios_toggle(auto_save_on_blur, theme, move |_, window, cx| {
                         t_asb(!auto_save_on_blur, window, cx);
                     }),
                     theme,
-                ))
-                .child(render_setting_row(
+                )
+                .into_any_element(),
+                render_setting_row(
                     strings.show_line_numbers_label,
                     Some(strings.show_line_numbers_desc.into()),
                     render_ios_toggle(show_line_numbers, theme, move |_, window, cx| {
                         t_ln(!show_line_numbers, window, cx);
                     }),
                     theme,
-                )),
-        )
+                )
+                .into_any_element(),
+            ],
+            theme,
+        ))
         .child(
             div()
                 .flex()
@@ -2008,6 +2052,7 @@ fn render_about_tab(
     on_check_update: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     on_open_github: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     on_open_licenses: Option<impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>,
+    on_restore_welcome: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let check_label = if matches!(update_status, UpdateStatus::Downloaded(_)) {
         strings.restart_update
@@ -2053,60 +2098,68 @@ fn render_about_tab(
                         .child(strings.about_tagline),
                 ),
         )
-        // Version + updates share the same row component as the other pages.
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(render_section_title(strings.software_updates, theme))
-                .child(render_setting_row(
-                    strings.current_version_label,
-                    None,
-                    div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(crate::APP_VERSION),
+        .child(render_setting_group(
+            Some(strings.software_updates.into()),
+            vec![render_setting_row(
+                format!("{} {}", strings.version_label, crate::APP_VERSION),
+                Some(update_text).filter(|text| !text.is_empty()).map(Into::into),
+                render_secondary_button(
+                    "btn_check_updates",
+                    check_label,
                     theme,
-                ))
-                .child(render_setting_row(
-                    strings.check_updates,
-                    Some(update_text).filter(|text| !text.is_empty()).map(Into::into),
-                    render_secondary_button(
-                        "btn_check_updates",
-                        check_label,
-                        theme,
-                        on_check_update,
-                    ),
+                    on_check_update,
+                ),
+                theme,
+            )
+            .into_any_element()],
+            theme,
+        ))
+        .child(render_setting_group(
+            Some(strings.welcome_guide_label.into()),
+            vec![render_setting_row(
+                strings.welcome_guide_label,
+                Some(strings.welcome_guide_desc.into()),
+                render_secondary_button(
+                    "btn_restore_welcome",
+                    strings.welcome_guide_restore,
                     theme,
-                )),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(render_section_title(strings.open_source_label, theme))
-                .child(render_setting_row(
-                    "github.com/2716190547/zmark",
-                    Some(strings.footer_credit.into()),
+                    on_restore_welcome,
+                ),
+                theme,
+            )
+            .into_any_element()],
+            theme,
+        ))
+        .child(render_setting_group(
+            Some(strings.open_source_label.into()),
+            {
+                let mut rows = vec![render_setting_row(
+                    strings.source_code_label,
+                    Some(format!("github.com/2716190547/zmark · {}", strings.footer_credit).into()),
                     render_secondary_button("btn_open_github", "GitHub", theme, on_open_github),
                     theme,
-                ))
-                .when_some(on_open_licenses, |el, on_open_licenses| {
-                    el.child(render_setting_row(
-                        strings.licenses_label,
-                        Some(strings.licenses_desc.into()),
-                        render_secondary_button(
-                            "btn_open_licenses",
-                            strings.licenses_open,
+                )
+                .into_any_element()];
+                if let Some(on_open_licenses) = on_open_licenses {
+                    rows.push(
+                        render_setting_row(
+                            strings.licenses_label,
+                            Some(strings.licenses_desc.into()),
+                            render_secondary_button(
+                                "btn_open_licenses",
+                                strings.licenses_open,
+                                theme,
+                                on_open_licenses,
+                            ),
                             theme,
-                            on_open_licenses,
-                        ),
-                        theme,
-                    ))
-                }),
-        )
+                        )
+                        .into_any_element(),
+                    );
+                }
+                rows
+            },
+            theme,
+        ))
 }
 
 fn render_mode_pill<F>(

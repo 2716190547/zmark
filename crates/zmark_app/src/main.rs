@@ -19,7 +19,12 @@ fn main() {
 
     let preferences = Preferences::load_or_default();
     let restore_session = initial_path.is_none();
-    let doc = zmark_app::welcome::initial_document(initial_path, preferences.locale);
+    let show_welcome = restore_session && !preferences.welcome_dismissed;
+    let doc = if restore_session && !show_welcome {
+        zmark_core::document::Document::new_scratch()
+    } else {
+        zmark_app::welcome::initial_document(initial_path, preferences.locale)
+    };
 
     let app = gpui_platform::application().with_assets(AppAssets);
     // Finder "Open With" and double-clicks arrive as open-URL events, not argv.
@@ -52,8 +57,11 @@ fn main() {
             // Launch with the file sidebar open. Tests build AppState directly and
             // keep the closed default so their layout assumptions stay stable.
             state.drawer_open = true;
-            // A plain launch reopens last session's files; the untouched welcome
-            // page gives way to the first of them.
+            if show_welcome {
+                state.mark_initial_welcome();
+            }
+            // A plain launch reopens last session's files and returns to the one
+            // that was active. The welcome guide stays until the user closes it.
             if restore_session {
                 state.restore_session();
             }

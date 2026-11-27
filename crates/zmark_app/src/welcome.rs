@@ -5,24 +5,15 @@ use zmark_core::i18n::SupportedLocale;
 pub fn initial_document(path: Option<PathBuf>, locale: SupportedLocale) -> Document {
     match path {
         Some(path) => Document::from_file(path).unwrap_or_else(|_| Document::new_scratch()),
-        None => {
-            let modifier = if cfg!(target_os = "macos") {
-                "Cmd+"
-            } else {
-                "Ctrl+"
-            };
-            let title = zmark_core::i18n::get_strings(locale).welcome_doc_title;
-            Document::new_named_scratch_with_text(title, text(locale).replace("Cmd+", modifier))
-        }
+        None => document(locale),
     }
 }
 
-/// True for the startup welcome draft the user has not edited, which may be
-/// replaced by the first opened file instead of staying as an extra tab.
-pub fn is_pristine(doc: &Document, locale: SupportedLocale) -> bool {
-    doc.path.is_none()
-        && doc.status != zmark_core::document::DocumentStatus::Modified
-        && doc.buffer == initial_document(None, locale).buffer
+/// The welcome guide as a named, unsaved draft.
+pub fn document(locale: SupportedLocale) -> Document {
+    let modifier = if cfg!(target_os = "macos") { "Cmd+" } else { "Ctrl+" };
+    let title = zmark_core::i18n::get_strings(locale).welcome_doc_title;
+    Document::new_named_scratch_with_text(title, text(locale).replace("Cmd+", modifier))
 }
 
 /// Welcome text is chosen once when a new startup scratch document is created.

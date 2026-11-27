@@ -453,6 +453,9 @@ pub struct Preferences {
     pub workspace_roots: Vec<PathBuf>,
     #[serde(default)]
     pub sidebar_hidden_paths: Vec<PathBuf>,
+    /// The user closed the welcome guide; it stays hidden until restored in Settings.
+    #[serde(default)]
+    pub welcome_dismissed: bool,
     /// Files open when ZMark last quit, reopened on a plain launch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub last_session_files: Vec<PathBuf>,
@@ -485,6 +488,7 @@ impl Default for Preferences {
             config_version: CURRENT_CONFIG_VERSION,
             workspace_roots: Vec::new(),
             sidebar_hidden_paths: Vec::new(),
+            welcome_dismissed: false,
             last_session_files: Vec::new(),
             last_active_file: None,
             custom_theme: CustomThemePreferences::default(),

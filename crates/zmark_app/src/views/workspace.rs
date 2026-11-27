@@ -3201,6 +3201,20 @@ impl WorkspaceView {
 
     /// Starts the restart flow. Dirty documents go through the existing close
     /// prompt; the actual swap happens only after they are all resolved.
+    /// Settings > About > "Restore guide".
+    pub fn restore_welcome_guide(&mut self, cx: &mut Context<Self>) {
+        match self.state.restore_welcome() {
+            Ok(()) => {
+                self.on_document_swapped(None, cx);
+                if let Some(handle) = self.window_handle {
+                    let _ = handle.update(cx, |_, window, _| window.activate_window());
+                }
+            }
+            Err(error) => self.error_banner = Some(error.to_string()),
+        }
+        cx.notify();
+    }
+
     pub fn restart_for_update(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         if self.prepared_update.is_none() {
             return;

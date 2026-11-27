@@ -403,6 +403,8 @@ pub fn root_label(roots: &[WorkspaceRoot], idx: usize) -> String {
 pub struct AppState {
     empty_doc: Document,
     _isolated_preferences_dir: Option<tempfile::TempDir>,
+    /// Key of the open welcome guide, if any. Closing it hides it on later launches.
+    welcome_key: Option<DocKey>,
     pub(crate) open_docs: Vec<OpenDoc>,
     pub(crate) active: Option<DocKey>,
     pub next_scratch_id: u64,
@@ -522,6 +524,7 @@ impl AppState {
             preferences_path,
             empty_doc: Document::new_scratch(),
             _isolated_preferences_dir: None,
+            welcome_key: None,
             editor,
             view_mode: ViewMode::Split,
             drawer_open: false,
@@ -1312,13 +1315,12 @@ impl AppState {
         }
 
         let new_doc = Document::from_file(path.clone())?;
-        // A single clean scratch that is empty or the untouched welcome page gives
-        // way to the opened file.
+        // If single empty clean scratch document, replace it. The welcome guide
+        // stays until the user closes it.
         if self.open_docs.len() == 1
             && self.open_docs[0].key.is_scratch()
+            && self.open_docs[0].doc.buffer.trim().is_empty()
             && self.open_docs[0].doc.status != DocumentStatus::Modified
-            && (self.open_docs[0].doc.buffer.trim().is_empty()
-                || crate::welcome::is_pristine(&self.open_docs[0].doc, self.preferences.locale))
         {
             self.open_docs[0] = OpenDoc {
                 key: target_key.clone(),
@@ -1499,6 +1501,14 @@ impl AppState {
         };
 
         self.open_docs.remove(pos);
+        if self.welcome_key.as_ref() == Some(key) {
+            self.welcome_key = None;
+            // Discarding during quit is not a request to hide the guide.
+            if !self.is_quitting && !self.preferences.welcome_dismissed {
+                self.preferences.welcome_dismissed = true;
+                let _ = self.preferences.save_to_path(&self.preferences_path);
+            }
+        }
 
         if self.active.as_ref() == Some(key) {
             if self.open_docs.is_empty() {
@@ -1520,6 +1530,30 @@ impl AppState {
                 }
             }
         }
+    }
+
+    /// Treat the startup draft as the welcome guide, so closing it hides it later.
+    pub fn mark_initial_welcome(&mut self) {
+        self.welcome_key = self.active.clone().filter(DocKey::is_scratch);
+    }
+
+    /// Settings > "Restore guide": show the welcome guide again on this and later launches.
+    pub fn restore_welcome(&mut self) -> Result<(), zmark_core::config::ConfigError> {
+        self.preferences.welcome_dismissed = false;
+        self.preferences.save_to_path(&self.preferences_path)?;
+        self.sync_from_editor();
+        if let Some(key) = self.welcome_key.clone().filter(|k| self.open_docs.iter().any(|d| &d.key == k)) {
+            self.switch_document(&key);
+            return Ok(());
+        }
+        let key = DocKey::Scratch(self.next_scratch_id);
+        self.next_scratch_id += 1;
+        let doc = crate::welcome::document(self.preferences.locale);
+        self.editor.reset_text(&doc.buffer);
+        self.open_docs.push(OpenDoc { key: key.clone(), doc });
+        self.active = Some(key.clone());
+        self.welcome_key = Some(key);
+        Ok(())
     }
 
     /// Record the open files so the next plain launch can reopen them. Drafts
@@ -2829,7 +2863,7 @@ mod session_restore_tests {
     use zmark_core::i18n::SupportedLocale;
 
     #[test]
-    fn plain_launch_reopens_last_files_in_place_of_the_welcome_page() {
+    fn plain_launch_reopens_last_files_and_keeps_the_welcome_guide() {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.md");
         let b = dir.path().join("b.md");
@@ -2856,7 +2890,26 @@ mod session_restore_tests {
         assert!(next.restore_session());
         let open: Vec<_> = next.open_documents().iter().filter_map(|d| d.doc.path.clone()).collect();
         assert_eq!(open, vec![a.canonicalize().unwrap(), b.canonicalize().unwrap()]);
-        assert_eq!(next.open_documents().len(), 2, "welcome page must be replaced, not kept");
+        assert_eq!(next.open_documents().len(), 3, "the welcome guide stays until the user closes it");
         assert_eq!(next.doc().path, Some(a.canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn closing_the_welcome_guide_hides_it_until_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefs_path = dir.path().join("config.toml");
+        let mut state = AppState::new_with_preferences_at(
+            crate::welcome::document(SupportedLocale::En),
+            Preferences::default(),
+            prefs_path.clone(),
+        );
+        state.mark_initial_welcome();
+        let key = state.open_documents()[0].key.clone();
+        state.close_document_forced(&key);
+        assert!(Preferences::load_or_default_from_path(&prefs_path).welcome_dismissed);
+
+        state.restore_welcome().unwrap();
+        assert!(!Preferences::load_or_default_from_path(&prefs_path).welcome_dismissed);
+        assert_eq!(state.doc().buffer, crate::welcome::document(SupportedLocale::En).buffer);
     }
 }
