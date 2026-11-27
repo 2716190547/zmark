@@ -140,7 +140,8 @@ if [ -x "$LSREGISTER" ]; then
     "$LSREGISTER" -f "$APP_DEST" || true
     # The staging bundle under target/ would otherwise show up as a second
     # ZMark in Finder's "Open With" menu.
-    "$LSREGISTER" -u "$BUNDLE_DIR" >/dev/null 2>&1 || true
+    # LaunchServices records resolved paths, and target/ may be a symlink.
+    "$LSREGISTER" -u "$(cd "$BUNDLE_DIR" && pwd -P)" >/dev/null 2>&1 || true
 fi
 
 # Keep the legacy installation as a rollback copy only after verifying the new bundle.
