@@ -5,6 +5,7 @@ pub struct AppAssets;
 
 const ASSETS: &[(&str, &[u8])] = &[
     ("icons/undo.svg", include_bytes!("../assets/icons/undo.svg")),
+    ("icons/pin.svg", include_bytes!("../assets/icons/pin.svg")),
     ("icons/arrow-up.svg", include_bytes!("../assets/icons/arrow-up.svg")),
     ("icons/arrow-down.svg", include_bytes!("../assets/icons/arrow-down.svg")),
     ("brand/logo.png", include_bytes!("../assets/brand/logo.png")),
