@@ -220,7 +220,7 @@ pub fn render_drawer_with_search(
     }
 
     let mut root_container = div()
-        .w(px(crate::views::editor::DRAWER_WIDTH))
+        .w_full()
         .h_full()
         .bg(theme.bg)
         .border_r_1()

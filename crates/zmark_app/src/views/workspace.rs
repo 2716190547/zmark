@@ -135,6 +135,7 @@ pub struct WorkspaceView {
     pub drawer_scroll_handle: ScrollHandle,
     pub split_ratio: f32,
     pub is_resizing_split: bool,
+    pub is_resizing_drawer: bool,
     pub is_renaming: bool,
     pub rename_target: Option<crate::state::DocKey>,
     pub rename_in_sidebar: bool,
@@ -310,6 +311,7 @@ impl WorkspaceView {
             drawer_scroll_handle: ScrollHandle::new(),
             split_ratio: 0.5,
             is_resizing_split: false,
+            is_resizing_drawer: false,
             is_renaming: false,
             rename_target: None,
             rename_in_sidebar: false,
@@ -990,7 +992,7 @@ impl WorkspaceView {
 
     pub fn compute_editor_max_width_px(&self, window: &Window) -> f32 {
         let drawer_w = if self.state.drawer_open {
-            px(crate::views::editor::DRAWER_WIDTH)
+            px(self.state.preferences.drawer_width)
         } else {
             px(0.)
         };
@@ -2238,12 +2240,20 @@ impl WorkspaceView {
         }));
     }
 
+    /// Ends a sidebar edge drag and persists the final width once.
+    fn end_drawer_resize(&mut self) {
+        if std::mem::take(&mut self.is_resizing_drawer) {
+            self.state.save_preferences();
+        }
+    }
+
     pub fn close_lightbox(&mut self, window: &mut Window, cx: &mut App) {
         // Opening a modal on mouse-down can hide the matching mouse-up from the panes.
         self.end_source_drag();
         self.end_preview_selection();
         self.end_preview_scroll_drag();
         self.is_resizing_split = false;
+        self.end_drawer_resize();
         self.clear_lightbox_sharp(window, cx);
         if let Some(image) = self.lightbox_local_image.take() {
             let shared = self.local_images.lock().unwrap().entries.values().any(|state| matches!(state,
@@ -3400,6 +3410,7 @@ impl WorkspaceView {
             viewport_w,
             col_w,
             self.editor_text_start_offset(window),
+            self.state.preferences.drawer_width,
         ));
 
         // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
@@ -4407,6 +4418,7 @@ impl Render for WorkspaceView {
         );
 
         let show_drawer = self.state.drawer_open || self.drawer_closing;
+        let drawer_w = self.state.preferences.drawer_width;
         let is_drawer_closing = self.drawer_closing;
 
         let root = div()
@@ -4432,11 +4444,21 @@ impl Render for WorkspaceView {
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.source_mouse_move(event, window, cx);
+                if this.is_resizing_drawer {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        // Keep at least 240px of canvas so the sidebar never swallows the window.
+                        let canvas_floor = (this.workspace_width - 240.0).max(zmark_core::config::MIN_DRAWER_WIDTH);
+                        this.state.set_drawer_width(f32::from(event.position.x).min(canvas_floor));
+                    } else {
+                        this.end_drawer_resize();
+                    }
+                    cx.notify();
+                }
                 if this.is_resizing_split {
                     if event.pressed_button == Some(MouseButton::Left) {
                         let w = this.workspace_width;
                         let x = f32::from(event.position.x);
-                        let left_offset = if this.state.drawer_open { crate::views::editor::DRAWER_WIDTH } else { 0.0 };
+                        let left_offset = if this.state.drawer_open { this.state.preferences.drawer_width } else { 0.0 };
                         let avail_w = (w - left_offset).max(100.0);
                         let offset_x = (x - left_offset).max(0.0);
                         this.split_ratio = (offset_x / avail_w).clamp(0.20, 0.80);
@@ -4466,6 +4488,7 @@ impl Render for WorkspaceView {
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| {
                 this.release_source_drag(MouseButton::Left);
                 this.is_resizing_split = false;
+                this.end_drawer_resize();
                 this.end_preview_selection();
                 cx.notify();
             }))
@@ -4475,6 +4498,7 @@ impl Render for WorkspaceView {
                 if this.is_resizing_split {
                     this.is_resizing_split = false;
                 }
+                this.end_drawer_resize();
                 if this.is_preview_selecting {
                     this.end_preview_selection();
                     cx.notify();
@@ -4716,7 +4740,7 @@ impl Render for WorkspaceView {
                         .overflow_hidden()
                         .child(
                             div()
-                                .w(px(crate::views::editor::DRAWER_WIDTH))
+                                .w(px(drawer_w))
                                 .h_full()
                                 .border_r_1()
                                 .border_color(theme.border)
@@ -4845,7 +4869,7 @@ impl Render for WorkspaceView {
                             Animation::new(std::time::Duration::from_millis(180)).with_easing(ease_in_out),
                             move |el, delta| {
                                 let factor = if is_drawer_closing { 1.0 - delta } else { delta };
-                                el.w(px(crate::views::editor::DRAWER_WIDTH * factor)).opacity(factor.clamp(0.0, 1.0))
+                                el.w(px(drawer_w * factor)).opacity(factor.clamp(0.0, 1.0))
                             },
                         ),
                 )
@@ -5531,6 +5555,43 @@ impl Render for WorkspaceView {
                                     })
                             })
                     )
+                    // Sidebar resize handle: a 6px hit zone straddling the drawer's right border.
+                    .when(self.state.drawer_open && !is_drawer_closing, |root| {
+                        root.child(
+                            div()
+                                .id("drawer_resize_handle")
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .left(px(drawer_w - 3.0))
+                                .w(px(6.))
+                                .flex()
+                                .justify_center()
+                                .cursor_col_resize()
+                                .group("drawer_resize")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                        cx.stop_propagation();
+                                        if event.click_count == 2 {
+                                            this.is_resizing_drawer = false;
+                                            this.state.set_drawer_width(zmark_core::config::DEFAULT_DRAWER_WIDTH);
+                                            this.state.save_preferences();
+                                        } else {
+                                            this.is_resizing_drawer = true;
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(2.))
+                                        .h_full()
+                                        .when(self.is_resizing_drawer, |el| el.bg(theme.accent))
+                                        .group_hover("drawer_resize", |s| s.bg(theme.accent)),
+                                ),
+                        )
+                    })
                     .when(self.lightbox.is_open, |root| {
                         let sharp = self.lightbox_sharp.as_ref().map(|(image, _)| image.clone())
                             .or_else(|| self.lightbox_local_image.as_ref().and_then(|image| image.render.clone()));
@@ -5679,6 +5740,7 @@ pub fn adaptive_header_padding(is_macos: bool, is_fullscreen: bool, drawer_open:
 /// - Collapsed drawer: maintains traffic light clearance (76px normal on macOS)
 /// - Source / Split mode: aligns title with the measured editor text start
 /// - Preview mode: aligns title with centered reading column
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_title_header_padding(
     is_macos: bool,
     is_fullscreen: bool,
@@ -5687,6 +5749,7 @@ pub fn calculate_title_header_padding(
     viewport_width: f32,
     max_column_width: f32,
     editor_text_start: f32,
+    drawer_width: f32,
 ) -> f32 {
     if !drawer_open {
         adaptive_header_padding(is_macos, is_fullscreen, false)
@@ -5694,8 +5757,7 @@ pub fn calculate_title_header_padding(
         match view_mode {
             ViewMode::Source | ViewMode::Split => editor_text_start - 8.0,
             ViewMode::Preview => {
-                let drawer_w = crate::views::editor::DRAWER_WIDTH;
-                let available_w = (viewport_width - drawer_w).max(0.0);
+                let available_w = (viewport_width - drawer_width).max(0.0);
                 let col_w = max_column_width;
                 let left_margin = ((available_w - col_w) * 0.5).max(32.0);
                 (left_margin - 8.0).max(8.0)

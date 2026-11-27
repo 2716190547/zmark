@@ -600,6 +600,15 @@ impl AppState {
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
+    /// Updates the sidebar width in memory; call `save_preferences` when the drag ends.
+    pub fn set_drawer_width(&mut self, val: f32) {
+        self.preferences.drawer_width = Preferences::sanitize_drawer_width(val);
+    }
+
+    pub fn save_preferences(&self) {
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
     pub fn set_line_height(&mut self, val: f32) {
         let clamped = Preferences::sanitize_line_height(val);
         self.preferences.line_height = clamped;

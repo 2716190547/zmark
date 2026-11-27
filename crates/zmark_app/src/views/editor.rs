@@ -117,7 +117,6 @@ pub fn physical_line_tokens(
     tokens
 }
 
-pub const DRAWER_WIDTH: f32 = 250.0;
 pub const EDITOR_CONTAINER_PADDING_X: f32 = 28.0; // 32px total with the row inset
 pub const EDITOR_ROW_PADDING_X: f32 = 4.0;        // row px_1
 pub const EDITOR_GUTTER_MARGIN_RIGHT: f32 = 8.0;

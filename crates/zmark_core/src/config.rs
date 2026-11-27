@@ -419,6 +419,15 @@ fn default_auto_save_delay() -> u64 {
     1000
 }
 
+fn default_drawer_width() -> f32 {
+    DEFAULT_DRAWER_WIDTH
+}
+
+/// Sidebar width bounds in logical pixels. Double-clicking the edge restores the default.
+pub const DEFAULT_DRAWER_WIDTH: f32 = 250.0;
+pub const MIN_DRAWER_WIDTH: f32 = 180.0;
+pub const MAX_DRAWER_WIDTH: f32 = 480.0;
+
 fn default_line_height() -> f32 {
     1.6
 }
@@ -430,6 +439,9 @@ pub struct Preferences {
     #[serde(default = "default_line_height")]
     pub line_height: f32,
     pub max_column_width: f32,
+    /// Sidebar width, set by dragging its right edge.
+    #[serde(default = "default_drawer_width")]
+    pub drawer_width: f32,
     pub theme: ThemeMode,
     pub palette: String,
     pub locale: SupportedLocale,
@@ -476,6 +488,7 @@ impl Default for Preferences {
             font_size: 16.0,
             line_height: 1.6,
             max_column_width: 760.0,
+            drawer_width: DEFAULT_DRAWER_WIDTH,
             theme: ThemeMode::Auto,
             palette: "default".to_string(),
             locale: SupportedLocale::Auto,
@@ -542,6 +555,14 @@ impl Preferences {
         }
     }
 
+    pub fn sanitize_drawer_width(val: f32) -> f32 {
+        if val.is_nan() {
+            DEFAULT_DRAWER_WIDTH
+        } else {
+            val.clamp(MIN_DRAWER_WIDTH, MAX_DRAWER_WIDTH)
+        }
+    }
+
     /// Standard OS application support or config directory.
     pub fn default_config_dir() -> PathBuf {
         dirs::config_dir()
@@ -557,6 +578,7 @@ impl Preferences {
         let content = fs::read_to_string(path)?;
         let mut pref: Preferences = toml::from_str(&content)?;
         pref.line_height = Self::sanitize_line_height(pref.line_height);
+        pref.drawer_width = Self::sanitize_drawer_width(pref.drawer_width);
         if pref.migrate_defaults() {
             // Best-effort: a read-only config directory must not block startup.
             if let Err(error) = pref.save_to_path(path) {
@@ -687,6 +709,18 @@ mod tests {
         } else {
             assert_eq!(Preferences::load_from_path(&path).unwrap().tab_size, 8);
         }
+    }
+
+    #[test]
+    fn test_sanitize_drawer_width() {
+        assert_eq!(Preferences::sanitize_drawer_width(300.0), 300.0);
+        assert_eq!(Preferences::sanitize_drawer_width(10.0), MIN_DRAWER_WIDTH);
+        assert_eq!(Preferences::sanitize_drawer_width(9000.0), MAX_DRAWER_WIDTH);
+        assert_eq!(Preferences::sanitize_drawer_width(f32::NAN), DEFAULT_DRAWER_WIDTH);
+        let legacy = toml::to_string(&Preferences::default()).unwrap()
+            .lines().filter(|l| !l.starts_with("drawer_width")).collect::<Vec<_>>().join("\n");
+        let old: Preferences = toml::from_str(&legacy).unwrap();
+        assert_eq!(old.drawer_width, DEFAULT_DRAWER_WIDTH);
     }
 
     #[test]
