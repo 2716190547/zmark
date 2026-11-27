@@ -756,7 +756,7 @@ impl Render for SettingsWindowView {
                     .when(cfg!(target_os = "windows"), |el| el.pt(px(36.)))
                     .bg(theme.surface)
                     .overflow_y_scroll()
-                    .child(
+                    .when(current_tab != SettingsTab::About, |el| el.child(
                         div()
                             .pb(px(tk::SECTION_GAP))
                             .text_size(px(tk::TEXT_TITLE))
@@ -769,7 +769,7 @@ impl Render for SettingsWindowView {
                                 SettingsTab::Shortcuts => strings.shortcuts_label,
                                 SettingsTab::About => strings.about,
                             }),
-                    )
+                    ))
                     .child(match current_tab {
                         SettingsTab::Appearance => render_appearance_tab(
                             current_mode,
@@ -2080,44 +2080,40 @@ fn render_about_tab(
         .flex()
         .flex_col()
         .gap(px(tk::SECTION_GAP))
-        // App identity and the update check share one card, like other pages.
-        .child(render_setting_group(
-            None,
-            vec![
-                div()
-                    .py(px(tk::ROW_PY))
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(img("brand/logo.png").size(px(44.)).flex_shrink_0())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_0p5()
-                            .child(
-                                div()
-                                    .text_size(px(tk::TEXT_LABEL + 2.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.text_primary)
-                                    .child("ZMark"),
-                            )
-                            .child(render_help_text(strings.about_tagline, theme)),
-                    )
-                    .into_any_element(),
-                render_setting_row(
-                    format!("{} {}", strings.version_label, crate::APP_VERSION),
-                    Some(update_text).filter(|text| !text.is_empty()).map(Into::into),
-                    render_secondary_button(
-                        "btn_check_updates",
-                        check_label,
-                        theme,
-                        on_check_update,
-                    ),
-                    theme,
+        // Product header: centered logo, name, tagline. The About page skips the
+        // page title, so this header is its heading.
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .pt_2()
+                .child(img("brand/logo.png").w(px(64.)).h(px(64.)).flex_shrink_0())
+                .child(
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.text_primary)
+                        .child("ZMark"),
                 )
-                .into_any_element(),
-            ],
+                .child(render_help_text(strings.about_tagline, theme)),
+        )
+        .child(render_setting_group(
+            Some(strings.software_updates.into()),
+            vec![render_setting_row(
+                format!("{} {}", strings.version_label, crate::APP_VERSION),
+                Some(update_text).filter(|text| !text.is_empty()).map(Into::into),
+                render_secondary_button(
+                    "btn_check_updates",
+                    check_label,
+                    theme,
+                    on_check_update,
+                ),
+                theme,
+            )
+            .into_any_element()],
             theme,
         ))
         .child(render_setting_group(
