@@ -17,6 +17,66 @@ use crate::theme::{ThemeColors, ALL_PALETTES};
 use crate::updater::UpdateStatus;
 use crate::views::workspace::WorkspaceView;
 
+/// Settings design tokens. Every settings control takes its size, radius and
+/// spacing from here; see `docs/design/settings-ui.md`.
+mod tokens {
+    /// Height of buttons, segmented controls and key caps.
+    pub const CONTROL_H: f32 = 28.0;
+    /// Horizontal padding inside buttons and key caps.
+    pub const CONTROL_PX: f32 = 12.0;
+    /// Minimum key-cap width, so caps line up down the right edge.
+    pub const KEYCAP_MIN_W: f32 = 88.0;
+    /// Radius of controls (button, segment track, key cap, list item).
+    pub const RADIUS: f32 = 6.0;
+    /// Radius of a segment thumb, so it nests inside the track's 2px inset.
+    pub const RADIUS_INNER: f32 = 4.0;
+    /// Radius of cards (setting groups, palette swatches, custom editor).
+    pub const RADIUS_CARD: f32 = 8.0;
+    /// Inset between a segment track and its thumb.
+    pub const TRACK_INSET: f32 = 2.0;
+    /// Horizontal padding inside a card; matches the row text's left edge.
+    pub const CARD_PX: f32 = 12.0;
+    /// Vertical padding of one setting row.
+    pub const ROW_PY: f32 = 10.0;
+    /// Gap between a section title and its card.
+    pub const TITLE_GAP: f32 = 6.0;
+    /// Gap between sections on a page.
+    pub const SECTION_GAP: f32 = 20.0;
+    /// Text sizes: row label, body/description, small badge.
+    pub const TEXT_LABEL: f32 = 13.0;
+    pub const TEXT_BODY: f32 = 12.0;
+    pub const TEXT_SMALL: f32 = 11.0;
+}
+use tokens as tk;
+
+/// Settings color roles derived from the active theme. Controls use these
+/// names instead of ad-hoc opacities.
+trait SettingsColors {
+    /// Card fill: one step off the content background.
+    fn card_bg(&self) -> Hsla;
+    /// Hairline used for card borders and row dividers.
+    fn hairline(&self) -> Hsla;
+    /// Fill of a neutral button or key cap at rest.
+    fn control_bg(&self) -> Hsla;
+    /// Fill of a neutral button or key cap under the pointer.
+    fn control_hover_bg(&self) -> Hsla;
+}
+
+impl SettingsColors for ThemeColors {
+    fn card_bg(&self) -> Hsla {
+        self.text_primary.opacity(0.035)
+    }
+    fn hairline(&self) -> Hsla {
+        self.text_primary.opacity(0.08)
+    }
+    fn control_bg(&self) -> Hsla {
+        self.text_primary.opacity(0.06)
+    }
+    fn control_hover_bg(&self) -> Hsla {
+        self.text_primary.opacity(0.10)
+    }
+}
+
 pub struct SettingsWindowView {
     pub workspace: WeakEntity<WorkspaceView>,
     pub current_tab: SettingsTab,
@@ -688,7 +748,7 @@ impl Render for SettingsWindowView {
                     .id("settings_content_scroll")
                     .flex_1()
                     .h_full()
-                    .p_5()
+                    .p_6()
                     .when(cfg!(target_os = "windows"), |el| el.pt(px(36.)))
                     .bg(theme.surface)
                     .overflow_y_scroll()
@@ -850,14 +910,14 @@ where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
     let base = div()
-        .px_3()
-        .py_2()
-        .rounded_lg()
+        .px_2p5()
+        .h(px(32.))
+        .rounded(px(tk::RADIUS))
         .cursor_pointer()
         .flex()
         .items_center()
-        .gap_2p5()
-        .text_xs()
+        .gap_2()
+        .text_size(px(tk::TEXT_LABEL))
         .on_mouse_down(MouseButton::Left, handler);
 
     let icon_color = if active {
@@ -865,11 +925,11 @@ where
     } else {
         theme.text_muted
     };
-    let icon = svg().path(icon_path).size(px(18.)).text_color(icon_color);
+    let icon = svg().path(icon_path).size(px(16.)).text_color(icon_color);
 
     if active {
         base.bg(theme.control_selection_bg())
-            .font_weight(FontWeight::SEMIBOLD)
+            .font_weight(FontWeight::MEDIUM)
             .text_color(theme.selection_text())
             .child(div().flex_shrink_0().child(icon))
             .child(div().flex_1().min_w(px(0.)).whitespace_normal().child(title))
@@ -884,9 +944,16 @@ where
 /// Section heading shared by every settings page.
 fn render_section_title(text: impl Into<SharedString>, theme: &ThemeColors) -> impl IntoElement {
     div()
-        .px_1()
-        .text_xs()
-        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(px(tk::TEXT_BODY))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text_muted)
+        .child(text.into())
+}
+
+/// Plain body/help text under a section title.
+fn render_help_text(text: impl Into<SharedString>, theme: &ThemeColors) -> impl IntoElement {
+    div()
+        .text_size(px(tk::TEXT_BODY))
         .text_color(theme.text_muted)
         .child(text.into())
 }
@@ -900,11 +967,11 @@ fn render_setting_row(
 ) -> impl IntoElement {
     div()
         .w_full()
-        .py_2()
+        .py(px(tk::ROW_PY))
         .flex()
         .items_center()
         .justify_between()
-        .gap_3()
+        .gap_4()
         .child(
             div()
                 .flex()
@@ -913,51 +980,62 @@ fn render_setting_row(
                 .min_w(px(0.))
                 .child(
                     div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
+                        .text_size(px(tk::TEXT_LABEL))
                         .text_color(theme.text_primary)
                         .child(label.into()),
                 )
                 .when_some(desc, |el, desc| {
-                    el.child(div().text_xs().text_color(theme.text_muted).child(desc))
+                    el.child(
+                        div()
+                            .text_size(px(tk::TEXT_BODY))
+                            .text_color(theme.text_muted)
+                            .child(desc),
+                    )
                 }),
         )
         .child(div().flex_shrink_0().child(trailing))
 }
 
-/// A titled card of related rows separated by hairlines, so each section reads
-/// as one block instead of loose lines of text.
+/// A section: optional title above one card. The card is a fill only (no
+/// outline), so controls inside it never sit in a frame within a frame.
+fn render_section(
+    title: Option<SharedString>,
+    body: impl IntoElement,
+    theme: &ThemeColors,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(tk::TITLE_GAP))
+        .when_some(title, |el, title| el.child(render_section_title(title, theme)))
+        .child(body)
+}
+
+/// A card of setting rows separated by hairlines.
 fn render_setting_group(
     title: Option<SharedString>,
     rows: Vec<AnyElement>,
     theme: &ThemeColors,
 ) -> impl IntoElement {
     let count = rows.len();
-    div()
-        .flex()
-        .flex_col()
-        .gap_1p5()
-        .when_some(title, |el, title| el.child(render_section_title(title, theme)))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .px_3()
-                .rounded(px(10.))
-                .bg(theme.text_primary.opacity(0.03))
-                .border_1()
-                .border_color(theme.text_primary.opacity(0.08))
-                .children(rows.into_iter().enumerate().map(|(i, row)| {
-                    div()
-                        .py_0p5()
-                        .when(i + 1 < count, |el| {
-                            el.border_b_1().border_color(theme.text_primary.opacity(0.06))
-                        })
-                        .child(row)
-                })),
-        )
+    render_section(
+        title,
+        div()
+            .flex()
+            .flex_col()
+            .px(px(tk::CARD_PX))
+            .rounded(px(tk::RADIUS_CARD))
+            .bg(theme.card_bg())
+            .children(rows.into_iter().enumerate().map(|(i, row)| {
+                div()
+                    .when(i + 1 < count, |el| el.border_b_1().border_color(theme.hairline()))
+                    .child(row)
+            })),
+        theme,
+    )
 }
 
+/// Neutral button: filled, no outline, fixed control height.
 fn render_secondary_button<F>(
     id: &'static str,
     label: impl Into<SharedString>,
@@ -969,20 +1047,94 @@ where
 {
     div()
         .id(id)
-        .h(px(26.))
-        .px(px(12.))
-        .rounded(px(6.))
+        .h(px(tk::CONTROL_H))
+        .px(px(tk::CONTROL_PX))
+        .rounded(px(tk::RADIUS))
         .flex()
         .items_center()
-        .bg(theme.text_primary.opacity(0.05))
-        .border(px(1.))
-        .border_color(theme.text_primary.opacity(0.12))
-        .text_size(px(12.))
+        .justify_center()
+        .bg(theme.control_bg())
+        .text_size(px(tk::TEXT_BODY))
+        .font_weight(FontWeight::MEDIUM)
         .text_color(theme.text_primary)
         .cursor_pointer()
-        .hover(|s| s.bg(theme.text_primary.opacity(0.08)))
+        .hover(|s| s.bg(theme.control_hover_bg()))
         .on_mouse_down(MouseButton::Left, handler)
         .child(label.into())
+}
+
+/// Text-only button for low-emphasis actions (reset, cancel).
+fn render_text_button<F>(
+    id: SharedString,
+    label: impl Into<SharedString>,
+    theme: &ThemeColors,
+    handler: F,
+) -> impl IntoElement
+where
+    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+{
+    div()
+        .id(id)
+        .h(px(tk::CONTROL_H))
+        .px_2()
+        .rounded(px(tk::RADIUS))
+        .flex()
+        .items_center()
+        .text_size(px(tk::TEXT_BODY))
+        .text_color(theme.text_muted)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
+        .on_mouse_down(MouseButton::Left, handler)
+        .child(label.into())
+}
+
+/// Segmented control track. Children are [`render_segment`]s.
+fn render_segmented(theme: &ThemeColors) -> Div {
+    div()
+        .w_full()
+        .h(px(tk::CONTROL_H))
+        .p(px(tk::TRACK_INSET))
+        .rounded(px(tk::RADIUS))
+        .bg(theme.segmented_track_bg())
+        .flex()
+        .gap(px(tk::TRACK_INSET))
+}
+
+/// One option of a segmented control. The selected thumb is a raised fill
+/// with a soft shadow instead of an outline.
+fn render_segment<F>(
+    id: SharedString,
+    label: impl Into<SharedString>,
+    active: bool,
+    theme: &ThemeColors,
+    handler: F,
+) -> impl IntoElement
+where
+    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+{
+    let sel = id.to_string();
+    let base = div()
+        .id(id)
+        .debug_selector(move || sel.clone())
+        .flex_1()
+        .h_full()
+        .rounded(px(tk::RADIUS_INNER))
+        .text_size(px(tk::TEXT_BODY))
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(MouseButton::Left, handler)
+        .child(label.into());
+    if active {
+        base.bg(theme.segmented_thumb_bg())
+            .shadow_xs()
+            .text_color(theme.segmented_thumb_text())
+            .font_weight(FontWeight::MEDIUM)
+    } else {
+        base.text_color(theme.segmented_inactive_text())
+            .hover(|s| s.text_color(theme.text_primary))
+    }
 }
 
 fn render_ios_toggle<F>(
@@ -1058,7 +1210,7 @@ fn render_custom_color_rows(
                         div()
                             .flex_1()
                             .min_w(px(0.))
-                            .text_xs()
+                            .text_size(px(tk::TEXT_LABEL))
                             .text_color(theme.text_primary)
                             .child(label),
                     )
@@ -1086,11 +1238,9 @@ fn render_custom_theme_editor(
 
     div()
         .w_full()
-        .p_3()
-        .rounded_lg()
-        .bg(theme.bg)
-        .border(px(1.))
-        .border_color(theme.border)
+        .p(px(tk::CARD_PX))
+        .rounded(px(tk::RADIUS_CARD))
+        .bg(theme.card_bg())
         .flex()
         .flex_col()
         .gap_3()
@@ -1103,13 +1253,8 @@ fn render_custom_theme_editor(
                 .justify_between()
                 .gap_2()
                 .child(
-                    div()
+                    render_segmented(theme)
                         .w(px(196.))
-                        .bg(theme.segmented_track_bg())
-                        .rounded_lg()
-                        .p(px(2.))
-                        .flex()
-                        .gap_1()
                         .child(render_mode_pill(
                             strings.custom_editing_light,
                             !editing_dark,
@@ -1146,11 +1291,6 @@ fn render_custom_theme_editor(
             el.child(
                 div()
                     .w_full()
-                    .p_2()
-                    .rounded_md()
-                    .bg(theme.surface)
-                    .border(px(1.))
-                    .border_color(theme.border)
                     .flex()
                     .flex_wrap()
                     .gap_1p5()
@@ -1160,17 +1300,17 @@ fn render_custom_theme_editor(
                         let on_import = props.on_import_preset.clone();
                         div()
                             .id(SharedString::from(format!("custom_import_{preset_id}")))
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
+                            .h(px(tk::CONTROL_H))
+                            .px_2p5()
+                            .rounded(px(tk::RADIUS))
                             .bg(resolved.bg)
-                            .border(px(1.))
+                            .border_1()
                             .border_color(resolved.border)
                             .cursor_pointer()
                             .flex()
                             .items_center()
                             .gap_1p5()
-                            .text_xs()
+                            .text_size(px(tk::TEXT_BODY))
                             .text_color(resolved.text_primary)
                             .hover(|s| s.border_color(resolved.accent))
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -1197,8 +1337,8 @@ fn render_custom_theme_editor(
         .child(
             div()
                 .pt_2()
-                .border_t(px(1.))
-                .border_color(theme.border)
+                .border_t_1()
+                .border_color(theme.hairline())
                 .flex()
                 .flex_col()
                 .gap_1p5()
@@ -1232,11 +1372,7 @@ fn render_custom_theme_editor(
                         )
                         .child(
                             div()
-                                .px_1p5()
-                                .py_0p5()
-                                .rounded(px(4.))
-                                .bg(theme.control_selection_bg())
-                                .text_xs()
+                                .text_size(px(tk::TEXT_BODY))
                                 .text_color(theme.text_muted)
                                 .child("12"),
                         ),
@@ -1277,27 +1413,17 @@ fn render_appearance_tab(
     div()
         .flex()
         .flex_col()
-        .gap_5()
+        .gap(px(tk::SECTION_GAP))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_2()
                 .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(strings.appearance),
+                    render_section_title(strings.appearance, theme),
                 )
                 .child(
-                    div()
-                        .w_full()
-                        .bg(theme.segmented_track_bg())
-                        .rounded_lg()
-                        .p(px(2.))
-                        .flex()
-                        .gap_1()
+                    render_segmented(theme)
                         .child(render_mode_pill(
                             strings.theme_auto,
                             current_mode == ThemeMode::Auto,
@@ -1324,11 +1450,7 @@ fn render_appearance_tab(
                 .flex_col()
                 .gap_2()
                 .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(strings.palette),
+                    render_section_title(strings.palette, theme),
                 )
                 .child(
                     div()
@@ -1350,7 +1472,7 @@ fn render_appearance_tab(
                                     div()
                                         .flex_1()
                                         .p_3()
-                                        .rounded_md()
+                                        .rounded(px(tk::RADIUS_CARD))
                                         .bg(resolved.bg)
                                         .cursor_pointer()
                                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -1383,7 +1505,7 @@ fn render_appearance_tab(
                                         )
                                         .child(
                                             div()
-                                                .text_xs()
+                                                .text_size(px(tk::TEXT_BODY))
                                                 .font_weight(FontWeight::MEDIUM)
                                                 .text_color(resolved.text_primary)
                                                 .child(zmark_core::i18n::localize_palette_name(desc.id, strings)),
@@ -1397,7 +1519,7 @@ fn render_appearance_tab(
                                 .id("palette_card_custom")
                                 .w_full()
                                 .p_3()
-                                .rounded_md()
+                                .rounded(px(tk::RADIUS_CARD))
                                 .bg(resolved_custom.bg)
                                 .cursor_pointer()
                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -1433,7 +1555,7 @@ fn render_appearance_tab(
                                 )
                                 .child(
                                     div()
-                                        .text_xs()
+                                        .text_size(px(tk::TEXT_BODY))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(resolved_custom.text_primary)
                                         .child(zmark_core::i18n::localize_palette_name(
@@ -1484,7 +1606,7 @@ fn render_editor_save_tab(
     div()
         .flex()
         .flex_col()
-        .gap_5()
+        .gap(px(tk::SECTION_GAP))
         .child(render_setting_group(
             None,
             vec![
@@ -1524,76 +1646,24 @@ fn render_editor_save_tab(
                 .flex_col()
                 .gap_2()
                 .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(strings.tab_size_label),
+                    render_section_title(strings.tab_size_label, theme),
                 )
                 .child(
-                    div()
-                        .w_full()
-                        .bg(theme.segmented_track_bg())
-                        .rounded_lg()
-                        .p(px(2.))
-                        .flex()
-                        .gap_1()
-                        .child({
-                            let active = tab_size == 2;
-                            let pill = div()
-                                .flex_1()
-                                .py_1p5()
-                                .rounded_md()
-                                .text_xs()
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    t_ts2(2, window, cx);
-                                })
-                                .child("2 Spaces");
-
-                            if active {
-                                pill.bg(theme.segmented_thumb_bg())
-                                    .border(px(1.))
-                                    .border_color(theme.segmented_thumb_border())
-                                    .text_color(theme.segmented_thumb_text())
-                                    .font_weight(FontWeight::MEDIUM)
-                            } else {
-                                pill.bg(gpui::transparent_black())
-                                    .text_color(theme.segmented_inactive_text())
-                                    .hover(|s| s.text_color(theme.text_primary))
-                            }
-                        })
-                        .child({
-                            let active = tab_size == 4;
-                            let pill = div()
-                                .flex_1()
-                                .py_1p5()
-                                .rounded_md()
-                                .text_xs()
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    t_ts4(4, window, cx);
-                                })
-                                .child("4 Spaces");
-
-                            if active {
-                                pill.bg(theme.segmented_thumb_bg())
-                                    .border(px(1.))
-                                    .border_color(theme.segmented_thumb_border())
-                                    .text_color(theme.segmented_thumb_text())
-                                    .font_weight(FontWeight::MEDIUM)
-                            } else {
-                                pill.bg(gpui::transparent_black())
-                                    .text_color(theme.segmented_inactive_text())
-                                    .hover(|s| s.text_color(theme.text_primary))
-                            }
-                        }),
+                    render_segmented(theme)
+                        .child(render_segment(
+                            "tab_size_2".into(),
+                            "2 Spaces",
+                            tab_size == 2,
+                            theme,
+                            move |_, window, cx| t_ts2(2, window, cx),
+                        ))
+                        .child(render_segment(
+                            "tab_size_4".into(),
+                            "4 Spaces",
+                            tab_size == 4,
+                            theme,
+                            move |_, window, cx| t_ts4(4, window, cx),
+                        )),
                 ),
         )
         .child(
@@ -1602,48 +1672,19 @@ fn render_editor_save_tab(
                 .flex_col()
                 .gap_2()
                 .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(strings.line_height_label),
+                    render_section_title(strings.line_height_label, theme),
                 )
                 .child(
-                    div()
-                        .w_full()
-                        .bg(theme.segmented_track_bg())
-                        .rounded_lg()
-                        .p(px(2.))
-                        .flex()
-                        .gap_1()
+                    render_segmented(theme)
                         .children([1.3f32, 1.4, 1.5, 1.6, 1.7].into_iter().map(|lh_opt| {
-                            let is_active = (line_height - lh_opt).abs() < 0.05;
                             let on_set = on_set_line_height.clone();
-                            let pill = div()
-                                .flex_1()
-                                .py_1p5()
-                                .rounded_md()
-                                .text_xs()
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    on_set(lh_opt, window, cx);
-                                })
-                                .child(format!("{:.1}x", lh_opt));
-
-                            if is_active {
-                                pill.bg(theme.segmented_thumb_bg())
-                                    .border(px(1.))
-                                    .border_color(theme.segmented_thumb_border())
-                                    .text_color(theme.segmented_thumb_text())
-                                    .font_weight(FontWeight::MEDIUM)
-                            } else {
-                                pill.bg(gpui::transparent_black())
-                                    .text_color(theme.segmented_inactive_text())
-                                    .hover(|s| s.text_color(theme.text_primary))
-                            }
+                            render_segment(
+                                format!("line_height_{lh_opt:.1}").into(),
+                                format!("{lh_opt:.1}x"),
+                                (line_height - lh_opt).abs() < 0.05,
+                                theme,
+                                move |_, window, cx| on_set(lh_opt, window, cx),
+                            )
                         })),
                 ),
         )
@@ -1661,11 +1702,7 @@ fn render_language_tab(
         .flex_col()
         .gap_2()
         .child(
-            div()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_muted)
-                .child(strings.language),
+            render_section_title(strings.language, theme),
         )
         .child(
             div()
@@ -1684,9 +1721,9 @@ fn render_language_tab(
 
                             let card = div()
                                 .flex_1()
-                                .px_3()
-                                .py_2p5()
-                                .rounded_md()
+                                .h(px(36.))
+                                .px(px(tk::CARD_PX))
+                                .rounded(px(tk::RADIUS))
                                 .cursor_pointer()
                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     on_set(loc, window, cx);
@@ -1695,7 +1732,7 @@ fn render_language_tab(
                                 .items_center()
                                 .child(
                                     div()
-                                        .text_xs()
+                                        .text_size(px(tk::TEXT_LABEL))
                                         .child(name),
                                 );
 
@@ -1704,9 +1741,9 @@ fn render_language_tab(
                                     .text_color(theme.selection_text())
                                     .font_weight(FontWeight::MEDIUM)
                             } else {
-                                card.bg(gpui::transparent_black())
+                                card.bg(theme.card_bg())
                                     .text_color(theme.text_primary)
-                                    .hover(|s| s.bg(theme.hover_bg()))
+                                    .hover(|s| s.bg(theme.control_bg()))
                             }
                         }))
                 })),
@@ -1759,7 +1796,7 @@ fn render_shortcuts_tab(
     div()
         .flex()
         .flex_col()
-        .gap_4()
+        .gap(px(tk::SECTION_GAP))
         .child(
             div()
                 .flex()
@@ -1780,29 +1817,23 @@ fn render_shortcuts_tab(
                             ))
                         }),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(strings.shortcut_help_banner),
-                ),
+                .child(render_help_text(strings.shortcut_help_banner, theme)),
         )
         .children(ShortcutGroup::ALL.into_iter().map(|group| {
             let group_actions: Vec<ShortcutActionId> = ShortcutActionId::ALL
                 .into_iter()
                 .filter(|a| a.group() == group)
                 .collect();
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(render_section_title(localize_shortcut_group(group, strings), theme))
-                .child(
-                    div()
+            let count = group_actions.len();
+            render_section(
+                Some(localize_shortcut_group(group, strings).into()),
+                div()
                         .flex()
                         .flex_col()
-                        .gap_1()
-                        .children(group_actions.into_iter().map(|action| {
+                        .px(px(tk::CARD_PX))
+                        .rounded(px(tk::RADIUS_CARD))
+                        .bg(theme.card_bg())
+                        .children(group_actions.into_iter().enumerate().map(|(index, action)| {
                             let is_recording = recording == Some(action);
                             let is_customized = preferences.is_shortcut_customized(action);
                             let spec = preferences.shortcut_spec(action);
@@ -1821,16 +1852,14 @@ fn render_shortcuts_tab(
                             let on_rep = handlers.on_replace_conflict.clone();
                             let on_can = handlers.on_cancel_conflict.clone();
 
+                            // Same fill-only cap as a neutral button; recording is the one
+                            // state that earns an outline, in the accent color.
                             let pill_bg = if is_recording || is_customized {
                                 theme.control_selection_bg()
                             } else {
-                                theme.text_primary.opacity(0.04)
+                                theme.control_bg()
                             };
-                            let pill_border = if is_recording {
-                                theme.text_primary.opacity(0.32)
-                            } else {
-                                theme.border
-                            };
+                            let pill_border = if is_recording { theme.accent } else { gpui::transparent_black() };
                             let pill_text = if is_recording || is_customized {
                                 theme.selection_text()
                             } else if spec.trim().is_empty() {
@@ -1849,9 +1878,11 @@ fn render_shortcuts_tab(
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap_1()
-                                .py_1()
-                                .px_1()
+                                .gap_1p5()
+                                .py(px(tk::ROW_PY - 2.0))
+                                .when(index + 1 < count, |el| {
+                                    el.border_b_1().border_color(theme.hairline())
+                                })
                                 .child(
                                     div()
                                         .w_full()
@@ -1866,21 +1897,14 @@ fn render_shortcuts_tab(
                                                 .gap_1p5()
                                                 .child(
                                                     div()
-                                                        .text_xs()
+                                                        .text_size(px(tk::TEXT_LABEL))
                                                         .text_color(theme.text_primary)
                                                         .child(localize_shortcut_action(action, strings)),
                                                 )
                                                 .when(is_customized && !is_recording, |el| {
                                                     el.child(
                                                         div()
-                                                            .px_1p5()
-                                                            .py_0p5()
-                                                            .rounded(px(4.))
-                                                            .bg(theme.text_primary.opacity(0.05))
-                                                            .border(px(1.))
-                                                            .border_color(theme.border)
-                                                            .text_size(px(10.))
-                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_size(px(tk::TEXT_SMALL))
                                                             .text_color(theme.text_muted)
                                                             .child(strings.shortcut_custom_badge),
                                                     )
@@ -1895,24 +1919,23 @@ fn render_shortcuts_tab(
                                                     div()
                                                         .id(SharedString::from(btn_id))
                                                         .debug_selector(move || btn_sel.clone())
-                                                        .px_2p5()
-                                                        .py_1()
-                                                        .rounded(px(6.))
-                                                        .border(px(1.))
+                                                        .h(px(tk::CONTROL_H))
+                                                        .min_w(px(tk::KEYCAP_MIN_W))
+                                                        .px(px(tk::CONTROL_PX - 2.0))
+                                                        .rounded(px(tk::RADIUS))
+                                                        .border_1()
                                                         .border_color(pill_border)
                                                         .bg(pill_bg)
                                                         .flex()
                                                         .items_center()
+                                                        .justify_between()
                                                         .gap_1p5()
-                                                        .text_xs()
+                                                        .text_size(px(tk::TEXT_BODY))
                                                         .when(is_recording, |el| el.font_weight(FontWeight::MEDIUM))
                                                         .font_family(crate::platform::MONO_FONT)
                                                         .text_color(pill_text)
                                                         .cursor_pointer()
-                                                        .hover(|s| {
-                                                            s.border_color(theme.text_primary.opacity(0.28))
-                                                                .bg(theme.control_selection_bg())
-                                                        })
+                                                        .hover(|s| s.bg(theme.control_hover_bg()))
                                                         .tooltip(move |_, cx| {
                                                             cx.new(|_| crate::views::workspace::TooltipView {
                                                                 text: edit_hint.to_string(),
@@ -1937,35 +1960,23 @@ fn render_shortcuts_tab(
                                                 .when(is_customized && !is_recording, |el| {
                                                     let res_sel = res_id.clone();
                                                     el.child(
-                                                        div()
-                                                            .id(SharedString::from(res_id))
-                                                            .debug_selector(move || res_sel.clone())
-                                                            .px_1p5()
-                                                            .py_0p5()
-                                                            .rounded(px(4.))
-                                                            .text_xs()
-                                                            .text_color(theme.text_muted)
-                                                            .cursor_pointer()
-                                                            .hover(|s| {
-                                                                s.bg(theme.hover_bg())
-                                                                    .text_color(theme.text_primary)
-                                                            })
-                                                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                                                cx.stop_propagation();
-                                                                on_res(action, window, cx);
-                                                            })
-                                                            .child(strings.shortcut_reset),
+                                                        div().debug_selector(move || res_sel.clone()).child(
+                                                            render_text_button(
+                                                                SharedString::from(res_id),
+                                                                strings.shortcut_reset,
+                                                                theme,
+                                                                move |_, window, cx| {
+                                                                    cx.stop_propagation();
+                                                                    on_res(action, window, cx);
+                                                                },
+                                                            ),
+                                                        ),
                                                     )
                                                 }),
                                         ),
                                 )
                                 .when_some(row_notice, |el, msg| {
-                                    el.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.text_muted)
-                                            .child(msg),
-                                    )
+                                    el.child(render_help_text(msg, theme))
                                 })
                                 .when_some(row_conflict, |el, (target, new_spec, conflicting)| {
                                     let conflict_name = localize_shortcut_action(conflicting, strings);
@@ -1980,19 +1991,17 @@ fn render_shortcuts_tab(
                                     el.child(
                                         div()
                                             .w_full()
-                                            .px_2p5()
+                                            .px(px(tk::CARD_PX))
                                             .py_1p5()
-                                            .rounded(px(6.))
+                                            .rounded(px(tk::RADIUS))
                                             .bg(theme.control_selection_bg())
-                                            .border(px(1.))
-                                            .border_color(theme.text_primary.opacity(0.22))
                                             .flex()
                                             .items_center()
                                             .justify_between()
                                             .gap_2()
                                             .child(
                                                 div()
-                                                    .text_xs()
+                                                    .text_size(px(tk::TEXT_BODY))
                                                     .text_color(theme.selection_text())
                                                     .child(conflict_msg),
                                             )
@@ -2005,11 +2014,14 @@ fn render_shortcuts_tab(
                                                         div()
                                                             .id(SharedString::from(rep_id))
                                                             .debug_selector(move || rep_sel.clone())
-                                                            .px_2()
-                                                            .py_0p5()
-                                                            .rounded(px(4.))
+                                                            .h(px(tk::CONTROL_H - 4.0))
+                                                            .px(px(tk::CONTROL_PX - 2.0))
+                                                            .rounded(px(tk::RADIUS))
+                                                            .flex()
+                                                            .items_center()
                                                             .bg(theme.text_primary)
-                                                            .text_xs()
+                                                            .text_size(px(tk::TEXT_BODY))
+                                                            .font_weight(FontWeight::MEDIUM)
                                                             .text_color(theme.surface)
                                                             .cursor_pointer()
                                                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -2022,10 +2034,12 @@ fn render_shortcuts_tab(
                                                         div()
                                                             .id(SharedString::from(can_id))
                                                             .debug_selector(move || can_sel.clone())
-                                                            .px_1p5()
-                                                            .py_0p5()
-                                                            .rounded(px(4.))
-                                                            .text_xs()
+                                                            .h(px(tk::CONTROL_H - 4.0))
+                                                            .px_2()
+                                                            .rounded(px(tk::RADIUS))
+                                                            .flex()
+                                                            .items_center()
+                                                            .text_size(px(tk::TEXT_BODY))
                                                             .text_color(theme.text_muted)
                                                             .cursor_pointer()
                                                             .hover(|s| s.bg(theme.hover_bg()))
@@ -2039,7 +2053,8 @@ fn render_shortcuts_tab(
                                     )
                                 })
                         })),
-                )
+                theme,
+            )
         }))
 }
 
@@ -2073,7 +2088,7 @@ fn render_about_tab(
     div()
         .flex()
         .flex_col()
-        .gap_5()
+        .gap(px(tk::SECTION_GAP))
         // Product header: centered logo, name, tagline.
         .child(
             div()
@@ -2091,12 +2106,7 @@ fn render_about_tab(
                         .text_color(theme.text_primary)
                         .child("ZMark"),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(strings.about_tagline),
-                ),
+                .child(render_help_text(strings.about_tagline, theme)),
         )
         .child(render_setting_group(
             Some(strings.software_updates.into()),
@@ -2171,31 +2181,5 @@ fn render_mode_pill<F>(
 where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
-    let base = div()
-        .id(SharedString::from(label))
-        .debug_selector(move || label.to_owned())
-        .flex_1()
-        .py_1p5()
-        .rounded_md()
-        .text_xs()
-        .cursor_pointer()
-        .flex()
-        .items_center()
-        .justify_center()
-        .on_mouse_down(MouseButton::Left, handler);
-
-    if active {
-        base.bg(theme.segmented_thumb_bg())
-            .border(px(1.))
-            .border_color(theme.segmented_thumb_border())
-            .text_color(theme.segmented_thumb_text())
-            .font_weight(FontWeight::MEDIUM)
-            .child(label)
-    } else {
-        base.bg(gpui::transparent_black())
-            .text_color(theme.segmented_inactive_text())
-            .hover(|s| s.text_color(theme.text_primary))
-            .child(label)
-    }
+    render_segment(SharedString::from(label), label, active, theme, handler)
 }
-
