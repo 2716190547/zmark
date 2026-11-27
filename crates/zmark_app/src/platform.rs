@@ -132,7 +132,8 @@ pub const LEADING_WINDOW_CONTROL_INSET: f32 = 76.0;
 /// needs normal content padding.
 pub const fn trailing_window_control_inset(is_macos: bool, is_windows: bool) -> f32 {
     if is_macos {
-        12.0
+        // 38px header, 28px buttons: 5px above, so 5px on the right too.
+        5.0
     } else if is_windows {
         0.0
     } else {
@@ -277,7 +278,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         {
             assert_eq!(LEADING_WINDOW_CONTROL_INSET, 76.0);
-            assert_eq!(TRAILING_WINDOW_CONTROL_INSET, 12.0);
+            assert_eq!(TRAILING_WINDOW_CONTROL_INSET, 5.0);
             assert!(DEFAULT_UI_FONT.contains("system-ui"));
         }
         #[cfg(not(target_os = "macos"))]
@@ -299,7 +300,7 @@ mod tests {
 
     #[test]
     fn trailing_inset_keeps_one_bar_per_platform() {
-        assert_eq!(trailing_window_control_inset(true, false), 12.0);
+        assert_eq!(trailing_window_control_inset(true, false), 5.0);
         assert_eq!(trailing_window_control_inset(false, true), 0.0);
         assert_eq!(trailing_window_control_inset(false, false), 8.0);
         assert_eq!(WINDOW_CONTROL_BUTTON_WIDTH * 3.0, 138.0);

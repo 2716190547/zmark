@@ -1027,8 +1027,9 @@ pub fn render_editor_pane(
         .child(
             div()
                 .absolute()
+                // Same inset from both window edges, like the header buttons.
                 .bottom_3()
-                .right_5()
+                .right_3()
                 .flex()
                 .items_center()
                 .gap_2()
@@ -1055,7 +1056,7 @@ pub fn render_editor_pane(
                             .gap_1p5()
                             .px_2()
                             .py_1()
-                            .rounded_full()
+                            .rounded(px(6.))
                             .bg(theme.bg)
                             .border_1()
                             .border_color(theme.border)
@@ -1080,7 +1081,7 @@ pub fn render_editor_pane(
                         .gap_1p5()
                         .px_2()
                         .py_1()
-                        .rounded_full()
+                        .rounded(px(6.))
                         .bg(theme.bg)
                         .border_1()
                         .border_color(theme.border)

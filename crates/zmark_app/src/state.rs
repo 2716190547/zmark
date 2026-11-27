@@ -1659,6 +1659,31 @@ impl AppState {
         Ok(candidate)
     }
 
+    /// Creates an empty `name`, `name 1`, ... folder inside `dir` and reveals it in the tree.
+    pub fn create_folder_in_dir(&mut self, dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf, std::io::Error> {
+        if !dir.is_dir() {
+            return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Target directory does not exist"));
+        }
+        let mut candidate = dir.join(name);
+        let mut counter = 1;
+        loop {
+            match std::fs::create_dir(&candidate) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    candidate = dir.join(format!("{name} {counter}"));
+                    counter += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let candidate = candidate.canonicalize()?;
+        if let Some(idx) = self.find_root_index_for_path(&candidate) {
+            self.refresh_root(idx);
+        }
+        self.expand_to_file(&candidate);
+        Ok(candidate)
+    }
+
     pub fn rename_file(&mut self, new_name: &str) -> Result<(), std::io::Error> {
         let Some(key) = self.active.clone() else { return Ok(()); };
         self.rename_document(&key, new_name).map(|_| ())

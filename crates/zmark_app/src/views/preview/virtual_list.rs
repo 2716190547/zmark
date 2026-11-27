@@ -37,6 +37,8 @@ pub struct PreviewScrollState {
     last_range: std::ops::Range<usize>,
     /// Real prepaint heights, kept across estimate rebuilds for the same AST.
     measured: Vec<Option<f32>>,
+    /// AST the measured heights belong to, used to carry them across reparses.
+    measured_ast: Option<Arc<ParsedDocument>>,
     /// (scroll offset when set, requested block, in-block progress). Keeps a
     /// programmatic `scroll_to` meaningful when GPUI clamps a short document.
     logical_override: Rc<Cell<Option<(f32, usize, f32)>>>,
@@ -69,6 +71,7 @@ impl PreviewScrollState {
             pending: Rc::new(RefCell::new(Vec::new())),
             last_range: 0..0,
             measured: Vec::new(),
+            measured_ast: None,
             logical_override: Rc::new(Cell::new(None)),
             scrollbar_dragging: Rc::new(Cell::new(false)),
             scrollbar_drag_ratio: Rc::new(Cell::new(None)),
@@ -260,10 +263,16 @@ impl PreviewScrollState {
             || self.measured.len() != parsed.blocks.len()
             || font_key != self.last_font_key;
         if ast_changed {
+            // Throwing every height away makes all blocks fall back to estimates
+            // for a frame, which shows as flicker and blank gaps after a small
+            // edit or a line-height change. Unchanged blocks keep their last real
+            // height until they are measured again; after a font or line-height
+            // change those heights are stale but far closer than an estimate.
+            self.measured = carry_measured(self.measured_ast.as_deref(), &self.measured, parsed);
             self.last_font_key = font_key;
-            self.measured = vec![None; parsed.blocks.len()];
             self.pending.borrow_mut().clear();
             self.last_parsed_ptr = ptr;
+            self.measured_ast = Some(parsed.clone());
         }
         self.padding_top = rem * 1.5;
         self.padding_bottom = rem * 1.5;
@@ -368,6 +377,7 @@ impl PreviewScrollState {
     pub fn reset(&mut self, count: usize) {
         self.sizes = vec![DEFAULT_ITEM_HEIGHT; count];
         self.measured = vec![None; count];
+        self.measured_ast = None;
         self.last_parsed_ptr = 0;
         self.pending.borrow_mut().clear();
         self.recompute();
@@ -505,6 +515,23 @@ impl gpui_component::scroll::ScrollbarHandle for PreviewScrollState {
     }
 }
 
+/// Maps measured heights from `old` onto `new` for blocks that did not change:
+/// the common prefix and the common suffix. Edited blocks start unmeasured.
+fn carry_measured(old: Option<&ParsedDocument>, measured: &[Option<f32>], new: &ParsedDocument) -> Vec<Option<f32>> {
+    let mut out = vec![None; new.blocks.len()];
+    let Some(old) = old else { return out; };
+    if old.blocks.len() != measured.len() { return out; }
+    let (a, b) = (&old.blocks, &new.blocks);
+    let prefix = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
+    let max_suffix = a.len().min(b.len()) - prefix;
+    let suffix = a.iter().rev().zip(b.iter().rev()).take(max_suffix).take_while(|(x, y)| x == y).count();
+    out[..prefix].copy_from_slice(&measured[..prefix]);
+    for k in 0..suffix {
+        out[b.len() - 1 - k] = measured[a.len() - 1 - k];
+    }
+    out
+}
+
 fn layout_key(
     parsed: &Arc<ParsedDocument>,
     max_width: f32,
@@ -601,6 +628,17 @@ fn estimate_sizes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn carry_measured_keeps_unchanged_prefix_and_suffix() {
+        let old = zmark_core::ast::parse_markdown("a\n\n- [ ] b\n\nc\n\nd\n");
+        let new = zmark_core::ast::parse_markdown("a\n\n- [x] b\n\nc\n\nd\n");
+        let measured = vec![Some(10.0), Some(20.0), Some(30.0), Some(40.0)];
+        assert_eq!(carry_measured(Some(&old), &measured, &new), vec![Some(10.0), None, Some(30.0), Some(40.0)]);
+        let inserted = zmark_core::ast::parse_markdown("a\n\nnew\n\n- [ ] b\n\nc\n\nd\n");
+        assert_eq!(carry_measured(Some(&old), &measured, &inserted), vec![Some(10.0), None, Some(20.0), Some(30.0), Some(40.0)]);
+        assert_eq!(carry_measured(Some(&old), &measured, &old), measured);
+    }
 
     #[test]
     fn measurement_keeps_the_block_under_the_top_anchored() {

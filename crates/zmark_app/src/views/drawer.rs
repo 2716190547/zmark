@@ -26,6 +26,9 @@ pub struct DrawerSearchParams {
     pub hidden_paths: Vec<PathBuf>,
     pub pinned_paths: Vec<PathBuf>,
     pub on_toggle_pin: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
+    /// Context-menu actions on folder rows; the path is the folder.
+    pub on_new_file: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
+    pub on_new_folder: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
     pub reduce_motion: bool,
     pub on_row: Option<Arc<dyn Fn(&DocKey, &MouseDownEvent, bool, &mut Window, &mut App)>>,
     pub on_trash_directory: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
@@ -548,7 +551,6 @@ pub fn render_drawer_with_search(
                                 let on_new_file_root = on_new_file_in_dir.clone();
                                 let root_dir_path = root.path.clone();
                                 let right_part = div()
-                                    .when(search.pinned_paths.contains(&root.path), |el| el.child(pin_badge(&root.path, search, theme, strings)))
                                     .child(path_actions(root.path.clone(), "drawer_root_row", search, strings))
                                     .flex()
                                     .items_center()
@@ -576,7 +578,8 @@ pub fn render_drawer_with_search(
                                                 on_new_file_root(&root_dir_path, window, cx);
                                             })
                                             .child("+"),
-                                    );
+                                    )
+                                    .when(search.pinned_paths.contains(&root.path), |el| el.child(pin_badge(&root.path, search, theme, strings)));
 
                                 root_header = root_header.child(left_part).child(right_part);
                                 roots_section = roots_section.child(path_context_menu(root_header, root.path.clone(), search, theme, strings));
@@ -1042,7 +1045,6 @@ fn render_file_tree_nodes(
             let on_new_file_dir = on_new_file_in_dir.clone();
             let dir_path = node.path.clone();
             let right_part = div()
-                .when(params.pinned_paths.contains(&node.path), |el| el.child(pin_badge(&node.path, params, theme, strings)))
                 .child(path_actions(node.path.clone(), "drawer_dir_row", params, strings))
                 .flex()
                 .items_center()
@@ -1070,7 +1072,8 @@ fn render_file_tree_nodes(
                             on_new_file_dir(&dir_path, window, cx);
                         })
                         .child("+"),
-                );
+                )
+                .when(params.pinned_paths.contains(&node.path), |el| el.child(pin_badge(&node.path, params, theme, strings)));
 
             let row_handler = params.on_row.clone();
             let row_key = key.clone();
@@ -1361,7 +1364,23 @@ fn path_context_menu<E: InteractiveElement + ParentElement + Styled + IntoElemen
     let remove = params.on_remove_path.clone();
     let trash = params.on_trash_directory.clone();
     let danger = theme.destructive_text();
+    let is_dir = path.is_dir();
+    let new_file = params.on_new_file.clone().filter(|_| is_dir);
+    let new_folder = params.on_new_folder.clone().filter(|_| is_dir);
     element.context_menu(move |mut menu, _, _| {
+        if let Some(callback) = &new_file {
+            let callback = callback.clone(); let path = path.clone();
+            menu = menu.item(PopupMenuItem::new(strings.new_file)
+                .on_click(move |_,window,cx| callback(&path,window,cx)));
+        }
+        if let Some(callback) = &new_folder {
+            let callback = callback.clone(); let path = path.clone();
+            menu = menu.item(PopupMenuItem::new(strings.new_folder)
+                .on_click(move |_,window,cx| callback(&path,window,cx)));
+        }
+        if new_file.is_some() || new_folder.is_some() {
+            menu = menu.separator();
+        }
         if let Some(callback) = &pin {
             let callback = callback.clone(); let path = path.clone();
             menu = menu.item(PopupMenuItem::new(if is_pinned { strings.unpin } else { strings.pin_to_top })

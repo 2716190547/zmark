@@ -4883,6 +4883,30 @@ impl Render for WorkspaceView {
                                     let on_toggle_pin = Arc::new(move |path: &PathBuf, _: &mut Window, cx: &mut App| {
                                         pin_view.update(cx, |this, cx| { this.state.toggle_sidebar_pin(path); cx.notify(); });
                                     });
+                                    let new_file_view = cx.entity().clone();
+                                    let on_new_file = Arc::new(move |dir: &PathBuf, window: &mut Window, cx: &mut App| {
+                                        new_file_view.update(cx, |this, cx| {
+                                            match this.state.create_file_in_dir(dir) {
+                                                Ok(_) => this.on_document_swapped(Some(window), cx),
+                                                Err(e) => this.state.set_error(format!("Failed to create file: {}", e)),
+                                            }
+                                            cx.notify();
+                                        });
+                                    });
+                                    let new_folder_view = cx.entity().clone();
+                                    let on_new_folder = Arc::new(move |dir: &PathBuf, window: &mut Window, cx: &mut App| {
+                                        new_folder_view.update(cx, |this, cx| {
+                                            let name = this.state.strings.untitled_folder;
+                                            match this.state.create_folder_in_dir(dir, name) {
+                                                Ok(path) => {
+                                                    this.selected_directory = Some(path.clone());
+                                                    this.begin_rename_target(crate::state::DocKey::Path(path), true, window, cx);
+                                                }
+                                                Err(e) => this.state.set_error(format!("Failed to create folder: {}", e)),
+                                            }
+                                            cx.notify();
+                                        });
+                                    });
                                     let undo_view = cx.entity().clone();
                                     let on_undo = Arc::new(move |_: &mut Window, cx: &mut App| {
                                         undo_view.update(cx, |this,cx| {
@@ -4904,6 +4928,8 @@ impl Render for WorkspaceView {
                                         hidden_paths: self.state.preferences.sidebar_hidden_paths.clone(),
                                         pinned_paths: self.state.preferences.sidebar_pinned_paths.clone(),
                                         on_toggle_pin: Some(on_toggle_pin),
+                                        on_new_file: Some(on_new_file),
+                                        on_new_folder: Some(on_new_folder),
                                         reduce_motion,
                                         on_row: Some(on_row),
                                         on_trash_directory: Some(on_trash_directory),
