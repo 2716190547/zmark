@@ -2,6 +2,9 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::Sizable as _;
 use gpui_component::color_picker::{ColorPickerEvent, ColorPickerState, ColorSelect};
+use gpui_component::searchable_list::{SearchableListItem, SearchableVec};
+use gpui_component::select::{Select, SelectEvent, SelectState};
+use gpui_component::IndexPath;
 use std::collections::HashMap;
 use std::sync::Arc;
 use zmark_core::config::{
@@ -16,6 +19,39 @@ use crate::state::SettingsTab;
 use crate::theme::{ThemeColors, ALL_PALETTES};
 use crate::updater::UpdateStatus;
 use crate::views::workspace::WorkspaceView;
+
+/// One entry of a font picker. An empty `family` is the platform default.
+#[derive(Clone)]
+struct FontChoice {
+    label: SharedString,
+    family: SharedString,
+}
+
+impl SearchableListItem for FontChoice {
+    type Value = SharedString;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        div()
+            .when(!self.family.is_empty(), |el| el.font_family(self.family.clone()))
+            .child(self.label.clone())
+    }
+
+    fn value(&self) -> &SharedString {
+        &self.family
+    }
+}
+
+type FontSelectState = SelectState<SearchableVec<FontChoice>>;
+
+#[derive(Clone, Copy, PartialEq)]
+enum FontRole {
+    Body,
+    Code,
+}
 
 /// Settings design tokens. Every settings control takes its size, radius and
 /// spacing from here; see `docs/design/settings-ui.md`.
@@ -100,6 +136,9 @@ pub struct SettingsWindowView {
     pub shortcut_conflict: Option<(ShortcutActionId, String, ShortcutActionId)>,
     pub shortcut_notice: Option<(ShortcutActionId, &'static str)>,
     shortcut_interceptor: Option<Subscription>,
+    /// Body and code font pickers, built on first use with the strings they show.
+    font_selects: Option<(Entity<FontSelectState>, Entity<FontSelectState>, &'static I18nStrings)>,
+    font_select_subs: Vec<Subscription>,
 }
 
 impl SettingsWindowView {
@@ -154,7 +193,75 @@ impl SettingsWindowView {
             shortcut_conflict: None,
             shortcut_notice: None,
             shortcut_interceptor: None,
+            font_selects: None,
+            font_select_subs: Vec::new(),
         }
+    }
+
+    /// Builds the font pickers from the installed families, and rebuilds them
+    /// when the interface language changes their "System Default" label.
+    fn ensure_font_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .font_selects
+            .as_ref()
+            .is_some_and(|(_, _, strings)| std::ptr::eq(*strings, self.strings))
+        {
+            return;
+        }
+        let mut choices = vec![FontChoice {
+            label: self.strings.font_system_default.into(),
+            family: SharedString::default(),
+        }];
+        choices.extend(
+            window
+                .text_system()
+                .all_font_names()
+                .into_iter()
+                .filter(|name| !name.starts_with('.'))
+                .map(|name| {
+                    let name = SharedString::from(name);
+                    FontChoice { label: name.clone(), family: name }
+                }),
+        );
+        self.font_select_subs.clear();
+        let mut build = |role: FontRole, this: &mut Self, cx: &mut Context<Self>| {
+            let current = match role {
+                FontRole::Body => this.preferences.font_family.as_str(),
+                FontRole::Code => this.preferences.code_font_family.as_str(),
+            };
+            let current = if current == "system-ui" { "" } else { current };
+            let ix = choices.iter().position(|c| c.family.as_ref() == current).unwrap_or(0);
+            let items = SearchableVec::new(choices.clone());
+            let state = cx.new(|cx| {
+                SelectState::new(items, Some(IndexPath::new(ix)), window, cx).searchable(true)
+            });
+            let sub = cx.subscribe(&state, move |this, _, event: &SelectEvent<SearchableVec<FontChoice>>, cx| {
+                let SelectEvent::Confirm(Some(family)) = event else {
+                    return;
+                };
+                let family = family.to_string();
+                match role {
+                    FontRole::Body => this.preferences.font_family = family.clone(),
+                    FontRole::Code => this.preferences.code_font_family = family.clone(),
+                }
+                if let Some(ws) = this.workspace.upgrade() {
+                    ws.update(cx, |ws, cx| {
+                        match role {
+                            FontRole::Body => ws.state.set_body_font(&family),
+                            FontRole::Code => ws.state.set_code_font(&family),
+                        }
+                        cx.notify();
+                    });
+                }
+                cx.refresh_windows();
+                cx.notify();
+            });
+            this.font_select_subs.push(sub);
+            state
+        };
+        let body = build(FontRole::Body, self, cx);
+        let code = build(FontRole::Code, self, cx);
+        self.font_selects = Some((body, code, self.strings));
     }
 
     /// Applies or clears a customized shortcut, updates GPUI's keymap live, and saves config.
@@ -413,6 +520,13 @@ impl Render for SettingsWindowView {
         {
             self.ensure_custom_pickers(editing_dark, window, cx);
         }
+        if self.current_tab == SettingsTab::Appearance {
+            self.ensure_font_selects(window, cx);
+        }
+        let font_selects = self
+            .font_selects
+            .as_ref()
+            .map(|(body, code, _)| (body.clone(), code.clone()));
         let current_tab = self.current_tab;
         let current_mode = self.preferences.theme;
         let current_palette = self.preferences.palette.clone();
@@ -792,6 +906,7 @@ impl Render for SettingsWindowView {
                     )
                     .child(match current_tab {
                         SettingsTab::Appearance => render_appearance_tab(
+                            font_selects,
                             current_mode,
                             &current_palette,
                             effective_dark,
@@ -1431,7 +1546,42 @@ fn render_custom_theme_editor(
         )
 }
 
+fn render_font_group(
+    selects: (Entity<FontSelectState>, Entity<FontSelectState>),
+    theme: &ThemeColors,
+    strings: &'static I18nStrings,
+) -> impl IntoElement {
+    let picker = |state: &Entity<FontSelectState>| {
+        Select::new(state)
+            .small()
+            .w(px(200.))
+            .menu_width(px(260.))
+            .search_placeholder(strings.font_search_placeholder)
+    };
+    render_setting_group(
+        Some(strings.font_section.into()),
+        vec![
+            render_setting_row(
+                strings.body_font_label,
+                Some(strings.body_font_desc.into()),
+                picker(&selects.0),
+                theme,
+            )
+            .into_any_element(),
+            render_setting_row(
+                strings.code_font_label,
+                Some(strings.code_font_desc.into()),
+                picker(&selects.1),
+                theme,
+            )
+            .into_any_element(),
+        ],
+        theme,
+    )
+}
+
 fn render_appearance_tab(
+    font_selects: Option<(Entity<FontSelectState>, Entity<FontSelectState>)>,
     current_mode: ThemeMode,
     current_palette: &str,
     effective_dark: bool,
@@ -1607,6 +1757,9 @@ fn render_appearance_tab(
         )
         .when(is_custom_active, |el| {
             el.child(render_custom_theme_editor(&custom, theme, strings))
+        })
+        .when_some(font_selects, |el, selects| {
+            el.child(render_font_group(selects, theme, strings))
         })
         .child(render_setting_row(
             strings.reduce_motion_label,
@@ -1968,7 +2121,7 @@ fn render_shortcuts_tab(
                                                         .gap_1p5()
                                                         .text_size(px(tk::TEXT_BODY))
                                                         .when(is_recording, |el| el.font_weight(FontWeight::MEDIUM))
-                                                        .font_family(crate::platform::MONO_FONT)
+                                                        .font_family(crate::platform::mono_font())
                                                         .text_color(pill_text)
                                                         .cursor_pointer()
                                                         .hover(|s| s.bg(theme.control_hover_bg()))

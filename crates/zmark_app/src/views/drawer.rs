@@ -899,7 +899,7 @@ pub fn render_input(input: &Entity<SearchInput>, title: bool) -> gpui_component:
         .w_full().min_w(px(0.)).px_0().py_0()
         .line_height(px(if title { 24. } else { 20. }))
         .text_size(px(if title { 18. } else { 13. }))
-        .font_family(crate::platform::UI_FONT)
+        .font_family(crate::platform::ui_font())
         .font_weight(if title { FontWeight::BOLD } else { FontWeight::NORMAL })
 }
 
@@ -1266,7 +1266,7 @@ impl Render for DrawerTooltipView {
             .border_color(rgba(0x3f3f4640))
             .text_size(px(11.))
             .text_color(rgb(0xf4f4f5))
-            .font_family(crate::platform::UI_FONT)
+            .font_family(crate::platform::ui_font())
             .shadow_md()
             .child(self.text.clone())
     }

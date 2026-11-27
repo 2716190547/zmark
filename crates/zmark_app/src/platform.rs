@@ -6,8 +6,8 @@
 
 use gpui::{point, px, TitlebarOptions, WindowDecorations};
 
-/// UI (proportional) font family list understood by the platform text system.
-pub const UI_FONT: &str = if cfg!(target_os = "macos") {
+/// Default UI (proportional) font family list understood by the platform text system.
+pub const DEFAULT_UI_FONT: &str = if cfg!(target_os = "macos") {
     "ui-sans-serif, system-ui"
 } else if cfg!(target_os = "windows") {
     "Segoe UI"
@@ -15,14 +15,81 @@ pub const UI_FONT: &str = if cfg!(target_os = "macos") {
     "Noto Sans, Cantarell, DejaVu Sans"
 };
 
-/// Monospace font family list understood by the platform text system.
-pub const MONO_FONT: &str = if cfg!(target_os = "macos") {
+/// Default monospace font family list understood by the platform text system.
+pub const DEFAULT_MONO_FONT: &str = if cfg!(target_os = "macos") {
     "ui-monospace"
 } else if cfg!(target_os = "windows") {
     "Cascadia Mono, Consolas"
 } else {
     "JetBrains Mono, DejaVu Sans Mono, monospace"
 };
+
+struct FontState {
+    ui: &'static str,
+    mono: &'static str,
+    generation: u32,
+}
+
+static FONTS: std::sync::RwLock<FontState> = std::sync::RwLock::new(FontState {
+    ui: DEFAULT_UI_FONT,
+    mono: DEFAULT_MONO_FONT,
+    generation: 0,
+});
+
+/// Family names handed out as `&'static str`. Each distinct user choice is
+/// leaked once, so switching back and forth does not grow memory.
+static INTERNED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+fn intern(value: String) -> &'static str {
+    let mut interned = INTERNED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(existing) = interned.iter().find(|s| **s == value) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(value.into_boxed_str());
+    interned.push(leaked);
+    leaked
+}
+
+/// Puts the user's family first and keeps the platform list as fallback, so a
+/// font that was uninstalled later still renders text.
+fn family_list(chosen: &str, default: &'static str) -> &'static str {
+    let chosen = chosen.trim();
+    if chosen.is_empty() || chosen == "system-ui" {
+        default
+    } else {
+        intern(format!("{chosen}, {default}"))
+    }
+}
+
+/// Body and interface font chosen in Settings (platform default when unset).
+pub fn ui_font() -> &'static str {
+    FONTS.read().unwrap_or_else(|e| e.into_inner()).ui
+}
+
+/// Code font chosen in Settings, used by code blocks and the source editor.
+pub fn mono_font() -> &'static str {
+    FONTS.read().unwrap_or_else(|e| e.into_inner()).mono
+}
+
+/// Applies the preferred families. Returns true when either one changed.
+pub fn set_fonts(body: &str, code: &str) -> bool {
+    let ui = family_list(body, DEFAULT_UI_FONT);
+    let mono = family_list(code, DEFAULT_MONO_FONT);
+    let mut fonts = FONTS.write().unwrap_or_else(|e| e.into_inner());
+    if fonts.ui == ui && fonts.mono == mono {
+        return false;
+    }
+    fonts.ui = ui;
+    fonts.mono = mono;
+    fonts.generation = fonts.generation.wrapping_add(1);
+    true
+}
+
+/// Cache key for text layout that depends on both size and the current fonts.
+pub fn font_layout_key(font_size: f32) -> u32 {
+    let generation = FONTS.read().unwrap_or_else(|e| e.into_inner()).generation;
+    font_size.to_bits() ^ generation.rotate_right(8)
+}
 
 /// Leading inset that keeps header content clear of the native window controls.
 pub const LEADING_WINDOW_CONTROL_INSET: f32 = 76.0;
@@ -174,16 +241,16 @@ mod tests {
 
     #[test]
     fn font_stacks_and_chrome_follow_platform() {
-        assert!(!UI_FONT.is_empty() && !MONO_FONT.is_empty());
+        assert!(!DEFAULT_UI_FONT.is_empty() && !DEFAULT_MONO_FONT.is_empty());
         #[cfg(target_os = "macos")]
         {
             assert_eq!(LEADING_WINDOW_CONTROL_INSET, 76.0);
             assert_eq!(TRAILING_WINDOW_CONTROL_INSET, 12.0);
-            assert!(UI_FONT.contains("system-ui"));
+            assert!(DEFAULT_UI_FONT.contains("system-ui"));
         }
         #[cfg(not(target_os = "macos"))]
         {
-            assert!(!UI_FONT.contains("system-ui"));
+            assert!(!DEFAULT_UI_FONT.contains("system-ui"));
         }
     }
 

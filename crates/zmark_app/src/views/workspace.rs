@@ -1031,7 +1031,7 @@ impl WorkspaceView {
         let font_size = self.state.preferences.font_size;
         let rev = self.state.editor.revision;
         let width_bits = max_width_px.round() as u64;
-        let font_bits = font_size.to_bits();
+        let font_bits = crate::platform::font_layout_key(font_size);
 
         let ast_blocks_changed = !self.state.doc().is_parse_stale()
             && (self.source_code_blocks_rev != rev
@@ -5737,7 +5737,7 @@ impl Render for TooltipView {
             .border_color(rgba(0x3f3f4640))
             .text_size(px(11.))
             .text_color(rgb(0xf4f4f5))
-            .font_family(crate::platform::UI_FONT)
+            .font_family(crate::platform::ui_font())
             .shadow_md()
             .child(self.text.clone())
     }

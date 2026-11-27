@@ -439,7 +439,11 @@ fn default_line_height() -> f32 {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Preferences {
+    /// Body and interface font family; `""` or `"system-ui"` keeps the platform default.
     pub font_family: String,
+    /// Code block and source editor font family; `""` keeps the platform default.
+    #[serde(default)]
+    pub code_font_family: String,
     pub font_size: f32,
     #[serde(default = "default_line_height")]
     pub line_height: f32,
@@ -493,6 +497,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             font_family: "system-ui".to_string(),
+            code_font_family: String::new(),
             font_size: 16.0,
             line_height: 1.6,
             max_column_width: 760.0,

@@ -31,6 +31,8 @@ pub struct PreviewScrollState {
     total_shared: Rc<Cell<f32>>,
     layout_key: u128,
     last_parsed_ptr: usize,
+    /// Font size and family key the measured heights were taken with.
+    last_font_key: u32,
     pending: MeasurementSink,
     last_range: std::ops::Range<usize>,
     /// Real prepaint heights, kept across estimate rebuilds for the same AST.
@@ -63,6 +65,7 @@ impl PreviewScrollState {
             total_shared: Rc::new(Cell::new(48.0)),
             layout_key: 0,
             last_parsed_ptr: 0,
+            last_font_key: 0,
             pending: Rc::new(RefCell::new(Vec::new())),
             last_range: 0..0,
             measured: Vec::new(),
@@ -252,8 +255,12 @@ impl PreviewScrollState {
         // Anchor against the old origins, before replacing the size table.
         let anchor_delta = self.top_anchor(old_offset);
         let ptr = Arc::as_ptr(parsed) as usize;
-        let ast_changed = ptr != self.last_parsed_ptr || self.measured.len() != parsed.blocks.len();
+        let font_key = crate::platform::font_layout_key(font_size);
+        let ast_changed = ptr != self.last_parsed_ptr
+            || self.measured.len() != parsed.blocks.len()
+            || font_key != self.last_font_key;
         if ast_changed {
+            self.last_font_key = font_key;
             self.measured = vec![None; parsed.blocks.len()];
             self.pending.borrow_mut().clear();
             self.last_parsed_ptr = ptr;
@@ -507,7 +514,7 @@ fn layout_key(
 ) -> u128 {
     let ptr = Arc::as_ptr(parsed) as usize as u128;
     let width = max_width.round() as u32 as u128;
-    let font = font_size.to_bits() as u128;
+    let font = crate::platform::font_layout_key(font_size) as u128;
     let lh = line_height.to_bits() as u128;
     let rem_bits = rem.to_bits() as u128;
     ptr << 64 | width << 40 | font << 20 | lh << 10 | rem_bits

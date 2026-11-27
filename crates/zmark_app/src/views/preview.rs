@@ -331,7 +331,7 @@ pub fn render_preview_pane_with_callbacks(
                 .border_1()
                 .border_color(theme.border)
                 .text_size(px(10.))
-                .font_family(crate::platform::UI_FONT)
+                .font_family(crate::platform::ui_font())
                 .text_color(theme.text_muted)
                 .id("preview_syntax_failure_badge")
                 .debug_selector(|| "preview_syntax_failure_badge".into())
@@ -584,7 +584,7 @@ fn render_block_element(
                 TextRegionInfo {
                     block_ix,
                     text: content.plain_text(),
-                    font_name: crate::platform::UI_FONT,
+                    font_name: crate::platform::ui_font(),
                     font_size,
                     line_height_factor: 1.75,
                     padding_left: 0.0,
@@ -618,7 +618,7 @@ fn render_block_element(
                 TextRegionInfo {
                     block_ix,
                     text: content.plain_text(),
-                    font_name: crate::platform::UI_FONT,
+                    font_name: crate::platform::ui_font(),
                     font_size: base_font_size,
                     line_height_factor: 1.75,
                     padding_left: 0.0,
@@ -764,7 +764,7 @@ fn render_block_element(
                         TextRegionInfo {
                             block_ix,
                             text: text.clone(),
-                            font_name: crate::platform::UI_FONT,
+                            font_name: crate::platform::ui_font(),
                             font_size: base_font_size * 0.95,
                             line_height_factor: 1.75,
                             padding_left: 12.0,
@@ -802,7 +802,7 @@ fn render_block_element(
                             TextRegionInfo {
                                 block_ix,
                                 text: text.clone(),
-                                font_name: crate::platform::UI_FONT,
+                                font_name: crate::platform::ui_font(),
                                 font_size: base_font_size * 0.95,
                                 line_height_factor: 1.75,
                                 padding_left: 12.0,
@@ -1574,7 +1574,7 @@ impl Render for CodeTooltipView {
             .border_color(rgba(0x3f3f4640))
             .text_size(px(11.))
             .text_color(rgb(0xf4f4f5))
-            .font_family(crate::platform::UI_FONT)
+            .font_family(crate::platform::ui_font())
             .shadow_md()
             .child(self.text.clone())
     }
@@ -1632,7 +1632,7 @@ fn render_list_element(
                 .w(px(20.))
                 .text_right()
                 .text_size(px(base_font_size))
-                .font_family(crate::platform::MONO_FONT)
+                .font_family(crate::platform::mono_font())
                 .text_color(theme.syntax_bullet)
                 .child(format!("{}.", idx + 1))
         } else {
@@ -1676,7 +1676,7 @@ fn render_list_element(
                             TextRegionInfo {
                                 block_ix,
                                 text: content_text,
-                                font_name: crate::platform::UI_FONT,
+                                font_name: crate::platform::ui_font(),
                                 font_size: base_font_size,
                                 line_height_factor: 1.6,
                                 padding_left: 0.0,
@@ -1913,7 +1913,7 @@ fn render_code_block(
         .min_w(px(0.))
         .p_3()
         .text_size(px(code_font_size))
-        .font_family(crate::platform::MONO_FONT)
+        .font_family(crate::platform::mono_font())
         .line_height(relative(1.75))
         .text_color(theme.syntax_code)
         .child(styled_text);
@@ -1929,7 +1929,7 @@ fn render_code_block(
         TextRegionInfo {
             block_ix,
             text: code.to_string(),
-            font_name: crate::platform::MONO_FONT,
+            font_name: crate::platform::mono_font(),
             font_size: code_font_size,
             line_height_factor: 1.75,
             padding_left: 12.0,
@@ -2026,7 +2026,7 @@ fn render_code_block(
                     .bottom(px(6.))
                     .right(px(10.))
                     .text_size(px(11.))
-                    .font_family(crate::platform::MONO_FONT)
+                    .font_family(crate::platform::mono_font())
                     .text_color(theme.text_muted.opacity(0.6))
                     .child(label),
             )

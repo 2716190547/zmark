@@ -11,8 +11,22 @@ pub fn init_components(cx: &mut App) {
     }
 }
 
+/// Keeps gpui-component's root font (settings window, inputs, menus) on the
+/// chosen body font, and restores its own default when none is chosen.
+fn sync_component_font(cx: &mut App) {
+    use gpui_component::Theme;
+    static COMPONENT_DEFAULT: std::sync::OnceLock<SharedString> = std::sync::OnceLock::new();
+    let default = COMPONENT_DEFAULT.get_or_init(|| Theme::global(cx).font_family.clone()).clone();
+    let ui = crate::platform::ui_font();
+    let wanted: SharedString = if ui == crate::platform::DEFAULT_UI_FONT { default } else { ui.into() };
+    if Theme::global(cx).font_family != wanted {
+        Theme::update(cx, |native| native.font_family = wanted);
+    }
+}
+
 pub fn sync_component_theme(theme: &ThemeColors, cx: &mut App) {
     use gpui_component::{Theme, ThemeMode, scroll::ScrollbarMode};
+    sync_component_font(cx);
     let mode = if theme.is_dark { ThemeMode::Dark } else { ThemeMode::Light };
     if Theme::global(cx).mode != mode {
         Theme::change(mode, None, cx);

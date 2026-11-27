@@ -314,7 +314,7 @@ impl RenderOnce for Mermaid {
                 )
                 .child(
                     div()
-                        .font_family(crate::platform::MONO_FONT)
+                        .font_family(crate::platform::mono_font())
                         .child(error.to_string()),
                 )
                 .into_any_element(),

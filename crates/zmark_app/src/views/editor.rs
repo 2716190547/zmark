@@ -124,7 +124,7 @@ pub const EDITOR_GUTTER_MARGIN_RIGHT: f32 = 8.0;
 pub fn editor_gutter_width(text_system: &gpui::WindowTextSystem, line_count: usize, font_size: f32) -> f32 {
     let digits = line_count.max(1).to_string().len();
     let text = "8".repeat(digits);
-    let run = gpui::TextRun { len: text.len(), font: gpui::font(crate::platform::MONO_FONT), color: gpui::black(), background_color: None, underline: None, strikethrough: None };
+    let run = gpui::TextRun { len: text.len(), font: gpui::font(crate::platform::mono_font()), color: gpui::black(), background_color: None, underline: None, strikethrough: None };
     f32::from(text_system.shape_line(text.into(), gpui::px(font_size * 0.85), &[run], None).width).ceil() + 2.0
 }
 
@@ -165,7 +165,7 @@ pub fn token_char_positions(text_system: &gpui::WindowTextSystem, tokens: &[Mark
     let mut index = 0;
     let mut x = 0.0;
     for token in tokens {
-        let mut font = gpui::font(crate::platform::MONO_FONT);
+        let mut font = gpui::font(crate::platform::mono_font());
         if matches!(token.kind, MarkdownTokenKind::Bold | MarkdownTokenKind::HeadingText) { font.weight = FontWeight::BOLD; }
         let run = TextRun { len: token.text.len(), font, color: gpui::black(), background_color: None, underline: None, strikethrough: None };
         let shaped = text_system.shape_line(token.text.clone().into(), px(font_size), &[run], None);
@@ -301,7 +301,7 @@ impl MonoMetrics {
     fn measure(text_system: &gpui::WindowTextSystem, font_size: f32) -> Self {
         let run = |len| TextRun {
             len,
-            font: gpui::font(crate::platform::MONO_FONT),
+            font: gpui::font(crate::platform::mono_font()),
             color: gpui::black(),
             background_color: None,
             underline: None,
@@ -486,7 +486,7 @@ impl DocumentLayoutCache {
         font_size: f32,
     ) -> Vec<VisualLine> {
         let width_bits = max_width_px.round().to_bits();
-        let font_bits = font_size.to_bits();
+        let font_bits = crate::platform::font_layout_key(font_size);
 
         let font_changed = self.cached_font_bits != font_bits;
         let width_changed = self.cached_width_bits != width_bits;
@@ -939,7 +939,7 @@ pub fn render_editor_pane(
                             .relative()
                             .text_size(px(font_size))
                             .line_height(relative(sanitized_lh))
-                            .font_family(crate::platform::MONO_FONT)
+                            .font_family(crate::platform::mono_font())
                             .flex()
                             .items_center()
                             .children(selection_quads)
@@ -997,7 +997,7 @@ pub fn render_editor_pane(
                                     .text_right()
                                     .text_size(px(font_size * 0.85))
                                     .line_height(relative(sanitized_lh))
-                                    .font_family(crate::platform::MONO_FONT)
+                                    .font_family(crate::platform::mono_font())
                                     .text_color(if is_active_subline {
                                         list_theme.accent
                                     } else {
@@ -1060,7 +1060,7 @@ pub fn render_editor_pane(
                             .border_1()
                             .border_color(theme.border)
                             .text_size(px(10.))
-                            .font_family(crate::platform::UI_FONT)
+                            .font_family(crate::platform::ui_font())
                             .text_color(theme.text_muted)
                             .tooltip(move |_window, cx| {
                                 let t = tooltip_text.clone();
@@ -1085,7 +1085,7 @@ pub fn render_editor_pane(
                         .border_1()
                         .border_color(theme.border)
                         .text_size(px(10.))
-                        .font_family(crate::platform::UI_FONT)
+                        .font_family(crate::platform::ui_font())
                         .text_color(theme.text_muted)
                         .child(format!(
                             "{} {}  ·  {} {}",

@@ -488,6 +488,7 @@ impl AppState {
             preferences.palette = "default".to_string();
             let _ = preferences.save_to_path(&preferences_path);
         }
+        crate::platform::set_fonts(&preferences.font_family, &preferences.code_font_family);
         let is_dark = match preferences.theme {
             ThemeMode::Light => false,
             ThemeMode::Dark => true,
@@ -622,6 +623,20 @@ impl AppState {
     }
 
     pub fn save_preferences(&self) {
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
+    /// Sets the body/interface font (`""` = platform default) and saves it.
+    pub fn set_body_font(&mut self, family: &str) {
+        self.preferences.font_family = family.to_string();
+        crate::platform::set_fonts(&self.preferences.font_family, &self.preferences.code_font_family);
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
+    /// Sets the code block and source editor font (`""` = platform default) and saves it.
+    pub fn set_code_font(&mut self, family: &str) {
+        self.preferences.code_font_family = family.to_string();
+        crate::platform::set_fonts(&self.preferences.font_family, &self.preferences.code_font_family);
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
