@@ -425,6 +425,7 @@ impl Render for SettingsWindowView {
         let auto_save_on_blur = self.preferences.auto_save_on_blur;
         let tab_size = self.preferences.tab_size;
         let line_height = self.preferences.line_height;
+        let column_width = self.preferences.max_column_width;
         let theme = self.theme.clone();
         let strings = self.strings;
         let update_status = self.update_status.clone();
@@ -665,6 +666,22 @@ impl Render for SettingsWindowView {
             });
         });
 
+        let view_cw = cx.entity().clone();
+        let on_set_column_width = Arc::new(move |w: f32, _window: &mut Window, cx: &mut App| {
+            view_cw.update(cx, |this, cx| {
+                let clamped = Preferences::sanitize_column_width(w);
+                this.preferences.max_column_width = clamped;
+                if let Some(ws) = this.workspace.upgrade() {
+                    ws.update(cx, |ws, cx| {
+                        ws.state.set_column_width(clamped);
+                        ws.state.save_preferences();
+                        cx.notify();
+                    });
+                }
+                cx.notify();
+            });
+        });
+
         div()
             .size_full()
             .relative()
@@ -804,6 +821,7 @@ impl Render for SettingsWindowView {
                             self.preferences.show_line_numbers,
                             tab_size,
                             line_height,
+                            column_width,
                             &theme,
                             strings,
                             on_toggle_auto_save,
@@ -811,6 +829,7 @@ impl Render for SettingsWindowView {
                             on_toggle_line_numbers,
                             on_set_tab_size,
                             on_set_line_height,
+                            on_set_column_width,
                         )
                         .into_any_element(),
                         SettingsTab::Language => render_language_tab(
@@ -1602,6 +1621,7 @@ fn render_editor_save_tab(
     show_line_numbers: bool,
     tab_size: usize,
     line_height: f32,
+    column_width: f32,
     theme: &ThemeColors,
     strings: &I18nStrings,
     on_toggle_auto_save: Arc<dyn Fn(bool, &mut Window, &mut App)>,
@@ -1609,6 +1629,7 @@ fn render_editor_save_tab(
     on_toggle_line_numbers: Arc<dyn Fn(bool, &mut Window, &mut App)>,
     on_set_tab_size: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_set_line_height: Arc<dyn Fn(f32, &mut Window, &mut App)>,
+    on_set_column_width: Arc<dyn Fn(f32, &mut Window, &mut App)>,
 ) -> impl IntoElement {
     let t_as = on_toggle_auto_save;
     let t_asb = on_toggle_auto_save_on_blur;
@@ -1691,6 +1712,24 @@ fn render_editor_save_tab(
                                 (line_height - lh_opt).abs() < 0.05,
                                 theme,
                                 move |_, window, cx| on_set(lh_opt, window, cx),
+                            )
+                        })),
+                    theme,
+                )
+                .into_any_element(),
+                render_setting_row(
+                    strings.column_width,
+                    Some(strings.column_width_desc.into()),
+                    render_segmented(theme)
+                        .w(px(300.))
+                        .children([640.0f32, 760.0, 880.0, 1000.0, 1200.0].into_iter().map(|w_opt| {
+                            let on_set = on_set_column_width.clone();
+                            render_segment(
+                                format!("column_width_{w_opt:.0}").into(),
+                                format!("{w_opt:.0}"),
+                                (column_width - w_opt).abs() < 0.5,
+                                theme,
+                                move |_, window, cx| on_set(w_opt, window, cx),
                             )
                         })),
                     theme,

@@ -136,6 +136,7 @@ pub struct WorkspaceView {
     pub split_ratio: f32,
     pub is_resizing_split: bool,
     pub is_resizing_drawer: bool,
+    pub is_resizing_column: bool,
     pub is_renaming: bool,
     pub rename_target: Option<crate::state::DocKey>,
     pub rename_in_sidebar: bool,
@@ -312,6 +313,7 @@ impl WorkspaceView {
             split_ratio: 0.5,
             is_resizing_split: false,
             is_resizing_drawer: false,
+            is_resizing_column: false,
             is_renaming: false,
             rename_target: None,
             rename_in_sidebar: false,
@@ -2240,6 +2242,66 @@ impl WorkspaceView {
         }));
     }
 
+    /// Ends a preview column edge drag and persists the final width once.
+    fn end_column_resize(&mut self) {
+        if std::mem::take(&mut self.is_resizing_column) {
+            self.state.save_preferences();
+        }
+    }
+
+    /// Drag handles on both edges of the preview reading column. Double-click restores 760.
+    fn render_column_resize_handles(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pane_w = f32::from(self.preview_content_bounds?.size.width);
+        let col_w = self.state.preferences.max_column_width.min(pane_w - PREVIEW_COLUMN_GUTTER);
+        if col_w <= 0.0 {
+            return None;
+        }
+        let inset = (pane_w - col_w) * 0.5 - 3.0;
+        let accent = self.state.theme.accent;
+        let active = self.is_resizing_column;
+        let handle = |id: &'static str, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .w(px(6.))
+                .flex()
+                .justify_center()
+                .cursor_col_resize()
+                .group(id)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                        if event.click_count == 2 {
+                            this.is_resizing_column = false;
+                            this.state.set_column_width(zmark_core::config::DEFAULT_COLUMN_WIDTH);
+                            this.state.save_preferences();
+                        } else {
+                            this.is_resizing_column = true;
+                        }
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .w(px(1.))
+                        .h_full()
+                        .when(active, |el| el.bg(accent))
+                        .group_hover(id, |s| s.bg(accent)),
+                )
+        };
+        Some(
+            div()
+                .absolute()
+                .size_full()
+                .child(handle("column_resize_left", cx).left(px(inset)))
+                .child(handle("column_resize_right", cx).right(px(inset)))
+                .into_any_element(),
+        )
+    }
+
     /// Ends a sidebar edge drag and persists the final width once.
     fn end_drawer_resize(&mut self) {
         if std::mem::take(&mut self.is_resizing_drawer) {
@@ -2254,6 +2316,7 @@ impl WorkspaceView {
         self.end_preview_scroll_drag();
         self.is_resizing_split = false;
         self.end_drawer_resize();
+        self.end_column_resize();
         self.clear_lightbox_sharp(window, cx);
         if let Some(image) = self.lightbox_local_image.take() {
             let shared = self.local_images.lock().unwrap().entries.values().any(|state| matches!(state,
@@ -4454,6 +4517,19 @@ impl Render for WorkspaceView {
                     }
                     cx.notify();
                 }
+                if this.is_resizing_column {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        if let Some(bounds) = this.preview_content_bounds {
+                            let pane_w = f32::from(bounds.size.width);
+                            let center = f32::from(bounds.origin.x) + pane_w * 0.5;
+                            let width = 2.0 * (f32::from(event.position.x) - center).abs();
+                            this.state.set_column_width(width.min(pane_w - PREVIEW_COLUMN_GUTTER));
+                        }
+                    } else {
+                        this.end_column_resize();
+                    }
+                    cx.notify();
+                }
                 if this.is_resizing_split {
                     if event.pressed_button == Some(MouseButton::Left) {
                         let w = this.workspace_width;
@@ -4489,6 +4565,7 @@ impl Render for WorkspaceView {
                 this.release_source_drag(MouseButton::Left);
                 this.is_resizing_split = false;
                 this.end_drawer_resize();
+                this.end_column_resize();
                 this.end_preview_selection();
                 cx.notify();
             }))
@@ -4499,6 +4576,7 @@ impl Render for WorkspaceView {
                     this.is_resizing_split = false;
                 }
                 this.end_drawer_resize();
+                this.end_column_resize();
                 if this.is_preview_selecting {
                     this.end_preview_selection();
                     cx.notify();
@@ -4789,6 +4867,10 @@ impl Render for WorkspaceView {
                                     let on_remove_path = Arc::new(move |path: &PathBuf, _: &mut Window, cx: &mut App| {
                                         remove_view.update(cx, |this,cx| this.persist_sidebar_hidden(vec![path.clone()],true,cx));
                                     });
+                                    let pin_view = cx.entity().clone();
+                                    let on_toggle_pin = Arc::new(move |path: &PathBuf, _: &mut Window, cx: &mut App| {
+                                        pin_view.update(cx, |this, cx| { this.state.toggle_sidebar_pin(path); cx.notify(); });
+                                    });
                                     let undo_view = cx.entity().clone();
                                     let on_undo = Arc::new(move |_: &mut Window, cx: &mut App| {
                                         undo_view.update(cx, |this,cx| {
@@ -4808,6 +4890,8 @@ impl Render for WorkspaceView {
                                         selected_directory: self.selected_directory.clone(),
                                         selection: self.sidebar_selection.clone(),
                                         hidden_paths: self.state.preferences.sidebar_hidden_paths.clone(),
+                                        pinned_paths: self.state.preferences.sidebar_pinned_paths.clone(),
+                                        on_toggle_pin: Some(on_toggle_pin),
                                         reduce_motion,
                                         on_row: Some(on_row),
                                         on_trash_directory: Some(on_trash_directory),
@@ -5401,6 +5485,7 @@ impl Render for WorkspaceView {
                                                         self.local_images.clone(),
                                                         reduce_motion,
                                                     ))
+                                                    .children(self.render_column_resize_handles(cx))
                                                     .child(self.render_preview_scrollbar()))
                                                     .into_any_element()
                                             }
@@ -5547,6 +5632,7 @@ impl Render for WorkspaceView {
                                                                     self.local_images.clone(),
                                                                     reduce_motion,
                                                                 ))
+                                                                .children(self.render_column_resize_handles(cx))
                                                                 .child(self.render_preview_scrollbar()))
                                                         }),
                                                 )
@@ -5765,6 +5851,9 @@ pub fn calculate_title_header_padding(
         }
     }
 }
+
+/// Horizontal padding of the preview pane (`px_8` on both sides).
+const PREVIEW_COLUMN_GUTTER: f32 = 64.0;
 
 /// Canvas document title left margin (in pixels, ADR 0036).
 /// Consistently aligns with the 16px content margin across Source, Split, and Preview.

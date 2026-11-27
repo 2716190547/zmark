@@ -605,6 +605,22 @@ impl AppState {
         self.preferences.drawer_width = Preferences::sanitize_drawer_width(val);
     }
 
+    /// Updates the preview column width in memory; call `save_preferences` when the drag ends.
+    pub fn set_column_width(&mut self, val: f32) {
+        self.preferences.max_column_width = Preferences::sanitize_column_width(val);
+    }
+
+    /// Pins a sidebar file to the top of its folder, or unpins it.
+    pub fn toggle_sidebar_pin(&mut self, path: &std::path::Path) {
+        let pinned = &mut self.preferences.sidebar_pinned_paths;
+        if let Some(ix) = pinned.iter().position(|p| p == path) {
+            pinned.remove(ix);
+        } else {
+            pinned.push(path.to_path_buf());
+        }
+        self.save_preferences();
+    }
+
     pub fn save_preferences(&self) {
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
@@ -1673,12 +1689,15 @@ impl AppState {
         let mut warning = None;
         let preferences_path = map(&self.preferences_path);
         let hidden_paths: Vec<_> = self.preferences.sidebar_hidden_paths.iter().map(|p| map(p)).collect();
-        let changes_config = hidden_paths != self.preferences.sidebar_hidden_paths || root_paths.iter().zip(&self.workspace_roots).any(|(p, r)| p != &r.path)
+        let pinned_paths: Vec<_> = self.preferences.sidebar_pinned_paths.iter().map(|p| map(p)).collect();
+        let changes_config = hidden_paths != self.preferences.sidebar_hidden_paths
+            || pinned_paths != self.preferences.sidebar_pinned_paths || root_paths.iter().zip(&self.workspace_roots).any(|(p, r)| p != &r.path)
             || preferences_path != self.preferences_path;
         if changes_config {
             let mut preferences = self.preferences.clone();
             preferences.workspace_roots = root_paths.clone();
             preferences.sidebar_hidden_paths = hidden_paths;
+            preferences.sidebar_pinned_paths = pinned_paths;
             if let Err(error) = preferences.save_to_path(&preferences_path) {
                 if let Err(rollback) = rename_noreplace(&new, old) {
                     warning = Some(format!("已更名到 {}，但配置未保存且回滚失败：{error}；{rollback}", new.display()));

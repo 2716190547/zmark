@@ -428,6 +428,11 @@ pub const DEFAULT_DRAWER_WIDTH: f32 = 250.0;
 pub const MIN_DRAWER_WIDTH: f32 = 180.0;
 pub const MAX_DRAWER_WIDTH: f32 = 480.0;
 
+/// Preview reading column bounds in logical pixels.
+pub const DEFAULT_COLUMN_WIDTH: f32 = 760.0;
+pub const MIN_COLUMN_WIDTH: f32 = 480.0;
+pub const MAX_COLUMN_WIDTH: f32 = 1600.0;
+
 fn default_line_height() -> f32 {
     1.6
 }
@@ -465,6 +470,9 @@ pub struct Preferences {
     pub workspace_roots: Vec<PathBuf>,
     #[serde(default)]
     pub sidebar_hidden_paths: Vec<PathBuf>,
+    /// Files pinned to the top of their folder in the sidebar, in pin order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidebar_pinned_paths: Vec<PathBuf>,
     /// The user closed the welcome guide; it stays hidden until restored in Settings.
     #[serde(default)]
     pub welcome_dismissed: bool,
@@ -501,6 +509,7 @@ impl Default for Preferences {
             config_version: CURRENT_CONFIG_VERSION,
             workspace_roots: Vec::new(),
             sidebar_hidden_paths: Vec::new(),
+            sidebar_pinned_paths: Vec::new(),
             welcome_dismissed: false,
             last_session_files: Vec::new(),
             last_active_file: None,
@@ -555,6 +564,14 @@ impl Preferences {
         }
     }
 
+    pub fn sanitize_column_width(val: f32) -> f32 {
+        if val.is_nan() {
+            DEFAULT_COLUMN_WIDTH
+        } else {
+            val.clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH)
+        }
+    }
+
     pub fn sanitize_drawer_width(val: f32) -> f32 {
         if val.is_nan() {
             DEFAULT_DRAWER_WIDTH
@@ -579,6 +596,7 @@ impl Preferences {
         let mut pref: Preferences = toml::from_str(&content)?;
         pref.line_height = Self::sanitize_line_height(pref.line_height);
         pref.drawer_width = Self::sanitize_drawer_width(pref.drawer_width);
+        pref.max_column_width = Self::sanitize_column_width(pref.max_column_width);
         if pref.migrate_defaults() {
             // Best-effort: a read-only config directory must not block startup.
             if let Err(error) = pref.save_to_path(path) {
@@ -721,6 +739,8 @@ mod tests {
             .lines().filter(|l| !l.starts_with("drawer_width")).collect::<Vec<_>>().join("\n");
         let old: Preferences = toml::from_str(&legacy).unwrap();
         assert_eq!(old.drawer_width, DEFAULT_DRAWER_WIDTH);
+        assert_eq!(Preferences::sanitize_column_width(100.0), MIN_COLUMN_WIDTH);
+        assert_eq!(Preferences::sanitize_column_width(f32::NAN), DEFAULT_COLUMN_WIDTH);
     }
 
     #[test]
