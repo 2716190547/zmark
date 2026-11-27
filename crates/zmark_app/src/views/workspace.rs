@@ -2249,14 +2249,12 @@ impl WorkspaceView {
         }
     }
 
-    /// Drag handles on both edges of the preview reading column. Double-click restores 760.
-    fn render_column_resize_handles(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let pane_w = f32::from(self.preview_content_bounds?.size.width);
-        let col_w = self.state.preferences.max_column_width.min(pane_w - PREVIEW_COLUMN_GUTTER);
-        if col_w <= 0.0 {
-            return None;
-        }
-        let inset = (pane_w - col_w) * 0.5 - 3.0;
+    /// Drag handles just outside both edges of the preview reading column. Double-click
+    /// restores 760. They are placed by layout (same `px_8` + centered `max_w` as the
+    /// blocks), so they track the column in the same frame, and they sit in the margin
+    /// so presses on the first or last character still reach the text.
+    fn render_column_resize_handles(&self, cx: &mut Context<Self>) -> AnyElement {
+        let col_w = self.state.preferences.max_column_width;
         let accent = self.state.theme.accent;
         let active = self.is_resizing_column;
         let handle = |id: &'static str, cx: &mut Context<Self>| {
@@ -2292,14 +2290,22 @@ impl WorkspaceView {
                         .group_hover(id, |s| s.bg(accent)),
                 )
         };
-        Some(
-            div()
-                .absolute()
-                .size_full()
-                .child(handle("column_resize_left", cx).left(px(inset)))
-                .child(handle("column_resize_right", cx).right(px(inset)))
-                .into_any_element(),
-        )
+        div()
+            .absolute()
+            .inset_0()
+            .px_8()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .max_w(px(col_w))
+                    .h_full()
+                    .child(handle("column_resize_left", cx).left(px(-COLUMN_HANDLE_OFFSET)))
+                    .child(handle("column_resize_right", cx).right(px(-COLUMN_HANDLE_OFFSET))),
+            )
+            .into_any_element()
     }
 
     /// Ends a sidebar edge drag and persists the final width once.
@@ -4522,7 +4528,8 @@ impl Render for WorkspaceView {
                         if let Some(bounds) = this.preview_content_bounds {
                             let pane_w = f32::from(bounds.size.width);
                             let center = f32::from(bounds.origin.x) + pane_w * 0.5;
-                            let width = 2.0 * (f32::from(event.position.x) - center).abs();
+                            // The pointer sits in the handle, about 5px outside the text edge.
+                            let width = 2.0 * ((f32::from(event.position.x) - center).abs() - 5.0);
                             this.state.set_column_width(width.min(pane_w - PREVIEW_COLUMN_GUTTER));
                         }
                     } else {
@@ -5485,7 +5492,7 @@ impl Render for WorkspaceView {
                                                         self.local_images.clone(),
                                                         reduce_motion,
                                                     ))
-                                                    .children(self.render_column_resize_handles(cx))
+                                                    .child(self.render_column_resize_handles(cx))
                                                     .child(self.render_preview_scrollbar()))
                                                     .into_any_element()
                                             }
@@ -5632,7 +5639,7 @@ impl Render for WorkspaceView {
                                                                     self.local_images.clone(),
                                                                     reduce_motion,
                                                                 ))
-                                                                .children(self.render_column_resize_handles(cx))
+                                                                .child(self.render_column_resize_handles(cx))
                                                                 .child(self.render_preview_scrollbar()))
                                                         }),
                                                 )
@@ -5854,6 +5861,9 @@ pub fn calculate_title_header_padding(
 
 /// Horizontal padding of the preview pane (`px_8` on both sides).
 const PREVIEW_COLUMN_GUTTER: f32 = 64.0;
+
+/// Column handles sit 2-8px outside the text edge.
+const COLUMN_HANDLE_OFFSET: f32 = 8.0;
 
 /// Canvas document title left margin (in pixels, ADR 0036).
 /// Consistently aligns with the 16px content margin across Source, Split, and Preview.

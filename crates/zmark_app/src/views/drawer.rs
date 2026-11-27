@@ -448,7 +448,9 @@ pub fn render_drawer_with_search(
                                     .child(strings.workspace_empty),
                             );
                         } else {
-                            for (root_idx, root) in workspace_roots.iter().enumerate() {
+                            let mut root_order: Vec<_> = workspace_roots.iter().enumerate().collect();
+                            root_order.sort_by_key(|(_, root)| pin_rank(&search.pinned_paths, &root.path));
+                            for (root_idx, root) in root_order {
                                 if search.hidden_paths.iter().any(|p| root.path.starts_with(p)) { continue; }
                                 let root_path_str = root.path.to_string_lossy().to_string();
                                 let root_name = root_label(workspace_roots, root_idx);
@@ -546,6 +548,7 @@ pub fn render_drawer_with_search(
                                 let on_new_file_root = on_new_file_in_dir.clone();
                                 let root_dir_path = root.path.clone();
                                 let right_part = div()
+                                    .when(search.pinned_paths.contains(&root.path), |el| el.child(pin_badge(theme)))
                                     .child(path_actions(root.path.clone(), "drawer_root_row", search, strings))
                                     .flex()
                                     .items_center()
@@ -576,7 +579,7 @@ pub fn render_drawer_with_search(
                                     );
 
                                 root_header = root_header.child(left_part).child(right_part);
-                                roots_section = roots_section.child(path_context_menu(root_header, root.path.clone(), false, search, theme, strings));
+                                roots_section = roots_section.child(path_context_menu(root_header, root.path.clone(), search, theme, strings));
 
                                 let mut closing_search = search.clone();
                                 if !is_expanded && !is_missing {
@@ -804,7 +807,7 @@ pub fn render_drawer_with_search(
 
                                 let right_part = if search.on_trash_directory.is_some() { path_actions((*p).clone(), "drawer_loose_file_row", search, strings) } else { right_part };
                                 let right_part = if search.pinned_paths.contains(*p) { right_part.child(pin_badge(theme)) } else { right_part };
-                                loose_section = loose_section.child(path_context_menu(item.child(left_part).child(right_part), (*p).clone(), true, search, theme, strings));
+                                loose_section = loose_section.child(path_context_menu(item.child(left_part).child(right_part), (*p).clone(), search, theme, strings));
                             }
 
                             content = content.child(loose_section);
@@ -980,8 +983,8 @@ fn render_file_tree_nodes(
 ) {
     let q_lower = search_query.to_lowercase();
     let mut order: Vec<(usize, &FileTreeNode)> = nodes.iter().enumerate().collect();
-    // Pinned files lead their folder in pin order; everything else keeps the scan order.
-    order.sort_by_key(|(_, node)| if node.is_dir { usize::MAX } else { pin_rank(&params.pinned_paths, &node.path) });
+    // Pinned entries lead their folder in pin order; the rest keep folders-then-files scan order.
+    order.sort_by_key(|(_, node)| pin_rank(&params.pinned_paths, &node.path));
     for (node_idx, node) in order {
         if params.hidden_paths.iter().any(|p| node.path.starts_with(p)) { continue; }
         let depth_indent = (depth as f32 + 1.0) * 12.0;
@@ -1038,6 +1041,7 @@ fn render_file_tree_nodes(
             let on_new_file_dir = on_new_file_in_dir.clone();
             let dir_path = node.path.clone();
             let right_part = div()
+                .when(params.pinned_paths.contains(&node.path), |el| el.child(pin_badge(theme)))
                 .child(path_actions(node.path.clone(), "drawer_dir_row", params, strings))
                 .flex()
                 .items_center()
@@ -1091,7 +1095,7 @@ fn render_file_tree_nodes(
 
 
                     .child(left_part)
-                    .child(right_part), node.path.clone(), false, params, theme, strings)
+                    .child(right_part), node.path.clone(), params, theme, strings)
                     .into_any_element(),
             );
 
@@ -1242,7 +1246,7 @@ fn render_file_tree_nodes(
                 .child(div().size(px(16.)).flex_shrink_0().mt(px(2.)).flex().items_center().justify_center()
                     .child(svg().path("icons/file.svg").size(px(14.)).flex_shrink_0().text_color(theme.text_muted)))
                 .child(left_part);
-            out.push(path_context_menu(item.child(file_content).child(right_part), node.path.clone(), true, params, theme, strings).into_any_element());
+            out.push(path_context_menu(item.child(file_content).child(right_part), node.path.clone(), params, theme, strings).into_any_element());
         }
     }
 }
@@ -1311,7 +1315,7 @@ where
 
 /// Sort key that puts pinned paths first, in the order they were pinned.
 fn pin_rank(pinned: &[PathBuf], path: &std::path::Path) -> usize {
-    pinned.iter().position(|p| p == path).unwrap_or(usize::MAX - 1)
+    pinned.iter().position(|p| p == path).unwrap_or(usize::MAX)
 }
 
 fn pin_badge(theme: &ThemeColors) -> Svg {
@@ -1336,9 +1340,9 @@ fn path_actions(path: PathBuf, group: &'static str, params: &DrawerSearchParams,
 }
 
 fn path_context_menu<E: InteractiveElement + ParentElement + Styled + IntoElement + 'static>(
-    element: E, path: PathBuf, is_file: bool, params: &DrawerSearchParams, theme: &ThemeColors, strings: &'static I18nStrings,
+    element: E, path: PathBuf, params: &DrawerSearchParams, theme: &ThemeColors, strings: &'static I18nStrings,
 ) -> impl IntoElement {
-    let pin = params.on_toggle_pin.clone().filter(|_| is_file);
+    let pin = params.on_toggle_pin.clone();
     let is_pinned = params.pinned_paths.contains(&path);
     let remove = params.on_remove_path.clone();
     let trash = params.on_trash_directory.clone();

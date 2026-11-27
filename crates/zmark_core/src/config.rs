@@ -470,7 +470,7 @@ pub struct Preferences {
     pub workspace_roots: Vec<PathBuf>,
     #[serde(default)]
     pub sidebar_hidden_paths: Vec<PathBuf>,
-    /// Files pinned to the top of their folder in the sidebar, in pin order.
+    /// Files and folders pinned to the top of their folder in the sidebar, in pin order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sidebar_pinned_paths: Vec<PathBuf>,
     /// The user closed the welcome guide; it stays hidden until restored in Settings.

@@ -610,7 +610,7 @@ impl AppState {
         self.preferences.max_column_width = Preferences::sanitize_column_width(val);
     }
 
-    /// Pins a sidebar file to the top of its folder, or unpins it.
+    /// Pins a sidebar file or folder to the top of its folder, or unpins it.
     pub fn toggle_sidebar_pin(&mut self, path: &std::path::Path) {
         let pinned = &mut self.preferences.sidebar_pinned_paths;
         if let Some(ix) = pinned.iter().position(|p| p == path) {

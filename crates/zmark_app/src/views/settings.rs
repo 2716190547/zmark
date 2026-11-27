@@ -1013,7 +1013,10 @@ fn render_setting_row(
         .justify_between()
         .gap_4()
         .child(
+            // flex_1 gives the label column a definite width so long descriptions wrap
+            // instead of pushing the control past the card edge.
             div()
+                .flex_1()
                 .flex()
                 .flex_col()
                 .gap_0p5()
@@ -1721,8 +1724,8 @@ fn render_editor_save_tab(
                     strings.column_width,
                     Some(strings.column_width_desc.into()),
                     render_segmented(theme)
-                        .w(px(300.))
-                        .children([640.0f32, 760.0, 880.0, 1000.0, 1200.0].into_iter().map(|w_opt| {
+                        .w(px(240.))
+                        .children([640.0f32, 760.0, 960.0, 1200.0].into_iter().map(|w_opt| {
                             let on_set = on_set_column_width.clone();
                             render_segment(
                                 format!("column_width_{w_opt:.0}").into(),
