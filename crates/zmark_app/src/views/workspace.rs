@@ -2870,15 +2870,20 @@ impl WorkspaceView {
             crate::state::DocKey::Path(path) => {
                 self.selected_directory = None;
                 if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
-                else {
+                else if self.state.is_active_path(path) {
+                    // Re-clicking the open file must not reset the preview.
+                    self.state.expand_to_file(path);
+                } else {
                     if let Err(error) = self.state.load_file(path.clone()) { self.error_banner = Some(error.to_string()); }
                     self.on_document_swapped(Some(window), cx);
                 }
             }
             crate::state::DocKey::Scratch(_) => {
                 self.selected_directory = None;
-                self.state.switch_document(key);
-                self.on_document_swapped(Some(window), cx);
+                if self.state.active.as_ref() != Some(key) {
+                    self.state.switch_document(key);
+                    self.on_document_swapped(Some(window), cx);
+                }
                 if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
             }
         }
@@ -4305,7 +4310,7 @@ impl Render for WorkspaceView {
                 view_doc_switch.update(cx, |this, cx| {
                     if rename {
                         this.begin_rename_target(key.clone(), true, window, cx);
-                    } else {
+                    } else if this.state.active.as_ref() != Some(key) {
                         this.state.switch_document(key);
                         this.on_document_swapped(Some(window), cx);
                     }
@@ -5092,10 +5097,10 @@ impl Render for WorkspaceView {
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     move |_, _, cx| {
-                                                        cx.reveal_path(&reveal_path);
+                                                        crate::platform::reveal_in_folder(&reveal_path, cx);
                                                     },
                                                 )
-                                                .child(strings.reveal_in_finder),
+                                                .child(strings.reveal_in_folder),
                                         )
                                         .child(
                                             div()
@@ -5345,6 +5350,28 @@ impl Render for WorkspaceView {
                                     });
                                 });
 
+                                let task_view = cx.entity().clone();
+                                let task_doc = self.state.active.clone();
+                                let on_toggle_task: crate::views::preview::OnToggleTaskCallback = Arc::new(move |marker, checked, _window, app| {
+                                    task_view.update(app, |this, cx| {
+                                        // The AST ranges are only valid for the document and parse they came from.
+                                        if this.state.active != task_doc || this.state.doc().is_parse_stale() { return; }
+                                        let source = this.state.editor.to_text();
+                                        let Some(expected) = source.get(marker.clone()) else { return; };
+                                        let want = if checked { ["[x]", "[X]"].contains(&expected) } else { expected == "[ ]" };
+                                        if !want { return; }
+                                        let replacement = if checked { "[ ]" } else { "[x]" };
+                                        let expected = expected.to_string();
+                                        if !this.state.editor.replace_source_range(marker, &expected, replacement) { return; }
+                                        this.preview_selection = None;
+                                        this.is_preview_selecting = false;
+                                        this.state.sync_from_editor();
+                                        this.schedule_parse(cx);
+                                        this.trigger_auto_save(cx);
+                                        cx.notify();
+                                    });
+                                });
+
                                 let wheel_view = cx.entity().clone();
                                 let on_wheel: crate::views::preview::OnPreviewWheelCallback =
                                     Arc::new(move |event, window, app| {
@@ -5359,6 +5386,7 @@ impl Render for WorkspaceView {
                                     on_selection_change: Some(on_selection_change),
                                     on_autoscroll: Some(on_autoscroll),
                                     on_image_recovery: Some(on_image_recovery),
+                                    on_toggle_task: Some(on_toggle_task),
                                     on_select_heading: Some(on_select_heading.clone()),
                                     on_wheel: Some(on_wheel),
                                 };

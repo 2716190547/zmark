@@ -136,6 +136,7 @@ fn test_multi_block_selection_skips_rules_and_compacts_consecutive_lists() {
     blocks.push(BlockElement::List {
         ordered: false,
         items: vec![ListItem {
+            marker: None,
             checked: None,
             body: vec![BlockElement::Paragraph(InlineGroup(vec![InlineItem::Text("Item 1".into())]))],
         }],
@@ -143,6 +144,7 @@ fn test_multi_block_selection_skips_rules_and_compacts_consecutive_lists() {
     blocks.push(BlockElement::List {
         ordered: true,
         items: vec![ListItem {
+            marker: None,
             checked: None,
             body: vec![BlockElement::Paragraph(InlineGroup(vec![InlineItem::Text("Item 2".into())]))],
         }],

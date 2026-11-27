@@ -489,6 +489,7 @@ impl AppState {
             let _ = preferences.save_to_path(&preferences_path);
         }
         crate::platform::set_fonts(&preferences.font_family, &preferences.code_font_family);
+        crate::platform::set_preview_line_height(Preferences::sanitize_line_height(preferences.line_height));
         let is_dark = match preferences.theme {
             ThemeMode::Light => false,
             ThemeMode::Dark => true,
@@ -643,6 +644,7 @@ impl AppState {
     pub fn set_line_height(&mut self, val: f32) {
         let clamped = Preferences::sanitize_line_height(val);
         self.preferences.line_height = clamped;
+        crate::platform::set_preview_line_height(clamped);
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
@@ -1621,6 +1623,12 @@ impl AppState {
             let _ = self.open_file(active);
         }
         opened
+    }
+
+    /// True when `path` is the active document, comparing canonical paths.
+    pub fn is_active_path(&self, path: &std::path::Path) -> bool {
+        let Some(DocKey::Path(active)) = &self.active else { return false; };
+        active == path || path.canonicalize().is_ok_and(|p| &p == active)
     }
 
     pub fn load_file(&mut self, path: PathBuf) -> Result<(), std::io::Error> {

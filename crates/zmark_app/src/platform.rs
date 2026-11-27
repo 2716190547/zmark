@@ -87,6 +87,36 @@ pub fn set_fonts(body: &str, code: &str) -> bool {
     true
 }
 
+/// Preview body line height. Stored as f32 bits; 1.75 matches the default
+/// `line_height` preference of 1.6 plus [`PREVIEW_LINE_HEIGHT_OFFSET`].
+static PREVIEW_LINE_HEIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3FE0_0000);
+
+/// Preview text sits looser than the source editor by this much.
+pub const PREVIEW_LINE_HEIGHT_OFFSET: f32 = 0.15;
+
+/// Line height factor for preview paragraphs and code blocks.
+pub fn preview_line_height() -> f32 {
+    f32::from_bits(PREVIEW_LINE_HEIGHT.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Line height factor for list item text, one offset tighter than paragraphs.
+pub fn preview_list_line_height() -> f32 {
+    preview_line_height() - PREVIEW_LINE_HEIGHT_OFFSET
+}
+
+/// Applies the `line_height` preference to the preview. Returns true when it
+/// changed; layout caches keyed by [`font_layout_key`] are invalidated then.
+pub fn set_preview_line_height(preference: f32) -> bool {
+    let value = preference + PREVIEW_LINE_HEIGHT_OFFSET;
+    let old = PREVIEW_LINE_HEIGHT.swap(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    if old == value.to_bits() {
+        return false;
+    }
+    let mut fonts = FONTS.write().unwrap_or_else(|e| e.into_inner());
+    fonts.generation = fonts.generation.wrapping_add(1);
+    true
+}
+
 /// Cache key for text layout that depends on both size and the current fonts.
 pub fn font_layout_key(font_size: f32) -> u32 {
     let generation = FONTS.read().unwrap_or_else(|e| e.into_inner()).generation;
@@ -335,6 +365,56 @@ pub fn move_file_to_trash(path: &std::path::Path) -> std::io::Result<()> {
         Ok(())
     } else {
         Err(std::io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_string()))
+    }
+}
+
+/// Shows `path` selected in the system file manager.
+///
+/// On Windows GPUI's `reveal_path` calls shell COM APIs on a background thread that
+/// never initialised COM, so it fails silently; launch Explorer directly instead.
+pub fn reveal_in_folder(path: &std::path::Path, cx: &gpui::App) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = cx;
+        let _ = spawn_explorer_select(path);
+    }
+    #[cfg(not(target_os = "windows"))]
+    cx.reveal_path(path);
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_explorer_select(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    let raw = path.to_string_lossy();
+    let plain = windows_display_path(&raw);
+    // explorer.exe parses its own command line; the path must be quoted after `/select,`.
+    std::process::Command::new("explorer.exe")
+        .raw_arg(format!("/select,\"{plain}\""))
+        .spawn()
+        .map(|_| ())
+}
+
+/// Strips the `\\?\` verbatim prefix that `canonicalize` adds on Windows; Explorer rejects it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_display_path(raw: &str) -> String {
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        raw.to_string()
+    }
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    use super::windows_display_path;
+
+    #[test]
+    fn strips_verbatim_prefixes() {
+        assert_eq!(windows_display_path(r"\\?\C:\a b\x.md"), r"C:\a b\x.md");
+        assert_eq!(windows_display_path(r"\\?\UNC\srv\share\x.md"), r"\\srv\share\x.md");
+        assert_eq!(windows_display_path(r"C:\x.md"), r"C:\x.md");
     }
 }
 

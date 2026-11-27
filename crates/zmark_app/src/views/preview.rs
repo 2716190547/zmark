@@ -20,6 +20,8 @@ pub const LOCAL_IMAGE_LIGHTBOX_HASH: u64 = 0;
 
 pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, Option<(f32, f32)>, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewSelectionCallback = Arc<dyn Fn(Option<PreviewSelection>, bool, &mut Window, &mut App) + Send + Sync>;
+/// Toggles a task item: marker source range, current checked state.
+pub type OnToggleTaskCallback = Arc<dyn Fn(std::ops::Range<usize>, bool, &mut Window, &mut App) + Send + Sync>;
 pub type OnImageRecoveryCallback = Arc<dyn Fn(std::ops::Range<usize>, String, crate::local_images::RecoveryCandidate, &mut Window, &mut App) + Send + Sync>;
 pub type OnSelectHeadingCallback = Arc<dyn Fn(usize, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewAutoscrollCallback = Arc<dyn Fn(f32, &mut Window, &mut App) + Send + Sync>;
@@ -32,6 +34,7 @@ pub struct PreviewCallbacks {
     pub on_selection_change: Option<OnPreviewSelectionCallback>,
     pub on_autoscroll: Option<OnPreviewAutoscrollCallback>,
     pub on_image_recovery: Option<OnImageRecoveryCallback>,
+    pub on_toggle_task: Option<OnToggleTaskCallback>,
     pub on_select_heading: Option<OnSelectHeadingCallback>,
     pub on_wheel: Option<OnPreviewWheelCallback>,
 }
@@ -175,6 +178,7 @@ pub fn render_preview_pane_with_callbacks(
                     &item_theme,
                     strings,
                     ix,
+                    font_size,
                 ),
                 _ => render_block_element(
                     block,
@@ -185,6 +189,7 @@ pub fn render_preview_pane_with_callbacks(
                     item_callbacks.on_copy.as_ref(),
                     item_callbacks.on_open_lightbox.as_ref(),
                     item_callbacks.on_image_recovery.as_ref(),
+                    item_callbacks.on_toggle_task.as_ref(),
                     selected_char_range,
                     ix,
                     item_regions.clone(),
@@ -428,7 +433,10 @@ fn render_toc_block(
     theme: &ThemeColors,
     strings: &'static I18nStrings,
     block_ix: usize,
+    font_size: f32,
 ) -> AnyElement {
+    // One step below body text, never smaller than the sidebar's 13px rows.
+    let toc_size = px((font_size - 2.0).max(13.0));
     let min_level = headings.iter().map(|h| h.level).min().unwrap_or(1);
     let mut card = div()
         .id(SharedString::from(format!("preview_toc_{block_ix}")))
@@ -449,7 +457,7 @@ fn render_toc_block(
                 .flex()
                 .items_center()
                 .gap_1p5()
-                .text_xs()
+                .text_size(toc_size)
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_muted)
                 .child(svg().path("icons/list.svg").size(px(13.)).text_color(theme.text_muted))
@@ -459,7 +467,7 @@ fn render_toc_block(
     if headings.is_empty() {
         card = card.child(
             div()
-                .text_xs()
+                .text_size(toc_size)
                 .text_color(theme.text_muted)
                 .child(strings.outline_empty),
         );
@@ -479,7 +487,7 @@ fn render_toc_block(
                 .pr_2()
                 .py_1()
                 .rounded(px(5.))
-                .text_xs()
+                .text_size(toc_size)
                 .text_color(text_color)
                 .when(is_top, |el| el.font_weight(FontWeight::MEDIUM))
                 .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
@@ -536,6 +544,7 @@ fn render_block_element(
     on_copy: Option<&OnCopyCallback>,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
     on_image_recovery: Option<&OnImageRecoveryCallback>,
+    on_toggle_task: Option<&OnToggleTaskCallback>,
     selected_char_range: Option<std::ops::Range<usize>>,
     block_ix: usize,
     regions: Arc<RegionsRegistry>,
@@ -609,7 +618,7 @@ fn render_block_element(
                 .w_full()
                 .min_w(px(0.))
                 .text_size(px(base_font_size))
-                .line_height(relative(1.75))
+                .line_height(relative(crate::platform::preview_line_height()))
                 .text_color(theme.text_primary)
                 .child(render_styled_inlines(content, theme, base_font_size, el_range, images, on_image_recovery, on_open_lightbox, reduce_motion));
 
@@ -620,7 +629,7 @@ fn render_block_element(
                     text: content.plain_text(),
                     font_name: crate::platform::ui_font(),
                     font_size: base_font_size,
-                    line_height_factor: 1.75,
+                    line_height_factor: crate::platform::preview_line_height(),
                     padding_left: 0.0,
                     padding_top: 0.0,
                     padding_right: 0.0,
@@ -687,6 +696,7 @@ fn render_block_element(
                     on_copy,
                     on_open_lightbox,
                     on_image_recovery,
+                    on_toggle_task,
                     selected_char_range.clone(),
                     block_ix,
                     regions.clone(),
@@ -728,6 +738,7 @@ fn render_block_element(
             on_copy,
             on_open_lightbox,
             on_image_recovery,
+            on_toggle_task,
             selected_char_range,
             block_ix,
             regions,
@@ -1591,6 +1602,7 @@ fn render_list_element(
     on_copy: Option<&OnCopyCallback>,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
     on_image_recovery: Option<&OnImageRecoveryCallback>,
+    on_toggle_task: Option<&OnToggleTaskCallback>,
     selected_char_range: Option<std::ops::Range<usize>>,
     block_ix: usize,
     regions: Arc<RegionsRegistry>,
@@ -1606,7 +1618,19 @@ fn render_list_element(
 
     for (idx, item) in items.iter().enumerate() {
         let bullet_element = if let Some(checked) = item.checked {
+            let toggle = on_toggle_task.zip(item.marker.clone());
             div()
+                .id(SharedString::from(format!("task_box_{block_ix}_{path}_{idx}")))
+                .when_some(toggle, |el, (callback, marker)| {
+                    let callback = callback.clone();
+                    el.cursor_pointer()
+                        // Keep the press from starting a preview text selection.
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            callback(marker.clone(), checked, window, cx);
+                        })
+                })
                 .mt_1()
                 .w(px(14.))
                 .h(px(14.))
@@ -1626,6 +1650,7 @@ fn render_list_element(
                 } else {
                     div().into_any_element()
                 })
+                .into_any_element()
         } else if ordered {
             div()
                 .flex_shrink_0()
@@ -1635,6 +1660,7 @@ fn render_list_element(
                 .font_family(crate::platform::mono_font())
                 .text_color(theme.syntax_bullet)
                 .child(format!("{}.", idx + 1))
+                .into_any_element()
         } else {
             let bullet = match depth % 3 {
                 0 => "–",
@@ -1648,6 +1674,7 @@ fn render_list_element(
                 .text_size(px(base_font_size))
                 .text_color(theme.syntax_bullet)
                 .child(bullet)
+                .into_any_element()
         };
 
         let mut first_child_el = None;
@@ -1670,7 +1697,7 @@ fn render_list_element(
                                 .flex_1()
                                 .min_w(px(0.))
                                 .text_size(px(base_font_size))
-                                .line_height(relative(1.6))
+                                .line_height(relative(crate::platform::preview_list_line_height()))
                                 .text_color(theme.text_primary)
                                 .child(render_styled_inlines(content, theme, base_font_size, child_range, images, on_image_recovery, on_open_lightbox, reduce_motion)),
                             TextRegionInfo {
@@ -1678,7 +1705,7 @@ fn render_list_element(
                                 text: content_text,
                                 font_name: crate::platform::ui_font(),
                                 font_size: base_font_size,
-                                line_height_factor: 1.6,
+                                line_height_factor: crate::platform::preview_list_line_height(),
                                 padding_left: 0.0,
                                 padding_top: 0.0,
                                 padding_right: 0.0,
@@ -1700,6 +1727,7 @@ fn render_list_element(
                         on_copy,
                         on_open_lightbox,
                         on_image_recovery,
+                        on_toggle_task,
                         selected_char_range.clone(),
                         block_ix,
                         regions.clone(),
@@ -1732,6 +1760,7 @@ fn render_list_element(
                         on_copy,
                         on_open_lightbox,
                         on_image_recovery,
+                        on_toggle_task,
                         selected_char_range.clone(),
                         block_ix,
                         regions.clone(),
@@ -1753,6 +1782,7 @@ fn render_list_element(
                         on_copy,
                         on_open_lightbox,
                         on_image_recovery,
+                        on_toggle_task,
                         selected_char_range.clone(),
                         block_ix,
                         regions.clone(),
@@ -1914,7 +1944,7 @@ fn render_code_block(
         .p_3()
         .text_size(px(code_font_size))
         .font_family(crate::platform::mono_font())
-        .line_height(relative(1.75))
+        .line_height(relative(crate::platform::preview_line_height()))
         .text_color(theme.syntax_code)
         .child(styled_text);
 
@@ -1931,7 +1961,7 @@ fn render_code_block(
             text: code.to_string(),
             font_name: crate::platform::mono_font(),
             font_size: code_font_size,
-            line_height_factor: 1.75,
+            line_height_factor: crate::platform::preview_line_height(),
             padding_left: 12.0,
             padding_top: 12.0,
             padding_right: 12.0,

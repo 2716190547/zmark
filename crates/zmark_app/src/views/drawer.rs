@@ -548,7 +548,7 @@ pub fn render_drawer_with_search(
                                 let on_new_file_root = on_new_file_in_dir.clone();
                                 let root_dir_path = root.path.clone();
                                 let right_part = div()
-                                    .when(search.pinned_paths.contains(&root.path), |el| el.child(pin_badge(theme)))
+                                    .when(search.pinned_paths.contains(&root.path), |el| el.child(pin_badge(&root.path, search, theme, strings)))
                                     .child(path_actions(root.path.clone(), "drawer_root_row", search, strings))
                                     .flex()
                                     .items_center()
@@ -806,7 +806,7 @@ pub fn render_drawer_with_search(
                                     );
 
                                 let right_part = if search.on_trash_directory.is_some() { path_actions((*p).clone(), "drawer_loose_file_row", search, strings) } else { right_part };
-                                let right_part = if search.pinned_paths.contains(*p) { right_part.child(pin_badge(theme)) } else { right_part };
+                                let right_part = if search.pinned_paths.contains(*p) { right_part.child(pin_badge(p, search, theme, strings)) } else { right_part };
                                 loose_section = loose_section.child(path_context_menu(item.child(left_part).child(right_part), (*p).clone(), search, theme, strings));
                             }
 
@@ -865,7 +865,8 @@ pub fn render_drawer_with_search(
                                         .pr_2()
                                         .py_1()
                                         .rounded_md()
-                                        .text_xs()
+                                        .text_size(px(13.))
+                                        .line_height(px(20.))
                                         .font_weight(font_weight)
                                         .text_color(text_color)
                                         .cursor_pointer()
@@ -1041,7 +1042,7 @@ fn render_file_tree_nodes(
             let on_new_file_dir = on_new_file_in_dir.clone();
             let dir_path = node.path.clone();
             let right_part = div()
-                .when(params.pinned_paths.contains(&node.path), |el| el.child(pin_badge(theme)))
+                .when(params.pinned_paths.contains(&node.path), |el| el.child(pin_badge(&node.path, params, theme, strings)))
                 .child(path_actions(node.path.clone(), "drawer_dir_row", params, strings))
                 .flex()
                 .items_center()
@@ -1240,7 +1241,7 @@ fn render_file_tree_nodes(
                 right_part = path_actions(node.path.clone(), "drawer_file_row", params, strings);
             }
             if params.pinned_paths.contains(&node.path) {
-                right_part = right_part.child(pin_badge(theme));
+                right_part = right_part.child(pin_badge(&node.path, params, theme, strings));
             }
             let file_content = div().flex().flex_1().items_start().gap_1().min_w(px(0.)).overflow_hidden()
                 .child(div().size(px(16.)).flex_shrink_0().mt(px(2.)).flex().items_center().justify_center()
@@ -1318,8 +1319,21 @@ fn pin_rank(pinned: &[PathBuf], path: &std::path::Path) -> usize {
     pinned.iter().position(|p| p == path).unwrap_or(usize::MAX)
 }
 
-fn pin_badge(theme: &ThemeColors) -> Svg {
-    svg().path("icons/pin.svg").size(px(12.)).flex_shrink_0().text_color(theme.text_muted)
+/// Pinned marker; clicking it unpins without opening the row.
+fn pin_badge(path: &std::path::Path, params: &DrawerSearchParams, theme: &ThemeColors, strings: &'static I18nStrings) -> Stateful<Div> {
+    let icon = svg().path("icons/pin.svg").size(px(12.)).flex_shrink_0().text_color(theme.text_muted);
+    let mut badge = div().id(SharedString::from(format!("sidebar_unpin:{}", path.display())))
+        .size(px(16.)).flex().flex_shrink_0().items_center().justify_center().rounded(px(3.))
+        .child(icon);
+    if let Some(callback) = params.on_toggle_pin.clone() {
+        let target = path.to_path_buf();
+        let hover = theme.hover_bg();
+        badge = badge.cursor_pointer().hover(move |s| s.bg(hover))
+            .tooltip(move |_, cx| cx.new(|_| DrawerTooltipView { text: strings.unpin.to_string() }).into())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_, window, cx| { cx.stop_propagation(); callback(&target, window, cx); });
+    }
+    badge
 }
 
 fn path_actions(path: PathBuf, group: &'static str, params: &DrawerSearchParams, strings: &'static I18nStrings) -> Div {
@@ -1360,8 +1374,8 @@ fn path_context_menu<E: InteractiveElement + ParentElement + Styled + IntoElemen
         }
         {
             let path = path.clone();
-            menu = menu.item(PopupMenuItem::new(strings.reveal_in_finder)
-                .on_click(move |_, _, cx| cx.reveal_path(&path)));
+            menu = menu.item(PopupMenuItem::new(strings.reveal_in_folder)
+                .on_click(move |_, _, cx| crate::platform::reveal_in_folder(&path, cx)));
         }
         if let Some(callback) = &trash {
             let callback = callback.clone(); let path = path.clone();
