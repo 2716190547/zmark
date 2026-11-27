@@ -756,9 +756,12 @@ impl Render for SettingsWindowView {
                     .when(cfg!(target_os = "windows"), |el| el.pt(px(36.)))
                     .bg(theme.surface)
                     .overflow_y_scroll()
-                    .when(current_tab != SettingsTab::About, |el| el.child(
+                    // About keeps the title's space (so content starts at the same
+                    // height on every page) but hides the text.
+                    .child(
                         div()
                             .pb(px(tk::SECTION_GAP))
+                            .when(current_tab == SettingsTab::About, |el| el.invisible())
                             .text_size(px(tk::TEXT_TITLE))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
@@ -769,7 +772,7 @@ impl Render for SettingsWindowView {
                                 SettingsTab::Shortcuts => strings.shortcuts_label,
                                 SettingsTab::About => strings.about,
                             }),
-                    ))
+                    )
                     .child(match current_tab {
                         SettingsTab::Appearance => render_appearance_tab(
                             current_mode,
@@ -2089,10 +2092,6 @@ fn render_about_tab(
                 .flex_col()
                 .items_center()
                 .gap_2()
-                // Other pages spend this space on their title; keep the logo
-                // from crowding the window's top edge.
-                .pt(px(28.))
-                .pb_2()
                 .child(img("brand/logo.png").w(px(64.)).h(px(64.)).flex_shrink_0())
                 .child(
                     div()
