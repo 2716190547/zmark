@@ -34,10 +34,14 @@ mod tokens {
     pub const RADIUS_CARD: f32 = 8.0;
     /// Inset between a segment track and its thumb.
     pub const TRACK_INSET: f32 = 2.0;
-    /// Horizontal padding inside a card; matches the row text's left edge.
+    /// Inset inside a card, used both horizontally (card edge to text and to
+    /// the trailing control) and vertically (row edge to a 28px control), so a
+    /// control sits the same distance from the card's top and right edges.
     pub const CARD_PX: f32 = 12.0;
-    /// Vertical padding of one setting row.
-    pub const ROW_PY: f32 = 10.0;
+    /// Vertical padding of one setting row; equal to `CARD_PX`.
+    pub const ROW_PY: f32 = CARD_PX;
+    /// Page title size.
+    pub const TEXT_TITLE: f32 = 20.0;
     /// Gap between a section title and its card.
     pub const TITLE_GAP: f32 = 6.0;
     /// Gap between sections on a page.
@@ -752,6 +756,20 @@ impl Render for SettingsWindowView {
                     .when(cfg!(target_os = "windows"), |el| el.pt(px(36.)))
                     .bg(theme.surface)
                     .overflow_y_scroll()
+                    .child(
+                        div()
+                            .pb(px(tk::SECTION_GAP))
+                            .text_size(px(tk::TEXT_TITLE))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text_primary)
+                            .child(match current_tab {
+                                SettingsTab::Appearance => strings.appearance,
+                                SettingsTab::EditorSave => strings.editor_and_save,
+                                SettingsTab::Language => strings.language,
+                                SettingsTab::Shortcuts => strings.shortcuts_label,
+                                SettingsTab::About => strings.about,
+                            }),
+                    )
                     .child(match current_tab {
                         SettingsTab::Appearance => render_appearance_tab(
                             current_mode,
@@ -1414,36 +1432,28 @@ fn render_appearance_tab(
         .flex()
         .flex_col()
         .gap(px(tk::SECTION_GAP))
-        .child(
+        .child(render_section(
+            Some(strings.theme_mode_label.into()),
             div()
                 .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    render_section_title(strings.appearance, theme),
-                )
-                .child(
-                    render_segmented(theme)
-                        .child(render_mode_pill(
-                            strings.theme_auto,
-                            current_mode == ThemeMode::Auto,
-                            theme,
-                            move |_, window, cx| m1(ThemeMode::Auto, window, cx),
-                        ))
-                        .child(render_mode_pill(
-                            strings.theme_light,
-                            current_mode == ThemeMode::Light,
-                            theme,
-                            move |_, window, cx| m2(ThemeMode::Light, window, cx),
-                        ))
-                        .child(render_mode_pill(
-                            strings.theme_dark,
-                            current_mode == ThemeMode::Dark,
-                            theme,
-                            move |_, window, cx| m3(ThemeMode::Dark, window, cx),
-                        )),
-                ),
-        )
+                .gap_3()
+                .child(render_mode_preview(
+                    "mode_auto", strings.theme_auto, ModePreview::Auto, current_palette,
+                    current_mode == ThemeMode::Auto, theme,
+                    move |_, window, cx| m1(ThemeMode::Auto, window, cx),
+                ))
+                .child(render_mode_preview(
+                    "mode_light", strings.theme_light, ModePreview::Light, current_palette,
+                    current_mode == ThemeMode::Light, theme,
+                    move |_, window, cx| m2(ThemeMode::Light, window, cx),
+                ))
+                .child(render_mode_preview(
+                    "mode_dark", strings.theme_dark, ModePreview::Dark, current_palette,
+                    current_mode == ThemeMode::Dark, theme,
+                    move |_, window, cx| m3(ThemeMode::Dark, window, cx),
+                )),
+            theme,
+        ))
         .child(
             div()
                 .flex()
@@ -1862,7 +1872,7 @@ fn render_shortcuts_tab(
                                 .flex()
                                 .flex_col()
                                 .gap_1p5()
-                                .py(px(tk::ROW_PY - 2.0))
+                                .py(px(tk::ROW_PY))
                                 .when(index + 1 < count, |el| {
                                     el.border_b_1().border_color(theme.hairline())
                                 })
@@ -2153,6 +2163,125 @@ fn render_about_tab(
             },
             theme,
         ))
+}
+
+#[derive(Clone, Copy)]
+enum ModePreview {
+    Auto,
+    Light,
+    Dark,
+}
+
+/// A small drawn window in the palette's light or dark colors; "Auto" shows
+/// the light window on the left and the dark one on the right.
+fn render_window_sketch(colors: &ThemeColors) -> Div {
+    let line = |w: f32, c: Hsla| div().w(px(w)).h(px(3.)).rounded_full().bg(c);
+    div()
+        .size_full()
+        .bg(colors.bg)
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .h(px(12.))
+                .px(px(6.))
+                .flex()
+                .items_center()
+                .gap(px(3.))
+                .bg(colors.surface)
+                .child(div().size(px(4.)).rounded_full().bg(rgb(0xff5f57)))
+                .child(div().size(px(4.)).rounded_full().bg(rgb(0xfebc2e)))
+                .child(div().size(px(4.)).rounded_full().bg(rgb(0x28c840))),
+        )
+        .child(
+            div()
+                .flex_1()
+                .p(px(8.))
+                .flex()
+                .flex_col()
+                .gap(px(5.))
+                .child(line(36., colors.accent))
+                .child(line(56., colors.text_primary.opacity(0.55)))
+                .child(line(44., colors.text_primary.opacity(0.35)))
+                .child(line(30., colors.text_primary.opacity(0.35))),
+        )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_mode_preview<F>(
+    id: &'static str,
+    label: &'static str,
+    mode: ModePreview,
+    palette: &str,
+    active: bool,
+    theme: &ThemeColors,
+    handler: F,
+) -> impl IntoElement
+where
+    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+{
+    let light = ThemeColors::resolve(palette, false);
+    let dark = ThemeColors::resolve(palette, true);
+    let picture = match mode {
+        ModePreview::Light => render_window_sketch(&light),
+        ModePreview::Dark => render_window_sketch(&dark),
+        ModePreview::Auto => div()
+            .size_full()
+            .relative()
+            .child(render_window_sketch(&light))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(relative(0.5))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right_0()
+                            .w(px(108.))
+                            .child(render_window_sketch(&dark)),
+                    ),
+            ),
+    };
+    div()
+        .id(id)
+        .debug_selector(move || label.to_owned())
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_1p5()
+        .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, handler)
+        .child(
+            div()
+                .w(px(112.))
+                .h(px(72.))
+                .p(px(2.))
+                .rounded(px(tk::RADIUS_CARD + 2.0))
+                .border_2()
+                .border_color(if active { theme.accent } else { gpui::transparent_black() })
+                .child(
+                    div()
+                        .size_full()
+                        .rounded(px(tk::RADIUS_CARD - 2.0))
+                        .overflow_hidden()
+                        .border_1()
+                        .border_color(theme.hairline())
+                        .child(picture),
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(tk::TEXT_BODY))
+                .text_color(if active { theme.text_primary } else { theme.text_muted })
+                .when(active, |el| el.font_weight(FontWeight::MEDIUM))
+                .child(label),
+        )
 }
 
 fn render_mode_pill<F>(
