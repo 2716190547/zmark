@@ -18,9 +18,16 @@ fn main() {
     };
 
     let preferences = Preferences::load_or_default();
-    let restore_session = initial_path.is_none();
+    let probe = zmark_app::frame_probe::requested();
+    // Probe scenarios open a generated document with isolated preferences so a
+    // measurement run never rewrites the user's session or config.
+    let probe_doc = probe.and_then(|scenario| scenario.document());
+    let isolated = probe_doc.is_some();
+    let restore_session = initial_path.is_none() && !isolated;
     let show_welcome = restore_session && !preferences.welcome_dismissed;
-    let doc = if restore_session && !show_welcome {
+    let doc = if let Some(text) = probe_doc {
+        zmark_core::document::Document::new_named_scratch_with_text("frame-probe", text)
+    } else if restore_session && !show_welcome {
         zmark_core::document::Document::new_scratch()
     } else {
         zmark_app::welcome::initial_document(initial_path, preferences.locale)
@@ -53,10 +60,14 @@ fn main() {
         };
 
         cx.open_window(window_options, |window, cx| {
-            let mut state = AppState::new_with_preferences(doc, preferences);
+            let mut state = if isolated {
+                AppState::new_isolated(doc)
+            } else {
+                AppState::new_with_preferences(doc, preferences)
+            };
             // Launch with the file sidebar open. Tests build AppState directly and
             // keep the closed default so their layout assumptions stay stable.
-            state.drawer_open = true;
+            state.drawer_open = !isolated;
             if show_welcome {
                 state.mark_initial_welcome();
             }
@@ -65,7 +76,11 @@ fn main() {
             if restore_session {
                 state.restore_session();
             }
-            let update_config = zmark_app::updater::UpdateConfig::production();
+            let update_config = if isolated {
+                zmark_app::updater::UpdateConfig::disabled()
+            } else {
+                zmark_app::updater::UpdateConfig::production()
+            };
             let view = cx.new(|cx| {
                 WorkspaceView::new_with_update_config(state, update_config, cx)
             });
@@ -115,29 +130,8 @@ fn main() {
                 })
                 .detach();
 
-            zmark_app::frame_probe::start(window, view.entity_id());
-            if std::env::var("ZMARK_FRAME_PROBE").is_ok() {
-                // Drive the mode-switch animations while the probe records.
-                let probe_view = view.clone();
-                cx.spawn(async move |app| {
-                    let modes = [
-                        zmark_app::state::ViewMode::Split,
-                        zmark_app::state::ViewMode::Preview,
-                        zmark_app::state::ViewMode::Source,
-                        zmark_app::state::ViewMode::Split,
-                        zmark_app::state::ViewMode::Preview,
-                        zmark_app::state::ViewMode::Source,
-                    ];
-                    for mode in modes {
-                        app.background_executor()
-                            .timer(std::time::Duration::from_millis(300))
-                            .await;
-                        let _ = probe_view.update(app, |workspace, cx| {
-                            workspace.set_view_mode(mode, cx);
-                        });
-                    }
-                })
-                .detach();
+            if let Some(scenario) = probe {
+                zmark_app::frame_probe::run(scenario, view.clone(), window, cx);
             }
 
             cx.new(|cx| gpui_component::Root::new(view, window, cx))
