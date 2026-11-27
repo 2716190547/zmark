@@ -2115,7 +2115,7 @@ fn render_about_tab(
             theme,
         ))
         .child(render_setting_group(
-            Some(strings.welcome_guide_label.into()),
+            Some(strings.help_section_label.into()),
             vec![render_setting_row(
                 strings.welcome_guide_label,
                 Some(strings.welcome_guide_desc.into()),
