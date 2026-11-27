@@ -41,13 +41,13 @@
 
 | 角色 | 取值 | 用途 |
 |---|---|---|
-| `card_bg` | `text_primary` 3.5% | 卡片底色、未选中的语言项 |
+| `card_bg` | `text_primary` 3.5% | 卡片底色 |
 | `hairline` | `text_primary` 8% | 卡片内行分隔线 |
 | `control_bg` | `text_primary` 6% | 次要按钮、键帽静止态 |
 | `control_hover_bg` | `text_primary` 10% | 次要按钮、键帽悬停态 |
-| `control_selection_bg` | 主题现有 token | 导航选中、语言选中、已自定义键帽、冲突提示 |
+| `control_selection_bg` | 主题现有 token | 导航选中、已自定义键帽、冲突提示 |
 | `segmented_*` | 主题现有 token | 分段轨道与滑块；滑块用阴影抬起，不加描边 |
-| `accent` | 主题强调色 | 开关打开、选中调色板、录制中键帽 |
+| `accent` | 主题强调色 | 开关打开、选中调色板、录制中键帽、单选列表的勾 |
 
 所有颜色都从当前主题推导，所以 8 套调色板和明暗模式自动适配。
 
@@ -63,3 +63,9 @@
 | 分段控件 | `render_segmented` + `render_segment` | 整行宽，28px 高 |
 | 开关 | `render_ios_toggle` | 36×20 |
 | 说明文字 | `render_help_text` | 分区下的辅助说明 |
+| 单选列表 | 语言页 | 一张卡片，行高 40px，选中项右侧 `accent` 勾，不用底色块 |
+
+## 页面结构
+
+- 左侧导航已经写明页面名称，页面顶部不再重复同名标题。
+- 单选项（如语言）用单列列表，不排成按钮网格；选中态用勾表示，避免和导航的选中底色混淆。

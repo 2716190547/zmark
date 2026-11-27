@@ -1693,61 +1693,48 @@ fn render_editor_save_tab(
 fn render_language_tab(
     current_locale: SupportedLocale,
     theme: &ThemeColors,
-    strings: &'static I18nStrings,
+    _strings: &'static I18nStrings,
     on_set_locale: Arc<dyn Fn(SupportedLocale, &mut Window, &mut App)>,
 ) -> impl IntoElement {
+    // One list card like every other page: rows split by hairlines, the
+    // current language marked with a check instead of a filled block.
     let locales = SupportedLocale::all();
+    let count = locales.len();
     div()
         .flex()
         .flex_col()
-        .gap_2()
-        .child(
-            render_section_title(strings.language, theme),
-        )
-        .child(
+        .px(px(tk::CARD_PX))
+        .rounded(px(tk::RADIUS_CARD))
+        .bg(theme.card_bg())
+        .children(locales.iter().enumerate().map(|(i, &(loc, tag, name))| {
+            let is_active = current_locale.resolve() == loc;
+            let on_set = on_set_locale.clone();
             div()
+                .id(SharedString::from(format!("locale_{tag}")))
+                .h(px(40.))
                 .flex()
-                .flex_col()
-                .gap_2()
-                .children(locales.chunks(2).map(|pair| {
+                .items_center()
+                .justify_between()
+                .cursor_pointer()
+                .when(i + 1 < count, |el| el.border_b_1().border_color(theme.hairline()))
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| on_set(loc, window, cx))
+                .child(
                     div()
-                        .w_full()
-                        .flex()
-                        .flex_row()
-                        .gap_2()
-                        .children(pair.iter().map(|&(loc, _tag, name)| {
-                            let is_active = current_locale.resolve() == loc;
-                            let on_set = on_set_locale.clone();
-
-                            let card = div()
-                                .flex_1()
-                                .h(px(36.))
-                                .px(px(tk::CARD_PX))
-                                .rounded(px(tk::RADIUS))
-                                .cursor_pointer()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    on_set(loc, window, cx);
-                                })
-                                .flex()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .text_size(px(tk::TEXT_LABEL))
-                                        .child(name),
-                                );
-
-                            if is_active {
-                                card.bg(theme.control_selection_bg())
-                                    .text_color(theme.selection_text())
-                                    .font_weight(FontWeight::MEDIUM)
-                            } else {
-                                card.bg(theme.card_bg())
-                                    .text_color(theme.text_primary)
-                                    .hover(|s| s.bg(theme.control_bg()))
-                            }
-                        }))
-                })),
-        )
+                        .text_size(px(tk::TEXT_LABEL))
+                        .text_color(theme.text_primary)
+                        .when(is_active, |el| el.font_weight(FontWeight::MEDIUM))
+                        .when(!is_active, |el| el.hover(|s| s.text_color(theme.accent)))
+                        .child(name),
+                )
+                .when(is_active, |el| {
+                    el.child(
+                        svg()
+                            .path("icons/check.svg")
+                            .size(px(16.))
+                            .text_color(theme.accent),
+                    )
+                })
+        }))
 }
 
 pub fn shortcut_rows(strings: &I18nStrings) -> [(String, String); 6] {
@@ -1797,27 +1784,23 @@ fn render_shortcuts_tab(
         .flex()
         .flex_col()
         .gap(px(tk::SECTION_GAP))
+        // The nav already names this page, so the header is just the hint
+        // and, once something is customized, "reset all".
         .child(
             div()
                 .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(render_section_title(strings.shortcuts_label, theme))
-                        .when(has_overrides, |el| {
-                            el.child(render_secondary_button(
-                                "btn_reset_all_shortcuts",
-                                strings.shortcut_reset_all,
-                                theme,
-                                move |_, window, cx| on_reset_all(window, cx),
-                            ))
-                        }),
-                )
-                .child(render_help_text(strings.shortcut_help_banner, theme)),
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(render_help_text(strings.shortcut_help_banner, theme))
+                .when(has_overrides, |el| {
+                    el.child(render_secondary_button(
+                        "btn_reset_all_shortcuts",
+                        strings.shortcut_reset_all,
+                        theme,
+                        move |_, window, cx| on_reset_all(window, cx),
+                    ))
+                }),
         )
         .children(ShortcutGroup::ALL.into_iter().map(|group| {
             let group_actions: Vec<ShortcutActionId> = ShortcutActionId::ALL
