@@ -109,7 +109,7 @@
 
 ### 2.4 帧时间测量（统一口径）
 
-- 新增调试用帧探针：`ZMARK_FRAME_PROBE=1` 时注册 `on_next_frame`；**每次回调记录 `Instant` 后重新注册**，直到 3s 窗口结束；样本先存内存，结束后一次写文件（避免 UI 线程重 I/O）；`scripts/analyze_frame_probe.py` 计算 p95/最差/刷新率。
+- 新增调试用帧探针：`ZMARK_FRAME_PROBE=1` 时注册 `on_next_frame`；**每次回调记录 `Instant` 后重新注册**，直到 3s 窗口结束；样本先存内存，结束后一次写文件（避免 UI 线程重 I/O）；`scripts/analyze_frame_probe.py` 计算 p95/最差/刷新率（该脚本已于 2026-11-27 移除，可从 git 历史恢复）。
 - 自测：3s 内至少采集 30 帧，否则判为探针失败（防止只采一帧的假绿）。
 - 参照机刷新率决定判据：120Hz → p95 ≤8.3ms、最差 ≤16.7ms；60Hz → p95 ≤16.7ms、最差 ≤33ms；报告实际刷新率与 hitch 数。
 - `profile_fps.sh`（Instruments Time Profiler）只作为 CPU/滚动辅助证据，不作为帧时间 p95 判据。
