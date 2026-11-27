@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ZMark third-party notices</title>
+<style>
+  body { font: 14px/1.5 -apple-system, "Segoe UI", sans-serif; max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
+  pre { white-space: pre-wrap; background: #f6f6f6; padding: 1em; border-radius: 6px; font-size: 12px; }
+  li { margin: 0.2em 0; }
+</style>
+</head>
+<body>
+<h1>Third-party notices</h1>
+<p>ZMark is licensed under MIT OR Apache-2.0. It includes the Rust crates listed below, each under its own license.
+The UI icons come from Lucide (ISC); see LICENSE-LUCIDE next to this file.</p>
+<h2>Overview</h2>
+<ul>
+{{#each overview}}<li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+{{/each}}
+</ul>
+{{#each licenses}}
+<h2 id="{{id}}">{{name}}</h2>
+<p>Used by:</p>
+<ul>
+{{#each used_by}}<li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+{{/each}}
+</body>
+</html>

@@ -3,6 +3,7 @@ name = "release_tool"
 version = "0.2.14"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+publish = false
 
 [dependencies]
 ring = "0.17"

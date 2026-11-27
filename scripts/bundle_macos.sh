@@ -33,6 +33,10 @@ if [ -f "$DIR/assets/Assets.car" ]; then
     cp "$DIR/assets/Assets.car" "$BUNDLE_DIR/Contents/Resources/Assets.car"
 fi
 
+echo "==> Copying licenses and third-party notices..."
+"$DIR/scripts/third_party_notices.sh" "$DIR/target/licenses"
+cp -R "$DIR/target/licenses" "$BUNDLE_DIR/Contents/Resources/licenses"
+
 echo "==> Generating Info.plist..."
 cat << EOF > "$BUNDLE_DIR/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>

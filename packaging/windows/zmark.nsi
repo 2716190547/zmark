@@ -7,6 +7,9 @@
 !ifndef OUT_PATH
   !define OUT_PATH "ZMark-${VERSION}-setup.exe"
 !endif
+!ifndef LICENSES_DIR
+  !define LICENSES_DIR "target\licenses"
+!endif
 !ifndef ICON
   !define ICON "zmark.ico"
 !endif
@@ -30,6 +33,9 @@ UninstPage instfiles
 Section "ZMark"
   SetOutPath "$INSTDIR"
   File /oname=ZMark.exe "${EXE_PATH}"
+  SetOutPath "$INSTDIR\licenses"
+  File "${LICENSES_DIR}\*"
+  SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateDirectory "$SMPROGRAMS\ZMark"
@@ -47,6 +53,7 @@ SectionEnd
 Section "Uninstall"
   Delete "$INSTDIR\ZMark.exe"
   Delete "$INSTDIR\Uninstall.exe"
+  RMDir /r "$INSTDIR\licenses"
   Delete "$SMPROGRAMS\ZMark\ZMark.lnk"
   RMDir "$SMPROGRAMS\ZMark"
   Delete "$DESKTOP\ZMark.lnk"
