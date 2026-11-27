@@ -143,7 +143,9 @@ static PROBE: Mutex<Option<ProbeState>> = Mutex::new(None);
 
 /// Start the requested scenario. Called once after the main window is built.
 pub fn run(scenario: Scenario, view: Entity<WorkspaceView>, window: &mut Window, cx: &mut App) {
-    // A background/occluded window may not receive display-link frames.
+    // An occluded window receives no display-link frames. Bring the whole
+    // app forward, not only the window, so other apps cannot cover it.
+    cx.activate(true);
     window.activate_window();
     match scenario {
         Scenario::Modes => {
