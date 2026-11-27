@@ -16,7 +16,7 @@
 
 ## 本地验证、安装与最终门禁（2026-11-13 / 2026-11-18 用户更新）
 
-- 日常代码修改和本机体验迭代直接运行 `./scripts/bundle_macos.sh --install`，构建并安装到本机供用户验收。日常迭代不运行测试，报告填写“未运行（按用户要求）”。用户明确要求快速检查时使用 `scripts/dev_check.sh`。
+- 日常代码修改和本机体验迭代直接运行 `./scripts/bundle_macos.sh --install`，构建并安装到本机供用户验收。改动过程中一律不运行测试，包括 `cargo test` 单元测试和 `scripts/dev_check.sh`，只做编译和本机安装，报告填写“未运行（按用户要求）”。测试统一放到提交推送时运行（见下条最终门禁）。用户明确要求快速检查时才使用 `scripts/dev_check.sh`。（2026-11-27 用户重申）
 - 安装前若检测到 `ZMark` 正在运行，可先保存应用中的改动、优雅退出应用并提交本地工作区改动，再执行安装，无需请求用户手动退出。
 - 准备推送构建更新时，在最终候选上运行一次 `scripts/full_gate.sh`，覆盖 `cargo test --workspace`、串行的 Phase H/I 六个专项和 rename 门禁。需要发布用的应用包时加 `--bundle`，并确认 `target/bundle/ZMark.app` 已生成。门禁通过后再推送。
 - 最终门禁中，Phase H 的 21 项与 Phase I 的 28 项观测专项须串行运行并分别报告。Phase H B3/B4 共 8 项与默认 workspace 测试重叠，分报时注明重叠，汇总时去重。默认 workspace 测试不包含 Phase I 两组及 Phase H B1/B2。

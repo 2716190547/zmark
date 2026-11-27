@@ -2,6 +2,9 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::Sizable as _;
 use gpui_component::color_picker::{ColorPickerEvent, ColorPickerState, ColorSelect};
+use gpui_component::searchable_list::{SearchableListItem, SearchableVec};
+use gpui_component::select::{Select, SelectEvent, SelectState};
+use gpui_component::IndexPath;
 use std::collections::HashMap;
 use std::sync::Arc;
 use zmark_core::config::{
@@ -16,6 +19,103 @@ use crate::state::SettingsTab;
 use crate::theme::{ThemeColors, ALL_PALETTES};
 use crate::updater::UpdateStatus;
 use crate::views::workspace::WorkspaceView;
+
+/// One entry of a font picker. An empty `family` is the platform default.
+#[derive(Clone)]
+struct FontChoice {
+    label: SharedString,
+    family: SharedString,
+}
+
+impl SearchableListItem for FontChoice {
+    type Value = SharedString;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        div()
+            .when(!self.family.is_empty(), |el| el.font_family(self.family.clone()))
+            .child(self.label.clone())
+    }
+
+    fn value(&self) -> &SharedString {
+        &self.family
+    }
+}
+
+type FontSelectState = SelectState<SearchableVec<FontChoice>>;
+
+#[derive(Clone, Copy, PartialEq)]
+enum FontRole {
+    Body,
+    Code,
+}
+
+/// Settings design tokens. Every settings control takes its size, radius and
+/// spacing from here; see `docs/design/settings-ui.md`.
+mod tokens {
+    /// Height of buttons, segmented controls and key caps.
+    pub const CONTROL_H: f32 = 28.0;
+    /// Horizontal padding inside buttons and key caps.
+    pub const CONTROL_PX: f32 = 12.0;
+    /// Minimum key-cap width, so caps line up down the right edge.
+    pub const KEYCAP_MIN_W: f32 = 88.0;
+    /// Radius of controls (button, segment track, key cap, list item).
+    pub const RADIUS: f32 = 6.0;
+    /// Radius of a segment thumb, so it nests inside the track's 2px inset.
+    pub const RADIUS_INNER: f32 = 4.0;
+    /// Radius of cards (setting groups, palette swatches, custom editor).
+    pub const RADIUS_CARD: f32 = 8.0;
+    /// Inset between a segment track and its thumb.
+    pub const TRACK_INSET: f32 = 2.0;
+    /// Inset inside a card, used both horizontally (card edge to text and to
+    /// the trailing control) and vertically (row edge to a 28px control), so a
+    /// control sits the same distance from the card's top and right edges.
+    pub const CARD_PX: f32 = 12.0;
+    /// Vertical padding of one setting row; equal to `CARD_PX`.
+    pub const ROW_PY: f32 = CARD_PX;
+    /// Page title size.
+    pub const TEXT_TITLE: f32 = 20.0;
+    /// Gap between a section title and its card.
+    pub const TITLE_GAP: f32 = 6.0;
+    /// Gap between sections on a page.
+    pub const SECTION_GAP: f32 = 20.0;
+    /// Text sizes: row label, body/description, small badge.
+    pub const TEXT_LABEL: f32 = 13.0;
+    pub const TEXT_BODY: f32 = 12.0;
+    pub const TEXT_SMALL: f32 = 11.0;
+}
+use tokens as tk;
+
+/// Settings color roles derived from the active theme. Controls use these
+/// names instead of ad-hoc opacities.
+trait SettingsColors {
+    /// Card fill: one step off the content background.
+    fn card_bg(&self) -> Hsla;
+    /// Hairline used for card borders and row dividers.
+    fn hairline(&self) -> Hsla;
+    /// Fill of a neutral button or key cap at rest.
+    fn control_bg(&self) -> Hsla;
+    /// Fill of a neutral button or key cap under the pointer.
+    fn control_hover_bg(&self) -> Hsla;
+}
+
+impl SettingsColors for ThemeColors {
+    fn card_bg(&self) -> Hsla {
+        self.text_primary.opacity(0.035)
+    }
+    fn hairline(&self) -> Hsla {
+        self.text_primary.opacity(0.08)
+    }
+    fn control_bg(&self) -> Hsla {
+        self.text_primary.opacity(0.06)
+    }
+    fn control_hover_bg(&self) -> Hsla {
+        self.text_primary.opacity(0.10)
+    }
+}
 
 pub struct SettingsWindowView {
     pub workspace: WeakEntity<WorkspaceView>,
@@ -36,6 +136,9 @@ pub struct SettingsWindowView {
     pub shortcut_conflict: Option<(ShortcutActionId, String, ShortcutActionId)>,
     pub shortcut_notice: Option<(ShortcutActionId, &'static str)>,
     shortcut_interceptor: Option<Subscription>,
+    /// Body and code font pickers, built on first use with the strings they show.
+    font_selects: Option<(Entity<FontSelectState>, Entity<FontSelectState>, &'static I18nStrings)>,
+    font_select_subs: Vec<Subscription>,
 }
 
 impl SettingsWindowView {
@@ -90,7 +193,75 @@ impl SettingsWindowView {
             shortcut_conflict: None,
             shortcut_notice: None,
             shortcut_interceptor: None,
+            font_selects: None,
+            font_select_subs: Vec::new(),
         }
+    }
+
+    /// Builds the font pickers from the installed families, and rebuilds them
+    /// when the interface language changes their "System Default" label.
+    fn ensure_font_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .font_selects
+            .as_ref()
+            .is_some_and(|(_, _, strings)| std::ptr::eq(*strings, self.strings))
+        {
+            return;
+        }
+        let mut choices = vec![FontChoice {
+            label: self.strings.font_system_default.into(),
+            family: SharedString::default(),
+        }];
+        choices.extend(
+            window
+                .text_system()
+                .all_font_names()
+                .into_iter()
+                .filter(|name| !name.starts_with('.'))
+                .map(|name| {
+                    let name = SharedString::from(name);
+                    FontChoice { label: name.clone(), family: name }
+                }),
+        );
+        self.font_select_subs.clear();
+        let mut build = |role: FontRole, this: &mut Self, cx: &mut Context<Self>| {
+            let current = match role {
+                FontRole::Body => this.preferences.font_family.as_str(),
+                FontRole::Code => this.preferences.code_font_family.as_str(),
+            };
+            let current = if current == "system-ui" { "" } else { current };
+            let ix = choices.iter().position(|c| c.family.as_ref() == current).unwrap_or(0);
+            let items = SearchableVec::new(choices.clone());
+            let state = cx.new(|cx| {
+                SelectState::new(items, Some(IndexPath::new(ix)), window, cx).searchable(true)
+            });
+            let sub = cx.subscribe(&state, move |this, _, event: &SelectEvent<SearchableVec<FontChoice>>, cx| {
+                let SelectEvent::Confirm(Some(family)) = event else {
+                    return;
+                };
+                let family = family.to_string();
+                match role {
+                    FontRole::Body => this.preferences.font_family = family.clone(),
+                    FontRole::Code => this.preferences.code_font_family = family.clone(),
+                }
+                if let Some(ws) = this.workspace.upgrade() {
+                    ws.update(cx, |ws, cx| {
+                        match role {
+                            FontRole::Body => ws.state.set_body_font(&family),
+                            FontRole::Code => ws.state.set_code_font(&family),
+                        }
+                        cx.notify();
+                    });
+                }
+                cx.refresh_windows();
+                cx.notify();
+            });
+            this.font_select_subs.push(sub);
+            state
+        };
+        let body = build(FontRole::Body, self, cx);
+        let code = build(FontRole::Code, self, cx);
+        self.font_selects = Some((body, code, self.strings));
     }
 
     /// Applies or clears a customized shortcut, updates GPUI's keymap live, and saves config.
@@ -349,6 +520,13 @@ impl Render for SettingsWindowView {
         {
             self.ensure_custom_pickers(editing_dark, window, cx);
         }
+        if self.current_tab == SettingsTab::Appearance {
+            self.ensure_font_selects(window, cx);
+        }
+        let font_selects = self
+            .font_selects
+            .as_ref()
+            .map(|(body, code, _)| (body.clone(), code.clone()));
         let current_tab = self.current_tab;
         let current_mode = self.preferences.theme;
         let current_palette = self.preferences.palette.clone();
@@ -361,15 +539,31 @@ impl Render for SettingsWindowView {
         let auto_save_on_blur = self.preferences.auto_save_on_blur;
         let tab_size = self.preferences.tab_size;
         let line_height = self.preferences.line_height;
+        let column_width = self.preferences.max_column_width;
         let theme = self.theme.clone();
         let strings = self.strings;
         let update_status = self.update_status.clone();
         let update_enabled = self.update_enabled;
         let update_reason = self.update_reason.clone();
         let workspace_for_update = self.workspace.clone();
-        let on_check_update = move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+        // Once an update is downloaded, the same button restarts into it, like the
+        // toolbar's update icon.
+        let on_check_update = move |_: &MouseDownEvent, window: &mut Window, cx: &mut App| {
             if let Some(ws) = workspace_for_update.upgrade() {
-                ws.update(cx, |ws, cx| ws.check_for_updates(cx, true));
+                ws.update(cx, |ws, cx| {
+                    if matches!(ws.update_status, UpdateStatus::Downloaded(_)) {
+                        ws.restart_for_update(Some(window), cx);
+                    } else {
+                        ws.check_for_updates(cx, true);
+                    }
+                });
+            }
+        };
+
+        let workspace_for_welcome = self.workspace.clone();
+        let on_restore_welcome = move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+            if let Some(ws) = workspace_for_welcome.upgrade() {
+                ws.update(cx, |ws, cx| ws.restore_welcome_guide(cx));
             }
         };
 
@@ -586,6 +780,22 @@ impl Render for SettingsWindowView {
             });
         });
 
+        let view_cw = cx.entity().clone();
+        let on_set_column_width = Arc::new(move |w: f32, _window: &mut Window, cx: &mut App| {
+            view_cw.update(cx, |this, cx| {
+                let clamped = Preferences::sanitize_column_width(w);
+                this.preferences.max_column_width = clamped;
+                if let Some(ws) = this.workspace.upgrade() {
+                    ws.update(cx, |ws, cx| {
+                        ws.state.set_column_width(clamped);
+                        ws.state.save_preferences();
+                        cx.notify();
+                    });
+                }
+                cx.notify();
+            });
+        });
+
         div()
             .size_full()
             .relative()
@@ -673,12 +883,30 @@ impl Render for SettingsWindowView {
                     .id("settings_content_scroll")
                     .flex_1()
                     .h_full()
-                    .p_5()
+                    .p_6()
                     .when(cfg!(target_os = "windows"), |el| el.pt(px(36.)))
                     .bg(theme.surface)
                     .overflow_y_scroll()
+                    // About keeps the title's space (so content starts at the same
+                    // height on every page) but hides the text.
+                    .child(
+                        div()
+                            .pb(px(tk::SECTION_GAP))
+                            .when(current_tab == SettingsTab::About, |el| el.invisible())
+                            .text_size(px(tk::TEXT_TITLE))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text_primary)
+                            .child(match current_tab {
+                                SettingsTab::Appearance => strings.appearance,
+                                SettingsTab::EditorSave => strings.editor_and_save,
+                                SettingsTab::Language => strings.language,
+                                SettingsTab::Shortcuts => strings.shortcuts_label,
+                                SettingsTab::About => strings.about,
+                            }),
+                    )
                     .child(match current_tab {
                         SettingsTab::Appearance => render_appearance_tab(
+                            font_selects,
                             current_mode,
                             &current_palette,
                             effective_dark,
@@ -708,6 +936,7 @@ impl Render for SettingsWindowView {
                             self.preferences.show_line_numbers,
                             tab_size,
                             line_height,
+                            column_width,
                             &theme,
                             strings,
                             on_toggle_auto_save,
@@ -715,6 +944,7 @@ impl Render for SettingsWindowView {
                             on_toggle_line_numbers,
                             on_set_tab_size,
                             on_set_line_height,
+                            on_set_column_width,
                         )
                         .into_any_element(),
                         SettingsTab::Language => render_language_tab(
@@ -793,6 +1023,12 @@ impl Render for SettingsWindowView {
                             move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
                                 cx.open_url("https://github.com/2716190547/zmark");
                             },
+                            crate::platform::licenses_dir().map(|dir| {
+                                move |_: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+                                    cx.open_with_system(&dir);
+                                }
+                            }),
+                            on_restore_welcome,
                         )
                         .into_any_element(),
                     }),
@@ -829,14 +1065,14 @@ where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
     let base = div()
-        .px_3()
-        .py_2()
-        .rounded_lg()
+        .px_2p5()
+        .h(px(32.))
+        .rounded(px(tk::RADIUS))
         .cursor_pointer()
         .flex()
         .items_center()
-        .gap_2p5()
-        .text_xs()
+        .gap_2()
+        .text_size(px(tk::TEXT_LABEL))
         .on_mouse_down(MouseButton::Left, handler);
 
     let icon_color = if active {
@@ -844,11 +1080,11 @@ where
     } else {
         theme.text_muted
     };
-    let icon = svg().path(icon_path).size(px(18.)).text_color(icon_color);
+    let icon = svg().path(icon_path).size(px(16.)).text_color(icon_color);
 
     if active {
         base.bg(theme.control_selection_bg())
-            .font_weight(FontWeight::SEMIBOLD)
+            .font_weight(FontWeight::MEDIUM)
             .text_color(theme.selection_text())
             .child(div().flex_shrink_0().child(icon))
             .child(div().flex_1().min_w(px(0.)).whitespace_normal().child(title))
@@ -863,8 +1099,16 @@ where
 /// Section heading shared by every settings page.
 fn render_section_title(text: impl Into<SharedString>, theme: &ThemeColors) -> impl IntoElement {
     div()
-        .text_xs()
+        .text_size(px(tk::TEXT_BODY))
         .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text_muted)
+        .child(text.into())
+}
+
+/// Plain body/help text under a section title.
+fn render_help_text(text: impl Into<SharedString>, theme: &ThemeColors) -> impl IntoElement {
+    div()
+        .text_size(px(tk::TEXT_BODY))
         .text_color(theme.text_muted)
         .child(text.into())
 }
@@ -878,32 +1122,78 @@ fn render_setting_row(
 ) -> impl IntoElement {
     div()
         .w_full()
-        .py_2()
+        .py(px(tk::ROW_PY))
         .flex()
         .items_center()
         .justify_between()
-        .gap_3()
+        .gap_4()
         .child(
+            // flex_1 gives the label column a definite width so long descriptions wrap
+            // instead of pushing the control past the card edge.
             div()
+                .flex_1()
                 .flex()
                 .flex_col()
                 .gap_0p5()
                 .min_w(px(0.))
                 .child(
                     div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
+                        .text_size(px(tk::TEXT_LABEL))
                         .text_color(theme.text_primary)
                         .child(label.into()),
                 )
                 .when_some(desc, |el, desc| {
-                    el.child(div().text_xs().text_color(theme.text_muted).child(desc))
+                    el.child(
+                        div()
+                            .text_size(px(tk::TEXT_BODY))
+                            .text_color(theme.text_muted)
+                            .child(desc),
+                    )
                 }),
         )
         .child(div().flex_shrink_0().child(trailing))
 }
 
-/// Secondary push button used for in-page actions (About -> check for updates).
+/// A section: optional title above one card. The card is a fill only (no
+/// outline), so controls inside it never sit in a frame within a frame.
+fn render_section(
+    title: Option<SharedString>,
+    body: impl IntoElement,
+    theme: &ThemeColors,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(tk::TITLE_GAP))
+        .when_some(title, |el, title| el.child(render_section_title(title, theme)))
+        .child(body)
+}
+
+/// A card of setting rows separated by hairlines.
+fn render_setting_group(
+    title: Option<SharedString>,
+    rows: Vec<AnyElement>,
+    theme: &ThemeColors,
+) -> impl IntoElement {
+    let count = rows.len();
+    render_section(
+        title,
+        div()
+            .flex()
+            .flex_col()
+            .px(px(tk::CARD_PX))
+            .rounded(px(tk::RADIUS_CARD))
+            .bg(theme.card_bg())
+            .children(rows.into_iter().enumerate().map(|(i, row)| {
+                div()
+                    .when(i + 1 < count, |el| el.border_b_1().border_color(theme.hairline()))
+                    .child(row)
+            })),
+        theme,
+    )
+}
+
+/// Neutral button: filled, no outline, fixed control height.
 fn render_secondary_button<F>(
     id: &'static str,
     label: impl Into<SharedString>,
@@ -915,20 +1205,94 @@ where
 {
     div()
         .id(id)
-        .h(px(26.))
-        .px(px(12.))
-        .rounded(px(6.))
+        .h(px(tk::CONTROL_H))
+        .px(px(tk::CONTROL_PX))
+        .rounded(px(tk::RADIUS))
         .flex()
         .items_center()
-        .bg(theme.text_primary.opacity(0.05))
-        .border(px(1.))
-        .border_color(theme.text_primary.opacity(0.12))
-        .text_size(px(12.))
+        .justify_center()
+        .bg(theme.control_bg())
+        .text_size(px(tk::TEXT_BODY))
+        .font_weight(FontWeight::MEDIUM)
         .text_color(theme.text_primary)
         .cursor_pointer()
-        .hover(|s| s.bg(theme.text_primary.opacity(0.08)))
+        .hover(|s| s.bg(theme.control_hover_bg()))
         .on_mouse_down(MouseButton::Left, handler)
         .child(label.into())
+}
+
+/// Text-only button for low-emphasis actions (reset, cancel).
+fn render_text_button<F>(
+    id: SharedString,
+    label: impl Into<SharedString>,
+    theme: &ThemeColors,
+    handler: F,
+) -> impl IntoElement
+where
+    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+{
+    div()
+        .id(id)
+        .h(px(tk::CONTROL_H))
+        .px_2()
+        .rounded(px(tk::RADIUS))
+        .flex()
+        .items_center()
+        .text_size(px(tk::TEXT_BODY))
+        .text_color(theme.text_muted)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
+        .on_mouse_down(MouseButton::Left, handler)
+        .child(label.into())
+}
+
+/// Segmented control track. Children are [`render_segment`]s.
+fn render_segmented(theme: &ThemeColors) -> Div {
+    div()
+        .w_full()
+        .h(px(tk::CONTROL_H))
+        .p(px(tk::TRACK_INSET))
+        .rounded(px(tk::RADIUS))
+        .bg(theme.control_bg())
+        .flex()
+        .gap(px(tk::TRACK_INSET))
+}
+
+/// One option of a segmented control. The selected thumb is a raised fill
+/// with a soft shadow instead of an outline.
+fn render_segment<F>(
+    id: SharedString,
+    label: impl Into<SharedString>,
+    active: bool,
+    theme: &ThemeColors,
+    handler: F,
+) -> impl IntoElement
+where
+    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+{
+    let sel = id.to_string();
+    let base = div()
+        .id(id)
+        .debug_selector(move || sel.clone())
+        .flex_1()
+        .h_full()
+        .rounded(px(tk::RADIUS_INNER))
+        .text_size(px(tk::TEXT_BODY))
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(MouseButton::Left, handler)
+        .child(label.into());
+    if active {
+        base.bg(theme.segmented_thumb_bg())
+            .shadow_xs()
+            .text_color(theme.segmented_thumb_text())
+            .font_weight(FontWeight::MEDIUM)
+    } else {
+        base.text_color(theme.segmented_inactive_text())
+            .hover(|s| s.text_color(theme.text_primary))
+    }
 }
 
 fn render_ios_toggle<F>(
@@ -1004,7 +1368,7 @@ fn render_custom_color_rows(
                         div()
                             .flex_1()
                             .min_w(px(0.))
-                            .text_xs()
+                            .text_size(px(tk::TEXT_LABEL))
                             .text_color(theme.text_primary)
                             .child(label),
                     )
@@ -1032,11 +1396,9 @@ fn render_custom_theme_editor(
 
     div()
         .w_full()
-        .p_3()
-        .rounded_lg()
-        .bg(theme.bg)
-        .border(px(1.))
-        .border_color(theme.border)
+        .p(px(tk::CARD_PX))
+        .rounded(px(tk::RADIUS_CARD))
+        .bg(theme.card_bg())
         .flex()
         .flex_col()
         .gap_3()
@@ -1049,13 +1411,8 @@ fn render_custom_theme_editor(
                 .justify_between()
                 .gap_2()
                 .child(
-                    div()
+                    render_segmented(theme)
                         .w(px(196.))
-                        .bg(theme.segmented_track_bg())
-                        .rounded_lg()
-                        .p(px(2.))
-                        .flex()
-                        .gap_1()
                         .child(render_mode_pill(
                             strings.custom_editing_light,
                             !editing_dark,
@@ -1092,11 +1449,6 @@ fn render_custom_theme_editor(
             el.child(
                 div()
                     .w_full()
-                    .p_2()
-                    .rounded_md()
-                    .bg(theme.surface)
-                    .border(px(1.))
-                    .border_color(theme.border)
                     .flex()
                     .flex_wrap()
                     .gap_1p5()
@@ -1106,17 +1458,17 @@ fn render_custom_theme_editor(
                         let on_import = props.on_import_preset.clone();
                         div()
                             .id(SharedString::from(format!("custom_import_{preset_id}")))
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
+                            .h(px(tk::CONTROL_H))
+                            .px_2p5()
+                            .rounded(px(tk::RADIUS))
                             .bg(resolved.bg)
-                            .border(px(1.))
+                            .border_1()
                             .border_color(resolved.border)
                             .cursor_pointer()
                             .flex()
                             .items_center()
                             .gap_1p5()
-                            .text_xs()
+                            .text_size(px(tk::TEXT_BODY))
                             .text_color(resolved.text_primary)
                             .hover(|s| s.border_color(resolved.accent))
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -1143,8 +1495,8 @@ fn render_custom_theme_editor(
         .child(
             div()
                 .pt_2()
-                .border_t(px(1.))
-                .border_color(theme.border)
+                .border_t_1()
+                .border_color(theme.hairline())
                 .flex()
                 .flex_col()
                 .gap_1p5()
@@ -1178,11 +1530,7 @@ fn render_custom_theme_editor(
                         )
                         .child(
                             div()
-                                .px_1p5()
-                                .py_0p5()
-                                .rounded(px(4.))
-                                .bg(theme.control_selection_bg())
-                                .text_xs()
+                                .text_size(px(tk::TEXT_BODY))
                                 .text_color(theme.text_muted)
                                 .child("12"),
                         ),
@@ -1198,7 +1546,42 @@ fn render_custom_theme_editor(
         )
 }
 
+fn render_font_group(
+    selects: (Entity<FontSelectState>, Entity<FontSelectState>),
+    theme: &ThemeColors,
+    strings: &'static I18nStrings,
+) -> impl IntoElement {
+    let picker = |state: &Entity<FontSelectState>| {
+        Select::new(state)
+            .small()
+            .w(px(200.))
+            .menu_width(px(260.))
+            .search_placeholder(strings.font_search_placeholder)
+    };
+    render_setting_group(
+        Some(strings.font_section.into()),
+        vec![
+            render_setting_row(
+                strings.body_font_label,
+                Some(strings.body_font_desc.into()),
+                picker(&selects.0),
+                theme,
+            )
+            .into_any_element(),
+            render_setting_row(
+                strings.code_font_label,
+                Some(strings.code_font_desc.into()),
+                picker(&selects.1),
+                theme,
+            )
+            .into_any_element(),
+        ],
+        theme,
+    )
+}
+
 fn render_appearance_tab(
+    font_selects: Option<(Entity<FontSelectState>, Entity<FontSelectState>)>,
     current_mode: ThemeMode,
     current_palette: &str,
     effective_dark: bool,
@@ -1223,58 +1606,36 @@ fn render_appearance_tab(
     div()
         .flex()
         .flex_col()
-        .gap_5()
+        .gap(px(tk::SECTION_GAP))
+        .child(render_section(
+            None,
+            div()
+                .flex()
+                .gap_3()
+                .child(render_mode_preview(
+                    "mode_auto", strings.theme_auto, ModePreview::Auto, current_palette,
+                    current_mode == ThemeMode::Auto, theme,
+                    move |_, window, cx| m1(ThemeMode::Auto, window, cx),
+                ))
+                .child(render_mode_preview(
+                    "mode_light", strings.theme_light, ModePreview::Light, current_palette,
+                    current_mode == ThemeMode::Light, theme,
+                    move |_, window, cx| m2(ThemeMode::Light, window, cx),
+                ))
+                .child(render_mode_preview(
+                    "mode_dark", strings.theme_dark, ModePreview::Dark, current_palette,
+                    current_mode == ThemeMode::Dark, theme,
+                    move |_, window, cx| m3(ThemeMode::Dark, window, cx),
+                )),
+            theme,
+        ))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_2()
                 .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(strings.appearance),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .bg(theme.segmented_track_bg())
-                        .rounded_lg()
-                        .p(px(2.))
-                        .flex()
-                        .gap_1()
-                        .child(render_mode_pill(
-                            strings.theme_auto,
-                            current_mode == ThemeMode::Auto,
-                            theme,
-                            move |_, window, cx| m1(ThemeMode::Auto, window, cx),
-                        ))
-                        .child(render_mode_pill(
-                            strings.theme_light,
-                            current_mode == ThemeMode::Light,
-                            theme,
-                            move |_, window, cx| m2(ThemeMode::Light, window, cx),
-                        ))
-                        .child(render_mode_pill(
-                            strings.theme_dark,
-                            current_mode == ThemeMode::Dark,
-                            theme,
-                            move |_, window, cx| m3(ThemeMode::Dark, window, cx),
-                        )),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(strings.palette),
+                    render_section_title(strings.palette, theme),
                 )
                 .child(
                     div()
@@ -1296,7 +1657,7 @@ fn render_appearance_tab(
                                     div()
                                         .flex_1()
                                         .p_3()
-                                        .rounded_md()
+                                        .rounded(px(tk::RADIUS_CARD))
                                         .bg(resolved.bg)
                                         .cursor_pointer()
                                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -1329,7 +1690,7 @@ fn render_appearance_tab(
                                         )
                                         .child(
                                             div()
-                                                .text_xs()
+                                                .text_size(px(tk::TEXT_BODY))
                                                 .font_weight(FontWeight::MEDIUM)
                                                 .text_color(resolved.text_primary)
                                                 .child(zmark_core::i18n::localize_palette_name(desc.id, strings)),
@@ -1343,7 +1704,7 @@ fn render_appearance_tab(
                                 .id("palette_card_custom")
                                 .w_full()
                                 .p_3()
-                                .rounded_md()
+                                .rounded(px(tk::RADIUS_CARD))
                                 .bg(resolved_custom.bg)
                                 .cursor_pointer()
                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -1379,7 +1740,7 @@ fn render_appearance_tab(
                                 )
                                 .child(
                                     div()
-                                        .text_xs()
+                                        .text_size(px(tk::TEXT_BODY))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(resolved_custom.text_primary)
                                         .child(zmark_core::i18n::localize_palette_name(
@@ -1397,6 +1758,9 @@ fn render_appearance_tab(
         .when(is_custom_active, |el| {
             el.child(render_custom_theme_editor(&custom, theme, strings))
         })
+        .when_some(font_selects, |el, selects| {
+            el.child(render_font_group(selects, theme, strings))
+        })
         .child(render_setting_row(
             strings.reduce_motion_label,
             Some(strings.reduce_motion_desc.into()),
@@ -1413,6 +1777,7 @@ fn render_editor_save_tab(
     show_line_numbers: bool,
     tab_size: usize,
     line_height: f32,
+    column_width: f32,
     theme: &ThemeColors,
     strings: &I18nStrings,
     on_toggle_auto_save: Arc<dyn Fn(bool, &mut Window, &mut App)>,
@@ -1420,6 +1785,7 @@ fn render_editor_save_tab(
     on_toggle_line_numbers: Arc<dyn Fn(bool, &mut Window, &mut App)>,
     on_set_tab_size: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_set_line_height: Arc<dyn Fn(f32, &mut Window, &mut App)>,
+    on_set_column_width: Arc<dyn Fn(f32, &mut Window, &mut App)>,
 ) -> impl IntoElement {
     let t_as = on_toggle_auto_save;
     let t_asb = on_toggle_auto_save_on_blur;
@@ -1430,230 +1796,151 @@ fn render_editor_save_tab(
     div()
         .flex()
         .flex_col()
-        .gap_5()
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(render_setting_row(
+        .gap(px(tk::SECTION_GAP))
+        .child(render_setting_group(
+            None,
+            vec![
+                render_setting_row(
                     strings.auto_save_label,
                     Some(strings.auto_save_desc.into()),
                     render_ios_toggle(auto_save, theme, move |_, window, cx| {
                         t_as(!auto_save, window, cx);
                     }),
                     theme,
-                ))
-                .child(render_setting_row(
+                )
+                .into_any_element(),
+                render_setting_row(
                     strings.auto_save_on_blur_label,
                     None,
                     render_ios_toggle(auto_save_on_blur, theme, move |_, window, cx| {
                         t_asb(!auto_save_on_blur, window, cx);
                     }),
                     theme,
-                ))
-                .child(render_setting_row(
+                )
+                .into_any_element(),
+                render_setting_row(
                     strings.show_line_numbers_label,
                     Some(strings.show_line_numbers_desc.into()),
                     render_ios_toggle(show_line_numbers, theme, move |_, window, cx| {
                         t_ln(!show_line_numbers, window, cx);
                     }),
                     theme,
-                )),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(strings.tab_size_label),
                 )
-                .child(
-                    div()
-                        .w_full()
-                        .bg(theme.segmented_track_bg())
-                        .rounded_lg()
-                        .p(px(2.))
-                        .flex()
-                        .gap_1()
-                        .child({
-                            let active = tab_size == 2;
-                            let pill = div()
-                                .flex_1()
-                                .py_1p5()
-                                .rounded_md()
-                                .text_xs()
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    t_ts2(2, window, cx);
-                                })
-                                .child("2 Spaces");
-
-                            if active {
-                                pill.bg(theme.segmented_thumb_bg())
-                                    .border(px(1.))
-                                    .border_color(theme.segmented_thumb_border())
-                                    .text_color(theme.segmented_thumb_text())
-                                    .font_weight(FontWeight::MEDIUM)
-                            } else {
-                                pill.bg(gpui::transparent_black())
-                                    .text_color(theme.segmented_inactive_text())
-                                    .hover(|s| s.text_color(theme.text_primary))
-                            }
-                        })
-                        .child({
-                            let active = tab_size == 4;
-                            let pill = div()
-                                .flex_1()
-                                .py_1p5()
-                                .rounded_md()
-                                .text_xs()
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    t_ts4(4, window, cx);
-                                })
-                                .child("4 Spaces");
-
-                            if active {
-                                pill.bg(theme.segmented_thumb_bg())
-                                    .border(px(1.))
-                                    .border_color(theme.segmented_thumb_border())
-                                    .text_color(theme.segmented_thumb_text())
-                                    .font_weight(FontWeight::MEDIUM)
-                            } else {
-                                pill.bg(gpui::transparent_black())
-                                    .text_color(theme.segmented_inactive_text())
-                                    .hover(|s| s.text_color(theme.text_primary))
-                            }
-                        }),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
-                        .child(strings.line_height_label),
+                .into_any_element(),
+            ],
+            theme,
+        ))
+        .child(render_setting_group(
+            None,
+            vec![
+                render_setting_row(
+                    strings.tab_size_label,
+                    None,
+                    render_segmented(theme)
+                        .w(px(168.))
+                        .child(render_segment(
+                            "tab_size_2".into(),
+                            "2",
+                            tab_size == 2,
+                            theme,
+                            move |_, window, cx| t_ts2(2, window, cx),
+                        ))
+                        .child(render_segment(
+                            "tab_size_4".into(),
+                            "4",
+                            tab_size == 4,
+                            theme,
+                            move |_, window, cx| t_ts4(4, window, cx),
+                        )),
+                    theme,
                 )
-                .child(
-                    div()
-                        .w_full()
-                        .bg(theme.segmented_track_bg())
-                        .rounded_lg()
-                        .p(px(2.))
-                        .flex()
-                        .gap_1()
+                .into_any_element(),
+                render_setting_row(
+                    strings.line_height_label,
+                    None,
+                    render_segmented(theme)
+                        .w(px(260.))
                         .children([1.3f32, 1.4, 1.5, 1.6, 1.7].into_iter().map(|lh_opt| {
-                            let is_active = (line_height - lh_opt).abs() < 0.05;
                             let on_set = on_set_line_height.clone();
-                            let pill = div()
-                                .flex_1()
-                                .py_1p5()
-                                .rounded_md()
-                                .text_xs()
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    on_set(lh_opt, window, cx);
-                                })
-                                .child(format!("{:.1}x", lh_opt));
-
-                            if is_active {
-                                pill.bg(theme.segmented_thumb_bg())
-                                    .border(px(1.))
-                                    .border_color(theme.segmented_thumb_border())
-                                    .text_color(theme.segmented_thumb_text())
-                                    .font_weight(FontWeight::MEDIUM)
-                            } else {
-                                pill.bg(gpui::transparent_black())
-                                    .text_color(theme.segmented_inactive_text())
-                                    .hover(|s| s.text_color(theme.text_primary))
-                            }
+                            render_segment(
+                                format!("line_height_{lh_opt:.1}").into(),
+                                format!("{lh_opt:.1}"),
+                                (line_height - lh_opt).abs() < 0.05,
+                                theme,
+                                move |_, window, cx| on_set(lh_opt, window, cx),
+                            )
                         })),
-                ),
-        )
+                    theme,
+                )
+                .into_any_element(),
+                render_setting_row(
+                    strings.column_width,
+                    Some(strings.column_width_desc.into()),
+                    render_segmented(theme)
+                        .w(px(240.))
+                        .children([640.0f32, 760.0, 960.0, 1200.0].into_iter().map(|w_opt| {
+                            let on_set = on_set_column_width.clone();
+                            render_segment(
+                                format!("column_width_{w_opt:.0}").into(),
+                                format!("{w_opt:.0}"),
+                                (column_width - w_opt).abs() < 0.5,
+                                theme,
+                                move |_, window, cx| on_set(w_opt, window, cx),
+                            )
+                        })),
+                    theme,
+                )
+                .into_any_element(),
+            ],
+            theme,
+        ))
 }
 
 fn render_language_tab(
     current_locale: SupportedLocale,
     theme: &ThemeColors,
-    strings: &'static I18nStrings,
+    _strings: &'static I18nStrings,
     on_set_locale: Arc<dyn Fn(SupportedLocale, &mut Window, &mut App)>,
 ) -> impl IntoElement {
+    // One list card like every other page: rows split by hairlines, the
+    // current language marked with a check instead of a filled block.
     let locales = SupportedLocale::all();
+    let count = locales.len();
     div()
         .flex()
         .flex_col()
-        .gap_2()
-        .child(
+        .px(px(tk::CARD_PX))
+        .rounded(px(tk::RADIUS_CARD))
+        .bg(theme.card_bg())
+        .children(locales.iter().enumerate().map(|(i, &(loc, tag, name))| {
+            let is_active = current_locale.resolve() == loc;
+            let on_set = on_set_locale.clone();
             div()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_muted)
-                .child(strings.language),
-        )
-        .child(
-            div()
+                .id(SharedString::from(format!("locale_{tag}")))
+                .h(px(40.))
                 .flex()
-                .flex_col()
-                .gap_2()
-                .children(locales.chunks(2).map(|pair| {
+                .items_center()
+                .justify_between()
+                .cursor_pointer()
+                .when(i + 1 < count, |el| el.border_b_1().border_color(theme.hairline()))
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| on_set(loc, window, cx))
+                .child(
                     div()
-                        .w_full()
-                        .flex()
-                        .flex_row()
-                        .gap_2()
-                        .children(pair.iter().map(|&(loc, _tag, name)| {
-                            let is_active = current_locale.resolve() == loc;
-                            let on_set = on_set_locale.clone();
-
-                            let card = div()
-                                .flex_1()
-                                .px_3()
-                                .py_2p5()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    on_set(loc, window, cx);
-                                })
-                                .flex()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .child(name),
-                                );
-
-                            if is_active {
-                                card.bg(theme.control_selection_bg())
-                                    .text_color(theme.selection_text())
-                                    .font_weight(FontWeight::MEDIUM)
-                            } else {
-                                card.bg(gpui::transparent_black())
-                                    .text_color(theme.text_primary)
-                                    .hover(|s| s.bg(theme.hover_bg()))
-                            }
-                        }))
-                })),
-        )
+                        .text_size(px(tk::TEXT_LABEL))
+                        .text_color(theme.text_primary)
+                        .when(is_active, |el| el.font_weight(FontWeight::MEDIUM))
+                        .when(!is_active, |el| el.hover(|s| s.text_color(theme.accent)))
+                        .child(name),
+                )
+                .when(is_active, |el| {
+                    el.child(
+                        svg()
+                            .path("icons/check.svg")
+                            .size(px(16.))
+                            .text_color(theme.accent),
+                    )
+                })
+        }))
 }
 
 pub fn shortcut_rows(strings: &I18nStrings) -> [(String, String); 6] {
@@ -1702,50 +1989,40 @@ fn render_shortcuts_tab(
     div()
         .flex()
         .flex_col()
-        .gap_4()
+        .gap(px(tk::SECTION_GAP))
+        // The nav already names this page, so the header is just the hint
+        // and, once something is customized, "reset all".
         .child(
             div()
                 .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(render_section_title(strings.shortcuts_label, theme))
-                        .when(has_overrides, |el| {
-                            el.child(render_secondary_button(
-                                "btn_reset_all_shortcuts",
-                                strings.shortcut_reset_all,
-                                theme,
-                                move |_, window, cx| on_reset_all(window, cx),
-                            ))
-                        }),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(strings.shortcut_help_banner),
-                ),
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(render_help_text(strings.shortcut_help_banner, theme))
+                .when(has_overrides, |el| {
+                    el.child(render_secondary_button(
+                        "btn_reset_all_shortcuts",
+                        strings.shortcut_reset_all,
+                        theme,
+                        move |_, window, cx| on_reset_all(window, cx),
+                    ))
+                }),
         )
         .children(ShortcutGroup::ALL.into_iter().map(|group| {
             let group_actions: Vec<ShortcutActionId> = ShortcutActionId::ALL
                 .into_iter()
                 .filter(|a| a.group() == group)
                 .collect();
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(render_section_title(localize_shortcut_group(group, strings), theme))
-                .child(
-                    div()
+            let count = group_actions.len();
+            render_section(
+                Some(localize_shortcut_group(group, strings).into()),
+                div()
                         .flex()
                         .flex_col()
-                        .gap_1()
-                        .children(group_actions.into_iter().map(|action| {
+                        .px(px(tk::CARD_PX))
+                        .rounded(px(tk::RADIUS_CARD))
+                        .bg(theme.card_bg())
+                        .children(group_actions.into_iter().enumerate().map(|(index, action)| {
                             let is_recording = recording == Some(action);
                             let is_customized = preferences.is_shortcut_customized(action);
                             let spec = preferences.shortcut_spec(action);
@@ -1764,16 +2041,14 @@ fn render_shortcuts_tab(
                             let on_rep = handlers.on_replace_conflict.clone();
                             let on_can = handlers.on_cancel_conflict.clone();
 
+                            // Same fill-only cap as a neutral button; recording is the one
+                            // state that earns an outline, in the accent color.
                             let pill_bg = if is_recording || is_customized {
                                 theme.control_selection_bg()
                             } else {
-                                theme.text_primary.opacity(0.04)
+                                theme.control_bg()
                             };
-                            let pill_border = if is_recording {
-                                theme.text_primary.opacity(0.32)
-                            } else {
-                                theme.border
-                            };
+                            let pill_border = if is_recording { theme.accent } else { gpui::transparent_black() };
                             let pill_text = if is_recording || is_customized {
                                 theme.selection_text()
                             } else if spec.trim().is_empty() {
@@ -1792,9 +2067,11 @@ fn render_shortcuts_tab(
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap_1()
-                                .py_1()
-                                .px_1()
+                                .gap_1p5()
+                                .py(px(tk::ROW_PY))
+                                .when(index + 1 < count, |el| {
+                                    el.border_b_1().border_color(theme.hairline())
+                                })
                                 .child(
                                     div()
                                         .w_full()
@@ -1809,21 +2086,14 @@ fn render_shortcuts_tab(
                                                 .gap_1p5()
                                                 .child(
                                                     div()
-                                                        .text_xs()
+                                                        .text_size(px(tk::TEXT_LABEL))
                                                         .text_color(theme.text_primary)
                                                         .child(localize_shortcut_action(action, strings)),
                                                 )
                                                 .when(is_customized && !is_recording, |el| {
                                                     el.child(
                                                         div()
-                                                            .px_1p5()
-                                                            .py_0p5()
-                                                            .rounded(px(4.))
-                                                            .bg(theme.text_primary.opacity(0.05))
-                                                            .border(px(1.))
-                                                            .border_color(theme.border)
-                                                            .text_size(px(10.))
-                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_size(px(tk::TEXT_SMALL))
                                                             .text_color(theme.text_muted)
                                                             .child(strings.shortcut_custom_badge),
                                                     )
@@ -1838,24 +2108,23 @@ fn render_shortcuts_tab(
                                                     div()
                                                         .id(SharedString::from(btn_id))
                                                         .debug_selector(move || btn_sel.clone())
-                                                        .px_2p5()
-                                                        .py_1()
-                                                        .rounded(px(6.))
-                                                        .border(px(1.))
+                                                        .h(px(tk::CONTROL_H))
+                                                        .min_w(px(tk::KEYCAP_MIN_W))
+                                                        .px(px(tk::CONTROL_PX - 2.0))
+                                                        .rounded(px(tk::RADIUS))
+                                                        .border_1()
                                                         .border_color(pill_border)
                                                         .bg(pill_bg)
                                                         .flex()
                                                         .items_center()
+                                                        .justify_between()
                                                         .gap_1p5()
-                                                        .text_xs()
+                                                        .text_size(px(tk::TEXT_BODY))
                                                         .when(is_recording, |el| el.font_weight(FontWeight::MEDIUM))
-                                                        .font_family(crate::platform::MONO_FONT)
+                                                        .font_family(crate::platform::mono_font())
                                                         .text_color(pill_text)
                                                         .cursor_pointer()
-                                                        .hover(|s| {
-                                                            s.border_color(theme.text_primary.opacity(0.28))
-                                                                .bg(theme.control_selection_bg())
-                                                        })
+                                                        .hover(|s| s.bg(theme.control_hover_bg()))
                                                         .tooltip(move |_, cx| {
                                                             cx.new(|_| crate::views::workspace::TooltipView {
                                                                 text: edit_hint.to_string(),
@@ -1880,35 +2149,23 @@ fn render_shortcuts_tab(
                                                 .when(is_customized && !is_recording, |el| {
                                                     let res_sel = res_id.clone();
                                                     el.child(
-                                                        div()
-                                                            .id(SharedString::from(res_id))
-                                                            .debug_selector(move || res_sel.clone())
-                                                            .px_1p5()
-                                                            .py_0p5()
-                                                            .rounded(px(4.))
-                                                            .text_xs()
-                                                            .text_color(theme.text_muted)
-                                                            .cursor_pointer()
-                                                            .hover(|s| {
-                                                                s.bg(theme.hover_bg())
-                                                                    .text_color(theme.text_primary)
-                                                            })
-                                                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                                                cx.stop_propagation();
-                                                                on_res(action, window, cx);
-                                                            })
-                                                            .child(strings.shortcut_reset),
+                                                        div().debug_selector(move || res_sel.clone()).child(
+                                                            render_text_button(
+                                                                SharedString::from(res_id),
+                                                                strings.shortcut_reset,
+                                                                theme,
+                                                                move |_, window, cx| {
+                                                                    cx.stop_propagation();
+                                                                    on_res(action, window, cx);
+                                                                },
+                                                            ),
+                                                        ),
                                                     )
                                                 }),
                                         ),
                                 )
                                 .when_some(row_notice, |el, msg| {
-                                    el.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.text_muted)
-                                            .child(msg),
-                                    )
+                                    el.child(render_help_text(msg, theme))
                                 })
                                 .when_some(row_conflict, |el, (target, new_spec, conflicting)| {
                                     let conflict_name = localize_shortcut_action(conflicting, strings);
@@ -1923,19 +2180,17 @@ fn render_shortcuts_tab(
                                     el.child(
                                         div()
                                             .w_full()
-                                            .px_2p5()
+                                            .px(px(tk::CARD_PX))
                                             .py_1p5()
-                                            .rounded(px(6.))
+                                            .rounded(px(tk::RADIUS))
                                             .bg(theme.control_selection_bg())
-                                            .border(px(1.))
-                                            .border_color(theme.text_primary.opacity(0.22))
                                             .flex()
                                             .items_center()
                                             .justify_between()
                                             .gap_2()
                                             .child(
                                                 div()
-                                                    .text_xs()
+                                                    .text_size(px(tk::TEXT_BODY))
                                                     .text_color(theme.selection_text())
                                                     .child(conflict_msg),
                                             )
@@ -1948,11 +2203,14 @@ fn render_shortcuts_tab(
                                                         div()
                                                             .id(SharedString::from(rep_id))
                                                             .debug_selector(move || rep_sel.clone())
-                                                            .px_2()
-                                                            .py_0p5()
-                                                            .rounded(px(4.))
+                                                            .h(px(tk::CONTROL_H - 4.0))
+                                                            .px(px(tk::CONTROL_PX - 2.0))
+                                                            .rounded(px(tk::RADIUS))
+                                                            .flex()
+                                                            .items_center()
                                                             .bg(theme.text_primary)
-                                                            .text_xs()
+                                                            .text_size(px(tk::TEXT_BODY))
+                                                            .font_weight(FontWeight::MEDIUM)
                                                             .text_color(theme.surface)
                                                             .cursor_pointer()
                                                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -1965,10 +2223,12 @@ fn render_shortcuts_tab(
                                                         div()
                                                             .id(SharedString::from(can_id))
                                                             .debug_selector(move || can_sel.clone())
-                                                            .px_1p5()
-                                                            .py_0p5()
-                                                            .rounded(px(4.))
-                                                            .text_xs()
+                                                            .h(px(tk::CONTROL_H - 4.0))
+                                                            .px_2()
+                                                            .rounded(px(tk::RADIUS))
+                                                            .flex()
+                                                            .items_center()
+                                                            .text_size(px(tk::TEXT_BODY))
                                                             .text_color(theme.text_muted)
                                                             .cursor_pointer()
                                                             .hover(|s| s.bg(theme.hover_bg()))
@@ -1982,7 +2242,8 @@ fn render_shortcuts_tab(
                                     )
                                 })
                         })),
-                )
+                theme,
+            )
         }))
 }
 
@@ -1994,7 +2255,14 @@ fn render_about_tab(
     update_reason: Option<&str>,
     on_check_update: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     on_open_github: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    on_open_licenses: Option<impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>,
+    on_restore_welcome: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let check_label = if matches!(update_status, UpdateStatus::Downloaded(_)) {
+        strings.restart_update
+    } else {
+        strings.check_updates
+    };
     let update_text = match update_status {
         UpdateStatus::Checking | UpdateStatus::Installing => strings.update_checking.to_string(),
         UpdateStatus::Latest => strings.up_to_date.to_string(),
@@ -2009,8 +2277,9 @@ fn render_about_tab(
     div()
         .flex()
         .flex_col()
-        .gap_5()
-        // Product header: centered logo, name, tagline.
+        .gap(px(tk::SECTION_GAP))
+        // Product header: centered logo, name, tagline. The About page skips the
+        // page title, so this header is its heading.
         .child(
             div()
                 .w_full()
@@ -2018,7 +2287,6 @@ fn render_about_tab(
                 .flex_col()
                 .items_center()
                 .gap_2()
-                .pt_2()
                 .child(img("brand/logo.png").w(px(64.)).h(px(64.)).flex_shrink_0())
                 .child(
                     div()
@@ -2027,53 +2295,199 @@ fn render_about_tab(
                         .text_color(theme.text_primary)
                         .child("ZMark"),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(strings.about_tagline),
+                .child(render_help_text(strings.about_tagline, theme)),
+        )
+        .child(render_setting_group(
+            Some(strings.software_updates.into()),
+            vec![render_setting_row(
+                format!("{} {}", strings.version_label, crate::APP_VERSION),
+                Some(update_text).filter(|text| !text.is_empty()).map(Into::into),
+                render_secondary_button(
+                    "btn_check_updates",
+                    check_label,
+                    theme,
+                    on_check_update,
                 ),
-        )
-        // Version + updates share the same row component as the other pages.
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(render_section_title(strings.software_updates, theme))
-                .child(render_setting_row(
-                    strings.current_version_label,
-                    None,
-                    div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(crate::APP_VERSION),
+                theme,
+            )
+            .into_any_element()],
+            theme,
+        ))
+        .child(render_setting_group(
+            Some(strings.help_section_label.into()),
+            vec![render_setting_row(
+                strings.welcome_guide_label,
+                Some(strings.welcome_guide_desc.into()),
+                render_secondary_button(
+                    "btn_restore_welcome",
+                    strings.welcome_guide_restore,
                     theme,
-                ))
-                .child(render_setting_row(
-                    strings.check_updates,
-                    Some(update_text).filter(|text| !text.is_empty()).map(Into::into),
-                    render_secondary_button(
-                        "btn_check_updates",
-                        strings.check_updates,
-                        theme,
-                        on_check_update,
-                    ),
-                    theme,
-                )),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(render_section_title(strings.open_source_label, theme))
-                .child(render_setting_row(
-                    "github.com/2716190547/zmark",
-                    Some(strings.footer_credit.into()),
+                    on_restore_welcome,
+                ),
+                theme,
+            )
+            .into_any_element()],
+            theme,
+        ))
+        .child(render_setting_group(
+            Some(strings.open_source_label.into()),
+            {
+                let mut rows = vec![render_setting_row(
+                    strings.source_code_label,
+                    Some(format!("github.com/2716190547/zmark · {}", strings.footer_credit).into()),
                     render_secondary_button("btn_open_github", "GitHub", theme, on_open_github),
                     theme,
-                )),
+                )
+                .into_any_element()];
+                if let Some(on_open_licenses) = on_open_licenses {
+                    rows.push(
+                        render_setting_row(
+                            strings.licenses_label,
+                            Some(strings.licenses_desc.into()),
+                            render_secondary_button(
+                                "btn_open_licenses",
+                                strings.licenses_open,
+                                theme,
+                                on_open_licenses,
+                            ),
+                            theme,
+                        )
+                        .into_any_element(),
+                    );
+                }
+                rows
+            },
+            theme,
+        ))
+}
+
+#[derive(Clone, Copy)]
+enum ModePreview {
+    Auto,
+    Light,
+    Dark,
+}
+
+/// A small drawn window in the palette's light or dark colors; "Auto" shows
+/// the light window on the left and the dark one on the right.
+fn render_window_sketch(colors: &ThemeColors, radius: f32) -> Div {
+    // GPUI clips overflow to a rectangle, not the parent's rounded corners, so
+    // the sketch paints its own rounded fill and title bar.
+    let line = |w: f32, c: Hsla| div().w(px(w)).h(px(3.)).rounded_full().bg(c);
+    div()
+        .size_full()
+        .rounded(px(radius))
+        .bg(colors.bg)
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .h(px(12.))
+                .px(px(6.))
+                .rounded_t(px(radius))
+                .flex()
+                .items_center()
+                .gap(px(3.))
+                .bg(colors.surface)
+                .child(div().size(px(4.)).rounded_full().bg(rgb(0xff5f57)))
+                .child(div().size(px(4.)).rounded_full().bg(rgb(0xfebc2e)))
+                .child(div().size(px(4.)).rounded_full().bg(rgb(0x28c840))),
+        )
+        .child(
+            div()
+                .flex_1()
+                .p(px(8.))
+                .flex()
+                .flex_col()
+                .gap(px(5.))
+                .child(line(36., colors.accent))
+                .child(line(56., colors.text_primary.opacity(0.55)))
+                .child(line(44., colors.text_primary.opacity(0.35)))
+                .child(line(30., colors.text_primary.opacity(0.35))),
+        )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_mode_preview<F>(
+    id: &'static str,
+    label: &'static str,
+    mode: ModePreview,
+    palette: &str,
+    active: bool,
+    theme: &ThemeColors,
+    handler: F,
+) -> impl IntoElement
+where
+    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+{
+    let light = ThemeColors::resolve(palette, false);
+    let dark = ThemeColors::resolve(palette, true);
+    let r = tk::RADIUS_CARD - 2.0;
+    let picture = match mode {
+        ModePreview::Light => render_window_sketch(&light, r),
+        ModePreview::Dark => render_window_sketch(&dark, r),
+        ModePreview::Auto => div()
+            .size_full()
+            .relative()
+            .child(render_window_sketch(&light, r))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(relative(0.5))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right_0()
+                            .w(px(104.))
+                            .child(render_window_sketch(&dark, r)),
+                    ),
+            ),
+    };
+    div()
+        .id(id)
+        .debug_selector(move || label.to_owned())
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_1p5()
+        .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, handler)
+        .child(
+            div()
+                .w(px(112.))
+                .h(px(72.))
+                .p(px(2.))
+                .rounded(px(tk::RADIUS_CARD + 2.0))
+                .border_2()
+                .border_color(if active { theme.accent } else { gpui::transparent_black() })
+                .child(
+                    // Outline drawn on top so light and dark sketches both get an edge.
+                    div()
+                        .size_full()
+                        .relative()
+                        .child(picture)
+                        .child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .rounded(px(r))
+                                .border_1()
+                                .border_color(theme.text_primary.opacity(0.14)),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(tk::TEXT_BODY))
+                .text_color(if active { theme.text_primary } else { theme.text_muted })
+                .when(active, |el| el.font_weight(FontWeight::MEDIUM))
+                .child(label),
         )
 }
 
@@ -2086,31 +2500,5 @@ fn render_mode_pill<F>(
 where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
-    let base = div()
-        .id(SharedString::from(label))
-        .debug_selector(move || label.to_owned())
-        .flex_1()
-        .py_1p5()
-        .rounded_md()
-        .text_xs()
-        .cursor_pointer()
-        .flex()
-        .items_center()
-        .justify_center()
-        .on_mouse_down(MouseButton::Left, handler);
-
-    if active {
-        base.bg(theme.segmented_thumb_bg())
-            .border(px(1.))
-            .border_color(theme.segmented_thumb_border())
-            .text_color(theme.segmented_thumb_text())
-            .font_weight(FontWeight::MEDIUM)
-            .child(label)
-    } else {
-        base.bg(gpui::transparent_black())
-            .text_color(theme.segmented_inactive_text())
-            .hover(|s| s.text_color(theme.text_primary))
-            .child(label)
-    }
+    render_segment(SharedString::from(label), label, active, theme, handler)
 }
-

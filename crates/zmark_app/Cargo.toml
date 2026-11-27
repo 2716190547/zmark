@@ -1,7 +1,9 @@
 [package]
 name = "zmark_app"
-version = "0.2.14"
+version = "0.2.15"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
 
 [features]
 test-observation = ["zmark_core/test-observation"]
@@ -20,6 +22,7 @@ tempfile = "3.17"
 ring = "0.17"
 serde_json = "1.0"
 hex = "0.4"
+futures = "0.3"
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 embed-resource = "3.0"

@@ -19,7 +19,22 @@
 
 ---
 
-## 2. Demostración de sintaxis Markdown
+## 2. Novedades
+
+Prueba cada punto y luego cambia su `[ ]` por `[x]` en el código fuente de la izquierda:
+
+- [ ] **Fuentes separadas para texto y código**: abre los ajustes con `Cmd+,` y elige la **Fuente del texto** y la **Fuente del código** en **Apariencia → Fuentes**. Las listas permiten buscar las fuentes instaladas. La fuente del texto también se usa en la interfaz.
+- [ ] **Arrastra el ancho de lectura**: pasa a la vista previa con `Cmd+3` y arrastra cualquier borde de la columna de texto. Con doble clic en el borde vuelve al ancho predeterminado. **Editor y Guardar → Ancho de lectura** también tiene valores predefinidos.
+- [ ] **Cambia el ancho de la barra lateral**: muéstrala con `Cmd+Shift+B` y arrastra su borde derecho. Con doble clic vuelve al ancho predeterminado.
+- [ ] **Fija los archivos que más usas**: haz clic derecho en un archivo o carpeta de la barra lateral y elige **Fijar arriba**. Pasará al principio de su carpeta.
+- [ ] **Gestos en el visor**: haz clic en una ilustración o diagrama más abajo. Haz zoom con la rueda del ratón o pellizcando el trackpad, y desplázate con dos dedos en un trackpad de Mac. La dirección del desplazamiento sigue el ajuste del sistema.
+- [ ] **Sigue donde lo dejaste**: al abrirse, ZMark vuelve a abrir los archivos que tenías abiertos al salir. Al hacer doble clic en un archivo `.md` en el Finder o el gestor de archivos, se abre ese archivo directamente.
+
+> **Sobre esta guía:** cuando cierres la página de bienvenida, ya no se abrirá sola. Para volver a verla, ve a **Ajustes → Acerca de → Guía de bienvenida** y haz clic en **Restaurar guía**.
+
+---
+
+## 3. Demostración de sintaxis Markdown
 
 ### 1. Estilos de texto, saltos `<br/>`, citas y enlaces
 

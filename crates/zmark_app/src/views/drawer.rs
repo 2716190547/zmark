@@ -24,6 +24,8 @@ pub struct DrawerSearchParams {
     pub selected_directory: Option<PathBuf>,
     pub selection: crate::views::sidebar_selection::SharedSelection,
     pub hidden_paths: Vec<PathBuf>,
+    pub pinned_paths: Vec<PathBuf>,
+    pub on_toggle_pin: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
     pub reduce_motion: bool,
     pub on_row: Option<Arc<dyn Fn(&DocKey, &MouseDownEvent, bool, &mut Window, &mut App)>>,
     pub on_trash_directory: Option<Arc<dyn Fn(&PathBuf, &mut Window, &mut App)>>,
@@ -220,7 +222,7 @@ pub fn render_drawer_with_search(
     }
 
     let mut root_container = div()
-        .w(px(crate::views::editor::DRAWER_WIDTH))
+        .w_full()
         .h_full()
         .bg(theme.bg)
         .border_r_1()
@@ -446,7 +448,9 @@ pub fn render_drawer_with_search(
                                     .child(strings.workspace_empty),
                             );
                         } else {
-                            for (root_idx, root) in workspace_roots.iter().enumerate() {
+                            let mut root_order: Vec<_> = workspace_roots.iter().enumerate().collect();
+                            root_order.sort_by_key(|(_, root)| pin_rank(&search.pinned_paths, &root.path));
+                            for (root_idx, root) in root_order {
                                 if search.hidden_paths.iter().any(|p| root.path.starts_with(p)) { continue; }
                                 let root_path_str = root.path.to_string_lossy().to_string();
                                 let root_name = root_label(workspace_roots, root_idx);
@@ -544,6 +548,7 @@ pub fn render_drawer_with_search(
                                 let on_new_file_root = on_new_file_in_dir.clone();
                                 let root_dir_path = root.path.clone();
                                 let right_part = div()
+                                    .when(search.pinned_paths.contains(&root.path), |el| el.child(pin_badge(theme)))
                                     .child(path_actions(root.path.clone(), "drawer_root_row", search, strings))
                                     .flex()
                                     .items_center()
@@ -685,6 +690,8 @@ pub fn render_drawer_with_search(
                                 DocKey::Scratch(_) => None,
                             })
                             .collect();
+                        let mut loose_file_paths = loose_file_paths;
+                        loose_file_paths.sort_by_key(|p| pin_rank(&search.pinned_paths, p));
 
                         if !loose_file_paths.is_empty() {
                             let mut loose_section = div()
@@ -799,6 +806,7 @@ pub fn render_drawer_with_search(
                                     );
 
                                 let right_part = if search.on_trash_directory.is_some() { path_actions((*p).clone(), "drawer_loose_file_row", search, strings) } else { right_part };
+                                let right_part = if search.pinned_paths.contains(*p) { right_part.child(pin_badge(theme)) } else { right_part };
                                 loose_section = loose_section.child(path_context_menu(item.child(left_part).child(right_part), (*p).clone(), search, theme, strings));
                             }
 
@@ -891,7 +899,7 @@ pub fn render_input(input: &Entity<SearchInput>, title: bool) -> gpui_component:
         .w_full().min_w(px(0.)).px_0().py_0()
         .line_height(px(if title { 24. } else { 20. }))
         .text_size(px(if title { 18. } else { 13. }))
-        .font_family(crate::platform::UI_FONT)
+        .font_family(crate::platform::ui_font())
         .font_weight(if title { FontWeight::BOLD } else { FontWeight::NORMAL })
 }
 
@@ -974,7 +982,10 @@ fn render_file_tree_nodes(
     out: &mut Vec<AnyElement>,
 ) {
     let q_lower = search_query.to_lowercase();
-    for (node_idx, node) in nodes.iter().enumerate() {
+    let mut order: Vec<(usize, &FileTreeNode)> = nodes.iter().enumerate().collect();
+    // Pinned entries lead their folder in pin order; the rest keep folders-then-files scan order.
+    order.sort_by_key(|(_, node)| pin_rank(&params.pinned_paths, &node.path));
+    for (node_idx, node) in order {
         if params.hidden_paths.iter().any(|p| node.path.starts_with(p)) { continue; }
         let depth_indent = (depth as f32 + 1.0) * 12.0;
         if node.is_dir {
@@ -1030,6 +1041,7 @@ fn render_file_tree_nodes(
             let on_new_file_dir = on_new_file_in_dir.clone();
             let dir_path = node.path.clone();
             let right_part = div()
+                .when(params.pinned_paths.contains(&node.path), |el| el.child(pin_badge(theme)))
                 .child(path_actions(node.path.clone(), "drawer_dir_row", params, strings))
                 .flex()
                 .items_center()
@@ -1227,6 +1239,9 @@ fn render_file_tree_nodes(
             if params.on_trash_directory.is_some() {
                 right_part = path_actions(node.path.clone(), "drawer_file_row", params, strings);
             }
+            if params.pinned_paths.contains(&node.path) {
+                right_part = right_part.child(pin_badge(theme));
+            }
             let file_content = div().flex().flex_1().items_start().gap_1().min_w(px(0.)).overflow_hidden()
                 .child(div().size(px(16.)).flex_shrink_0().mt(px(2.)).flex().items_center().justify_center()
                     .child(svg().path("icons/file.svg").size(px(14.)).flex_shrink_0().text_color(theme.text_muted)))
@@ -1251,7 +1266,7 @@ impl Render for DrawerTooltipView {
             .border_color(rgba(0x3f3f4640))
             .text_size(px(11.))
             .text_color(rgb(0xf4f4f5))
-            .font_family(crate::platform::UI_FONT)
+            .font_family(crate::platform::ui_font())
             .shadow_md()
             .child(self.text.clone())
     }
@@ -1298,6 +1313,15 @@ where
     }
 }
 
+/// Sort key that puts pinned paths first, in the order they were pinned.
+fn pin_rank(pinned: &[PathBuf], path: &std::path::Path) -> usize {
+    pinned.iter().position(|p| p == path).unwrap_or(usize::MAX)
+}
+
+fn pin_badge(theme: &ThemeColors) -> Svg {
+    svg().path("icons/pin.svg").size(px(12.)).flex_shrink_0().text_color(theme.text_muted)
+}
+
 fn path_actions(path: PathBuf, group: &'static str, params: &DrawerSearchParams, strings: &'static I18nStrings) -> Div {
     let mut actions = div().flex().items_center().gap_1().flex_shrink_0();
     for (suffix, label, title, callback) in [
@@ -1318,10 +1342,17 @@ fn path_actions(path: PathBuf, group: &'static str, params: &DrawerSearchParams,
 fn path_context_menu<E: InteractiveElement + ParentElement + Styled + IntoElement + 'static>(
     element: E, path: PathBuf, params: &DrawerSearchParams, theme: &ThemeColors, strings: &'static I18nStrings,
 ) -> impl IntoElement {
+    let pin = params.on_toggle_pin.clone();
+    let is_pinned = params.pinned_paths.contains(&path);
     let remove = params.on_remove_path.clone();
     let trash = params.on_trash_directory.clone();
     let danger = theme.destructive_text();
     element.context_menu(move |mut menu, _, _| {
+        if let Some(callback) = &pin {
+            let callback = callback.clone(); let path = path.clone();
+            menu = menu.item(PopupMenuItem::new(if is_pinned { strings.unpin } else { strings.pin_to_top })
+                .on_click(move |_,window,cx| callback(&path,window,cx)));
+        }
         if let Some(callback) = &remove {
             let callback = callback.clone(); let path = path.clone();
             menu = menu.item(PopupMenuItem::new(strings.remove_from_sidebar)

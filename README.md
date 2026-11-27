@@ -10,10 +10,11 @@
 [![Build Desktop](https://img.shields.io/github/actions/workflow/status/2716190547/zmark/build-desktop.yml?branch=dev&label=CI%20Build&style=flat-square)](https://github.com/2716190547/zmark/actions/workflows/build-desktop.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-DEA584?logo=rust&logoColor=white&style=flat-square)](rust-toolchain.toml)
 [![GPUI](https://img.shields.io/badge/UI-GPUI%20GPU%20Native-3B82F6?style=flat-square)](https://crates.io/crates/gpui)
+[![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-6B7280?style=flat-square)](#license)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-4B5563?style=flat-square)](#download-and-install)
 [![Languages](https://img.shields.io/badge/i18n-10%20Locales-10B981?style=flat-square)](#highlights)
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Download Installers](https://github.com/2716190547/zmark/releases/tag/v0.2.14) · [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub Repo](https://github.com/2716190547/zmark)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Download Installers](https://github.com/2716190547/zmark/releases/tag/v0.2.15) · [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub Repo](https://github.com/2716190547/zmark)
 
 </div>
 
@@ -34,12 +35,12 @@
 
 | Area | Capabilities |
 | --- | --- |
-| **Writing & Sync Scroll** | Instant switching between **Source**, **Split**, and **Preview** modes; block-aligned smooth synchronized scrolling; drag & drop `.md` files, folders, and local images directly into the window; auto-save on idle or window blur for files with a saved path; drafts choose a destination on their first manual save. |
+| **Writing & Sync Scroll** | Instant switching between **Source**, **Split**, and **Preview** modes; block-aligned smooth synchronized scrolling; drag & drop `.md` files, folders, and local images directly into the window; auto-save on idle or window blur for files with a saved path; drafts choose a destination on their first manual save; a plain launch reopens last session's files, and files opened from Finder go straight to the editor. |
 | **Markdown & Code Engine** | GitHub-style adaptive tables, clickable inline `[toc]` outline cards, `<br>` / `<br/>` line breaks, interactive task lists (`- [ ]` / `- [x]`), nested lists, blockquotes, horizontal rules, multi-language fenced code syntax highlighting with one-click copy, and source mode editing for Rust, Python, TypeScript/JS, C/C++, Java, Go, JSON, YAML, TOML, HTML/CSS, shell scripts, and plain text. |
 | **Mermaid & Local Media** | Native local `rusty-mermaid` SVG rendering with UTF-8/CJK label support; local PNG/JPEG/GIF/WebP/SVG previews (relative to document, absolute path, or built-in `zmark-asset://` vector illustrations); click any diagram or image to zoom and pan in the HiDPI Lightbox. |
-| **Workspace & Navigation** | Multi-root folder tree, loose external files, and scratch drafts; fast filename filtering (`Files`) and one-click toggle to document heading tree (`Outline`); Shift / Cmd / Ctrl multi-select, batch hide with 5-second undo, Move to Trash, inline double-click rename, and in-document highlighted Find (`Cmd+F` / `Ctrl+F`). |
-| **Themes & Typography** | Light, Dark, and System appearance modes; **7 curated palettes** (*Claude Warm*, *macOS Native*, *Tokyo Night*, *Nord*, *GitHub Light*, *Solarized*, *One Dark*) plus a **Custom Theme Editor** with separate light/dark color pickers for UI and syntax tokens; customizable font family, size, column width, line height, Tab size, line numbers, and Reduced Motion. |
-| **Rebindable Shortcuts & Welcome** | **17 customizable shortcuts** with live keystroke recording, `Backspace` unbinding, and conflict detection/replacement in **Settings → Shortcuts**; clean named welcome showcase document (`Welcome to ZMark.md`) enriched with interactive `[toc]` navigation and vector SVG illustrations. |
+| **Workspace & Navigation** | Multi-root folder tree, loose external files, and scratch drafts; fast filename filtering (`Files`) and one-click toggle to document heading tree (`Outline`); Shift / Cmd / Ctrl multi-select, batch hide with 5-second undo, Move to Trash, inline double-click rename, pinning files and folders to the top of their folder, a drag-resizable sidebar edge, and in-document highlighted Find (`Cmd+F` / `Ctrl+F`). |
+| **Themes & Typography** | Light, Dark, and System appearance modes; **7 curated palettes** (*Claude Warm*, *macOS Native*, *Tokyo Night*, *Nord*, *GitHub Light*, *Solarized*, *One Dark*) plus a **Custom Theme Editor** with separate light/dark color pickers for UI and syntax tokens; separate body and code fonts picked from installed families, font size, a reading column width you can drag from its edges in Preview, line height, Tab size, line numbers, and Reduced Motion. |
+| **Rebindable Shortcuts & Welcome** | **17 customizable shortcuts** with live keystroke recording, `Backspace` unbinding, and conflict detection/replacement in **Settings → Shortcuts**; a named welcome showcase document (`Welcome to ZMark.md`) with interactive `[toc]` navigation and vector SVG illustrations, shown until you close it and restorable from **Settings → About**. |
 | **i18n & Export** | **10 UI languages** (`Auto`, English, 简体中文, 繁體中文, 日本語, 한국어, Français, Deutsch, Español, Русский, Português) and standalone HTML export (`Cmd+Shift+E` / `Ctrl+Shift+E`). |
 
 ---
@@ -92,9 +93,9 @@ ZMark/
 
 ## Download and Install
 
-**Current release: `v0.2.14`** · [Release Notes](docs/releases/v0.2.14.md)
+**Current release: `v0.2.15`** · [Release Notes](docs/releases/v0.2.15.md)
 
-Download installers directly from [GitHub Releases](https://github.com/2716190547/zmark/releases/tag/v0.2.14). Users in mainland China can also download the macOS ZIP, Windows installer, and update feeds via the [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) (DMG and Linux packages are hosted on GitHub). Releases up to v0.2.12 remain in the archived [zmark-releases](https://github.com/2716190547/zmark-releases/releases) repository.
+Download installers directly from [GitHub Releases](https://github.com/2716190547/zmark/releases/tag/v0.2.15). Users in mainland China can also download the macOS ZIP, Windows installer, and update feeds via the [Gitee Mirror](https://gitee.com/zeng_sc/zmark-releases/releases) (DMG and Linux packages are hosted on GitHub). Releases up to v0.2.12 remain in the archived [zmark-releases](https://github.com/2716190547/zmark-releases/releases) repository.
 
 | Platform | Architecture | Package | Install Instructions |
 | --- | --- | --- | --- |
@@ -158,6 +159,16 @@ Platform build dependencies (such as Ubuntu `wayland` / `x11` / `fontconfig` lib
   ./scripts/full_gate.sh --bundle
   ```
 - **Release & artifact guide**: see [`docs/releases/README.md`](docs/releases/README.md) and [`docs/plans/theme-selection-and-memory-audit.md`](docs/plans/theme-selection-and-memory-audit.md).
+
+---
+
+## License
+
+ZMark is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+Unless you explicitly state otherwise, any contribution you submit to this project is licensed as above, without any additional terms or conditions.
+
+Third-party components keep their own licenses: the UI icons come from [Lucide](https://lucide.dev/) ([ISC](crates/zmark_app/assets/icons/LICENSE-LUCIDE)), and `vendor/rusty-mermaid-diagrams` is a patched copy of [rusty-mermaid](https://github.com/base58ed/rusty-mermaid) ([MIT](vendor/rusty-mermaid-diagrams/LICENSE)).
 
 ---
 

@@ -19,7 +19,22 @@
 
 ---
 
-## 2. Interaktiver Markdown-Syntax-Baukasten
+## 2. Neu in ZMark
+
+Probieren Sie jeden Punkt aus und ändern Sie danach `[ ]` links im Quelltext zu `[x]`:
+
+- [ ] **Getrennte Schriften für Text und Code**: Öffnen Sie mit `Cmd+,` die Einstellungen und wählen Sie unter **Erscheinungsbild → Schriften** eine **Textschrift** und eine **Codeschrift**. Die Listen durchsuchen die installierten Schriften. Die Textschrift gilt auch für die Oberfläche.
+- [ ] **Lesebreite ziehen**: Wechseln Sie mit `Cmd+3` in die Vorschau und ziehen Sie einen Rand der Textspalte. Ein Doppelklick auf den Rand stellt die Standardbreite wieder her. Unter **Editor & Speichern → Spaltenbreite** gibt es auch Voreinstellungen.
+- [ ] **Seitenleiste verbreitern**: Blenden Sie sie mit `Cmd+Shift+B` ein und ziehen Sie den rechten Rand. Ein Doppelklick stellt die Standardbreite wieder her.
+- [ ] **Häufige Dateien anheften**: Klicken Sie in der Seitenleiste mit der rechten Maustaste auf eine Datei oder einen Ordner und wählen Sie **Oben anheften**. Der Eintrag steht dann oben in seinem Ordner.
+- [ ] **Gesten im Leuchtkasten**: Klicken Sie weiter unten auf eine Illustration oder ein Diagramm. Zoomen Sie mit dem Mausrad oder durch Zusammenziehen auf dem Trackpad und verschieben Sie mit zwei Fingern auf einem Mac-Trackpad. Die Scrollrichtung folgt der Systemeinstellung.
+- [ ] **Weiterarbeiten, wo Sie aufgehört haben**: Beim Start öffnet ZMark die Dateien, die beim letzten Beenden offen waren. Ein Doppelklick auf eine `.md`-Datei im Finder oder Dateimanager öffnet genau diese Datei.
+
+> **Zu diesem Leitfaden:** Nachdem Sie die Willkommensseite geschlossen haben, erscheint sie nicht mehr von selbst. Um sie wieder zu öffnen, gehen Sie zu **Einstellungen → Über → Willkommensleitfaden** und klicken auf **Leitfaden wiederherstellen**.
+
+---
+
+## 3. Interaktiver Markdown-Syntax-Baukasten
 
 ### 1. Textformatierung, Zeilenumbrüche, Zitate & Links
 

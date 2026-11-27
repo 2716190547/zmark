@@ -419,17 +419,38 @@ fn default_auto_save_delay() -> u64 {
     1000
 }
 
+fn default_drawer_width() -> f32 {
+    DEFAULT_DRAWER_WIDTH
+}
+
+/// Sidebar width bounds in logical pixels. Double-clicking the edge restores the default.
+pub const DEFAULT_DRAWER_WIDTH: f32 = 250.0;
+pub const MIN_DRAWER_WIDTH: f32 = 180.0;
+pub const MAX_DRAWER_WIDTH: f32 = 480.0;
+
+/// Preview reading column bounds in logical pixels.
+pub const DEFAULT_COLUMN_WIDTH: f32 = 760.0;
+pub const MIN_COLUMN_WIDTH: f32 = 480.0;
+pub const MAX_COLUMN_WIDTH: f32 = 1600.0;
+
 fn default_line_height() -> f32 {
     1.6
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Preferences {
+    /// Body and interface font family; `""` or `"system-ui"` keeps the platform default.
     pub font_family: String,
+    /// Code block and source editor font family; `""` keeps the platform default.
+    #[serde(default)]
+    pub code_font_family: String,
     pub font_size: f32,
     #[serde(default = "default_line_height")]
     pub line_height: f32,
     pub max_column_width: f32,
+    /// Sidebar width, set by dragging its right edge.
+    #[serde(default = "default_drawer_width")]
+    pub drawer_width: f32,
     pub theme: ThemeMode,
     pub palette: String,
     pub locale: SupportedLocale,
@@ -453,6 +474,18 @@ pub struct Preferences {
     pub workspace_roots: Vec<PathBuf>,
     #[serde(default)]
     pub sidebar_hidden_paths: Vec<PathBuf>,
+    /// Files and folders pinned to the top of their folder in the sidebar, in pin order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidebar_pinned_paths: Vec<PathBuf>,
+    /// The user closed the welcome guide; it stays hidden until restored in Settings.
+    #[serde(default)]
+    pub welcome_dismissed: bool,
+    /// Files open when ZMark last quit, reopened on a plain launch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub last_session_files: Vec<PathBuf>,
+    /// The file that was active when ZMark last quit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_active_file: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "CustomThemePreferences::is_empty")]
     pub custom_theme: CustomThemePreferences,
     /// Sparse shortcut overrides (`action_id -> GPUI keystroke spec`; `""` means unbound).
@@ -464,9 +497,11 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             font_family: "system-ui".to_string(),
+            code_font_family: String::new(),
             font_size: 16.0,
             line_height: 1.6,
             max_column_width: 760.0,
+            drawer_width: DEFAULT_DRAWER_WIDTH,
             theme: ThemeMode::Auto,
             palette: "default".to_string(),
             locale: SupportedLocale::Auto,
@@ -479,6 +514,10 @@ impl Default for Preferences {
             config_version: CURRENT_CONFIG_VERSION,
             workspace_roots: Vec::new(),
             sidebar_hidden_paths: Vec::new(),
+            sidebar_pinned_paths: Vec::new(),
+            welcome_dismissed: false,
+            last_session_files: Vec::new(),
+            last_active_file: None,
             custom_theme: CustomThemePreferences::default(),
             shortcuts: BTreeMap::new(),
         }
@@ -530,6 +569,22 @@ impl Preferences {
         }
     }
 
+    pub fn sanitize_column_width(val: f32) -> f32 {
+        if val.is_nan() {
+            DEFAULT_COLUMN_WIDTH
+        } else {
+            val.clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH)
+        }
+    }
+
+    pub fn sanitize_drawer_width(val: f32) -> f32 {
+        if val.is_nan() {
+            DEFAULT_DRAWER_WIDTH
+        } else {
+            val.clamp(MIN_DRAWER_WIDTH, MAX_DRAWER_WIDTH)
+        }
+    }
+
     /// Standard OS application support or config directory.
     pub fn default_config_dir() -> PathBuf {
         dirs::config_dir()
@@ -545,6 +600,8 @@ impl Preferences {
         let content = fs::read_to_string(path)?;
         let mut pref: Preferences = toml::from_str(&content)?;
         pref.line_height = Self::sanitize_line_height(pref.line_height);
+        pref.drawer_width = Self::sanitize_drawer_width(pref.drawer_width);
+        pref.max_column_width = Self::sanitize_column_width(pref.max_column_width);
         if pref.migrate_defaults() {
             // Best-effort: a read-only config directory must not block startup.
             if let Err(error) = pref.save_to_path(path) {
@@ -675,6 +732,20 @@ mod tests {
         } else {
             assert_eq!(Preferences::load_from_path(&path).unwrap().tab_size, 8);
         }
+    }
+
+    #[test]
+    fn test_sanitize_drawer_width() {
+        assert_eq!(Preferences::sanitize_drawer_width(300.0), 300.0);
+        assert_eq!(Preferences::sanitize_drawer_width(10.0), MIN_DRAWER_WIDTH);
+        assert_eq!(Preferences::sanitize_drawer_width(9000.0), MAX_DRAWER_WIDTH);
+        assert_eq!(Preferences::sanitize_drawer_width(f32::NAN), DEFAULT_DRAWER_WIDTH);
+        let legacy = toml::to_string(&Preferences::default()).unwrap()
+            .lines().filter(|l| !l.starts_with("drawer_width")).collect::<Vec<_>>().join("\n");
+        let old: Preferences = toml::from_str(&legacy).unwrap();
+        assert_eq!(old.drawer_width, DEFAULT_DRAWER_WIDTH);
+        assert_eq!(Preferences::sanitize_column_width(100.0), MIN_COLUMN_WIDTH);
+        assert_eq!(Preferences::sanitize_column_width(f32::NAN), DEFAULT_COLUMN_WIDTH);
     }
 
     #[test]

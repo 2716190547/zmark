@@ -135,6 +135,8 @@ pub struct WorkspaceView {
     pub drawer_scroll_handle: ScrollHandle,
     pub split_ratio: f32,
     pub is_resizing_split: bool,
+    pub is_resizing_drawer: bool,
+    pub is_resizing_column: bool,
     pub is_renaming: bool,
     pub rename_target: Option<crate::state::DocKey>,
     pub rename_in_sidebar: bool,
@@ -310,6 +312,8 @@ impl WorkspaceView {
             drawer_scroll_handle: ScrollHandle::new(),
             split_ratio: 0.5,
             is_resizing_split: false,
+            is_resizing_drawer: false,
+            is_resizing_column: false,
             is_renaming: false,
             rename_target: None,
             rename_in_sidebar: false,
@@ -990,7 +994,7 @@ impl WorkspaceView {
 
     pub fn compute_editor_max_width_px(&self, window: &Window) -> f32 {
         let drawer_w = if self.state.drawer_open {
-            px(crate::views::editor::DRAWER_WIDTH)
+            px(self.state.preferences.drawer_width)
         } else {
             px(0.)
         };
@@ -1027,7 +1031,7 @@ impl WorkspaceView {
         let font_size = self.state.preferences.font_size;
         let rev = self.state.editor.revision;
         let width_bits = max_width_px.round() as u64;
-        let font_bits = font_size.to_bits();
+        let font_bits = crate::platform::font_layout_key(font_size);
 
         let ast_blocks_changed = !self.state.doc().is_parse_stale()
             && (self.source_code_blocks_rev != rev
@@ -2238,12 +2242,87 @@ impl WorkspaceView {
         }));
     }
 
+    /// Ends a preview column edge drag and persists the final width once.
+    fn end_column_resize(&mut self) {
+        if std::mem::take(&mut self.is_resizing_column) {
+            self.state.save_preferences();
+        }
+    }
+
+    /// Drag handles just outside both edges of the preview reading column. Double-click
+    /// restores 760. They are placed by layout (same `px_8` + centered `max_w` as the
+    /// blocks), so they track the column in the same frame, and they sit in the margin
+    /// so presses on the first or last character still reach the text.
+    fn render_column_resize_handles(&self, cx: &mut Context<Self>) -> AnyElement {
+        let col_w = self.state.preferences.max_column_width;
+        let accent = self.state.theme.accent;
+        let active = self.is_resizing_column;
+        let handle = |id: &'static str, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .w(px(6.))
+                .flex()
+                .justify_center()
+                .cursor_col_resize()
+                .group(id)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                        if event.click_count == 2 {
+                            this.is_resizing_column = false;
+                            this.state.set_column_width(zmark_core::config::DEFAULT_COLUMN_WIDTH);
+                            this.state.save_preferences();
+                        } else {
+                            this.is_resizing_column = true;
+                        }
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .w(px(1.))
+                        .h_full()
+                        .when(active, |el| el.bg(accent))
+                        .group_hover(id, |s| s.bg(accent)),
+                )
+        };
+        div()
+            .absolute()
+            .inset_0()
+            .px_8()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .max_w(px(col_w))
+                    .h_full()
+                    .child(handle("column_resize_left", cx).left(px(-COLUMN_HANDLE_OFFSET)))
+                    .child(handle("column_resize_right", cx).right(px(-COLUMN_HANDLE_OFFSET))),
+            )
+            .into_any_element()
+    }
+
+    /// Ends a sidebar edge drag and persists the final width once.
+    fn end_drawer_resize(&mut self) {
+        if std::mem::take(&mut self.is_resizing_drawer) {
+            self.state.save_preferences();
+        }
+    }
+
     pub fn close_lightbox(&mut self, window: &mut Window, cx: &mut App) {
         // Opening a modal on mouse-down can hide the matching mouse-up from the panes.
         self.end_source_drag();
         self.end_preview_selection();
         self.end_preview_scroll_drag();
         self.is_resizing_split = false;
+        self.end_drawer_resize();
+        self.end_column_resize();
         self.clear_lightbox_sharp(window, cx);
         if let Some(image) = self.lightbox_local_image.take() {
             let shared = self.local_images.lock().unwrap().entries.values().any(|state| matches!(state,
@@ -2825,6 +2904,35 @@ impl WorkspaceView {
         }
     }
 
+    /// Open files or folders handed to ZMark from outside (drag and drop, Finder "Open With").
+    pub fn open_external_paths(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let mut errors = Vec::new();
+        let mut opened_file = false;
+        for path in paths {
+            let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if path.is_dir() {
+                if let Err(msg) = self.open_or_add_workspace_dir(&path, cx) {
+                    errors.push(format!("{}: {}", path.display(), msg));
+                }
+            } else {
+                match self.state.load_file(path.clone()) {
+                    Ok(()) => {
+                        self.restore_sidebar_path(&path, cx);
+                        opened_file = true;
+                    }
+                    Err(error) => errors.push(format!("{}: {}", path.display(), error)),
+                }
+            }
+        }
+        if opened_file { self.on_document_swapped(Some(window), cx); }
+        self.drawer_close_task = None;
+        self.drawer_closing = false;
+        self.state.drawer_open = true;
+        self.state.drawer_tab = crate::state::DrawerTab::Files;
+        self.error_banner = if errors.is_empty() { None } else { Some(errors.join("\n")) };
+        cx.notify();
+    }
+
     fn restore_sidebar_path(&mut self, path: &Path, cx: &mut Context<Self>) {
         let paths = self.state.preferences.sidebar_hidden_paths.iter().filter(|hidden| path.starts_with(hidden)).cloned().collect::<Vec<_>>();
         if !paths.is_empty() { self.persist_sidebar_hidden(paths, false, cx); }
@@ -3172,6 +3280,20 @@ impl WorkspaceView {
 
     /// Starts the restart flow. Dirty documents go through the existing close
     /// prompt; the actual swap happens only after they are all resolved.
+    /// Settings > About > "Restore guide".
+    pub fn restore_welcome_guide(&mut self, cx: &mut Context<Self>) {
+        match self.state.restore_welcome() {
+            Ok(()) => {
+                self.on_document_swapped(None, cx);
+                if let Some(handle) = self.window_handle {
+                    let _ = handle.update(cx, |_, window, _| window.activate_window());
+                }
+            }
+            Err(error) => self.error_banner = Some(error.to_string()),
+        }
+        cx.notify();
+    }
+
     pub fn restart_for_update(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         if self.prepared_update.is_none() {
             return;
@@ -3357,6 +3479,7 @@ impl WorkspaceView {
             viewport_w,
             col_w,
             self.editor_text_start_offset(window),
+            self.state.preferences.drawer_width,
         ));
 
         // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
@@ -4364,6 +4487,7 @@ impl Render for WorkspaceView {
         );
 
         let show_drawer = self.state.drawer_open || self.drawer_closing;
+        let drawer_w = self.state.preferences.drawer_width;
         let is_drawer_closing = self.drawer_closing;
 
         let root = div()
@@ -4385,39 +4509,39 @@ impl Render for WorkspaceView {
                     p.is_dir() || zmark_core::file_ops::is_supported_text(p)))
             })
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                let mut errors = Vec::new();
-                let mut opened_file = false;
-                for path in paths.paths() {
-                    let path = path.canonicalize().unwrap_or_else(|_| path.clone());
-                    if path.is_dir() {
-                        if let Err(msg) = this.open_or_add_workspace_dir(&path, cx) {
-                            errors.push(format!("{}: {}", path.display(), msg));
-                        }
-                    } else {
-                        match this.state.load_file(path.clone()) {
-                            Ok(()) => {
-                                this.restore_sidebar_path(&path, cx);
-                                opened_file = true;
-                            }
-                            Err(error) => errors.push(format!("{}: {}", path.display(), error)),
-                        }
-                    }
-                }
-                if opened_file { this.on_document_swapped(Some(window), cx); }
-                this.drawer_close_task = None;
-                this.drawer_closing = false;
-                this.state.drawer_open = true;
-                this.state.drawer_tab = crate::state::DrawerTab::Files;
-                this.error_banner = if errors.is_empty() { None } else { Some(errors.join("\n")) };
-                cx.notify();
+                this.open_external_paths(paths.paths(), window, cx);
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.source_mouse_move(event, window, cx);
+                if this.is_resizing_drawer {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        // Keep at least 240px of canvas so the sidebar never swallows the window.
+                        let canvas_floor = (this.workspace_width - 240.0).max(zmark_core::config::MIN_DRAWER_WIDTH);
+                        this.state.set_drawer_width(f32::from(event.position.x).min(canvas_floor));
+                    } else {
+                        this.end_drawer_resize();
+                    }
+                    cx.notify();
+                }
+                if this.is_resizing_column {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        if let Some(bounds) = this.preview_content_bounds {
+                            let pane_w = f32::from(bounds.size.width);
+                            let center = f32::from(bounds.origin.x) + pane_w * 0.5;
+                            // The pointer sits in the handle, about 5px outside the text edge.
+                            let width = 2.0 * ((f32::from(event.position.x) - center).abs() - 5.0);
+                            this.state.set_column_width(width.min(pane_w - PREVIEW_COLUMN_GUTTER));
+                        }
+                    } else {
+                        this.end_column_resize();
+                    }
+                    cx.notify();
+                }
                 if this.is_resizing_split {
                     if event.pressed_button == Some(MouseButton::Left) {
                         let w = this.workspace_width;
                         let x = f32::from(event.position.x);
-                        let left_offset = if this.state.drawer_open { crate::views::editor::DRAWER_WIDTH } else { 0.0 };
+                        let left_offset = if this.state.drawer_open { this.state.preferences.drawer_width } else { 0.0 };
                         let avail_w = (w - left_offset).max(100.0);
                         let offset_x = (x - left_offset).max(0.0);
                         this.split_ratio = (offset_x / avail_w).clamp(0.20, 0.80);
@@ -4447,6 +4571,8 @@ impl Render for WorkspaceView {
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| {
                 this.release_source_drag(MouseButton::Left);
                 this.is_resizing_split = false;
+                this.end_drawer_resize();
+                this.end_column_resize();
                 this.end_preview_selection();
                 cx.notify();
             }))
@@ -4456,6 +4582,8 @@ impl Render for WorkspaceView {
                 if this.is_resizing_split {
                     this.is_resizing_split = false;
                 }
+                this.end_drawer_resize();
+                this.end_column_resize();
                 if this.is_preview_selecting {
                     this.end_preview_selection();
                     cx.notify();
@@ -4697,7 +4825,7 @@ impl Render for WorkspaceView {
                         .overflow_hidden()
                         .child(
                             div()
-                                .w(px(crate::views::editor::DRAWER_WIDTH))
+                                .w(px(drawer_w))
                                 .h_full()
                                 .border_r_1()
                                 .border_color(theme.border)
@@ -4746,6 +4874,10 @@ impl Render for WorkspaceView {
                                     let on_remove_path = Arc::new(move |path: &PathBuf, _: &mut Window, cx: &mut App| {
                                         remove_view.update(cx, |this,cx| this.persist_sidebar_hidden(vec![path.clone()],true,cx));
                                     });
+                                    let pin_view = cx.entity().clone();
+                                    let on_toggle_pin = Arc::new(move |path: &PathBuf, _: &mut Window, cx: &mut App| {
+                                        pin_view.update(cx, |this, cx| { this.state.toggle_sidebar_pin(path); cx.notify(); });
+                                    });
                                     let undo_view = cx.entity().clone();
                                     let on_undo = Arc::new(move |_: &mut Window, cx: &mut App| {
                                         undo_view.update(cx, |this,cx| {
@@ -4765,6 +4897,8 @@ impl Render for WorkspaceView {
                                         selected_directory: self.selected_directory.clone(),
                                         selection: self.sidebar_selection.clone(),
                                         hidden_paths: self.state.preferences.sidebar_hidden_paths.clone(),
+                                        pinned_paths: self.state.preferences.sidebar_pinned_paths.clone(),
+                                        on_toggle_pin: Some(on_toggle_pin),
                                         reduce_motion,
                                         on_row: Some(on_row),
                                         on_trash_directory: Some(on_trash_directory),
@@ -4826,7 +4960,7 @@ impl Render for WorkspaceView {
                             Animation::new(std::time::Duration::from_millis(180)).with_easing(ease_in_out),
                             move |el, delta| {
                                 let factor = if is_drawer_closing { 1.0 - delta } else { delta };
-                                el.w(px(crate::views::editor::DRAWER_WIDTH * factor)).opacity(factor.clamp(0.0, 1.0))
+                                el.w(px(drawer_w * factor)).opacity(factor.clamp(0.0, 1.0))
                             },
                         ),
                 )
@@ -5358,6 +5492,7 @@ impl Render for WorkspaceView {
                                                         self.local_images.clone(),
                                                         reduce_motion,
                                                     ))
+                                                    .child(self.render_column_resize_handles(cx))
                                                     .child(self.render_preview_scrollbar()))
                                                     .into_any_element()
                                             }
@@ -5504,6 +5639,7 @@ impl Render for WorkspaceView {
                                                                     self.local_images.clone(),
                                                                     reduce_motion,
                                                                 ))
+                                                                .child(self.render_column_resize_handles(cx))
                                                                 .child(self.render_preview_scrollbar()))
                                                         }),
                                                 )
@@ -5512,6 +5648,43 @@ impl Render for WorkspaceView {
                                     })
                             })
                     )
+                    // Sidebar resize handle: a 6px hit zone straddling the drawer's right border.
+                    .when(self.state.drawer_open && !is_drawer_closing, |root| {
+                        root.child(
+                            div()
+                                .id("drawer_resize_handle")
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .left(px(drawer_w - 3.0))
+                                .w(px(6.))
+                                .flex()
+                                .justify_center()
+                                .cursor_col_resize()
+                                .group("drawer_resize")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                        cx.stop_propagation();
+                                        if event.click_count == 2 {
+                                            this.is_resizing_drawer = false;
+                                            this.state.set_drawer_width(zmark_core::config::DEFAULT_DRAWER_WIDTH);
+                                            this.state.save_preferences();
+                                        } else {
+                                            this.is_resizing_drawer = true;
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(2.))
+                                        .h_full()
+                                        .when(self.is_resizing_drawer, |el| el.bg(theme.accent))
+                                        .group_hover("drawer_resize", |s| s.bg(theme.accent)),
+                                ),
+                        )
+                    })
                     .when(self.lightbox.is_open, |root| {
                         let sharp = self.lightbox_sharp.as_ref().map(|(image, _)| image.clone())
                             .or_else(|| self.lightbox_local_image.as_ref().and_then(|image| image.render.clone()));
@@ -5564,7 +5737,7 @@ impl Render for TooltipView {
             .border_color(rgba(0x3f3f4640))
             .text_size(px(11.))
             .text_color(rgb(0xf4f4f5))
-            .font_family(crate::platform::UI_FONT)
+            .font_family(crate::platform::ui_font())
             .shadow_md()
             .child(self.text.clone())
     }
@@ -5660,6 +5833,7 @@ pub fn adaptive_header_padding(is_macos: bool, is_fullscreen: bool, drawer_open:
 /// - Collapsed drawer: maintains traffic light clearance (76px normal on macOS)
 /// - Source / Split mode: aligns title with the measured editor text start
 /// - Preview mode: aligns title with centered reading column
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_title_header_padding(
     is_macos: bool,
     is_fullscreen: bool,
@@ -5668,6 +5842,7 @@ pub fn calculate_title_header_padding(
     viewport_width: f32,
     max_column_width: f32,
     editor_text_start: f32,
+    drawer_width: f32,
 ) -> f32 {
     if !drawer_open {
         adaptive_header_padding(is_macos, is_fullscreen, false)
@@ -5675,8 +5850,7 @@ pub fn calculate_title_header_padding(
         match view_mode {
             ViewMode::Source | ViewMode::Split => editor_text_start - 8.0,
             ViewMode::Preview => {
-                let drawer_w = crate::views::editor::DRAWER_WIDTH;
-                let available_w = (viewport_width - drawer_w).max(0.0);
+                let available_w = (viewport_width - drawer_width).max(0.0);
                 let col_w = max_column_width;
                 let left_margin = ((available_w - col_w) * 0.5).max(32.0);
                 (left_margin - 8.0).max(8.0)
@@ -5684,6 +5858,12 @@ pub fn calculate_title_header_padding(
         }
     }
 }
+
+/// Horizontal padding of the preview pane (`px_8` on both sides).
+const PREVIEW_COLUMN_GUTTER: f32 = 64.0;
+
+/// Column handles sit 2-8px outside the text edge.
+const COLUMN_HANDLE_OFFSET: f32 = 8.0;
 
 /// Canvas document title left margin (in pixels, ADR 0036).
 /// Consistently aligns with the 16px content margin across Source, Split, and Preview.

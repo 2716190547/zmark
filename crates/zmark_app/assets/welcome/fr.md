@@ -19,7 +19,22 @@
 
 ---
 
-## 2. Galerie interactive de syntaxe Markdown
+## 2. Nouveautés
+
+Essayez chaque point, puis remplacez son `[ ]` par `[x]` dans la source à gauche :
+
+- [ ] **Polices du texte et du code séparées** : ouvrez les réglages avec `Cmd+,`, puis choisissez la **Police du texte** et la **Police du code** dans **Apparence → Polices**. Les listes permettent de rechercher les polices installées. La police du texte sert aussi à l'interface.
+- [ ] **Largeur de lecture à la souris** : passez en aperçu avec `Cmd+3`, puis faites glisser un bord de la colonne de texte. Un double-clic sur le bord rétablit la largeur par défaut. **Éditeur & Sauvegarde → Largeur de colonne** propose aussi des préréglages.
+- [ ] **Largeur de la barre latérale** : affichez-la avec `Cmd+Shift+B`, puis faites glisser son bord droit. Un double-clic rétablit la largeur par défaut.
+- [ ] **Épingler les fichiers fréquents** : faites un clic droit sur un fichier ou un dossier de la barre latérale et choisissez **Épingler en haut**. Il passe en tête de son dossier.
+- [ ] **Gestes dans la visionneuse** : cliquez sur une illustration ou un diagramme plus bas. Zoomez avec la molette ou en pinçant le trackpad, et déplacez l'image à deux doigts sur un trackpad de Mac. Le sens du défilement suit le réglage du système.
+- [ ] **Reprendre là où vous en étiez** : au lancement, ZMark rouvre les fichiers ouverts lors de la dernière fermeture. Un double-clic sur un fichier `.md` dans le Finder ou le gestionnaire de fichiers ouvre directement ce fichier.
+
+> **À propos de ce guide :** une fois la page d'accueil fermée, elle ne s'ouvre plus d'elle-même. Pour la revoir, allez dans **Réglages → À propos → Guide de bienvenue** et cliquez sur **Restaurer le guide**.
+
+---
+
+## 3. Galerie interactive de syntaxe Markdown
 
 ### 1. Mise en forme, retours à la ligne, citations et liens
 

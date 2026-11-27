@@ -252,6 +252,7 @@ impl WorkspaceView {
                 f32::from(window.viewport_size().width),
                 self.state.preferences.max_column_width,
                 self.editor_text_start_offset(window),
+                self.state.preferences.drawer_width,
             ) + 8.0
         } else {
             self.editor_text_start_offset(window)

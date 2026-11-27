@@ -403,6 +403,8 @@ pub fn root_label(roots: &[WorkspaceRoot], idx: usize) -> String {
 pub struct AppState {
     empty_doc: Document,
     _isolated_preferences_dir: Option<tempfile::TempDir>,
+    /// Key of the open welcome guide, if any. Closing it hides it on later launches.
+    welcome_key: Option<DocKey>,
     pub(crate) open_docs: Vec<OpenDoc>,
     pub(crate) active: Option<DocKey>,
     pub next_scratch_id: u64,
@@ -486,6 +488,7 @@ impl AppState {
             preferences.palette = "default".to_string();
             let _ = preferences.save_to_path(&preferences_path);
         }
+        crate::platform::set_fonts(&preferences.font_family, &preferences.code_font_family);
         let is_dark = match preferences.theme {
             ThemeMode::Light => false,
             ThemeMode::Dark => true,
@@ -522,6 +525,7 @@ impl AppState {
             preferences_path,
             empty_doc: Document::new_scratch(),
             _isolated_preferences_dir: None,
+            welcome_key: None,
             editor,
             view_mode: ViewMode::Split,
             drawer_open: false,
@@ -594,6 +598,45 @@ impl AppState {
 
     pub fn set_tab_size(&mut self, tab_size: usize) {
         self.preferences.tab_size = tab_size;
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
+    /// Updates the sidebar width in memory; call `save_preferences` when the drag ends.
+    pub fn set_drawer_width(&mut self, val: f32) {
+        self.preferences.drawer_width = Preferences::sanitize_drawer_width(val);
+    }
+
+    /// Updates the preview column width in memory; call `save_preferences` when the drag ends.
+    pub fn set_column_width(&mut self, val: f32) {
+        self.preferences.max_column_width = Preferences::sanitize_column_width(val);
+    }
+
+    /// Pins a sidebar file or folder to the top of its folder, or unpins it.
+    pub fn toggle_sidebar_pin(&mut self, path: &std::path::Path) {
+        let pinned = &mut self.preferences.sidebar_pinned_paths;
+        if let Some(ix) = pinned.iter().position(|p| p == path) {
+            pinned.remove(ix);
+        } else {
+            pinned.push(path.to_path_buf());
+        }
+        self.save_preferences();
+    }
+
+    pub fn save_preferences(&self) {
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
+    /// Sets the body/interface font (`""` = platform default) and saves it.
+    pub fn set_body_font(&mut self, family: &str) {
+        self.preferences.font_family = family.to_string();
+        crate::platform::set_fonts(&self.preferences.font_family, &self.preferences.code_font_family);
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
+    /// Sets the code block and source editor font (`""` = platform default) and saves it.
+    pub fn set_code_font(&mut self, family: &str) {
+        self.preferences.code_font_family = family.to_string();
+        crate::platform::set_fonts(&self.preferences.font_family, &self.preferences.code_font_family);
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
@@ -1312,7 +1355,8 @@ impl AppState {
         }
 
         let new_doc = Document::from_file(path.clone())?;
-        // If single empty clean scratch document, replace it
+        // If single empty clean scratch document, replace it. The welcome guide
+        // stays until the user closes it.
         if self.open_docs.len() == 1
             && self.open_docs[0].key.is_scratch()
             && self.open_docs[0].doc.buffer.trim().is_empty()
@@ -1497,6 +1541,14 @@ impl AppState {
         };
 
         self.open_docs.remove(pos);
+        if self.welcome_key.as_ref() == Some(key) {
+            self.welcome_key = None;
+            // Discarding during quit is not a request to hide the guide.
+            if !self.is_quitting && !self.preferences.welcome_dismissed {
+                self.preferences.welcome_dismissed = true;
+                let _ = self.preferences.save_to_path(&self.preferences_path);
+            }
+        }
 
         if self.active.as_ref() == Some(key) {
             if self.open_docs.is_empty() {
@@ -1518,6 +1570,57 @@ impl AppState {
                 }
             }
         }
+    }
+
+    /// Treat the startup draft as the welcome guide, so closing it hides it later.
+    pub fn mark_initial_welcome(&mut self) {
+        self.welcome_key = self.active.clone().filter(DocKey::is_scratch);
+    }
+
+    /// Settings > "Restore guide": show the welcome guide again on this and later launches.
+    pub fn restore_welcome(&mut self) -> Result<(), zmark_core::config::ConfigError> {
+        self.preferences.welcome_dismissed = false;
+        self.preferences.save_to_path(&self.preferences_path)?;
+        self.sync_from_editor();
+        if let Some(key) = self.welcome_key.clone().filter(|k| self.open_docs.iter().any(|d| &d.key == k)) {
+            self.switch_document(&key);
+            return Ok(());
+        }
+        let key = DocKey::Scratch(self.next_scratch_id);
+        self.next_scratch_id += 1;
+        let doc = crate::welcome::document(self.preferences.locale);
+        self.editor.reset_text(&doc.buffer);
+        self.open_docs.push(OpenDoc { key: key.clone(), doc });
+        self.active = Some(key.clone());
+        self.welcome_key = Some(key);
+        Ok(())
+    }
+
+    /// Record the open files so the next plain launch can reopen them. Drafts
+    /// without a path are skipped; auto-save and the close flow handle those.
+    pub fn remember_session(&mut self) -> Result<(), zmark_core::config::ConfigError> {
+        let files: Vec<PathBuf> = self.open_docs.iter().filter_map(|d| d.doc.path.clone()).collect();
+        let active = self.doc().path.clone();
+        if files == self.preferences.last_session_files && active == self.preferences.last_active_file {
+            return Ok(());
+        }
+        self.preferences.last_session_files = files;
+        self.preferences.last_active_file = active;
+        self.preferences.save_to_path(&self.preferences_path)
+    }
+
+    /// Reopen the files recorded by [`Self::remember_session`] that still exist,
+    /// then switch to the one that was active. Returns whether anything opened.
+    pub fn restore_session(&mut self) -> bool {
+        let files: Vec<PathBuf> = self.preferences.last_session_files.iter().filter(|p| p.is_file()).cloned().collect();
+        let mut opened = false;
+        for path in &files {
+            opened |= self.open_file(path.clone()).is_ok();
+        }
+        if let Some(active) = self.preferences.last_active_file.clone().filter(|p| p.is_file()) {
+            let _ = self.open_file(active);
+        }
+        opened
     }
 
     pub fn load_file(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
@@ -1601,12 +1704,15 @@ impl AppState {
         let mut warning = None;
         let preferences_path = map(&self.preferences_path);
         let hidden_paths: Vec<_> = self.preferences.sidebar_hidden_paths.iter().map(|p| map(p)).collect();
-        let changes_config = hidden_paths != self.preferences.sidebar_hidden_paths || root_paths.iter().zip(&self.workspace_roots).any(|(p, r)| p != &r.path)
+        let pinned_paths: Vec<_> = self.preferences.sidebar_pinned_paths.iter().map(|p| map(p)).collect();
+        let changes_config = hidden_paths != self.preferences.sidebar_hidden_paths
+            || pinned_paths != self.preferences.sidebar_pinned_paths || root_paths.iter().zip(&self.workspace_roots).any(|(p, r)| p != &r.path)
             || preferences_path != self.preferences_path;
         if changes_config {
             let mut preferences = self.preferences.clone();
             preferences.workspace_roots = root_paths.clone();
             preferences.sidebar_hidden_paths = hidden_paths;
+            preferences.sidebar_pinned_paths = pinned_paths;
             if let Err(error) = preferences.save_to_path(&preferences_path) {
                 if let Err(rollback) = rename_noreplace(&new, old) {
                     warning = Some(format!("已更名到 {}，但配置未保存且回滚失败：{error}；{rollback}", new.display()));
@@ -2791,4 +2897,62 @@ fn background_disk_conflict_survives_switching_without_losing_local_text() {
     assert_eq!(state.editor.to_text(), local);
     assert_eq!(fs::read_to_string(first).unwrap(), "external change");
 }
+}
+
+#[cfg(test)]
+mod session_restore_tests {
+    use super::AppState;
+    use zmark_core::config::Preferences;
+    use zmark_core::i18n::SupportedLocale;
+
+    #[test]
+    fn plain_launch_reopens_last_files_and_keeps_the_welcome_guide() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.md");
+        let b = dir.path().join("b.md");
+        std::fs::write(&a, "# A").unwrap();
+        std::fs::write(&b, "# B").unwrap();
+        let prefs_path = dir.path().join("config.toml");
+
+        let mut first = AppState::new_with_preferences_at(
+            crate::welcome::initial_document(None, SupportedLocale::En),
+            Preferences::default(),
+            prefs_path.clone(),
+        );
+        first.open_file(a.clone()).unwrap();
+        first.open_file(b.clone()).unwrap();
+        first.open_file(a.clone()).unwrap();
+        first.remember_session().unwrap();
+
+        let prefs = Preferences::load_or_default_from_path(&prefs_path);
+        let mut next = AppState::new_with_preferences_at(
+            crate::welcome::initial_document(None, prefs.locale),
+            prefs,
+            prefs_path,
+        );
+        assert!(next.restore_session());
+        let open: Vec<_> = next.open_documents().iter().filter_map(|d| d.doc.path.clone()).collect();
+        assert_eq!(open, vec![a.canonicalize().unwrap(), b.canonicalize().unwrap()]);
+        assert_eq!(next.open_documents().len(), 3, "the welcome guide stays until the user closes it");
+        assert_eq!(next.doc().path, Some(a.canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn closing_the_welcome_guide_hides_it_until_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefs_path = dir.path().join("config.toml");
+        let mut state = AppState::new_with_preferences_at(
+            crate::welcome::document(SupportedLocale::En),
+            Preferences::default(),
+            prefs_path.clone(),
+        );
+        state.mark_initial_welcome();
+        let key = state.open_documents()[0].key.clone();
+        state.close_document_forced(&key);
+        assert!(Preferences::load_or_default_from_path(&prefs_path).welcome_dismissed);
+
+        state.restore_welcome().unwrap();
+        assert!(!Preferences::load_or_default_from_path(&prefs_path).welcome_dismissed);
+        assert_eq!(state.doc().buffer, crate::welcome::document(SupportedLocale::En).buffer);
+    }
 }

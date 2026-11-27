@@ -249,6 +249,25 @@ impl LightboxState {
         self.set_zoom(self.zoom * factor);
     }
 
+    /// Trackpad pinch: `delta` is the fractional change GPUI reports (0.1 = +10%).
+    pub fn apply_pinch_zoom(&mut self, delta: f32) {
+        if !delta.is_finite() || delta == 0.0 {
+            return;
+        }
+        self.set_zoom(self.zoom * (1.0 + delta).clamp(0.5, 2.0));
+    }
+
+    /// Two-finger trackpad scroll. macOS has already applied the user's
+    /// scroll-direction setting, so the image follows the deltas as given.
+    pub fn pan_by(&mut self, dx: f32, dy: f32) {
+        if !dx.is_finite() || !dy.is_finite() || (dx == 0.0 && dy == 0.0) || self.is_dragging {
+            return;
+        }
+        self.pan_x += dx;
+        self.pan_y += dy;
+        self.is_fitted = false;
+    }
+
     pub fn start_drag(&mut self, mouse_x: f32, mouse_y: f32) {
         self.is_dragging = true;
         self.drag_start_mouse = Some((mouse_x, mouse_y));
@@ -373,13 +392,29 @@ pub fn render_lightbox(
             }),
         )
         .on_scroll(cx.listener(|this, event: &ScrollEvent, _window, cx| {
+            // A macOS trackpad (precise pixel deltas) pans with two fingers and zooms
+            // by pinching or with Cmd held; a mouse wheel keeps zooming.
+            if let ScrollDelta::Pixels(p) = event.delta {
+                if cfg!(target_os = "macos") && !event.modifiers.platform && !event.modifiers.control {
+                    this.lightbox.pan_by(f32::from(p.x), f32::from(p.y));
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
+            }
             let delta = match event.delta {
                 ScrollDelta::Pixels(p) => f32::from(p.y),
                 ScrollDelta::Lines(l) => l.y * 20.0,
             };
-            // Windows wheel-up is positive; retain macOS's existing natural-scroll mapping.
-            let delta = if cfg!(target_os = "windows") { delta } else { -delta };
+            // Zoom in when the wheel or fingers move up. With macOS natural scrolling
+            // the system has already inverted the delta, so undo that first.
+            let delta = if crate::platform::scroll_direction_inverted() { -delta } else { delta };
             this.lightbox.apply_scroll_zoom(delta);
+            cx.stop_propagation();
+            cx.notify();
+        }))
+        .on_pinch(cx.listener(|this, event: &PinchEvent, _window, cx| {
+            this.lightbox.apply_pinch_zoom(event.delta);
             cx.stop_propagation();
             cx.notify();
         }))
@@ -459,7 +494,7 @@ pub fn render_lightbox(
                         .gap_2()
                         .text_xs()
                         .text_color(rgb(0xf4f4f5))
-                        .font_family(crate::platform::UI_FONT)
+                        .font_family(crate::platform::ui_font())
                         .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                             cx.stop_propagation()
                         })
@@ -617,8 +652,23 @@ impl Render for HudTooltipView {
             .border_color(rgba(0x3f3f4640))
             .text_size(px(11.))
             .text_color(rgb(0xf4f4f5))
-            .font_family(crate::platform::UI_FONT)
+            .font_family(crate::platform::ui_font())
             .shadow_md()
             .child(self.text.clone())
+    }
+}
+
+#[cfg(test)]
+mod pan_tests {
+    use super::LightboxState;
+
+    #[test]
+    fn two_finger_pan_moves_the_image_and_leaves_fit() {
+        let mut state = LightboxState::new();
+        state.pan_by(12.0, -8.0);
+        assert_eq!((state.pan_x, state.pan_y), (12.0, -8.0));
+        assert!(!state.is_fitted);
+        state.pan_by(f32::NAN, 1.0);
+        assert_eq!((state.pan_x, state.pan_y), (12.0, -8.0));
     }
 }

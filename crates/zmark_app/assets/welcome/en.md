@@ -19,7 +19,22 @@
 
 ---
 
-## 2. Common Markdown Syntax Playground
+## 2. What's New
+
+Try each one, then change its `[ ]` to `[x]` in the source on the left:
+
+- [ ] **Separate body and code fonts**: press `Cmd+,` to open Settings, then pick a **Body Font** and a **Code Font** under **Appearance → Fonts**. Both lists can be searched. The body font is also used for the interface.
+- [ ] **Drag the reading width**: press `Cmd+3` for Preview, then drag either edge of the text column. Double-click an edge to restore the default. **Editor & Save → Column Width** also has presets.
+- [ ] **Resize the sidebar**: press `Cmd+Shift+B` to show the sidebar, then drag its right edge. Double-click to restore the default width.
+- [ ] **Pin files you use often**: right-click a file or folder in the sidebar and choose **Pin to Top**. It moves to the top of its folder.
+- [ ] **Lightbox gestures**: click an illustration or diagram further down. Zoom with the mouse wheel or a trackpad pinch, and pan with two fingers on a Mac trackpad. Scrolling follows your system's scroll direction.
+- [ ] **Pick up where you left off**: launching ZMark reopens the files you had open when you quit. Double-clicking a `.md` file in Finder or your file manager opens that file directly.
+
+> **About this guide:** once you close the welcome page, it won't open again on its own. To see it again, go to **Settings → About → Welcome guide** and click **Restore guide**.
+
+---
+
+## 3. Common Markdown Syntax Playground
 
 ### 1. Text Formatting, Line Breaks, Quotes & Links
 
