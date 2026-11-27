@@ -23,7 +23,19 @@ fn fn_body<'a>(src: &'a str, name: &str) -> &'a str {
 #[test]
 fn about_page_reuses_shared_setting_components() {
     let about = fn_body(settings_src(), "fn render_about_tab(");
-    assert!(about.contains("render_section_title("), "About must use the shared section title");
+    // About's section titles come from titled setting groups, which draw them
+    // through `render_section` -> `render_section_title`.
+    assert!(
+        about.contains("render_setting_group(\n            Some("),
+        "About must use titled shared setting groups"
+    );
+    let group = fn_body(settings_src(), "fn render_setting_group(");
+    assert!(group.contains("render_section("), "setting groups must use the shared section");
+    let section = fn_body(settings_src(), "fn render_section(");
+    assert!(
+        section.contains("render_section_title("),
+        "sections must draw their title with the shared section title"
+    );
     assert!(about.contains("render_setting_row("), "About must use the shared setting row");
     assert!(about.contains("render_secondary_button("), "About must use the shared secondary button");
     assert!(

@@ -19,7 +19,22 @@
 
 ---
 
-## 2. Demonstração interativa da sintaxe Markdown
+## 2. Novidades
+
+Experimente cada item e depois troque o `[ ]` por `[x]` no código-fonte à esquerda:
+
+- [ ] **Fontes separadas para texto e código**: abra as configurações com `Cmd+,` e escolha a **Fonte do texto** e a **Fonte do código** em **Aparência → Fontes**. As listas permitem pesquisar as fontes instaladas. A fonte do texto também é usada na interface.
+- [ ] **Arraste a largura de leitura**: entre na pré-visualização com `Cmd+3` e arraste qualquer borda da coluna de texto. Um clique duplo na borda restaura a largura padrão. **Editor e Salvar → Largura da coluna** também tem predefinições.
+- [ ] **Ajuste a largura da barra lateral**: abra-a com `Cmd+Shift+B` e arraste a borda direita. Um clique duplo restaura a largura padrão.
+- [ ] **Fixe os arquivos mais usados**: clique com o botão direito em um arquivo ou pasta da barra lateral e escolha **Fixar no topo**. Ele passa para o início da pasta.
+- [ ] **Gestos no visualizador**: clique em uma ilustração ou diagrama mais abaixo. Amplie com a roda do mouse ou com pinça no trackpad, e mova com dois dedos em um trackpad de Mac. A direção da rolagem segue a configuração do sistema.
+- [ ] **Continue de onde parou**: ao abrir, o ZMark reabre os arquivos que estavam abertos quando você saiu. Um clique duplo em um arquivo `.md` no Finder ou no gerenciador de arquivos abre esse arquivo diretamente.
+
+> **Sobre este guia:** depois que você fechar a página de boas-vindas, ela não abre mais sozinha. Para vê-la de novo, vá em **Configurações → Sobre → Guia de boas-vindas** e clique em **Restaurar guia**.
+
+---
+
+## 3. Demonstração interativa da sintaxe Markdown
 
 ### 1. Formatação, quebras `<br/>`, citações e links
 
