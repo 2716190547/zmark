@@ -50,14 +50,16 @@ fn intern(value: String) -> &'static str {
     leaked
 }
 
-/// Puts the user's family first and keeps the platform list as fallback, so a
-/// font that was uninstalled later still renders text.
+/// The user's family on its own. GPUI treats a family string as one name and
+/// does not split a CSS-style list, so `"Courier New, ui-monospace"` would
+/// never resolve. A family uninstalled later falls back to GPUI's built-in
+/// fallback stack.
 fn family_list(chosen: &str, default: &'static str) -> &'static str {
     let chosen = chosen.trim();
     if chosen.is_empty() || chosen == "system-ui" {
         default
     } else {
-        intern(format!("{chosen}, {default}"))
+        intern(chosen.to_string())
     }
 }
 
