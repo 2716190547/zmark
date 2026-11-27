@@ -75,6 +75,8 @@ impl DocKey {
 pub struct OpenDoc {
     pub key: DocKey,
     pub doc: Document,
+    /// Undo history, cursor and selection while this document is in the background.
+    pub session: Option<crate::editor_engine::EditorSession>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -511,6 +513,7 @@ impl AppState {
         let open_docs = vec![OpenDoc {
             key: key.clone(),
             doc,
+            session: None,
         }];
         let active = Some(key);
 
@@ -1367,28 +1370,59 @@ impl AppState {
             self.open_docs[0] = OpenDoc {
                 key: target_key.clone(),
                 doc: new_doc,
+                session: None,
             };
         } else {
             self.open_docs.push(OpenDoc {
                 key: target_key.clone(),
                 doc: new_doc,
+                session: None,
             });
         }
 
         let previous_key = self.active.clone();
+        self.park_editor_session();
         self.active = Some(target_key.clone());
         if let Some(previous_key) = previous_key.filter(|old| old != &target_key) {
             if let Some(old_pos) = self.open_docs.iter().position(|d| d.key == previous_key) {
                 self.open_docs[old_pos].doc.unload_parsed();
             }
         }
-        let buffer = &self.open_docs.iter().find(|d| self.active.as_ref() == Some(&d.key)).unwrap().doc.buffer;
-        self.editor.reset_text(buffer);
+        self.load_active_into_editor();
         if let Some(idx) = self.find_root_index_for_path(&path) {
             self.refresh_root(idx);
         }
         self.expand_to_file(&path);
         Ok(())
+    }
+
+    /// Stores the active document's editor session before another one is loaded.
+    fn park_editor_session(&mut self) {
+        let Some(active) = self.active.clone() else { return; };
+        let session = self.editor.take_session();
+        if let Some(open) = self.open_docs.iter_mut().find(|d| d.key == active) {
+            open.session = Some(session);
+        }
+        // Each document may hold up to 8 MiB of history; cap what background
+        // documents keep in total by dropping the largest histories first.
+        const BACKGROUND_HISTORY_BUDGET: usize = 32 * 1024 * 1024;
+        loop {
+            let total: usize = self.open_docs.iter().filter_map(|d| d.session.as_ref()).map(|s| s.history_bytes()).sum();
+            if total <= BACKGROUND_HISTORY_BUDGET { break; }
+            let Some(largest) = self.open_docs.iter_mut()
+                .filter_map(|d| d.session.as_mut())
+                .max_by_key(|s| s.history_bytes()) else { break; };
+            largest.clear_history();
+        }
+    }
+
+    /// Loads the active document into the editor with its saved session.
+    fn load_active_into_editor(&mut self) {
+        let Some(active) = self.active.clone() else { return; };
+        let Some(open) = self.open_docs.iter_mut().find(|d| d.key == active) else { return; };
+        let session = open.session.take();
+        let buffer = open.doc.buffer.clone();
+        self.editor.restore_session(&buffer, session);
     }
 
     pub fn switch_document(&mut self, key: &DocKey) {
@@ -1404,9 +1438,10 @@ impl AppState {
                     self.open_docs[old_pos].doc.unload_parsed();
                 }
             }
+            self.park_editor_session();
             self.active = Some(key.clone());
             self.open_docs[pos].doc.reparse();
-            self.editor.reset_text(&self.open_docs[pos].doc.buffer);
+            self.load_active_into_editor();
             if let DocKey::Path(ref p) = key {
                 self.expand_to_file(p);
             }
@@ -1427,9 +1462,11 @@ impl AppState {
         let key = DocKey::Scratch(self.next_scratch_id);
         self.next_scratch_id += 1;
 
+        self.park_editor_session();
         self.open_docs.push(OpenDoc {
             key: key.clone(),
             doc: scratch,
+            session: None,
         });
         self.active = Some(key);
         self.editor.reset_text("");
@@ -1566,7 +1603,7 @@ impl AppState {
                 let next_key = self.open_docs[next_idx].key.clone();
                 self.active = Some(next_key.clone());
                 self.open_docs[next_idx].doc.reparse();
-                self.editor.reset_text(&self.open_docs[next_idx].doc.buffer);
+                self.load_active_into_editor();
                 if let DocKey::Path(ref p) = next_key {
                     self.expand_to_file(p);
                 }
@@ -1591,8 +1628,9 @@ impl AppState {
         let key = DocKey::Scratch(self.next_scratch_id);
         self.next_scratch_id += 1;
         let doc = crate::welcome::document(self.preferences.locale);
+        self.park_editor_session();
         self.editor.reset_text(&doc.buffer);
-        self.open_docs.push(OpenDoc { key: key.clone(), doc });
+        self.open_docs.push(OpenDoc { key: key.clone(), doc, session: None });
         self.active = Some(key.clone());
         self.welcome_key = Some(key);
         Ok(())
@@ -2756,6 +2794,7 @@ fn test_sidebar_draft_decentralization_lifecycle() {
     state.open_docs.push(OpenDoc {
         key: scratch_zero.clone(),
         doc: scratch_doc,
+        session: None,
     });
     state.active = Some(scratch_zero.clone());
 
@@ -2802,6 +2841,7 @@ fn test_sidebar_draft_decentralization_lifecycle() {
     state.open_docs.push(OpenDoc {
         key: DocKey::Scratch(0),
         doc: Document::new_scratch(),
+        session: None,
     });
     assert!(state.open_docs.iter().any(|d| d.key == DocKey::Scratch(0)));
 
@@ -2872,6 +2912,7 @@ fn test_matching_across_roots_loose_and_drafts() {
     state.open_docs.push(OpenDoc {
         key: DocKey::Path(ext_path),
         doc: ext_doc,
+        session: None,
     });
 
     state.set_search_query("external_loose");
@@ -2883,6 +2924,7 @@ fn test_matching_across_roots_loose_and_drafts() {
     state.open_docs.push(OpenDoc {
         key: DocKey::Scratch(99),
         doc: scratch_doc,
+        session: None,
     });
 
     state.set_search_query("Daily");

@@ -18,6 +18,13 @@ use std::{
 
 const DEFAULT_ITEM_HEIGHT: f32 = 40.0;
 
+/// Saved preview layout of a background document; see [`PreviewScrollState::snapshot`].
+#[derive(Debug, Clone, Default)]
+pub struct PreviewSnapshot {
+    measured: Vec<Option<f32>>,
+    top: (usize, f32),
+}
+
 pub type MeasurementSink = Rc<RefCell<Vec<(usize, f32)>>>;
 
 #[derive(Clone)]
@@ -39,6 +46,8 @@ pub struct PreviewScrollState {
     measured: Vec<Option<f32>>,
     /// AST the measured heights belong to, used to carry them across reparses.
     measured_ast: Option<Arc<ParsedDocument>>,
+    /// Scroll position from a restored [`PreviewSnapshot`], applied by the next layout.
+    pending_restore: Option<(usize, f32)>,
     /// (scroll offset when set, requested block, in-block progress). Keeps a
     /// programmatic `scroll_to` meaningful when GPUI clamps a short document.
     logical_override: Rc<Cell<Option<(f32, usize, f32)>>>,
@@ -72,6 +81,7 @@ impl PreviewScrollState {
             last_range: 0..0,
             measured: Vec::new(),
             measured_ast: None,
+            pending_restore: None,
             logical_override: Rc::new(Cell::new(None)),
             scrollbar_dragging: Rc::new(Cell::new(false)),
             scrollbar_drag_ratio: Rc::new(Cell::new(None)),
@@ -268,7 +278,13 @@ impl PreviewScrollState {
             // edit or a line-height change. Unchanged blocks keep their last real
             // height until they are measured again; after a font or line-height
             // change those heights are stale but far closer than an estimate.
-            self.measured = carry_measured(self.measured_ast.as_deref(), &self.measured, parsed);
+            // After `restore` there is no AST to compare; the caller vouched
+            // that the source is unchanged, so heights apply one-to-one.
+            self.measured = if self.measured_ast.is_none() && self.measured.len() == parsed.blocks.len() {
+                std::mem::take(&mut self.measured)
+            } else {
+                carry_measured(self.measured_ast.as_deref(), &self.measured, parsed)
+            };
             self.last_font_key = font_key;
             self.pending.borrow_mut().clear();
             self.last_parsed_ptr = ptr;
@@ -283,7 +299,9 @@ impl PreviewScrollState {
             .collect();
         self.recompute();
         self.layout_key = key;
-        let new_offset = if was_at_end {
+        let new_offset = if let Some((ix, progress)) = self.pending_restore.take() {
+            self.offset_for_block(ix, progress)
+        } else if was_at_end {
             self.max_scroll()
         } else {
             match anchor_delta {
@@ -374,10 +392,31 @@ impl PreviewScrollState {
 
     // ---- `ListState`-shaped compatibility methods used by behaviour tests ----
 
+    /// Measured heights and scroll position of the current document, to restore
+    /// when it becomes active again. Holds no AST, so a background document can
+    /// still release its parse.
+    pub fn snapshot(&self) -> PreviewSnapshot {
+        PreviewSnapshot {
+            measured: self.measured.clone(),
+            top: self.progress_from_offset(self.offset()),
+        }
+    }
+
+    /// Like [`Self::reset`], then reuses `snapshot` when it matches `count` blocks.
+    /// The caller must only pass a snapshot taken for the same, unchanged source.
+    pub fn restore(&mut self, count: usize, snapshot: PreviewSnapshot) {
+        self.reset(count);
+        if snapshot.measured.len() == count {
+            self.measured = snapshot.measured;
+            self.pending_restore = Some(snapshot.top);
+        }
+    }
+
     pub fn reset(&mut self, count: usize) {
         self.sizes = vec![DEFAULT_ITEM_HEIGHT; count];
         self.measured = vec![None; count];
         self.measured_ast = None;
+        self.pending_restore = None;
         self.last_parsed_ptr = 0;
         self.pending.borrow_mut().clear();
         self.recompute();
@@ -628,6 +667,24 @@ fn estimate_sizes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restore_reuses_heights_and_scroll_position() {
+        let source = (0..30).map(|i| format!("Paragraph {i}\n\n")).collect::<String>();
+        let parsed = Arc::new(zmark_core::ast::parse_markdown(&source));
+        let mut state = PreviewScrollState::new();
+        state.ensure_layout(&parsed, 900.0, 14.0, 1.5, 16.0);
+        for ix in 0..30 { state.measurement_sink().borrow_mut().push((ix, 90.0)); }
+        state.apply_measured(None);
+        state.set_scroll_offset(state.offset_for_block(12, 0.5));
+        let snapshot = state.snapshot();
+        let reparsed = Arc::new(zmark_core::ast::parse_markdown(&source));
+        let mut other = PreviewScrollState::new();
+        other.restore(30, snapshot);
+        other.ensure_layout(&reparsed, 900.0, 14.0, 1.5, 16.0);
+        assert!(other.sizes().iter().all(|&h| (h - 90.0).abs() < 0.01));
+        assert!((other.offset() - other.offset_for_block(12, 0.5)).abs() < 0.5);
+    }
 
     #[test]
     fn carry_measured_keeps_unchanged_prefix_and_suffix() {

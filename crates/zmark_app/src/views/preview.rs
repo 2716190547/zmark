@@ -10,6 +10,7 @@ use crate::theme::ThemeColors;
 mod selection;
 mod mermaid;
 mod virtual_list;
+mod measured_blocks;
 pub use selection::*;
 pub use virtual_list::*;
 
@@ -132,7 +133,6 @@ pub fn render_preview_pane_with_callbacks(
             });
     }
 
-    let mut content = div().relative().w_full().h(px(total));
     let has_toc = item_parsed
         .blocks
         .iter()
@@ -143,15 +143,16 @@ pub fn render_preview_pane_with_callbacks(
         Vec::new()
     };
 
-    for ix in visible_range {
-        let Some(block) = item_parsed.blocks.get(ix) else { continue; };
+    let item_toc = toc_headings;
+    let item_images = images.clone();
+    let build_block = move |ix: usize| -> Option<AnyElement> {
+        let Some(block) = item_parsed.blocks.get(ix) else { return None; };
         let flat = zmark_core::ast::flatten_block(block, "0");
         let block_char_len = flat.text.chars().count();
         let selected_char_range = selection.and_then(|s| s.char_range_for_block(ix, block_char_len));
 
         let block_bounds_cell = Arc::new(std::cell::Cell::new(Bounds::default()));
         let bounds_for_canvas = block_bounds_cell.clone();
-        let measured_cell = measurement_sink.clone();
         let block_container = div()
             .relative()
             .w_full()
@@ -159,13 +160,7 @@ pub fn render_preview_pane_with_callbacks(
             .mx_auto()
             .child(
                 canvas(
-                    move |bounds, window, _cx| {
-                        bounds_for_canvas.set(bounds);
-                        let padding = f32::from(window.rem_size()); // pb_4
-                        measured_cell
-                            .borrow_mut()
-                            .push((ix, f32::from(bounds.size.height) + padding));
-                    },
+                    move |bounds, _window, _cx| bounds_for_canvas.set(bounds),
                     |_bounds, _, _window, _cx| {},
                 )
                 .absolute()
@@ -173,7 +168,7 @@ pub fn render_preview_pane_with_callbacks(
             )
             .child(match block {
                 BlockElement::TableOfContents => render_toc_block(
-                    &toc_headings,
+                    &item_toc,
                     item_callbacks.on_select_heading.as_ref(),
                     &item_theme,
                     strings,
@@ -194,7 +189,7 @@ pub fn render_preview_pane_with_callbacks(
                     ix,
                     item_regions.clone(),
                     item_syntax_cache.clone(),
-                    &images,
+                    &item_images,
                     &item_parsed.code_blocks,
                     &flat,
                     "0",
@@ -203,12 +198,9 @@ pub fn render_preview_pane_with_callbacks(
                 ),
             });
 
+        // Positioned and measured by `MeasuredBlocks` in the same frame.
         let mut item = div()
-            .absolute()
-            .top(px(origins[ix]))
-            .left(px(0.))
             .w_full()
-            .min_h(px(sizes[ix]))
             .px_8()
             .pb_4()
             .child(block_container);
@@ -279,8 +271,16 @@ pub fn render_preview_pane_with_callbacks(
                 });
         }
 
-        content = content.child(item.into_any_element());
-    }
+        Some(item.into_any_element())
+    };
+    let content = measured_blocks::MeasuredBlocks::new(
+        visible_range,
+        origins,
+        sizes,
+        total,
+        measurement_sink,
+        Box::new(build_block),
+    );
 
     let mut scroll_view = div()
         .id("preview_scroll_view")

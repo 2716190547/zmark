@@ -126,6 +126,10 @@ pub struct WorkspaceView {
     sync_scroll_target: Option<(ScrollOrigin, f32)>,
     sync_scroll_task: Option<Task<()>>,
     pub preview_list: PreviewScrollState,
+    /// Document whose layout `preview_list` currently holds.
+    preview_doc: Option<crate::state::DocKey>,
+    /// Preview layout of background documents, with a hash of the buffer it was measured for.
+    preview_snapshots: std::collections::HashMap<crate::state::DocKey, (u64, crate::views::preview::PreviewSnapshot)>,
     preview_viewport_size: Option<Size<Pixels>>,
     pub preview_scroll_activation_observed: bool,
     pub preview_scroll_end_pending: bool,
@@ -293,6 +297,7 @@ impl WorkspaceView {
         crate::actions::ensure_key_bindings(&state.preferences, cx);
         let mut preview_list = PreviewScrollState::new();
         preview_list.reset(state.doc().parsed.blocks.len());
+        let preview_doc = state.active.clone();
         let mut view = Self {
             state,
             focus_handle: cx.focus_handle(),
@@ -308,7 +313,9 @@ impl WorkspaceView {
             split_scrollbar_content_height: Rc::new(Cell::new(None)),
             sync_scroll_target: None,
             sync_scroll_task: None,
+            preview_doc,
             preview_list,
+            preview_snapshots: std::collections::HashMap::new(),
             drawer_scroll_handle: ScrollHandle::new(),
             split_ratio: 0.5,
             is_resizing_split: false,
@@ -520,7 +527,9 @@ impl WorkspaceView {
             .reset(self.state.doc().parsed.blocks.len());
         self.last_preview_sync_offset = 0.0;
         self.rendered_regions.lock().unwrap().clear();
-        self.syntax_cache.lock().unwrap().clear();
+        // The syntax cache is keyed by code content and language, so entries
+        // stay valid across documents; keeping them avoids a plain-text flash
+        // when switching back.
         self.syntax_attempts.clear();
         self.syntax_block_states.clear();
         self.last_visible_syntax_keys.clear();
@@ -1982,10 +1991,29 @@ impl WorkspaceView {
                 cx.remove_asset::<gpui::ImgResourceLoader>(&resource);
             }
         }
+        // Park the outgoing document's preview layout; it is keyed by the buffer
+        // it was measured for, so an edited or reloaded document starts fresh.
+        if let Some(old) = self.preview_doc.take() {
+            if let Some(open) = self.state.open_documents().iter().find(|d| d.key == old) {
+                let hash = buffer_hash(&open.doc.buffer);
+                self.preview_snapshots.insert(old, (hash, self.preview_list.snapshot()));
+            }
+        }
+        let open_keys: Vec<_> = self.state.open_documents().iter().map(|d| d.key.clone()).collect();
+        self.preview_snapshots.retain(|key, _| open_keys.contains(key));
         if self.state.view_mode != ViewMode::Source && self.state.doc().is_parse_stale() {
             self.parse_now_and_refresh();
         }
         self.reset_preview_list();
+        self.preview_doc = self.state.active.clone();
+        if let Some(key) = &self.preview_doc {
+            if let Some((hash, snapshot)) = self.preview_snapshots.remove(key) {
+                if hash == buffer_hash(&self.state.doc().buffer) && !self.state.doc().is_parse_stale() {
+                    let count = self.state.doc().parsed.blocks.len();
+                    self.preview_list.restore(count, snapshot);
+                }
+            }
+        }
         self.syntax_warm_pending = true;
     }
 
@@ -6299,4 +6327,12 @@ fn render_settings_icon(color: Hsla) -> impl IntoElement {
         .path("icons/settings.svg")
         .size(px(16.))
         .text_color(color)
+}
+
+/// Cheap identity for a document buffer, used to key saved preview layouts.
+fn buffer_hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
 }
