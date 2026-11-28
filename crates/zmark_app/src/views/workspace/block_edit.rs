@@ -141,13 +141,53 @@ fn code_source_offset(lines: &[String], offset: usize) -> usize {
     (start + offset).min(end.max(start))
 }
 
-/// Tokens for a line of a code block being edited: fences are muted, the rest is code.
-fn code_line_tokens(lines: &[String], phys: usize, edit: &BlockEdit, end: usize) -> Vec<crate::views::editor::MarkdownToken> {
-    use crate::views::editor::{MarkdownToken, MarkdownTokenKind};
-    let line = &lines[phys];
-    let at_edge = phys == edit.start_line || phys == end;
-    let kind = if at_edge && is_fence(line) { MarkdownTokenKind::CodeDelimiter } else { MarkdownTokenKind::CodeText };
-    vec![MarkdownToken { text: line.clone(), kind }]
+/// Largest code payload highlighted live; bigger blocks edit without colours so a
+/// keystroke never waits on a full re-highlight.
+const LIVE_SYNTAX_MAX_BYTES: usize = 24 * 1024;
+const LIVE_SYNTAX_MAX_LINES: usize = 600;
+
+/// Tokens for every line of a code block being edited: fences are muted, code lines
+/// carry syntax roles for the fence's language (plain code colour when it is unknown
+/// or the block is too large).
+pub(crate) fn code_block_tokens(lines: &[String]) -> Vec<Vec<crate::views::editor::MarkdownToken>> {
+    use crate::views::editor::{spans_to_code_tokens, MarkdownToken, MarkdownTokenKind};
+    let fenced = lines.first().is_some_and(|l| is_fence(l));
+    let closed = fenced && lines.len() > 1 && lines.last().is_some_and(|l| is_fence(l));
+    let first = usize::from(fenced);
+    let end = lines.len() - usize::from(closed);
+    let code = &lines[first.min(end)..end];
+    let info = if fenced {
+        lines[0].trim_start().trim_start_matches(['`', '~']).trim().to_string()
+    } else {
+        String::new()
+    };
+    let payload = code.join("\n");
+    let spans = if !info.is_empty() && !payload.is_empty() && payload.len() <= LIVE_SYNTAX_MAX_BYTES && code.len() <= LIVE_SYNTAX_MAX_LINES {
+        zmark_core::syntax::parse_code_spans_bounded(&payload, Some(&info), None).spans().cloned()
+    } else {
+        None
+    };
+    let mut tokens = Vec::with_capacity(lines.len());
+    let mut payload_start = 0;
+    for (ix, line) in lines.iter().enumerate() {
+        if ix < first || ix >= end {
+            tokens.push(vec![MarkdownToken { text: line.clone(), kind: MarkdownTokenKind::CodeDelimiter }]);
+            continue;
+        }
+        let len = line.len();
+        let line_tokens = if line.is_empty() {
+            Vec::new()
+        } else {
+            let line_spans: Vec<_> = spans.iter().flat_map(|spans| spans.iter()).filter_map(|span| {
+                let (a, b) = (span.range.start.max(payload_start), span.range.end.min(payload_start + len));
+                (a < b).then(|| zmark_core::syntax::SyntaxSpan { range: a - payload_start..b - payload_start, role: span.role })
+            }).collect();
+            spans_to_code_tokens(line, &line_spans)
+        };
+        tokens.push(line_tokens);
+        payload_start += len + 1;
+    }
+    tokens
 }
 
 /// (line, column) of character `offset` within `lines`, relative to the first line.
@@ -413,9 +453,13 @@ impl WorkspaceView {
                 let mut visual = Vec::new();
                 let mut rows = Vec::new();
                 let mut line_offset = edit.start_offset;
+                let code_tokens = edit.code.then(|| code_block_tokens(&display[edit.start_line..=end]));
                 for phys in edit.start_line..=end {
                     let line = &display[phys];
-                    let tokens = if edit.code { code_line_tokens(&display, phys, &edit, end) } else { tokenize_markdown_line(line) };
+                    let tokens = match &code_tokens {
+                        Some(all) => all[phys - edit.start_line].clone(),
+                        None => tokenize_markdown_line(line),
+                    };
                     let (wrapped, _) = crate::views::editor::wrap_line_to_visual_layout_with_width(
                         window.text_system(), phys, line, &tokens, text_width, font_size,
                     );
@@ -583,7 +627,8 @@ impl WorkspaceView {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // Not `super::*`: it would pull in `gpui::test`, which shadows the built-in `#[test]`.
+    use super::{anchor_lines, code_block_tokens, source_offset_for_rendered, BlockEdit, BlockShift};
 
     #[test]
     fn rendered_offsets_skip_markup() {
@@ -592,6 +637,20 @@ mod tests {
         assert_eq!(source_offset_for_rendered("a **bold** c", "a bold c", 2), 4);
         assert_eq!(source_offset_for_rendered("a **bold** c", "a bold c", 7), 11);
         assert_eq!(source_offset_for_rendered("---", "", 0), 0);
+    }
+
+    #[test]
+    fn code_block_tokens_mute_fences_and_keep_every_line_intact() {
+        let lines: Vec<String> = ["```rust", "fn main() {}", "", "// done", "```"].iter().map(|l| l.to_string()).collect();
+        let tokens = code_block_tokens(&lines);
+        assert_eq!(tokens.len(), lines.len());
+        for (line, line_tokens) in lines.iter().zip(&tokens) {
+            assert_eq!(line_tokens.iter().map(|t| t.text.as_str()).collect::<String>(), *line);
+        }
+        assert_eq!(tokens[0][0].kind, crate::views::editor::MarkdownTokenKind::CodeDelimiter);
+        assert_eq!(tokens[4][0].kind, crate::views::editor::MarkdownTokenKind::CodeDelimiter);
+        assert!(tokens[1].len() > 1, "a rust line should split into several roles");
+        assert!(tokens[2].is_empty());
     }
 
     #[test]
