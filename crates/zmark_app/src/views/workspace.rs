@@ -20,6 +20,7 @@ use crate::views::settings::SettingsWindowView;
 
 mod source;
 mod find;
+mod tabs;
 pub use source::{SourceCommand, SourceComposition, SourceDrag, SourceRow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +173,7 @@ pub struct WorkspaceView {
     export_press_generation: u64,
     update_press_generation: u64,
     settings_press_generation: u64,
+    tab_bar_scroll: ScrollHandle,
     pub update_config: UpdateConfig,
     pub update_status: UpdateStatus,
     pub prepared_update: Option<PreparedUpdate>,
@@ -355,6 +357,7 @@ impl WorkspaceView {
             export_press_generation: 0,
             update_press_generation: 0,
             settings_press_generation: 0,
+            tab_bar_scroll: ScrollHandle::new(),
             update_config,
             update_status: UpdateStatus::Idle,
             prepared_update: None,
@@ -1957,6 +1960,7 @@ impl WorkspaceView {
     /// Reclaims GPU texture memory by dropping any active HiDPI lightbox image.
     pub fn on_document_swapped(&mut self, mut window: Option<&mut Window>, cx: &mut App) {
         self.release_hidden_diagrams = true;
+        self.reveal_active_tab();
         if let Some(image) = self.lightbox_local_image.take() {
             if let Some(render) = &image.render { cx.drop_image(render.clone(), window.as_deref_mut()); }
         }
@@ -3486,7 +3490,10 @@ impl WorkspaceView {
         let view_mode = self.state.view_mode;
         let strings = self.state.strings;
         let auto_save = self.state.preferences.auto_save && self.state.doc().path.is_some();
-        let is_renaming = self.is_renaming && !self.rename_in_sidebar;
+        let show_tabs = self.state.preferences.show_tab_bar && self.state.active.is_some();
+        // With tabs the rename box lives inside the active tab, so the header
+        // layout stays as is.
+        let is_renaming = self.is_renaming && !self.rename_in_sidebar && !show_tabs;
         let rename_input = self.rename_input.clone();
 
         let os = cx.platform_info().os;
@@ -3536,16 +3543,21 @@ impl WorkspaceView {
 
         let viewport_w = f32::from(window.viewport_size().width);
         let col_w = self.state.preferences.max_column_width;
-        let header_pl = px(calculate_title_header_padding(
-            is_macos,
-            is_fullscreen,
-            drawer_open,
-            view_mode,
-            viewport_w,
-            col_w,
-            self.editor_text_start_offset(window),
-            self.state.preferences.drawer_width,
-        ));
+        // Tabs start at the canvas edge instead of the text column so more fit.
+        let header_pl = px(if show_tabs {
+            adaptive_header_padding(is_macos, is_fullscreen, drawer_open)
+        } else {
+            calculate_title_header_padding(
+                is_macos,
+                is_fullscreen,
+                drawer_open,
+                view_mode,
+                viewport_w,
+                col_w,
+                self.editor_text_start_offset(window),
+                self.state.preferences.drawer_width,
+            )
+        });
 
         // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
         let header_pr = px(crate::platform::TRAILING_WINDOW_CONTROL_INSET);
@@ -3602,7 +3614,9 @@ impl WorkspaceView {
                             }),
                         ))
                     })
-                    .child(if is_renaming && active_key.is_some() {
+                    .child(if show_tabs {
+                        self.render_tab_bar(theme, is_dirty, cx)
+                    } else if is_renaming && active_key.is_some() {
                         // Same position and type as the static title: no frame, only a
                         // blinking caret, so entering rename never shifts the layout.
                         div()
@@ -4726,6 +4740,21 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(|this, _: &CloseActiveDoc, window, cx| {
                 if !this.workspace_shortcut_blocked() {
                     this.trigger_close_active(Some(window), cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::NextDocument, window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    if let Some(key) = this.state.cycled_document(1) { this.activate_document_key(key, window, cx); }
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::PreviousDocument, window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    if let Some(key) = this.state.cycled_document(-1) { this.activate_document_key(key, window, cx); }
+                }
+            }))
+            .on_action(cx.listener(|this, action: &crate::actions::ActivateDocument, window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    if let Some(key) = this.state.document_for_jump(action.0) { this.activate_document_key(key, window, cx); }
                 }
             }))
             .on_action(cx.listener(|this, _: &CancelRename, window, cx| {

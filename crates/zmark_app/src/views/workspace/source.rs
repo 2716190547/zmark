@@ -341,7 +341,8 @@ impl WorkspaceView {
                 "a" => Some(SourceCommand::SelectAll),
                 _ => None,
             }
-        } else if key == "tab" {
+        } else if key == "tab" && !modifiers.control && !modifiers.alt {
+            // Ctrl+Tab cycles documents; only plain and Shift+Tab indent.
             Some(if modifiers.shift {
                 SourceCommand::Outdent
             } else {

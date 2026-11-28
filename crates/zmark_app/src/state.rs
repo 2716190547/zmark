@@ -600,6 +600,11 @@ impl AppState {
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
+    pub fn set_show_tab_bar(&mut self, enabled: bool) {
+        self.preferences.show_tab_bar = enabled;
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
     pub fn set_tab_size(&mut self, tab_size: usize) {
         self.preferences.tab_size = tab_size;
         let _ = self.preferences.save_to_path(&self.preferences_path);
@@ -1451,6 +1456,37 @@ impl AppState {
                 self.expand_to_file(p);
             }
         }
+    }
+
+    /// The open document `step` places away from the active one in tab order,
+    /// wrapping at both ends; `None` when fewer than two documents are open.
+    pub fn cycled_document(&self, step: isize) -> Option<DocKey> {
+        let len = self.open_docs.len() as isize;
+        if len < 2 {
+            return None;
+        }
+        let current = self.active.as_ref()
+            .and_then(|key| self.open_docs.iter().position(|d| &d.key == key))
+            .unwrap_or(0) as isize;
+        Some(self.open_docs[(current + step).rem_euclid(len) as usize].key.clone())
+    }
+
+    /// The document for a `Ctrl+1…9` jump: 0–7 pick by position, 8 is always the last.
+    pub fn document_for_jump(&self, slot: usize) -> Option<DocKey> {
+        let idx = if slot >= 8 { self.open_docs.len().checked_sub(1)? } else { slot };
+        self.open_docs.get(idx).map(|d| d.key.clone())
+    }
+
+    /// Moves `key` to position `to` in tab order (the order the session restores).
+    pub fn move_document(&mut self, key: &DocKey, to: usize) -> bool {
+        let Some(from) = self.open_docs.iter().position(|d| &d.key == key) else { return false; };
+        let to = to.min(self.open_docs.len() - 1);
+        if from == to {
+            return false;
+        }
+        let doc = self.open_docs.remove(from);
+        self.open_docs.insert(to, doc);
+        true
     }
 
     /// Focuses the existing draft slot, or creates a new draft if none exists.
