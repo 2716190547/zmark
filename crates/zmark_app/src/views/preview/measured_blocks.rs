@@ -10,8 +10,8 @@
 //! the viewport top, so the next frame draws the same positions.
 
 use gpui::{
-    point, px, relative, size, AnyElement, App, AvailableSpace, Bounds, Element, ElementId,
-    GlobalElementId, InspectorElementId, IntoElement, LayoutId, Pixels, Style, Window,
+    point, px, relative, size, AnyElement, App, AvailableSpace, Bounds, ContentMask, Element,
+    ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, Pixels, Style, Window,
 };
 
 use super::virtual_list::MeasurementSink;
@@ -25,6 +25,17 @@ const MAX_EXTRA_BLOCKS: usize = 64;
 
 pub type BuildBlock = Box<dyn Fn(usize) -> Option<AnyElement>>;
 
+/// A group of blocks whose combined height eases from `from` to its measured
+/// height (block editing opening or closing). The group is clipped to the eased
+/// height and the blocks below follow it, so nothing else on screen moves.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeightMotion {
+    pub range: std::ops::Range<usize>,
+    pub from: f32,
+    /// Eased progress in `0.0..1.0`.
+    pub progress: f32,
+}
+
 pub struct MeasuredBlocks {
     start: usize,
     min_end: usize,
@@ -35,6 +46,7 @@ pub struct MeasuredBlocks {
     table_sizes: Vec<f32>,
     build: BuildBlock,
     sink: MeasurementSink,
+    motions: Vec<HeightMotion>,
 }
 
 impl MeasuredBlocks {
@@ -46,6 +58,7 @@ impl MeasuredBlocks {
         total_height: f32,
         sink: MeasurementSink,
         build: BuildBlock,
+        motions: Vec<HeightMotion>,
     ) -> Self {
         let count = sizes.len();
         let start = range.start.min(count);
@@ -59,6 +72,7 @@ impl MeasuredBlocks {
             table_sizes: sizes[start..limit].to_vec(),
             build,
             sink,
+            motions,
         }
     }
 }
@@ -73,7 +87,8 @@ impl IntoElement for MeasuredBlocks {
 
 impl Element for MeasuredBlocks {
     type RequestLayoutState = ();
-    type PrepaintState = Vec<AnyElement>;
+    /// Elements with the clip they were prepainted under.
+    type PrepaintState = Vec<(AnyElement, Option<ContentMask<Pixels>>)>;
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -112,6 +127,39 @@ impl Element for MeasuredBlocks {
         let mut reported = false;
         let mut ix = self.start;
         while ix < self.count && (ix < self.min_end || y < visible_bottom) {
+            if let Some(motion) = self.motions.iter().find(|m| m.range.start == ix && m.range.end <= self.count).cloned() {
+                // Lay the whole group out at its natural height, then show the eased part.
+                let mut group = Vec::new();
+                for i in motion.range.clone() {
+                    if let Some(mut element) = (self.build)(i) {
+                        let height = f32::from(element.layout_as_root(available, window, cx).height);
+                        group.push((i, element, height));
+                    }
+                }
+                let natural: f32 = group.iter().map(|(_, _, h)| h).sum();
+                let shown = motion.from + (natural - motion.from) * motion.progress.clamp(0.0, 1.0);
+                let mask = ContentMask {
+                    bounds: Bounds::new(point(bounds.origin.x, y), size(bounds.size.width, px(shown.max(0.0)))),
+                };
+                let scale = if natural > 0.0 { shown / natural } else { 0.0 };
+                let mut inner = y;
+                for (i, mut element, height) in group {
+                    window.with_content_mask(Some(mask.clone()), |window| {
+                        element.prepaint_at(point(bounds.origin.x, inner), window, cx);
+                    });
+                    inner += px(height);
+                    let reported = height * scale;
+                    if (reported - self.table_sizes.get(i - self.start).copied().unwrap_or(0.0)).abs() > REPORT_EPSILON {
+                        self.sink.borrow_mut().push((i, reported));
+                    }
+                    items.push((element, Some(mask.clone())));
+                }
+                // The next frame advances the motion.
+                reported = true;
+                y += px(shown);
+                ix = motion.range.end;
+                continue;
+            }
             if let Some(mut element) = (self.build)(ix) {
                 let height = element.layout_as_root(available, window, cx).height;
                 element.prepaint_at(point(bounds.origin.x, y), window, cx);
@@ -121,7 +169,7 @@ impl Element for MeasuredBlocks {
                     reported = true;
                 }
                 y += px(height);
-                items.push(element);
+                items.push((element, None));
             }
             ix += 1;
         }
@@ -142,8 +190,11 @@ impl Element for MeasuredBlocks {
         window: &mut Window,
         cx: &mut App,
     ) {
-        for item in items {
-            item.paint(window, cx);
+        for (item, mask) in items {
+            match mask {
+                Some(mask) => window.with_content_mask(Some(mask.clone()), |window| item.paint(window, cx)),
+                None => item.paint(window, cx),
+            }
         }
     }
 }

@@ -20,6 +20,22 @@ const BOX_PAD_X: f32 = 10.0;
 const BOX_PAD_Y: f32 = 6.0;
 /// A press that moves less than this before release is a click, not a drag.
 pub const CLICK_SLOP: f32 = 4.0;
+/// Duration of the open/close height transition.
+const MOTION: std::time::Duration = std::time::Duration::from_millis(220);
+
+/// Wrapped rows of the block editor: visual line, char offset, tokens, char x positions.
+pub type BlockRows = Arc<Vec<(VisualLine, usize, Vec<crate::views::editor::MarkdownToken>, Arc<Vec<f32>>)>>;
+/// Hash of the block text and caret base offset, range, width, font and line-height bits the rows were built for.
+pub type BlockLayoutKey = (usize, usize, usize, usize, u32, u32);
+
+/// A running open/close transition over `range` (indices of the current parse).
+#[derive(Clone, Debug)]
+pub struct BlockMotionState {
+    pub range: Range<usize>,
+    pub from: f32,
+    pub opening: bool,
+    pub started: std::time::Instant,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockEdit {
@@ -150,6 +166,7 @@ impl WorkspaceView {
         let (line, col) = position_in(block_lines, source_offset_for_rendered(&source, &rendered, offset));
         self.cancel_source_composition();
         self.end_source_drag();
+        self.start_block_motion(ix..ix + 1, true);
         self.state.editor.set_cursor(start + line, col);
         self.block_edit = Some(BlockEdit {
             start_line: start,
@@ -170,8 +187,10 @@ impl WorkspaceView {
     /// Closes the block editor and parses the edit. Returns how later blocks moved.
     pub fn exit_block_edit(&mut self, cx: &mut Context<Self>) -> Option<BlockShift> {
         let edit = self.block_edit.take()?;
+        let editor_height: f32 = self.preview_list.sizes().get(edit.blocks.clone()).map_or(0.0, |s| s.iter().sum());
         self.block_rows.lock().unwrap().clear();
         self.block_visual = Arc::new(Vec::new());
+        self.block_layout = None;
         self.cancel_source_composition();
         self.end_source_drag();
         let before = self.state.doc().parsed.blocks.len();
@@ -189,14 +208,29 @@ impl WorkspaceView {
         }
         cx.notify();
         let after = self.state.doc().parsed.blocks.len();
-        Some(BlockShift { after: edit.blocks.end, delta: after as isize - before as isize })
+        let shift = BlockShift { after: edit.blocks.end, delta: after as isize - before as isize };
+        // Motions still running refer to the old parse.
+        for motion in &mut self.block_motions {
+            motion.range = shift.apply(motion.range.start)..shift.apply(motion.range.end);
+        }
+        self.block_motions.retain(|m| m.range.end <= edit.blocks.start || m.range.start >= shift.apply(edit.blocks.end));
+        let closed = edit.blocks.start..shift.apply(edit.blocks.end).max(edit.blocks.start);
+        if !closed.is_empty() {
+            self.block_motions.push(BlockMotionState {
+                range: closed, from: editor_height, opening: false, started: std::time::Instant::now(),
+            });
+            if self.state.preferences.reduce_motion { self.block_motions.clear(); }
+        }
+        Some(shift)
     }
 
     /// Drops the block editor without parsing (document swap, reload).
     pub fn discard_block_edit(&mut self) {
+        self.block_motions.clear();
         if self.block_edit.take().is_some() {
             self.block_rows.lock().unwrap().clear();
             self.block_visual = Arc::new(Vec::new());
+            self.block_layout = None;
         }
     }
 
@@ -219,6 +253,33 @@ impl WorkspaceView {
             (Some(&first), Some(&last)) => edit.blocks = first..last + 1,
             _ => self.discard_block_edit(),
         }
+    }
+
+    fn start_block_motion(&mut self, range: Range<usize>, opening: bool) {
+        self.block_motions.retain(|m| m.range.end <= range.start || m.range.start >= range.end);
+        if self.state.preferences.reduce_motion {
+            return;
+        }
+        let from = self.preview_list.sizes().get(range.clone()).map_or(0.0, |s| s.iter().sum());
+        self.block_motions.push(BlockMotionState { range, from, opening, started: std::time::Instant::now() });
+    }
+
+    /// Current eased state of the running transitions; keeps frames coming while any runs.
+    pub fn sample_block_motions(&mut self, window: &mut Window) -> Vec<crate::views::preview::BlockMotion> {
+        let now = std::time::Instant::now();
+        self.block_motions.retain(|m| now.duration_since(m.started) < MOTION);
+        if self.block_motions.is_empty() {
+            return Vec::new();
+        }
+        window.request_animation_frame();
+        let ease = ease_out_quint();
+        self.block_motions.iter().map(|m| {
+            let t = now.duration_since(m.started).as_secs_f32() / MOTION.as_secs_f32();
+            crate::views::preview::BlockMotion {
+                height: crate::views::preview::HeightMotion { range: m.range.clone(), from: m.from, progress: ease(t.clamp(0.0, 1.0)) },
+                opening: m.opening,
+            }
+        }).collect()
     }
 
     /// Whether the caret is still on the edited lines.
@@ -311,24 +372,48 @@ impl WorkspaceView {
         let column = if pane_width > 1.0 { (pane_width - 64.0).min(max_column) } else { max_column }.max(40.0);
         let text_width = (column - 2.0 * BOX_PAD_X).max(20.0);
 
-        let mut visual = Vec::new();
-        let mut rows = Vec::new();
-        let mut line_offset = edit.start_offset;
-        for phys in edit.start_line..=end {
-            let line = &display[phys];
-            let tokens = tokenize_markdown_line(line);
-            let (wrapped, _) = crate::views::editor::wrap_line_to_visual_layout_with_width(
-                window.text_system(), phys, line, &tokens, text_width, font_size,
-            );
-            for v in wrapped {
-                let sub = slice_tokens_for_visual_subline(&tokens, v.char_start, v.char_len);
-                let positions = Arc::new(token_char_positions(window.text_system(), &sub, font_size));
-                rows.push((v.clone(), line_offset + v.char_start, sub, positions));
-                visual.push(v);
+        // Animation frames re-render without edits; reuse the shaped rows.
+        let text_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            display[edit.start_line..=end].hash(&mut hasher);
+            edit.start_offset.hash(&mut hasher);
+            hasher.finish() as usize
+        };
+        let key: BlockLayoutKey = (
+            text_hash,
+            edit.start_line,
+            end,
+            text_width.to_bits() as usize,
+            font_size.to_bits(),
+            line_height.to_bits(),
+        );
+        let rows = match &self.block_layout {
+            Some((cached, rows)) if *cached == key => rows.clone(),
+            _ => {
+                let mut visual = Vec::new();
+                let mut rows = Vec::new();
+                let mut line_offset = edit.start_offset;
+                for phys in edit.start_line..=end {
+                    let line = &display[phys];
+                    let tokens = tokenize_markdown_line(line);
+                    let (wrapped, _) = crate::views::editor::wrap_line_to_visual_layout_with_width(
+                        window.text_system(), phys, line, &tokens, text_width, font_size,
+                    );
+                    for v in wrapped {
+                        let sub = slice_tokens_for_visual_subline(&tokens, v.char_start, v.char_len);
+                        let positions = Arc::new(token_char_positions(window.text_system(), &sub, font_size));
+                        rows.push((v.clone(), line_offset + v.char_start, sub, positions));
+                        visual.push(v);
+                    }
+                    line_offset += line.chars().count() + 1;
+                }
+                let rows: BlockRows = Arc::new(rows);
+                self.block_visual = Arc::new(visual);
+                self.block_layout = Some((key, rows.clone()));
+                rows
             }
-            line_offset += line.chars().count() + 1;
-        }
-        self.block_visual = Arc::new(visual);
+        };
         self.block_rows.lock().unwrap().clear();
 
         let theme = self.state.theme.clone();
@@ -337,7 +422,6 @@ impl WorkspaceView {
         let marked = self.source_marked_range();
         let view = cx.entity().clone();
         let registry = self.block_rows.clone();
-        let rows = Arc::new(rows);
         let row_h = calculate_line_row_height(font_size, line_height);
 
         let build = move || -> AnyElement {

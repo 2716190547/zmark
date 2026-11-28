@@ -20,10 +20,13 @@
 //!   visible task every 240 ms.
 //! - `line-height`: a 12 000-line document; alternate the line height
 //!   preference between 1.3 and 1.7 every 240 ms.
+//! - `block-edit`: a 12 000-line document with block editing on; open the
+//!   paragraph after the top block, then close it, every 240 ms (each open and
+//!   close runs the height transition).
 //! - `bottom-scroll`: the welcome guide (images, a diagram, a table) scrolled
 //!   to its end, then wheel-scrolled further down every step.
 //!
-//! The last three start scrolled to block 500 and print the top block at the
+//! `doc-switch`, `task-toggle`, `line-height` and `block-edit` start scrolled to block 500 and print the top block at the
 //! end: it must still be block 500 (on `doc-switch`, after an even number of
 //! switches), so the viewport did not drift while layouts were rebuilt.
 //!
@@ -58,6 +61,7 @@ pub enum Scenario {
     DocSwitch,
     TaskToggle,
     LineHeight,
+    BlockEdit,
     BottomScroll,
 }
 
@@ -71,6 +75,7 @@ impl Scenario {
             Scenario::DocSwitch => "doc-switch",
             Scenario::TaskToggle => "task-toggle",
             Scenario::LineHeight => "line-height",
+            Scenario::BlockEdit => "block-edit",
             Scenario::BottomScroll => "bottom-scroll",
         }
     }
@@ -80,7 +85,7 @@ impl Scenario {
     pub fn document(self) -> Option<String> {
         match self {
             Scenario::Modes => None,
-            Scenario::DragScroll | Scenario::Resize | Scenario::DocSwitch | Scenario::LineHeight => {
+            Scenario::DragScroll | Scenario::Resize | Scenario::DocSwitch | Scenario::LineHeight | Scenario::BlockEdit => {
                 Some(long_document(12_000))
             }
             Scenario::TaskToggle => Some(task_document(12_000)),
@@ -100,6 +105,7 @@ pub fn requested() -> Option<Scenario> {
         Ok("doc-switch") => Scenario::DocSwitch,
         Ok("task-toggle") => Scenario::TaskToggle,
         Ok("line-height") => Scenario::LineHeight,
+        Ok("block-edit") => Scenario::BlockEdit,
         Ok("bottom-scroll") => Scenario::BottomScroll,
         _ => Scenario::Modes,
     };
@@ -241,7 +247,10 @@ pub fn run(scenario: Scenario, view: Entity<WorkspaceView>, window: &mut Window,
                     })
                     .detach();
             }
-            if matches!(scenario, Scenario::DocSwitch | Scenario::TaskToggle | Scenario::LineHeight) {
+            if scenario == Scenario::BlockEdit {
+                view.update(cx, |ws, _| ws.state.preferences.preview_inline_edit = true);
+            }
+            if matches!(scenario, Scenario::DocSwitch | Scenario::TaskToggle | Scenario::LineHeight | Scenario::BlockEdit) {
                 let view = view.clone();
                 window
                     .spawn(cx, async move |cx| {
@@ -386,6 +395,20 @@ fn drive(
                 });
                 if let Some((marker, checked)) = task {
                     ws.toggle_task(marker, checked, cx);
+                }
+            });
+        }
+        Scenario::BlockEdit => {
+            view.update(cx, |ws, cx| {
+                if ws.exit_block_edit(cx).is_some() {
+                    return;
+                }
+                let top = ws.preview_list.logical_scroll_top().item_ix;
+                let target = ws.state.doc().parsed.blocks.iter().enumerate().skip(top + 1)
+                    .find(|(_, b)| matches!(b, zmark_core::ast::BlockElement::Paragraph(_)))
+                    .map(|(ix, _)| ix);
+                if let Some(ix) = target {
+                    ws.enter_block_edit(ix, 10, window, cx);
                 }
             });
         }

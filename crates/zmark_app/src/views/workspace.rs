@@ -206,6 +206,10 @@ pub struct WorkspaceView {
     pub block_visual: Arc<Vec<crate::editor_engine::VisualLine>>,
     /// A press on an editable block, waiting to see whether it becomes a drag.
     pending_block_click: Option<(usize, usize, Point<Pixels>)>,
+    /// Height transitions of blocks opening into or closing from the block editor.
+    block_motions: Vec<block_edit::BlockMotionState>,
+    /// Shaped block-editor rows, reused while the buffer and width are unchanged.
+    block_layout: Option<(block_edit::BlockLayoutKey, block_edit::BlockRows)>,
     pub source_autoscroll_task: Option<Task<()>>,
     source_focus_subscription: Option<Subscription>,
     pub document_layout_cache: crate::views::editor::DocumentLayoutCache,
@@ -393,6 +397,8 @@ impl WorkspaceView {
             block_rows: Arc::new(std::sync::Mutex::new(Vec::new())),
             block_visual: Arc::new(Vec::new()),
             pending_block_click: None,
+            block_motions: Vec::new(),
+            block_layout: None,
             source_autoscroll_task: None,
             source_focus_subscription: None,
             document_layout_cache: crate::views::editor::DocumentLayoutCache::new(),
@@ -4353,6 +4359,7 @@ impl Render for WorkspaceView {
         }
 
         let block_editor = self.block_editor_slot(window, cx);
+        let block_motions = self.sample_block_motions(window);
         let is_dirty = self.state.is_dirty();
         (self.dirty_pulse_generation, self.was_dirty) = crate::views::motion::advance_dirty_generation(
             self.was_dirty,
@@ -5685,6 +5692,7 @@ impl Render for WorkspaceView {
                                                         self.local_images.clone(),
                                                         reduce_motion,
                                                         block_editor.clone(),
+                                                        block_motions.clone(),
                                                     ))
                                                     .child(self.render_column_resize_handles(cx))
                                                     .child(self.render_preview_scrollbar()))
@@ -5833,6 +5841,7 @@ impl Render for WorkspaceView {
                                                                     self.local_images.clone(),
                                                                     reduce_motion,
                                                                     block_editor.clone(),
+                                                                    block_motions.clone(),
                                                                 ))
                                                                 .child(self.render_column_resize_handles(cx))
                                                                 .child(self.render_preview_scrollbar()))

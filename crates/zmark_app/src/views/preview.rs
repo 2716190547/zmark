@@ -13,6 +13,16 @@ mod virtual_list;
 mod measured_blocks;
 pub use selection::*;
 pub use virtual_list::*;
+pub use measured_blocks::HeightMotion;
+
+/// Block-editor transition passed to the preview: the eased height group and
+/// whether the editor is opening (crossfade from the rendered block) or closing
+/// (the rendered block fades back in).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockMotion {
+    pub height: HeightMotion,
+    pub opening: bool,
+}
 
 pub type OnCopyCallback = Arc<dyn Fn(String, u64, &mut Window, &mut App) + Send + Sync>;
 /// Marks a lightbox request for a local image snapshot (as opposed to a Mermaid diagram,
@@ -62,6 +72,7 @@ pub fn render_preview_pane_with_callbacks(
     images: crate::local_images::SharedImages,
     reduce_motion: bool,
     block_editor: Option<crate::views::workspace::BlockEditorSlot>,
+    block_motions: Vec<BlockMotion>,
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
@@ -150,11 +161,8 @@ pub fn render_preview_pane_with_callbacks(
 
     let item_toc = toc_headings;
     let item_images = images.clone();
-    let build_block = move |ix: usize| -> Option<AnyElement> {
-        if let Some(slot) = block_editor.as_ref().filter(|slot| slot.blocks.contains(&ix)) {
-            // Later blocks the editor covers measure as empty so the size table stays true.
-            return Some(if ix == slot.blocks.start { (slot.build)() } else { div().into_any_element() });
-        }
+    let motion_for_build = block_motions.clone();
+    let render_block = move |ix: usize| -> Option<AnyElement> {
         let Some(block) = item_parsed.blocks.get(ix) else { return None; };
         let flat = zmark_core::ast::flatten_block(block, "0");
         let block_char_len = flat.text.chars().count();
@@ -287,6 +295,36 @@ pub fn render_preview_pane_with_callbacks(
 
         Some(item.into_any_element())
     };
+    let build_block = move |ix: usize| -> Option<AnyElement> {
+        let motion = motion_for_build.iter().find(|m| m.height.range.contains(&ix));
+        let progress = motion.map_or(1.0, |m| m.height.progress.clamp(0.0, 1.0));
+        if let Some(slot) = block_editor.as_ref().filter(|slot| slot.blocks.contains(&ix)) {
+            if ix != slot.blocks.start {
+                // Later blocks the editor covers measure as empty so the size table stays true.
+                return Some(div().into_any_element());
+            }
+            let editor = (slot.build)();
+            if motion.is_none_or(|m| !m.opening) || progress >= 1.0 {
+                return Some(editor);
+            }
+            // Crossfade: the rendered block fades out under the editor fading in.
+            // The editor is the later child, so it paints and hit-tests on top.
+            let mut stack = div().relative().w_full();
+            if let Some(rendered) = render_block(ix) {
+                stack = stack.child(
+                    div().absolute().top_0().left_0().w_full().opacity(1.0 - progress).child(rendered),
+                );
+            }
+            return Some(stack.child(div().w_full().opacity(progress).child(editor)).into_any_element());
+        }
+        let rendered = render_block(ix)?;
+        Some(match motion {
+            Some(m) if !m.opening && progress < 1.0 => {
+                div().w_full().opacity(0.2 + 0.8 * progress).child(rendered).into_any_element()
+            }
+            _ => rendered,
+        })
+    };
     let content = measured_blocks::MeasuredBlocks::new(
         visible_range,
         origins,
@@ -294,6 +332,7 @@ pub fn render_preview_pane_with_callbacks(
         total,
         measurement_sink,
         Box::new(build_block),
+        block_motions.into_iter().map(|m| m.height).collect(),
     );
 
     let mut scroll_view = div()
