@@ -3639,7 +3639,9 @@ impl WorkspaceView {
                     .items_center()
                     .gap_1p5()
                     .min_w(px(0.))
-                    .when(is_renaming, |el| el.flex_1())
+                    // With tabs the group takes all the room left of the tools, so the
+                    // tab bar always reaches them however wide they are.
+                    .when(is_renaming || show_tabs, |el| el.flex_1())
                     .when(!drawer_open, |el| {
                         el.child(render_icon_button(
                             "btn_expand_drawer",
@@ -3733,10 +3735,29 @@ impl WorkspaceView {
                                 }
                             })
                             .into_any_element()
+                    })
+                    // Free space after the tabs drags the window (ADR 0029); it never
+                    // shrinks below 12px, so overflowing tabs still leave a grip.
+                    .when(show_tabs, |el| {
+                        el.child(
+                            div()
+                                .id("canvas_header_drag_area")
+                                .debug_selector(|| "canvas_header_drag_area".into())
+                                .flex_1()
+                                .h_full()
+                                .min_w(px(12.))
+                                .occlude()
+                                .window_control_area(WindowControlArea::Drag)
+                                .when(!cfg!(target_os = "windows"), |el| {
+                                    el.on_mouse_down(MouseButton::Left, |_e, window, _| {
+                                        window.start_window_move();
+                                    })
+                                }),
+                        )
                     }),
             )
             // Draggable Window Control Area in center between title and action tools
-            .child(
+            .when(!show_tabs, |el| el.child(
                 div()
                     .id("canvas_header_drag_area")
                     .debug_selector(|| "canvas_header_drag_area".into())
@@ -3751,7 +3772,7 @@ impl WorkspaceView {
                             window.start_window_move();
                         })
                     }),
-            )
+            ))
             // Right Group: Flat View Mode Switcher + Action Buttons (Save, Export, Settings)
             .child(
                 if self.sidebar_selection.lock().unwrap().selected.len() > 1 {

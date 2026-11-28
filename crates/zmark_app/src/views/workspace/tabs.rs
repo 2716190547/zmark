@@ -40,6 +40,8 @@ impl Render for DraggedTab {
 
 const TAB_H: f32 = 26.0;
 const TAB_MAX_W: f32 = 220.0;
+/// Width of the fade at a tab bar edge that has more tabs behind it.
+const TAB_FADE_W: f32 = 28.0;
 
 impl WorkspaceView {
     /// Keeps the active tab inside the visible part of the tab bar.
@@ -209,17 +211,41 @@ impl WorkspaceView {
                 .child(close_slot)
         });
 
+        // Tabs scroll inside whatever width the header leaves; a fade marks each
+        // edge that has more tabs behind it instead of a hard cut.
+        let offset = self.tab_bar_scroll.offset().x;
+        let max = self.tab_bar_scroll.max_offset().x;
+        let fade_left = f32::from(offset) < -1.0;
+        let fade_right = f32::from(max) > 1.0 && f32::from(offset) > -(f32::from(max) - 1.0);
+        let edge = |left: bool| {
+            let clear = theme.surface.opacity(0.0);
+            let (from, to) = if left { (theme.surface, clear) } else { (clear, theme.surface) };
+            let el = div().absolute().top_0().h_full().w(px(TAB_FADE_W))
+                .bg(linear_gradient(90., linear_color_stop(from, 0.), linear_color_stop(to, 1.)));
+            if left { el.left_0() } else { el.right_0() }
+        };
         div()
-            .id("canvas_tab_bar")
-            .debug_selector(|| "canvas_tab_bar".into())
+            .relative()
             .flex()
-            .items_center()
-            .gap_0p5()
             .min_w(px(0.))
             .h_full()
-            .overflow_x_scroll()
-            .track_scroll(&self.tab_bar_scroll)
-            .children(tabs)
+            .child(
+                div()
+                    .id("canvas_tab_bar")
+                    .debug_selector(|| "canvas_tab_bar".into())
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .min_w(px(0.))
+                    .h_full()
+                    .overflow_x_scroll()
+                    .track_scroll(&self.tab_bar_scroll)
+                    // The edge fades follow the scroll offset, which GPUI does not re-render for.
+                    .on_scroll(cx.listener(|_, _: &ScrollEvent, _, cx| cx.notify()))
+                    .children(tabs),
+            )
+            .when(fade_left, |el| el.child(edge(true)))
+            .when(fade_right, |el| el.child(edge(false)))
             .into_any_element()
     }
 }
