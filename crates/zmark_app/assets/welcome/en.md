@@ -28,6 +28,9 @@ Try each one, then change its `[ ]` to `[x]` in the source on the left:
 - [ ] **Resize the sidebar**: press `Cmd+Shift+B` to show the sidebar, then drag its right edge. Double-click to restore the default width.
 - [ ] **Pin files you use often**: right-click a file or folder in the sidebar and choose **Pin to Top**. It moves to the top of its folder.
 - [ ] **Lightbox gestures**: click an illustration or diagram further down. Zoom with the mouse wheel or a trackpad pinch, and pan with two fingers on a Mac trackpad. Scrolling follows your system's scroll direction.
+- [ ] **Turn on the tab bar**: press `Cmd+,` for Settings and switch on **Show tab bar** under **Editor & Save**. Open documents become tabs in the header; drag to reorder and press `Ctrl+Tab` to cycle.
+- [ ] **Edit right in the preview**: on the same page switch on **Edit in preview**, press `Cmd+3` for Preview, then click a paragraph, list or code block. It turns into its Markdown source in place; press `Esc` to finish.
+- [ ] **Open files quickly**: press `Cmd+O` to pick a file, or click **Open File or Folder** at the top of the sidebar to pick a file or add a whole folder. You can also **drag** a `.md` file or a folder from Finder or your file manager straight into the window; a folder shows up in the sidebar.
 - [ ] **Pick up where you left off**: launching ZMark reopens the files you had open when you quit. Double-clicking a `.md` file in Finder or your file manager opens that file directly.
 
 > **About this guide:** once you close the welcome page, it won't open again on its own. To see it again, go to **Settings → About → Welcome guide** and click **Restore guide**.

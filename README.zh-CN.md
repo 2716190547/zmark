@@ -14,7 +14,7 @@
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-4B5563?style=flat-square)](#下载与安装)
 [![Languages](https://img.shields.io/badge/i18n-10%20%E7%A7%8D%E8%AF%AD%E8%A8%80-10B981?style=flat-square)](#核心特性)
 
-[简体中文](README.zh-CN.md) · [English](README.md) · [下载安装包](https://github.com/2716190547/zmark/releases/tag/v0.2.15) · [Gitee 国内镜像](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub 源码仓库](https://github.com/2716190547/zmark)
+[简体中文](README.zh-CN.md) · [English](README.md) · [下载安装包](https://github.com/2716190547/zmark/releases/tag/v0.2.16) · [Gitee 国内镜像](https://gitee.com/zeng_sc/zmark-releases/releases) · [GitHub 源码仓库](https://github.com/2716190547/zmark)
 
 </div>
 
@@ -35,7 +35,7 @@
 
 | 模块 | 能力说明 |
 | --- | --- |
-| **写作视图与同步滚动** | 支持 **源码**、**左右分屏** 与 **纯净预览** 一键切换；分屏模式提供按语法块精确对齐的平滑同步滚动；支持将 `.md` 文件、文件夹或本地图片直接拖拽进窗口打开；支持已有路径文件的定时自动保存与窗口失焦保存；草稿首次手动保存时选择位置；直接启动时恢复上次打开的文件，从 Finder 打开的文件直接进入编辑。 |
+| **写作视图与同步滚动** | 支持 **源码**、**左右分屏** 与 **纯净预览** 一键切换，可在「设置 → 编辑与保存」打开两个默认关闭的开关：预览中单击块就地编辑、头部多标签；分屏模式提供按语法块精确对齐的平滑同步滚动；支持将 `.md` 文件、文件夹或本地图片直接拖拽进窗口打开；支持已有路径文件的定时自动保存与窗口失焦保存；草稿首次手动保存时选择位置；直接启动时恢复上次打开的文件，从 Finder 打开的文件直接进入编辑。 |
 | **Markdown 与源码支持** | 完整支持标题、粗体/斜体/删除线、引用块、多层有序与无序列表、交互式任务清单（`[ ]` / `[x]`）、自适应列宽表格、`[toc]` 内嵌可点击目录、`<br>` / `<br/>` 换行与多语言代码块高亮（右上角一键复制）；非 Markdown 文件自动进入带行号的源码编辑模式。 |
 | **Mermaid 与本地媒体** | 基于 `rusty-mermaid` 本机渲染流程图（内置 UTF-8 中文节点修复）；支持 PNG / JPEG / GIF / WebP / SVG 本地图片及内置 `zmark-asset://` 矢量插图（macOS 大图使用原生 ImageIO 缩略解码）；点击任意图表或图片进入 HiDPI 灯箱放大检视。 |
 | **工作区侧栏与大纲检索** | 侧栏分工作区文件夹、外部文件与草稿三组展示；支持按文件名实时模糊过滤，并可通过快捷键在**文件夹树**与**文档标题大纲**间快速互切；支持 Shift / Cmd / Ctrl 多选、批量移除（5 秒内可撤销）、移入废纸篓、双击标题原地重命名、将文件或文件夹置顶到所在文件夹最前、拖动边缘调整侧栏宽度以及文档内高亮查找。 |
@@ -93,9 +93,9 @@ ZMark/
 
 ## 下载与安装
 
-**当前最新版本：`v0.2.15`** · [版本更新说明](docs/releases/v0.2.15.md)
+**当前最新版本：`v0.2.16`** · [版本更新说明](docs/releases/v0.2.16.md)
 
-可从 [GitHub Releases](https://github.com/2716190547/zmark/releases/tag/v0.2.15) 下载对应系统安装包；国内网络也可通过 [Gitee 发行镜像](https://gitee.com/zeng_sc/zmark-releases/releases) 获取 macOS ZIP、Windows 安装包与签名更新清单（DMG 与 Linux 安装包请前往 GitHub 下载）。v0.2.12 及更早版本保留在已归档的 [zmark-releases](https://github.com/2716190547/zmark-releases/releases) 仓库。
+可从 [GitHub Releases](https://github.com/2716190547/zmark/releases/tag/v0.2.16) 下载对应系统安装包；国内网络也可通过 [Gitee 发行镜像](https://gitee.com/zeng_sc/zmark-releases/releases) 获取 macOS ZIP、Windows 安装包与签名更新清单（DMG 与 Linux 安装包请前往 GitHub 下载）。v0.2.12 及更早版本保留在已归档的 [zmark-releases](https://github.com/2716190547/zmark-releases/releases) 仓库。
 
 | 平台 | 架构 | 安装包格式 | 安装说明 |
 | --- | --- | --- | --- |

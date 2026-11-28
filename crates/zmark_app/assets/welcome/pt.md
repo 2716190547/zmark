@@ -28,6 +28,9 @@ Experimente cada item e depois troque o `[ ]` por `[x]` no código-fonte à esqu
 - [ ] **Ajuste a largura da barra lateral**: abra-a com `Cmd+Shift+B` e arraste a borda direita. Um clique duplo restaura a largura padrão.
 - [ ] **Fixe os arquivos mais usados**: clique com o botão direito em um arquivo ou pasta da barra lateral e escolha **Fixar no topo**. Ele passa para o início da pasta.
 - [ ] **Gestos no visualizador**: clique em uma ilustração ou diagrama mais abaixo. Amplie com a roda do mouse ou com pinça no trackpad, e mova com dois dedos em um trackpad de Mac. A direção da rolagem segue a configuração do sistema.
+- [ ] **Ativar a barra de abas**: pressione `Cmd+,` para abrir as configurações e ative **Mostrar barra de abas** em **Editor e salvamento**. Os documentos abertos viram abas no cabeçalho; arraste para reordenar e use `Ctrl+Tab` para alternar.
+- [ ] **Editar direto na pré-visualização**: na mesma página ative **Editar na pré-visualização**, pressione `Cmd+3` para a pré-visualização e clique em um parágrafo, lista ou bloco de código. Ele vira ali mesmo o seu Markdown de origem; `Esc` para terminar.
+- [ ] **Abrir ficheiros rapidamente**: prima `Cmd+O` para escolher um ficheiro, ou clique em **Abrir ficheiro ou pasta** no topo da barra lateral para escolher um ficheiro ou adicionar uma pasta inteira. Também pode **arrastar** um ficheiro `.md` ou uma pasta do Finder ou do gestor de ficheiros para a janela; a pasta aparece na barra lateral.
 - [ ] **Continue de onde parou**: ao abrir, o ZMark reabre os arquivos que estavam abertos quando você saiu. Um clique duplo em um arquivo `.md` no Finder ou no gerenciador de arquivos abre esse arquivo diretamente.
 
 > **Sobre este guia:** depois que você fechar a página de boas-vindas, ela não abre mais sozinha. Para vê-la de novo, vá em **Configurações → Sobre → Guia de boas-vindas** e clique em **Restaurar guia**.
