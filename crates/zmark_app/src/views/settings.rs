@@ -752,6 +752,23 @@ impl Render for SettingsWindowView {
             });
         });
 
+        let view_ie = cx.entity().clone();
+        let on_toggle_inline_edit = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
+            view_ie.update(cx, |this, cx| {
+                this.preferences.preview_inline_edit = enabled;
+                if let Some(ws) = this.workspace.upgrade() {
+                    ws.update(cx, |ws, cx| {
+                        ws.state.set_preview_inline_edit(enabled);
+                        if !enabled {
+                            ws.exit_block_edit(cx);
+                        }
+                        cx.notify();
+                    });
+                }
+                cx.notify();
+            });
+        });
+
         let view_rm = cx.entity().clone();
         let on_toggle_reduce_motion = Arc::new(move |enabled: bool, _window: &mut Window, cx: &mut App| {
             view_rm.update(cx, |this, cx| {
@@ -950,6 +967,7 @@ impl Render for SettingsWindowView {
                             auto_save_on_blur,
                             self.preferences.show_line_numbers,
                             self.preferences.show_tab_bar,
+                            self.preferences.preview_inline_edit,
                             tab_size,
                             line_height,
                             column_width,
@@ -959,6 +977,7 @@ impl Render for SettingsWindowView {
                             on_toggle_auto_save_on_blur,
                             on_toggle_line_numbers,
                             on_toggle_tab_bar,
+                            on_toggle_inline_edit,
                             on_set_tab_size,
                             on_set_line_height,
                             on_set_column_width,
@@ -1793,6 +1812,7 @@ fn render_editor_save_tab(
     auto_save_on_blur: bool,
     show_line_numbers: bool,
     show_tab_bar: bool,
+    preview_inline_edit: bool,
     tab_size: usize,
     line_height: f32,
     column_width: f32,
@@ -1802,6 +1822,7 @@ fn render_editor_save_tab(
     on_toggle_auto_save_on_blur: Arc<dyn Fn(bool, &mut Window, &mut App)>,
     on_toggle_line_numbers: Arc<dyn Fn(bool, &mut Window, &mut App)>,
     on_toggle_tab_bar: Arc<dyn Fn(bool, &mut Window, &mut App)>,
+    on_toggle_inline_edit: Arc<dyn Fn(bool, &mut Window, &mut App)>,
     on_set_tab_size: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     on_set_line_height: Arc<dyn Fn(f32, &mut Window, &mut App)>,
     on_set_column_width: Arc<dyn Fn(f32, &mut Window, &mut App)>,
@@ -1810,6 +1831,7 @@ fn render_editor_save_tab(
     let t_asb = on_toggle_auto_save_on_blur;
     let t_ln = on_toggle_line_numbers;
     let t_tb = on_toggle_tab_bar;
+    let t_ie = on_toggle_inline_edit;
     let t_ts2 = on_set_tab_size.clone();
     let t_ts4 = on_set_tab_size;
 
@@ -1852,6 +1874,15 @@ fn render_editor_save_tab(
                     Some(strings.show_tab_bar_desc.into()),
                     render_ios_toggle(show_tab_bar, theme, move |_, window, cx| {
                         t_tb(!show_tab_bar, window, cx);
+                    }),
+                    theme,
+                )
+                .into_any_element(),
+                render_setting_row(
+                    strings.preview_inline_edit_label,
+                    Some(strings.preview_inline_edit_desc.into()),
+                    render_ios_toggle(preview_inline_edit, theme, move |_, window, cx| {
+                        t_ie(!preview_inline_edit, window, cx);
                     }),
                     theme,
                 )

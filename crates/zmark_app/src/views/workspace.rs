@@ -21,6 +21,8 @@ use crate::views::settings::SettingsWindowView;
 mod source;
 mod find;
 mod tabs;
+mod block_edit;
+pub use block_edit::{BlockEdit, BlockEditorSlot};
 pub use source::{SourceCommand, SourceComposition, SourceDrag, SourceRow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,7 +196,16 @@ pub struct WorkspaceView {
     pub source_rows: Arc<std::sync::Mutex<Vec<SourceRow>>>,
     pub source_composition: Option<SourceComposition>,
     pub source_drag: Option<SourceDrag>,
-    source_click_after_composition: Option<(MouseDownEvent, bool)>,
+    /// Press, released flag, and whether it landed in the block editor.
+    source_click_after_composition: Option<(MouseDownEvent, bool, bool)>,
+    /// Preview block open for in-place editing (`Preferences::preview_inline_edit`).
+    pub block_edit: Option<BlockEdit>,
+    /// Row geometry of the block editor; used instead of `source_rows` while it is open.
+    pub block_rows: Arc<std::sync::Mutex<Vec<SourceRow>>>,
+    /// The block editor's wrapped rows, for Up/Down.
+    pub block_visual: Arc<Vec<crate::editor_engine::VisualLine>>,
+    /// A press on an editable block, waiting to see whether it becomes a drag.
+    pending_block_click: Option<(usize, usize, Point<Pixels>)>,
     pub source_autoscroll_task: Option<Task<()>>,
     source_focus_subscription: Option<Subscription>,
     pub document_layout_cache: crate::views::editor::DocumentLayoutCache,
@@ -378,6 +389,10 @@ impl WorkspaceView {
             source_composition: None,
             source_drag: None,
             source_click_after_composition: None,
+            block_edit: None,
+            block_rows: Arc::new(std::sync::Mutex::new(Vec::new())),
+            block_visual: Arc::new(Vec::new()),
+            pending_block_click: None,
             source_autoscroll_task: None,
             source_focus_subscription: None,
             document_layout_cache: crate::views::editor::DocumentLayoutCache::new(),
@@ -513,6 +528,8 @@ impl WorkspaceView {
 
     /// Swaps in a new document: the preview list drops cached heights and starts at the top.
     pub fn reset_preview_list(&mut self) {
+        self.discard_block_edit();
+        self.pending_block_click = None;
         self.cancel_source_composition();
         self.end_source_drag();
         self.source_rows.lock().unwrap().clear();
@@ -681,6 +698,12 @@ impl WorkspaceView {
 
     /// Debounces a reparse based on document size; very large documents wait for an explicit refresh.
     pub fn schedule_parse(&mut self, cx: &mut Context<Self>) {
+        if self.block_edit.is_some() {
+            // Block indices must stay put while a block is open; leaving it parses.
+            self.parse_task = None;
+            cx.notify();
+            return;
+        }
         let debounce = parse_debounce(self.state.doc().buffer.len());
         self.parse_task = None;
         self.parse_paused = debounce.is_none();
@@ -722,6 +745,7 @@ impl WorkspaceView {
             self.prune_syntax_state();
             self.syntax_warm_pending = true;
             self.invalidate_preview_list();
+            self.retarget_block_edit();
             if self.state.view_mode == ViewMode::Split {
                 self.align_preview_to_cursor();
             }
@@ -1959,6 +1983,8 @@ impl WorkspaceView {
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
     /// Reclaims GPU texture memory by dropping any active HiDPI lightbox image.
     pub fn on_document_swapped(&mut self, mut window: Option<&mut Window>, cx: &mut App) {
+        // The open block belongs to the outgoing document.
+        self.discard_block_edit();
         self.release_hidden_diagrams = true;
         self.reveal_active_tab();
         if let Some(image) = self.lightbox_local_image.take() {
@@ -2023,6 +2049,9 @@ impl WorkspaceView {
 
     /// Flips the task marker at `marker` (a source byte range from the current parse).
     pub fn toggle_task(&mut self, marker: std::ops::Range<usize>, checked: bool, cx: &mut Context<Self>) {
+        // The marker comes from the parse before the open block's edits; close the
+        // block and let the next click act on the fresh parse.
+        if self.exit_block_edit(cx).is_some() { return; }
         if self.state.doc().is_parse_stale() { return; }
         let source = self.state.editor.to_text();
         let Some(expected) = source.get(marker.clone()) else { return; };
@@ -2056,6 +2085,9 @@ impl WorkspaceView {
         let mode = if self.state.doc().path.as_ref().is_some_and(|p| !zmark_core::file_ops::is_markdown(p)) {
             ViewMode::Source
         } else { mode };
+        if mode == ViewMode::Source {
+            self.exit_block_edit(cx);
+        }
         self.cancel_source_composition();
         self.end_source_drag();
         self.cancel_pending_preview_seek();
@@ -4320,6 +4352,7 @@ impl Render for WorkspaceView {
             }
         }
 
+        let block_editor = self.block_editor_slot(window, cx);
         let is_dirty = self.state.is_dirty();
         (self.dirty_pulse_generation, self.was_dirty) = crate::views::motion::advance_dirty_generation(
             self.was_dirty,
@@ -4656,6 +4689,7 @@ impl Render for WorkspaceView {
                 cx.notify();
             }))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.pending_block_click = None;
                 this.release_source_drag(MouseButton::Left);
                 this.is_resizing_split = false;
                 this.end_drawer_resize();
@@ -4663,9 +4697,10 @@ impl Render for WorkspaceView {
                 this.end_preview_selection();
                 cx.notify();
             }))
-            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, window, cx| {
                 if event.button != MouseButton::Left { return; }
                 this.release_source_drag(MouseButton::Left);
+                this.finish_block_click(event.position, window, cx);
                 if this.is_resizing_split {
                     this.is_resizing_split = false;
                 }
@@ -5388,6 +5423,17 @@ impl Render for WorkspaceView {
                                     let view = view_for_sel.clone();
                                     view.update(app, |this, cx| {
                                         if this.lightbox.is_open { return; }
+                                        let mut sel = sel;
+                                        // A press outside the open block closes it; the hit was
+                                        // made on the parse before the edit, so shift it.
+                                        if is_selecting && this.block_edit.is_some() {
+                                            if let Some(shift) = this.exit_block_edit(cx) {
+                                                sel = sel.map(|s| crate::views::preview::PreviewSelection::new(
+                                                    crate::views::preview::PreviewCharPosition::new(shift.apply(s.anchor.block_ix), s.anchor.char_offset),
+                                                    crate::views::preview::PreviewCharPosition::new(shift.apply(s.head.block_ix), s.head.char_offset),
+                                                ));
+                                            }
+                                        }
                                         if is_selecting || sel.is_none() {
                                             this.preview_selection = sel;
                                         }
@@ -5490,6 +5536,14 @@ impl Render for WorkspaceView {
                                         });
                                     });
 
+                                let press_view = cx.entity().clone();
+                                let on_block_press: crate::views::preview::OnBlockPressCallback =
+                                    Arc::new(move |ix, offset, clicks, position, window, app| {
+                                        press_view.update(app, |this, cx| {
+                                            this.preview_block_press(ix, offset, clicks, position, window, cx);
+                                        });
+                                    });
+
                                 let preview_callbacks = crate::views::preview::PreviewCallbacks {
                                     on_copy: Some(on_copy.clone()),
                                     on_open_lightbox: Some(on_open_lightbox.clone()),
@@ -5499,6 +5553,7 @@ impl Render for WorkspaceView {
                                     on_toggle_task: Some(on_toggle_task),
                                     on_select_heading: Some(on_select_heading.clone()),
                                     on_wheel: Some(on_wheel),
+                                    on_block_press: Some(on_block_press),
                                 };
 
                                 div()
@@ -5629,6 +5684,7 @@ impl Render for WorkspaceView {
                                                         &preview_failures,
                                                         self.local_images.clone(),
                                                         reduce_motion,
+                                                        block_editor.clone(),
                                                     ))
                                                     .child(self.render_column_resize_handles(cx))
                                                     .child(self.render_preview_scrollbar()))
@@ -5776,6 +5832,7 @@ impl Render for WorkspaceView {
                                                                     &preview_failures,
                                                                     self.local_images.clone(),
                                                                     reduce_motion,
+                                                                    block_editor.clone(),
                                                                 ))
                                                                 .child(self.render_column_resize_handles(cx))
                                                                 .child(self.render_preview_scrollbar()))

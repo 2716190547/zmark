@@ -26,6 +26,8 @@ pub type OnToggleTaskCallback = Arc<dyn Fn(std::ops::Range<usize>, bool, &mut Wi
 pub type OnImageRecoveryCallback = Arc<dyn Fn(std::ops::Range<usize>, String, crate::local_images::RecoveryCandidate, &mut Window, &mut App) + Send + Sync>;
 pub type OnSelectHeadingCallback = Arc<dyn Fn(usize, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewAutoscrollCallback = Arc<dyn Fn(f32, &mut Window, &mut App) + Send + Sync>;
+/// A press on block `ix`: rendered char offset, click count, window position.
+pub type OnBlockPressCallback = Arc<dyn Fn(usize, usize, usize, Point<Pixels>, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewWheelCallback = Arc<dyn Fn(&ScrollEvent, &mut Window, &mut App) + Send + Sync>;
 
 #[derive(Clone, Default)]
@@ -38,6 +40,8 @@ pub struct PreviewCallbacks {
     pub on_toggle_task: Option<OnToggleTaskCallback>,
     pub on_select_heading: Option<OnSelectHeadingCallback>,
     pub on_wheel: Option<OnPreviewWheelCallback>,
+    /// Replaces the plain selection start on block presses (block editing).
+    pub on_block_press: Option<OnBlockPressCallback>,
 }
 
 pub fn render_preview_pane_with_callbacks(
@@ -57,6 +61,7 @@ pub fn render_preview_pane_with_callbacks(
     failures: &[crate::syntax::VisibleSyntaxFailure],
     images: crate::local_images::SharedImages,
     reduce_motion: bool,
+    block_editor: Option<crate::views::workspace::BlockEditorSlot>,
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
@@ -146,6 +151,10 @@ pub fn render_preview_pane_with_callbacks(
     let item_toc = toc_headings;
     let item_images = images.clone();
     let build_block = move |ix: usize| -> Option<AnyElement> {
+        if let Some(slot) = block_editor.as_ref().filter(|slot| slot.blocks.contains(&ix)) {
+            // Later blocks the editor covers measure as empty so the size table stays true.
+            return Some(if ix == slot.blocks.start { (slot.build)() } else { div().into_any_element() });
+        }
         let Some(block) = item_parsed.blocks.get(ix) else { return None; };
         let flat = zmark_core::ast::flatten_block(block, "0");
         let block_char_len = flat.text.chars().count();
@@ -209,6 +218,7 @@ pub fn render_preview_pane_with_callbacks(
             let on_sel_down = on_selection_change.clone();
             let on_sel_move = on_selection_change.clone();
             let on_autoscroll = item_callbacks.on_autoscroll.clone();
+            let on_block_press = item_callbacks.on_block_press.clone();
             let text_for_down: Arc<str> = Arc::from(flat.text.as_str());
             let text_for_move = Arc::clone(&text_for_down);
             let bounds_cell_down = block_bounds_cell.clone();
@@ -231,8 +241,12 @@ pub fn render_preview_pane_with_callbacks(
                             bounds_cell_down.get(),
                         )
                     };
-                    let pos = PreviewCharPosition::new(ix, offset);
                     cx.stop_propagation();
+                    if let Some(ref press) = on_block_press {
+                        press(ix, offset, event.click_count, event.position, window, cx);
+                        return;
+                    }
+                    let pos = PreviewCharPosition::new(ix, offset);
                     on_sel_down(Some(PreviewSelection::new(pos, pos)), true, window, cx);
                 })
                 .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {

@@ -39,6 +39,7 @@
 | **0038** | [发行资产迁回源码仓库，并通过过渡版归档 zmark-releases](0038-move-releases-into-the-source-repository.md) | 已通过 (Accepted) | 安装包、签名更新清单与发布说明从 0.2.13 起发布到源码仓库 Releases，旧发行仓库归档保留 |
 | **0039** | [预览同帧测量与按文档保存的编辑、预览状态](0039-same-frame-preview-measurement-and-per-document-state.md) | 已通过 (Accepted) | 可见块在 prepaint 中先测量再定位，消除按估算高度排版的一帧；撤销历史、预览高度与滚动位置按文档保存；图片与 Mermaid 尺寸记忆 |
 | **0040** | [可选标签条](0040-optional-tab-bar.md) | 已通过 (Accepted) | 修订 0031 第 1 节：默认仍无标签，设置开关开启后头部显示由 `open_docs` 派生的标签条；拖动排序写回会话顺序；`Ctrl+Tab` 与按位置跳转快捷键常开 |
+| **0041** | [预览按块编辑](0041-preview-block-editing.md) | 已通过 (Accepted) | 开关开启后单击预览块，就地换成编辑共享 `EditorEngine` 的源码框；编辑期间不重新解析，退出时解析一次；代码块双击跳到源码 |
 
 ---
 

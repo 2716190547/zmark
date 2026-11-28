@@ -605,6 +605,11 @@ impl AppState {
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
+    pub fn set_preview_inline_edit(&mut self, enabled: bool) {
+        self.preferences.preview_inline_edit = enabled;
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
     pub fn set_tab_size(&mut self, tab_size: usize) {
         self.preferences.tab_size = tab_size;
         let _ = self.preferences.save_to_path(&self.preferences_path);

@@ -12,7 +12,7 @@ pub fn calculate_line_row_height(font_size: f32, line_height: f32) -> f32 {
 mod tokenizer;
 pub use tokenizer::{spans_to_code_tokens, tokenize_inline, tokenize_markdown_line, MarkdownToken, MarkdownTokenKind};
 
-fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors, selection: &[std::ops::Range<usize>]) -> impl IntoElement {
+pub(crate) fn render_markdown_token_element(tok: &MarkdownToken, theme: &ThemeColors, selection: &[std::ops::Range<usize>]) -> impl IntoElement {
     let highlights: Vec<_> = selection.iter().map(|range| (
         char_index_to_byte_offset(&tok.text, range.start)..char_index_to_byte_offset(&tok.text, range.end),
         HighlightStyle { color: Some(theme.text_selection_foreground()), background_color: Some(theme.selection_bg()), ..Default::default() },
@@ -1018,6 +1018,8 @@ pub fn render_editor_pane(
             .py_4(),
         )
         .child(canvas(|bounds, _, _| bounds, move |bounds, _, window, cx| {
+            // While a preview block is open, its editor owns text input.
+            if source_view.read(cx).block_edit.is_some() { return; }
             let focus = source_view.read(cx).focus_handle.clone();
             if source_view.read(cx).source_accepts_input(window, cx) {
                 window.handle_input(&focus, ElementInputHandler::new(bounds, source_view.clone()), cx);
