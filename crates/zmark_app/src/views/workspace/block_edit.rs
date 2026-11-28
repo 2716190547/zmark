@@ -113,6 +113,13 @@ pub fn source_offset_for_rendered(source: &str, rendered: &str, offset: usize) -
     next.min(src.len())
 }
 
+/// Buffer line indices of an anchor. `SourceAnchor` lines are 1-based (the
+/// sync-scroll map compares them with `cursor_line + 1`).
+pub fn anchor_lines(anchor: &zmark_core::anchor::SourceAnchor) -> (usize, usize) {
+    let start = anchor.source_line_start.saturating_sub(1);
+    (start, anchor.source_line_end.saturating_sub(1).max(start))
+}
+
 /// (line, column) of character `offset` within `lines`, relative to the first line.
 fn position_in(lines: &[String], mut offset: usize) -> (usize, usize) {
     for (index, line) in lines.iter().enumerate() {
@@ -155,11 +162,11 @@ impl WorkspaceView {
         let parsed = self.state.doc().parsed.clone();
         let Some(anchor) = parsed.anchors.get(ix) else { return false };
         let lines = self.state.editor.lines.clone();
-        if anchor.source_line_start >= lines.len() {
+        let (start, end) = anchor_lines(anchor);
+        if start >= lines.len() {
             return false;
         }
-        let start = anchor.source_line_start;
-        let end = anchor.source_line_end.min(lines.len() - 1);
+        let end = end.min(lines.len() - 1);
         let block_lines = &lines[start..=end];
         let rendered = zmark_core::ast::flatten_block(&parsed.blocks[ix], "0").text;
         let source = block_lines.join("\n");
@@ -246,7 +253,10 @@ impl WorkspaceView {
         let covered: Vec<usize> = anchors
             .iter()
             .enumerate()
-            .filter(|(_, a)| a.source_line_end >= edit.start_line && a.source_line_start <= end)
+            .filter(|(_, a)| {
+                let (a_start, a_end) = anchor_lines(a);
+                a_end >= edit.start_line && a_start <= end
+            })
             .map(|(ix, _)| ix)
             .collect();
         match (covered.first(), covered.last()) {
@@ -337,7 +347,8 @@ impl WorkspaceView {
     /// Double-click on a code block: put the caret on its first code line in the source.
     fn jump_to_block_source(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(anchor) = self.state.doc().parsed.anchors.get(ix) else { return };
-        let line = (anchor.source_line_start + 1).min(anchor.source_line_end).min(self.state.editor.lines.len().saturating_sub(1));
+        let (start, end) = anchor_lines(anchor);
+        let line = (start + 1).min(end).min(self.state.editor.lines.len().saturating_sub(1));
         self.preview_selection = None;
         self.end_preview_selection();
         if self.state.view_mode == ViewMode::Preview {
@@ -573,6 +584,13 @@ mod tests {
         assert_eq!(source_offset_for_rendered("a **bold** c", "a bold c", 2), 4);
         assert_eq!(source_offset_for_rendered("a **bold** c", "a bold c", 7), 11);
         assert_eq!(source_offset_for_rendered("---", "", 0), 0);
+    }
+
+    #[test]
+    fn anchor_lines_are_one_based() {
+        let first = zmark_core::ast::parse_markdown("# Title\n\n> quote\n> more\n");
+        assert_eq!(anchor_lines(&first.anchors[0]), (0, 0));
+        assert_eq!(anchor_lines(&first.anchors[1]), (2, 3));
     }
 
     #[test]
