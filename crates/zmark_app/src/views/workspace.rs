@@ -4063,6 +4063,11 @@ impl Render for WorkspaceView {
             .detach();
             self.preview_scroll_activation_observed = true;
         }
+        // Preview blocks request their images during prepaint (`MeasuredBlocks`),
+        // after this render returns. Finish a pending decode while `wanted` still
+        // holds the previous frame's requests; after `begin_frame` clears it the
+        // decode would be discarded as hidden and restarted forever.
+        self.complete_local_image_decode(window, cx);
         {
             let mut images = self.local_images.lock().unwrap();
             images.begin_frame(self.state.active.clone(), self.state.doc().path.clone());
@@ -5801,7 +5806,6 @@ impl Render for WorkspaceView {
                         root.child(self.render_close_modal(theme, cx))
                     });
 
-        self.complete_local_image_decode(window, cx);
         let pinned_diagram = self.lightbox.svg_path.clone();
         let release_hidden = std::mem::take(&mut self.release_hidden_diagrams)
             || self.state.view_mode == ViewMode::Source;
