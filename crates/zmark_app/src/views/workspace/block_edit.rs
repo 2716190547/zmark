@@ -47,6 +47,8 @@ pub struct BlockEdit {
     pub start_offset: usize,
     /// Parsed blocks (from the last parse) that the editor stands in for.
     pub blocks: Range<usize>,
+    /// A fenced or indented code block: lines are code, not Markdown.
+    pub code: bool,
 }
 
 impl BlockEdit {
@@ -89,6 +91,7 @@ pub fn block_is_editable(block: &BlockElement) -> bool {
         BlockElement::Paragraph(_)
             | BlockElement::Heading { .. }
             | BlockElement::Rule
+            | BlockElement::FencedCode { .. }
             | BlockElement::List { .. }
             | BlockElement::BlockQuote(_)
             | BlockElement::Table { .. }
@@ -118,6 +121,33 @@ pub fn source_offset_for_rendered(source: &str, rendered: &str, offset: usize) -
 pub fn anchor_lines(anchor: &zmark_core::anchor::SourceAnchor) -> (usize, usize) {
     let start = anchor.source_line_start.saturating_sub(1);
     (start, anchor.source_line_end.saturating_sub(1).max(start))
+}
+
+/// Whether `line` opens or closes a code fence.
+fn is_fence(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("```") || t.starts_with("~~~")
+}
+
+/// Source offset for a click at `offset` characters into a code block's rendered
+/// text, which is only the code: skips the opening fence line and stays before the
+/// closing one.
+fn code_source_offset(lines: &[String], offset: usize) -> usize {
+    let total: usize = lines.iter().map(|l| l.chars().count() + 1).sum::<usize>().saturating_sub(1);
+    let fenced = lines.first().is_some_and(|l| is_fence(l));
+    let start = if fenced { lines[0].chars().count() + 1 } else { 0 };
+    let closed = lines.len() > 1 && lines.last().is_some_and(|l| is_fence(l));
+    let end = if closed { total - lines[lines.len() - 1].chars().count() - 1 } else { total };
+    (start + offset).min(end.max(start))
+}
+
+/// Tokens for a line of a code block being edited: fences are muted, the rest is code.
+fn code_line_tokens(lines: &[String], phys: usize, edit: &BlockEdit, end: usize) -> Vec<crate::views::editor::MarkdownToken> {
+    use crate::views::editor::{MarkdownToken, MarkdownTokenKind};
+    let line = &lines[phys];
+    let at_edge = phys == edit.start_line || phys == end;
+    let kind = if at_edge && is_fence(line) { MarkdownTokenKind::CodeDelimiter } else { MarkdownTokenKind::CodeText };
+    vec![MarkdownToken { text: line.clone(), kind }]
 }
 
 /// (line, column) of character `offset` within `lines`, relative to the first line.
@@ -170,7 +200,13 @@ impl WorkspaceView {
         let block_lines = &lines[start..=end];
         let rendered = zmark_core::ast::flatten_block(&parsed.blocks[ix], "0").text;
         let source = block_lines.join("\n");
-        let (line, col) = position_in(block_lines, source_offset_for_rendered(&source, &rendered, offset));
+        let code = matches!(parsed.blocks[ix], BlockElement::FencedCode { .. });
+        let source_offset = if code {
+            code_source_offset(block_lines, offset)
+        } else {
+            source_offset_for_rendered(&source, &rendered, offset)
+        };
+        let (line, col) = position_in(block_lines, source_offset);
         self.cancel_source_composition();
         self.end_source_drag();
         self.start_block_motion(ix..ix + 1, true);
@@ -180,6 +216,7 @@ impl WorkspaceView {
             tail: lines.len() - 1 - end,
             start_offset: self.state.editor.offset_for_position((start, 0)),
             blocks: ix..ix + 1,
+            code,
         });
         self.preview_selection = None;
         self.end_preview_selection();
@@ -315,13 +352,6 @@ impl WorkspaceView {
             return;
         }
         let ix = self.exit_block_edit(cx).map_or(ix, |shift| shift.apply(ix));
-        if click_count == 2
-            && self.state.preferences.preview_inline_edit
-            && matches!(self.state.doc().parsed.blocks.get(ix), Some(BlockElement::FencedCode { .. }))
-        {
-            self.jump_to_block_source(ix, window, cx);
-            return;
-        }
         let pos = crate::views::preview::PreviewCharPosition::new(ix, offset);
         self.preview_selection = Some(crate::views::preview::PreviewSelection::new(pos, pos));
         self.is_preview_selecting = true;
@@ -342,28 +372,6 @@ impl WorkspaceView {
         if moved < CLICK_SLOP && collapsed {
             self.enter_block_edit(ix, offset, window, cx);
         }
-    }
-
-    /// Double-click on a code block: put the caret on its first code line in the source.
-    fn jump_to_block_source(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(anchor) = self.state.doc().parsed.anchors.get(ix) else { return };
-        let (start, end) = anchor_lines(anchor);
-        let line = (start + 1).min(end).min(self.state.editor.lines.len().saturating_sub(1));
-        self.preview_selection = None;
-        self.end_preview_selection();
-        if self.state.view_mode == ViewMode::Preview {
-            self.set_view_mode(ViewMode::Split, cx);
-        }
-        self.state.editor.set_cursor(line, 0);
-        self.preview_focused = false;
-        window.focus(&self.focus_handle, cx);
-        self.scroll_editor_to_line(line);
-        cx.notify();
-    }
-
-    fn scroll_editor_to_line(&mut self, line: usize) {
-        let (index, _) = crate::editor_engine::physical_to_visual(line, 0, &self.cached_visual_lines);
-        self.editor_scroll_handle.scroll_to_item_strict(index, ScrollStrategy::Center);
     }
 
     /// Wraps the edited lines at the preview column width and returns the editor
@@ -407,7 +415,7 @@ impl WorkspaceView {
                 let mut line_offset = edit.start_offset;
                 for phys in edit.start_line..=end {
                     let line = &display[phys];
-                    let tokens = tokenize_markdown_line(line);
+                    let tokens = if edit.code { code_line_tokens(&display, phys, &edit, end) } else { tokenize_markdown_line(line) };
                     let (wrapped, _) = crate::views::editor::wrap_line_to_visual_layout_with_width(
                         window.text_system(), phys, line, &tokens, text_width, font_size,
                     );
@@ -595,7 +603,7 @@ mod tests {
 
     #[test]
     fn edit_range_follows_line_count_and_shift_moves_later_blocks() {
-        let edit = BlockEdit { start_line: 2, tail: 3, start_offset: 0, blocks: 1..2 };
+        let edit = BlockEdit { start_line: 2, tail: 3, start_offset: 0, blocks: 1..2, code: false };
         assert_eq!(edit.end_line(6), Some(2));
         assert_eq!(edit.end_line(8), Some(4));
         assert_eq!(edit.end_line(5), None);
