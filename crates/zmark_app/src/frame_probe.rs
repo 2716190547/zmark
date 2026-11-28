@@ -20,6 +20,8 @@
 //!   visible task every 240 ms.
 //! - `line-height`: a 12 000-line document; alternate the line height
 //!   preference between 1.3 and 1.7 every 240 ms.
+//! - `bottom-scroll`: the welcome guide (images, a diagram, a table) scrolled
+//!   to its end, then wheel-scrolled further down every step.
 //!
 //! The last three start scrolled to block 500 and print the top block at the
 //! end: it must still be block 500 (on `doc-switch`, after an even number of
@@ -56,6 +58,7 @@ pub enum Scenario {
     DocSwitch,
     TaskToggle,
     LineHeight,
+    BottomScroll,
 }
 
 impl Scenario {
@@ -68,6 +71,7 @@ impl Scenario {
             Scenario::DocSwitch => "doc-switch",
             Scenario::TaskToggle => "task-toggle",
             Scenario::LineHeight => "line-height",
+            Scenario::BottomScroll => "bottom-scroll",
         }
     }
 
@@ -80,6 +84,7 @@ impl Scenario {
                 Some(long_document(12_000))
             }
             Scenario::TaskToggle => Some(task_document(12_000)),
+            Scenario::BottomScroll => Some(crate::welcome::document(zmark_core::i18n::SupportedLocale::ZhCn).buffer),
             Scenario::TableSelect => Some(table_document(30, 6)),
         }
     }
@@ -95,6 +100,7 @@ pub fn requested() -> Option<Scenario> {
         Ok("doc-switch") => Scenario::DocSwitch,
         Ok("task-toggle") => Scenario::TaskToggle,
         Ok("line-height") => Scenario::LineHeight,
+        Ok("bottom-scroll") => Scenario::BottomScroll,
         _ => Scenario::Modes,
     };
     Some(scenario)
@@ -215,11 +221,26 @@ pub fn run(scenario: Scenario, view: Entity<WorkspaceView>, window: &mut Window,
                     });
                 }
             }
+            // `ZMARK_FRAME_PROBE_MODE=split` runs a scenario in Split instead of Preview.
+            let mode = if std::env::var("ZMARK_FRAME_PROBE_MODE").as_deref() == Ok("split") { ViewMode::Split } else { ViewMode::Preview };
             view.update(cx, |ws, cx| {
-                ws.set_view_mode(ViewMode::Preview, cx);
+                ws.set_view_mode(mode, cx);
                 ws.parse_now_and_refresh();
                 cx.notify();
             });
+            if scenario == Scenario::BottomScroll {
+                let view = view.clone();
+                window
+                    .spawn(cx, async move |cx| {
+                        cx.background_executor().timer(SETTLE / 2).await;
+                        let _ = cx.update(|_, cx| view.update(cx, |ws, cx| {
+                            let max = ws.preview_list.max_scroll();
+                            ws.preview_list.set_scroll_offset(max);
+                            cx.notify();
+                        }));
+                    })
+                    .detach();
+            }
             if matches!(scenario, Scenario::DocSwitch | Scenario::TaskToggle | Scenario::LineHeight) {
                 let view = view.clone();
                 window
@@ -332,6 +353,15 @@ fn drive(
             let phase = (step % 60) as f32 / 60.;
             let tri = if phase < 0.5 { phase * 2. } else { 2. - phase * 2. };
             window.resize(size(px(900. + 500. * tri), px(800.)));
+        }
+        Scenario::BottomScroll => {
+            let inside = Point::new(left + px(100.), top + height / 2.);
+            mouse(window, cx, PlatformInput::Scroll(ScrollEvent {
+                position: inside,
+                delta: ScrollDelta::Pixels(Point::new(px(0.), px(-30.))),
+                modifiers: Modifiers::none(),
+                ..Default::default()
+            }));
         }
         _ if step % ACTION_EVERY != ACTION_EVERY - 1 => {}
         Scenario::DocSwitch => {

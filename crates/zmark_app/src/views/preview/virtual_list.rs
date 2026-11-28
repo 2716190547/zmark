@@ -190,6 +190,16 @@ impl PreviewScrollState {
     /// Returns the visible block range and whether it changed since last frame.
     /// The caller notifies on change so prepaint bounds can settle before input.
     pub fn visible_range(&mut self, overdraw: f32) -> (std::ops::Range<usize>, bool) {
+        // GPUI's scroll listener adds wheel deltas without clamping and only
+        // clamps in the next prepaint. Wheeling past the end therefore leaves an
+        // overshot offset here; ranging from it skipped the blocks at the top of
+        // the viewport and left that area blank for a frame. Clamp first.
+        let raw = -f32::from(self.scroll.offset().y);
+        let clamped = raw.clamp(0.0, self.max_scroll());
+        if (raw - clamped).abs() > 0.01 {
+            let x = self.scroll.offset().x;
+            self.scroll.set_offset(point(x, px(-clamped)));
+        }
         let range = if self.sizes.is_empty() {
             0..0
         } else {
@@ -667,6 +677,17 @@ fn estimate_sizes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_range_clamps_an_offset_past_the_end() {
+        let mut state = PreviewScrollState::new();
+        state.reset(50);
+        let max = state.max_scroll();
+        state.scroll.set_offset(point(px(0.), px(-(max + 500.0))));
+        let (range, _) = state.visible_range(32.0);
+        assert!((state.offset() - max).abs() < 0.01, "offset {} not clamped to {max}", state.offset());
+        assert!(state.origins[range.start] <= max, "range {range:?} starts below the viewport top");
+    }
 
     #[test]
     fn restore_reuses_heights_and_scroll_position() {
