@@ -114,6 +114,9 @@ impl gpui_component::scroll::ScrollbarHandle for EditorScrollbarHandle {
     }
 }
 
+/// Folder expand/collapse duration; close to the sidebar slide and block-edit transitions.
+const FOLDER_MOTION_MS: u64 = 220;
+
 pub struct WorkspaceView {
     pub state: AppState,
     sidebar_selection: crate::views::sidebar_selection::SharedSelection,
@@ -4369,7 +4372,8 @@ impl Render for WorkspaceView {
         for (path, expanded) in folder_targets {
             let transition = self.folder_transitions.entry(path.clone()).or_default();
             let target = if expanded { 1.0 } else { 0.0 };
-            let value = transition.sample(target, gpui_base::motion::Transition::new(std::time::Duration::from_millis(600)), window, cx);
+            let policy = gpui_base::motion::Transition::new(std::time::Duration::from_millis(FOLDER_MOTION_MS)).ease(gpui::ease_out_quint());
+            let value = transition.sample(target, policy, window, cx);
             folder_values.insert(path, value.value);
         }
         if !self.sidebar_selection.lock().unwrap().initialized {

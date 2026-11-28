@@ -923,6 +923,12 @@ fn inline_rename(key: &DocKey, params: &DrawerSearchParams) -> Option<AnyElement
 const TREE_DIR_ROW_H: f32 = 28.0;
 const TREE_FILE_ROW_H: f32 = 48.0;
 
+/// Rows fade in ahead of the height reveal and, on collapse, only fade near the
+/// end, so content is clipped away while still readable instead of going grey first.
+fn folder_content_opacity(value: f32) -> f32 {
+    (value * 1.6).clamp(0.0, 1.0)
+}
+
 /// Native measured reveal owns height; settled closed children are not built.
 fn fading_children(children: Div, expanded: bool, value: f32, path: PathBuf) -> AnyElement {
     // Settled content must participate in normal layout, without nested reveal masks.
@@ -930,7 +936,7 @@ fn fading_children(children: Div, expanded: bool, value: f32, path: PathBuf) -> 
     div().relative().w_full().flex_shrink_0().overflow_hidden()
         .child(gpui_base::Collapsible::new().w_full().open(expanded)
             .reveal(SharedString::from(format!("folder-reveal:{}", path.display())), value)
-            .content(children.w_full().flex_shrink_0().opacity(value)))
+            .content(children.w_full().flex_shrink_0().opacity(folder_content_opacity(value))))
         .when(!expanded, |el| {
             el.child(div().absolute().inset_0().occlude()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
