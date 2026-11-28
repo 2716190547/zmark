@@ -431,9 +431,10 @@ async fn folder_expand_grows_the_tree_height_smoothly_instead_of_jumping(cx: &mu
         "4 files must add well over 100px: collapsed {collapsed}, expanded {expanded}"
     );
 
-    // Collapse again and sample mid-animation: strictly in between, not a jump.
+    // Collapse again and sample mid-animation: strictly in between, not a jump. The fixture
+    // folder is short, so its animation runs the 160 ms minimum; 40 ms is well inside it.
     toggle(cx);
-    advance(cx, 250);
+    advance(cx, 40);
     let mid = height(cx);
     assert!(
         mid > collapsed + 1.0 && mid < expanded - 1.0,
