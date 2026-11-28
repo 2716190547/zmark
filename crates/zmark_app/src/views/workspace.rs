@@ -3826,9 +3826,16 @@ impl WorkspaceView {
                     .gap_2()
                     .child(
                         div()
+                            .relative()
                             .flex()
                             .items_center()
                             .gap_1()
+                            .child(crate::views::slide_thumb::SlideThumb::new(
+                                "mode_switch_thumb",
+                                match view_mode { ViewMode::Source => 0, ViewMode::Split => 1, ViewMode::Preview => 2 },
+                                crate::views::slide_thumb::SlotLayout::Row { width: 28.0 },
+                                div().size_full().rounded(px(6.)).bg(mode_tab_colors(true, theme).0),
+                            ).gap(4.0))
                             .child(render_mode_icon_tab(
                                 "btn_mode_source",
                                 tip_source,
@@ -6283,7 +6290,9 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        base.bg(bg_color).text_color(text_color).child(icon)
+        // The background is the sliding thumb behind the group, not this button.
+        let _ = bg_color;
+        base.text_color(text_color).child(icon)
     } else {
         base.text_color(text_color)
             .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))

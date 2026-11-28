@@ -857,7 +857,19 @@ impl Render for SettingsWindowView {
                     .pb_2()
                     .flex()
                     .flex_col()
-                    .gap_1()
+                    .child(div().relative().flex().flex_col().gap_1()
+                    .child(crate::views::slide_thumb::SlideThumb::new(
+                        "settings_nav_thumb",
+                        match current_tab {
+                            SettingsTab::Appearance => 0,
+                            SettingsTab::EditorSave => 1,
+                            SettingsTab::Language => 2,
+                            SettingsTab::Shortcuts => 3,
+                            SettingsTab::About => 4,
+                        },
+                        crate::views::slide_thumb::SlotLayout::Column { height: 32.0 },
+                        div().size_full().rounded(px(tk::RADIUS)).bg(theme.control_selection_bg()),
+                    ).gap(4.0))
                     .child(render_nav_item(
                         strings.appearance,
                         "icons/palette.svg",
@@ -907,7 +919,7 @@ impl Render for SettingsWindowView {
                             let t = on_set_tab.clone();
                             move |_, window, cx| t(SettingsTab::About, window, cx)
                         },
-                    )),
+                    ))),
             )
             // Right Content Panel
             .child(
@@ -1119,8 +1131,8 @@ where
     let icon = svg().path(icon_path).size(px(16.)).text_color(icon_color);
 
     if active {
-        base.bg(theme.control_selection_bg())
-            .font_weight(FontWeight::MEDIUM)
+        // The fill is the sliding `SlideThumb` behind the list.
+        base.font_weight(FontWeight::MEDIUM)
             .text_color(theme.selection_text())
             .child(div().flex_shrink_0().child(icon))
             .child(div().flex_1().min_w(px(0.)).whitespace_normal().child(title))
@@ -1282,9 +1294,28 @@ where
         .child(label.into())
 }
 
-/// Segmented control track. Children are [`render_segment`]s.
-fn render_segmented(theme: &ThemeColors) -> Div {
+/// Segmented control track. Children are [`render_segment`]s; `active` is the index of
+/// the selected one among `count` equal options (none when the value matches no option).
+/// The selected thumb is a `SlideThumb` that eases between options.
+fn render_segmented(id: &'static str, active: Option<usize>, count: usize, theme: &ThemeColors) -> Div {
     div()
+        .relative()
+        .when_some(active, |track, index| {
+            track.child(
+                crate::views::slide_thumb::SlideThumb::new(
+                    id,
+                    index,
+                    crate::views::slide_thumb::SlotLayout::Equal { count },
+                    div()
+                        .size_full()
+                        .rounded(px(tk::RADIUS_INNER))
+                        .bg(theme.segmented_thumb_bg())
+                        .shadow_xs(),
+                )
+                .inset(tk::TRACK_INSET)
+                .gap(tk::TRACK_INSET),
+            )
+        })
         .w_full()
         .h(px(tk::CONTROL_H))
         .p(px(tk::TRACK_INSET))
@@ -1321,9 +1352,8 @@ where
         .on_mouse_down(MouseButton::Left, handler)
         .child(label.into());
     if active {
-        base.bg(theme.segmented_thumb_bg())
-            .shadow_xs()
-            .text_color(theme.segmented_thumb_text())
+        // The raised fill is the track's sliding thumb, not this segment.
+        base.text_color(theme.segmented_thumb_text())
             .font_weight(FontWeight::MEDIUM)
     } else {
         base.text_color(theme.segmented_inactive_text())
@@ -1332,6 +1362,7 @@ where
 }
 
 fn render_ios_toggle<F>(
+    id: &'static str,
     active: bool,
     theme: &ThemeColors,
     handler: F,
@@ -1352,17 +1383,16 @@ where
         .bg(track_bg)
         .text_color(theme.selection_text())
         .cursor_pointer()
-        .flex()
-        .items_center()
-        .when(active, |s| s.justify_end())
-        .when(!active, |s| s.justify_start())
+        .relative()
         .on_mouse_down(MouseButton::Left, handler)
         .child(
-            div()
-                .size(px(16.))
-                .rounded_full()
-                .bg(rgb(0xffffff))
-                .shadow_sm(),
+            crate::views::slide_thumb::SlideThumb::new(
+                id,
+                usize::from(active),
+                crate::views::slide_thumb::SlotLayout::Row { width: 16.0 },
+                div().size_full().rounded_full().bg(rgb(0xffffff)).shadow_sm(),
+            )
+            .inset(2.0),
         )
 }
 
@@ -1447,7 +1477,7 @@ fn render_custom_theme_editor(
                 .justify_between()
                 .gap_2()
                 .child(
-                    render_segmented(theme)
+                    render_segmented("seg_custom_mode", Some(usize::from(editing_dark)), 2, theme)
                         .w(px(196.))
                         .child(render_mode_pill(
                             strings.custom_editing_light,
@@ -1800,7 +1830,7 @@ fn render_appearance_tab(
         .child(render_setting_row(
             strings.reduce_motion_label,
             Some(strings.reduce_motion_desc.into()),
-            render_ios_toggle(reduce_motion, theme, move |_, window, cx| {
+            render_ios_toggle("toggle_reduce_motion", reduce_motion, theme, move |_, window, cx| {
                 on_toggle_reduce_motion(!reduce_motion, window, cx);
             }),
             theme,
@@ -1845,7 +1875,7 @@ fn render_editor_save_tab(
                 render_setting_row(
                     strings.auto_save_label,
                     Some(strings.auto_save_desc.into()),
-                    render_ios_toggle(auto_save, theme, move |_, window, cx| {
+                    render_ios_toggle("toggle_auto_save", auto_save, theme, move |_, window, cx| {
                         t_as(!auto_save, window, cx);
                     }),
                     theme,
@@ -1854,7 +1884,7 @@ fn render_editor_save_tab(
                 render_setting_row(
                     strings.auto_save_on_blur_label,
                     None,
-                    render_ios_toggle(auto_save_on_blur, theme, move |_, window, cx| {
+                    render_ios_toggle("toggle_auto_save_on_blur", auto_save_on_blur, theme, move |_, window, cx| {
                         t_asb(!auto_save_on_blur, window, cx);
                     }),
                     theme,
@@ -1863,7 +1893,7 @@ fn render_editor_save_tab(
                 render_setting_row(
                     strings.show_line_numbers_label,
                     Some(strings.show_line_numbers_desc.into()),
-                    render_ios_toggle(show_line_numbers, theme, move |_, window, cx| {
+                    render_ios_toggle("toggle_line_numbers", show_line_numbers, theme, move |_, window, cx| {
                         t_ln(!show_line_numbers, window, cx);
                     }),
                     theme,
@@ -1872,7 +1902,7 @@ fn render_editor_save_tab(
                 render_setting_row(
                     strings.show_tab_bar_label,
                     Some(strings.show_tab_bar_desc.into()),
-                    render_ios_toggle(show_tab_bar, theme, move |_, window, cx| {
+                    render_ios_toggle("toggle_tab_bar", show_tab_bar, theme, move |_, window, cx| {
                         t_tb(!show_tab_bar, window, cx);
                     }),
                     theme,
@@ -1881,7 +1911,7 @@ fn render_editor_save_tab(
                 render_setting_row(
                     strings.preview_inline_edit_label,
                     Some(strings.preview_inline_edit_desc.into()),
-                    render_ios_toggle(preview_inline_edit, theme, move |_, window, cx| {
+                    render_ios_toggle("toggle_inline_edit", preview_inline_edit, theme, move |_, window, cx| {
                         t_ie(!preview_inline_edit, window, cx);
                     }),
                     theme,
@@ -1896,7 +1926,7 @@ fn render_editor_save_tab(
                 render_setting_row(
                     strings.tab_size_label,
                     None,
-                    render_segmented(theme)
+                    render_segmented("seg_tab_size", [2usize, 4].iter().position(|v| *v == tab_size), 2, theme)
                         .w(px(168.))
                         .child(render_segment(
                             "tab_size_2".into(),
@@ -1918,7 +1948,7 @@ fn render_editor_save_tab(
                 render_setting_row(
                     strings.line_height_label,
                     None,
-                    render_segmented(theme)
+                    render_segmented("seg_line_height", [1.3f32, 1.4, 1.5, 1.6, 1.7].iter().position(|v| (line_height - v).abs() < 0.05), 5, theme)
                         .w(px(260.))
                         .children([1.3f32, 1.4, 1.5, 1.6, 1.7].into_iter().map(|lh_opt| {
                             let on_set = on_set_line_height.clone();
@@ -1936,7 +1966,7 @@ fn render_editor_save_tab(
                 render_setting_row(
                     strings.column_width,
                     Some(strings.column_width_desc.into()),
-                    render_segmented(theme)
+                    render_segmented("seg_column_width", [640.0f32, 760.0, 960.0, 1200.0].iter().position(|v| (column_width - v).abs() < 0.5), 4, theme)
                         .w(px(240.))
                         .children([640.0f32, 760.0, 960.0, 1200.0].into_iter().map(|w_opt| {
                             let on_set = on_set_column_width.clone();

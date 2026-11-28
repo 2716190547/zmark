@@ -253,6 +253,13 @@ pub fn render_drawer_with_search(
                     theme,
                     move |_, window, cx| t_toggle(window, cx),
                 ))
+                .child(div().relative().flex().items_center().gap_1()
+                .child(crate::views::slide_thumb::SlideThumb::new(
+                    "drawer_tab_thumb",
+                    usize::from(active_tab == DrawerTab::Outline),
+                    crate::views::slide_thumb::SlotLayout::Row { width: 28.0 },
+                    div().size_full().rounded(px(6.)).bg(theme.control_selection_bg()),
+                ).gap(4.0))
                 .child(render_icon_btn(
                     "drawer_tab_files",
                     &match &search.switch_tab_shortcut_hint {
@@ -274,7 +281,7 @@ pub fn render_drawer_with_search(
                     active_tab == DrawerTab::Outline,
                     theme,
                     move |_, window, cx| t2(DrawerTab::Outline, window, cx),
-                ))
+                )))
                 .child(render_icon_btn(
                     "drawer_add_folder_btn",
                     strings.open_file_or_folder,
@@ -1313,9 +1320,9 @@ where
     let icon_el = svg().path(icon_path).size(px(16.)).text_color(color);
 
     if active {
-        base.bg(theme.control_selection_bg())
-            .rounded(px(6.))
-            .child(icon_el)
+        // The background is the sliding thumb behind the tab pair (see `SlideThumb`); a
+        // lone active button such as an action stays unfilled.
+        base.rounded(px(6.)).child(icon_el)
     } else {
         base.rounded(px(6.))
 
