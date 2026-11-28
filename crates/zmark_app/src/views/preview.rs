@@ -906,16 +906,14 @@ fn render_styled_inlines(
             offset += len;
             match item {
                 InlineItem::Image { alt, url, source_range, .. } => {
-                    let state = images.lock().unwrap().request(url);
+                    let (state, known_size) = {
+                        let mut images = images.lock().unwrap();
+                        (images.request(url), images.known_size(url))
+                    };
                     match state {
                         crate::local_images::ImageState::Ready(image) => {
                             let reference = url.clone();
-                            let ratio = image.width as f32 / image.height as f32;
-                            // Cap the displayed height by shrinking the width instead of
-                            // letterboxing: a tall image must not own a whole viewport
-                            // (it made the preview blocks huge and left big empty gaps).
-                            let max_display_width = (MAX_IMAGE_DISPLAY_HEIGHT * ratio)
-                                .min(image.width as f32);
+                            let (ratio, max_display_width) = image_display_box(image.width, image.height);
                             let element = img(image.image_source())
                                 .absolute().inset_0().size_full()
                                 .object_fit(ObjectFit::Contain)
@@ -976,6 +974,17 @@ fn render_styled_inlines(
                         }
                         state => {
                             if matches!(state, crate::local_images::ImageState::Waiting) {
+                                // Decoded before: reserve exactly the box the image will take,
+                                // so nothing below moves when it arrives again.
+                                if let Some((width, height)) = known_size {
+                                    let (ratio, max_display_width) = image_display_box(width, height);
+                                    let mut placeholder = div().relative().w_full().max_w(px(max_display_width))
+                                        .max_h(px(max_display_width / ratio)).min_w(px(0.))
+                                        .rounded_md().bg(theme.hover_bg())
+                                        .debug_selector(|| format!("local_image_status:{url}"));
+                                    placeholder.style().aspect_ratio = Some(ratio);
+                                    return placeholder.into_any_element();
+                                }
                                 // Loading: reserve the space with a quiet block instead of flashing
                                 // a text box that the image then replaces (the "stutter").
                                 return div().w_full().min_w(px(0.)).h(px(LOADING_IMAGE_HEIGHT))
@@ -1846,6 +1855,15 @@ fn render_list_element(
 pub const MAX_IMAGE_DISPLAY_HEIGHT: f32 = 400.0;
 /// Height reserved for an image that is still decoding.
 const LOADING_IMAGE_HEIGHT: f32 = 120.0;
+
+/// Aspect ratio and maximum display width of an image of `width`×`height` pixels.
+/// The displayed height is capped by shrinking the width instead of
+/// letterboxing: a tall image must not own a whole viewport (it made the
+/// preview blocks huge and left big empty gaps).
+fn image_display_box(width: u32, height: u32) -> (f32, f32) {
+    let ratio = width as f32 / height.max(1) as f32;
+    (ratio, (MAX_IMAGE_DISPLAY_HEIGHT * ratio).min(width as f32))
+}
 
 pub fn should_wrap_code_block(lang: Option<&str>) -> bool {
     match lang {

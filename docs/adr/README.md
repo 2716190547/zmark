@@ -36,6 +36,7 @@
 | **0035** | [无缝贯穿设置视窗、系统化调色推导、图标线宽归一、点部语义上色与 Mermaid 语法脱糖](0035-settings-layout-derived-palette-icon-stroke-and-mermaid-desugaring.md) | 已通过 (Accepted) | 彻底移除 44px 横栏实现全高无缝分栏；macOS 原生 Segmented Control 槽底浮雕调色推导；顶栏设置常亮修复与 16px 图标线宽 1.8~2.25 viewBox 光学归一；Markdown 列表/语法标缀点部专属色；Mermaid 复合连线 & 自动笛卡尔展开与容错 |
 | **0036** | [选中态语义 Token、代码墨色、灯箱位图通道修复与设置页扁平化](0036-selection-tokens-code-ink-lightbox-bitmap-and-settings-flattening.md) | 已通过 (Accepted) | Phase G 历史决策；选中色、标题对齐及侧栏搜索推迟项由 0037 局部替代，其余继续有效 |
 | **0037** | [真实文字布局、虚拟化预览选区与侧栏文件名搜索](0037-real-text-layout-and-virtualized-preview-selection.md) | 已通过 (Accepted，含 P2 限制) | 真实折行与行级复用、预览跨块字符选区及纯文本复制、系统输入与后台文件名搜索；模式相关标题对齐、默认/Claude 暖选中色；遗留见 Phase H 验收 |
+| **0039** | [预览同帧测量与按文档保存的编辑、预览状态](0039-same-frame-preview-measurement-and-per-document-state.md) | 已通过 (Accepted) | 可见块在 prepaint 中先测量再定位，消除按估算高度排版的一帧；撤销历史、预览高度与滚动位置按文档保存；图片与 Mermaid 尺寸记忆 |
 
 ---
 

@@ -104,6 +104,17 @@ struct Requests {
     entries: HashMap<(u64, bool), Request>,
     rasters: HashMap<RasterSource, u64>,
 }
+/// SVG size of diagrams laid out before, by source hash, so a diagram that is
+/// re-parsed (after eviction or a document switch) keeps its height meanwhile.
+static KNOWN_SIZES: LazyLock<Mutex<std::collections::HashMap<u64, (f32, f32)>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+const MAX_KNOWN_SIZES: usize = 1024;
+
+fn display_size(svg_size: (f32, f32), width: f32) -> (f32, f32) {
+    let display_width = (width - 34.0).max(1.0).min(svg_size.0);
+    (display_width, display_width * svg_size.1 / svg_size.0.max(1.0))
+}
+
 static REQUESTS: LazyLock<Mutex<Requests>> = LazyLock::new(|| Mutex::new(Requests::default()));
 
 pub(super) fn retire(evicted: &[PathBuf], window: &mut Window, cx: &mut App) {
@@ -250,11 +261,13 @@ impl RenderOnce for Mermaid {
         match result {
             Some(Ok(svg)) => {
                 let path = svg.file.path().to_path_buf();
-                let display_width = (self.width - 34.0).max(1.0).min(svg.size.0);
-                let display = (
-                    display_width,
-                    display_width * svg.size.1 / svg.size.0.max(1.0),
-                );
+                {
+                    let mut known = KNOWN_SIZES.lock().unwrap();
+                    if known.len() >= MAX_KNOWN_SIZES { known.clear(); }
+                    known.insert(hash, svg.size);
+                }
+                let display = display_size(svg.size, self.width);
+                let display_width = display.0;
                 let (width, height) =
                     preview_pixels(svg.size, display_width, window.scale_factor());
                 let source = RasterSource {
@@ -318,14 +331,26 @@ impl RenderOnce for Mermaid {
                         .child(error.to_string()),
                 )
                 .into_any_element(),
-            None => div()
-                .w_full()
-                .my_3()
-                .p_3()
-                .text_xs()
-                .text_color(self.theme.text_muted)
-                .child("Mermaid · 渲染中…")
-                .into_any_element(),
+            None => match KNOWN_SIZES.lock().unwrap().get(&hash).copied() {
+                // Laid out before: keep the card at its final size until the SVG is back.
+                Some(size) => render_mermaid_container(
+                    std::path::PathBuf::new(),
+                    None,
+                    display_size(size, self.width),
+                    hash,
+                    &self.theme,
+                    self.strings,
+                    None,
+                ),
+                None => div()
+                    .w_full()
+                    .my_3()
+                    .p_3()
+                    .text_xs()
+                    .text_color(self.theme.text_muted)
+                    .child("Mermaid · 渲染中…")
+                    .into_any_element(),
+            },
         }
     }
 }
