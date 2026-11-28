@@ -2030,7 +2030,20 @@ impl WorkspaceView {
         self.preview_selection = None;
         self.is_preview_selecting = false;
         self.state.sync_from_editor();
-        self.schedule_parse(cx);
+        // A click expects an immediate result: parse now instead of waiting for
+        // the typing debounce. Documents too large for automatic parsing keep
+        // the normal paused path.
+        if crate::state::parse_debounce(self.state.doc().buffer.len()).is_some() {
+            self.parse_task = None;
+            self.parse_paused = false;
+            if self.state.parse_now() {
+                self.prune_syntax_state();
+                self.invalidate_preview_list();
+            }
+            self.schedule_syntax_parse(cx);
+        } else {
+            self.schedule_parse(cx);
+        }
         self.trigger_auto_save(cx);
         cx.notify();
     }
@@ -3472,6 +3485,7 @@ impl WorkspaceView {
         let drawer_open = self.state.drawer_open;
         let view_mode = self.state.view_mode;
         let strings = self.state.strings;
+        let auto_save = self.state.preferences.auto_save && self.state.doc().path.is_some();
         let is_renaming = self.is_renaming && !self.rename_in_sidebar;
         let rename_input = self.rename_input.clone();
 
@@ -3650,7 +3664,10 @@ impl WorkspaceView {
                                     .child(title_text),
                             )
                             .map(|el| {
-                                if is_dirty {
+                                // With auto-save the dirty state lasts about a second and
+                                // returns on every edit; pulsing the title each time reads
+                                // as flicker, so only pulse when saving is manual.
+                                if is_dirty && !auto_save {
                                     crate::views::motion::animated(
                                         el,
                                         reduce_motion,
