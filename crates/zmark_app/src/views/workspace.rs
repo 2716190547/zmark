@@ -2956,9 +2956,11 @@ impl WorkspaceView {
             if self.state.folder_expanded(path).is_some() {
                 self.exit_sidebar_multiselect(cx);
                 self.selected_directory = Some(path.clone());
+                // Rapid clicks arrive as click_count 2, 3, ...; only a double-click on the
+                // name renames, every other press toggles, so fast clicking keeps working.
                 if name && event.click_count == 2 {
                     self.begin_rename_target(key.clone(), true, window, cx);
-                } else if event.click_count == 1 {
+                } else {
                     if let Some(root) = self.state.workspace_roots.iter().position(|r| path.starts_with(&r.path)) {
                         self.toggle_folder(root, path, cx);
                     }
