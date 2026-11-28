@@ -517,7 +517,7 @@ pub fn hit_test_char_offset_in_block(
             f32::from(local_y),
             crate::platform::ui_font(),
             base_font_size,
-            1.75,
+            crate::platform::preview_line_height(),
             Some(f32::from(block_bounds.size.width)),
         );
     }

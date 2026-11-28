@@ -18,6 +18,13 @@ use std::{
 
 const DEFAULT_ITEM_HEIGHT: f32 = 40.0;
 
+/// Saved preview layout of a background document; see [`PreviewScrollState::snapshot`].
+#[derive(Debug, Clone, Default)]
+pub struct PreviewSnapshot {
+    measured: Vec<Option<f32>>,
+    top: (usize, f32),
+}
+
 pub type MeasurementSink = Rc<RefCell<Vec<(usize, f32)>>>;
 
 #[derive(Clone)]
@@ -37,6 +44,10 @@ pub struct PreviewScrollState {
     last_range: std::ops::Range<usize>,
     /// Real prepaint heights, kept across estimate rebuilds for the same AST.
     measured: Vec<Option<f32>>,
+    /// AST the measured heights belong to, used to carry them across reparses.
+    measured_ast: Option<Arc<ParsedDocument>>,
+    /// Scroll position from a restored [`PreviewSnapshot`], applied by the next layout.
+    pending_restore: Option<(usize, f32)>,
     /// (scroll offset when set, requested block, in-block progress). Keeps a
     /// programmatic `scroll_to` meaningful when GPUI clamps a short document.
     logical_override: Rc<Cell<Option<(f32, usize, f32)>>>,
@@ -69,6 +80,8 @@ impl PreviewScrollState {
             pending: Rc::new(RefCell::new(Vec::new())),
             last_range: 0..0,
             measured: Vec::new(),
+            measured_ast: None,
+            pending_restore: None,
             logical_override: Rc::new(Cell::new(None)),
             scrollbar_dragging: Rc::new(Cell::new(false)),
             scrollbar_drag_ratio: Rc::new(Cell::new(None)),
@@ -177,6 +190,16 @@ impl PreviewScrollState {
     /// Returns the visible block range and whether it changed since last frame.
     /// The caller notifies on change so prepaint bounds can settle before input.
     pub fn visible_range(&mut self, overdraw: f32) -> (std::ops::Range<usize>, bool) {
+        // GPUI's scroll listener adds wheel deltas without clamping and only
+        // clamps in the next prepaint. Wheeling past the end therefore leaves an
+        // overshot offset here; ranging from it skipped the blocks at the top of
+        // the viewport and left that area blank for a frame. Clamp first.
+        let raw = -f32::from(self.scroll.offset().y);
+        let clamped = raw.clamp(0.0, self.max_scroll());
+        if (raw - clamped).abs() > 0.01 {
+            let x = self.scroll.offset().x;
+            self.scroll.set_offset(point(x, px(-clamped)));
+        }
         let range = if self.sizes.is_empty() {
             0..0
         } else {
@@ -260,10 +283,22 @@ impl PreviewScrollState {
             || self.measured.len() != parsed.blocks.len()
             || font_key != self.last_font_key;
         if ast_changed {
+            // Throwing every height away makes all blocks fall back to estimates
+            // for a frame, which shows as flicker and blank gaps after a small
+            // edit or a line-height change. Unchanged blocks keep their last real
+            // height until they are measured again; after a font or line-height
+            // change those heights are stale but far closer than an estimate.
+            // After `restore` there is no AST to compare; the caller vouched
+            // that the source is unchanged, so heights apply one-to-one.
+            self.measured = if self.measured_ast.is_none() && self.measured.len() == parsed.blocks.len() {
+                std::mem::take(&mut self.measured)
+            } else {
+                carry_measured(self.measured_ast.as_deref(), &self.measured, parsed)
+            };
             self.last_font_key = font_key;
-            self.measured = vec![None; parsed.blocks.len()];
             self.pending.borrow_mut().clear();
             self.last_parsed_ptr = ptr;
+            self.measured_ast = Some(parsed.clone());
         }
         self.padding_top = rem * 1.5;
         self.padding_bottom = rem * 1.5;
@@ -274,7 +309,9 @@ impl PreviewScrollState {
             .collect();
         self.recompute();
         self.layout_key = key;
-        let new_offset = if was_at_end {
+        let new_offset = if let Some((ix, progress)) = self.pending_restore.take() {
+            self.offset_for_block(ix, progress)
+        } else if was_at_end {
             self.max_scroll()
         } else {
             match anchor_delta {
@@ -365,9 +402,31 @@ impl PreviewScrollState {
 
     // ---- `ListState`-shaped compatibility methods used by behaviour tests ----
 
+    /// Measured heights and scroll position of the current document, to restore
+    /// when it becomes active again. Holds no AST, so a background document can
+    /// still release its parse.
+    pub fn snapshot(&self) -> PreviewSnapshot {
+        PreviewSnapshot {
+            measured: self.measured.clone(),
+            top: self.progress_from_offset(self.offset()),
+        }
+    }
+
+    /// Like [`Self::reset`], then reuses `snapshot` when it matches `count` blocks.
+    /// The caller must only pass a snapshot taken for the same, unchanged source.
+    pub fn restore(&mut self, count: usize, snapshot: PreviewSnapshot) {
+        self.reset(count);
+        if snapshot.measured.len() == count {
+            self.measured = snapshot.measured;
+            self.pending_restore = Some(snapshot.top);
+        }
+    }
+
     pub fn reset(&mut self, count: usize) {
         self.sizes = vec![DEFAULT_ITEM_HEIGHT; count];
         self.measured = vec![None; count];
+        self.measured_ast = None;
+        self.pending_restore = None;
         self.last_parsed_ptr = 0;
         self.pending.borrow_mut().clear();
         self.recompute();
@@ -505,6 +564,23 @@ impl gpui_component::scroll::ScrollbarHandle for PreviewScrollState {
     }
 }
 
+/// Maps measured heights from `old` onto `new` for blocks that did not change:
+/// the common prefix and the common suffix. Edited blocks start unmeasured.
+fn carry_measured(old: Option<&ParsedDocument>, measured: &[Option<f32>], new: &ParsedDocument) -> Vec<Option<f32>> {
+    let mut out = vec![None; new.blocks.len()];
+    let Some(old) = old else { return out; };
+    if old.blocks.len() != measured.len() { return out; }
+    let (a, b) = (&old.blocks, &new.blocks);
+    let prefix = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
+    let max_suffix = a.len().min(b.len()) - prefix;
+    let suffix = a.iter().rev().zip(b.iter().rev()).take(max_suffix).take_while(|(x, y)| x == y).count();
+    out[..prefix].copy_from_slice(&measured[..prefix]);
+    for k in 0..suffix {
+        out[b.len() - 1 - k] = measured[a.len() - 1 - k];
+    }
+    out
+}
+
 fn layout_key(
     parsed: &Arc<ParsedDocument>,
     max_width: f32,
@@ -601,6 +677,61 @@ fn estimate_sizes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_range_clamps_an_offset_past_the_end() {
+        let mut state = PreviewScrollState::new();
+        state.reset(50);
+        let max = state.max_scroll();
+        state.scroll.set_offset(point(px(0.), px(-(max + 500.0))));
+        let (range, _) = state.visible_range(32.0);
+        assert!((state.offset() - max).abs() < 0.01, "offset {} not clamped to {max}", state.offset());
+        // A unit test has no viewport (height 0), so at the end nothing is visible and the
+        // range is empty at the block count; a non-empty range must not start below the top.
+        assert!(
+            state.origins.get(range.start).is_none_or(|origin| *origin <= max),
+            "range {range:?} starts below the viewport top"
+        );
+    }
+
+    #[test]
+    fn restore_reuses_heights_and_scroll_position() {
+        let source = (0..30).map(|i| format!("Paragraph {i}\n\n")).collect::<String>();
+        let parsed = Arc::new(zmark_core::ast::parse_markdown(&source));
+        let mut state = PreviewScrollState::new();
+        state.ensure_layout(&parsed, 900.0, 14.0, 1.5, 16.0);
+        for ix in 0..30 { state.measurement_sink().borrow_mut().push((ix, 90.0)); }
+        state.apply_measured(None);
+        state.set_scroll_offset(state.offset_for_block(12, 0.5));
+        let snapshot = state.snapshot();
+        let reparsed = Arc::new(zmark_core::ast::parse_markdown(&source));
+        let mut other = PreviewScrollState::new();
+        other.restore(30, snapshot);
+        other.ensure_layout(&reparsed, 900.0, 14.0, 1.5, 16.0);
+        assert!(other.sizes().iter().all(|&h| (h - 90.0).abs() < 0.01));
+        assert!((other.offset() - other.offset_for_block(12, 0.5)).abs() < 0.5);
+    }
+
+    #[test]
+    fn carry_measured_keeps_unchanged_prefix_and_suffix() {
+        let old = zmark_core::ast::parse_markdown("a\n\n- [ ] b\n\nc\n\nd\n");
+        let new = zmark_core::ast::parse_markdown("a\n\n- [x] b\n\nc\n\nd\n");
+        let measured = vec![Some(10.0), Some(20.0), Some(30.0), Some(40.0)];
+        assert_eq!(carry_measured(Some(&old), &measured, &new), vec![Some(10.0), None, Some(30.0), Some(40.0)]);
+        assert_eq!(carry_measured(Some(&old), &measured, &old), measured);
+        // Inserting before a block keeps the suffix. The old list is not part of it: a task
+        // item carries its marker's source byte range, which the insertion shifts, so that
+        // block is measured again (harmless: only its own height is re-measured).
+        let inserted = zmark_core::ast::parse_markdown("a\n\nnew\n\n- [ ] b\n\nc\n\nd\n");
+        assert_eq!(carry_measured(Some(&old), &measured, &inserted), vec![Some(10.0), None, None, Some(30.0), Some(40.0)]);
+        // Blocks without source ranges survive an insertion before them.
+        let plain_old = zmark_core::ast::parse_markdown("a\n\nb\n\nc\n\nd\n");
+        let plain_new = zmark_core::ast::parse_markdown("a\n\nnew\n\nb\n\nc\n\nd\n");
+        assert_eq!(
+            carry_measured(Some(&plain_old), &measured, &plain_new),
+            vec![Some(10.0), None, Some(20.0), Some(30.0), Some(40.0)]
+        );
+    }
 
     #[test]
     fn measurement_keeps_the_block_under_the_top_anchored() {

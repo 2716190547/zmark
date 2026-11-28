@@ -28,6 +28,9 @@ Prueba cada punto y luego cambia su `[ ]` por `[x]` en el código fuente de la i
 - [ ] **Cambia el ancho de la barra lateral**: muéstrala con `Cmd+Shift+B` y arrastra su borde derecho. Con doble clic vuelve al ancho predeterminado.
 - [ ] **Fija los archivos que más usas**: haz clic derecho en un archivo o carpeta de la barra lateral y elige **Fijar arriba**. Pasará al principio de su carpeta.
 - [ ] **Gestos en el visor**: haz clic en una ilustración o diagrama más abajo. Haz zoom con la rueda del ratón o pellizcando el trackpad, y desplázate con dos dedos en un trackpad de Mac. La dirección del desplazamiento sigue el ajuste del sistema.
+- [ ] **Activar la barra de pestañas**: pulsa `Cmd+,` para abrir los ajustes y activa **Mostrar barra de pestañas** en **Editor y guardado**. Los documentos abiertos pasan a ser pestañas en la cabecera; arrastra para reordenarlas y usa `Ctrl+Tab` para cambiar.
+- [ ] **Editar directamente en la vista previa**: en la misma página activa **Editar en la vista previa**, pulsa `Cmd+3` para la vista previa y haz clic en un párrafo, una lista o un bloque de código. Se convierte allí mismo en su Markdown fuente; `Esc` para terminar.
+- [ ] **Abrir archivos rápido**: pulsa `Cmd+O` para elegir un archivo, o haz clic en **Abrir archivo o carpeta** en la parte superior de la barra lateral para elegir un archivo o añadir una carpeta entera. También puedes **arrastrar** un archivo `.md` o una carpeta desde el Finder o el gestor de archivos a la ventana; la carpeta aparece en la barra lateral.
 - [ ] **Sigue donde lo dejaste**: al abrirse, ZMark vuelve a abrir los archivos que tenías abiertos al salir. Al hacer doble clic en un archivo `.md` en el Finder o el gestor de archivos, se abre ese archivo directamente.
 
 > **Sobre esta guía:** cuando cierres la página de bienvenida, ya no se abrirá sola. Para volver a verla, ve a **Ajustes → Acerca de → Guía de bienvenida** y haz clic en **Restaurar guía**.

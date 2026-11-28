@@ -7,3 +7,4 @@ pub mod settings;
 pub mod workspace;
 
 pub mod sidebar_selection;
+pub mod slide_thumb;

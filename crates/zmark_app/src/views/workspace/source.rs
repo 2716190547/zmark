@@ -112,8 +112,11 @@ impl WorkspaceView {
     pub fn source_accepts_input(&self, window: &Window, cx: &App) -> bool {
         !self.sidebar_busy
             && self.state.active.is_some()
-            && self.state.view_mode != ViewMode::Preview
-            && !self.preview_focused
+            && if self.block_edit.is_some() {
+                self.state.view_mode != ViewMode::Source
+            } else {
+                self.state.view_mode != ViewMode::Preview && !self.preview_focused
+            }
             && !self.lightbox.is_open
             && !self.is_renaming
             && self.state.pending_close.is_none()
@@ -184,6 +187,11 @@ impl WorkspaceView {
         Some((vec![a..b], text.to_owned(), 0))
     }
 
+    /// Row geometry for hit testing and IME bounds: the block editor's while it is open.
+    fn active_source_rows(&self) -> &Arc<std::sync::Mutex<Vec<SourceRow>>> {
+        if self.block_edit.is_some() { &self.block_rows } else { &self.source_rows }
+    }
+
     pub fn source_display_lines(&self) -> Arc<Vec<String>> {
         self.source_composition.as_ref().map_or_else(
             || self.state.editor.lines.clone(),
@@ -233,17 +241,17 @@ impl WorkspaceView {
         let click = self
             .source_click_after_composition
             .take()
-            .map(|(event, released)| {
+            .map(|(event, released, in_block)| {
                 let released = released || event.button == button;
-                (event, released)
+                (event, released, in_block)
             });
         self.end_source_drag();
         self.source_click_after_composition = click;
     }
 
     pub fn source_after_paint(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((event, released)) = self.source_click_after_composition.take() {
-            self.source_mouse_down(&event, window, cx);
+        if let Some((event, released, in_block)) = self.source_click_after_composition.take() {
+            self.source_mouse_down_from(&event, in_block, window, cx);
             if released {
                 self.end_source_drag();
             }
@@ -253,6 +261,9 @@ impl WorkspaceView {
     }
 
     fn source_changed(&mut self, revision: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.block_edit.is_some() && !self.block_caret_inside() {
+            self.exit_block_edit(cx);
+        }
         if self.state.editor.revision != revision {
             self.state.mark_editor_dirty();
             self.schedule_parse(cx);
@@ -277,11 +288,22 @@ impl WorkspaceView {
         self.end_source_drag();
         let revision = self.state.editor.revision;
         match command {
-            SourceCommand::Undo => {
-                self.state.editor.undo();
-            }
-            SourceCommand::Redo => {
-                self.state.editor.redo();
+            SourceCommand::Undo | SourceCommand::Redo => {
+                if matches!(command, SourceCommand::Undo) {
+                    self.state.editor.undo();
+                } else {
+                    self.state.editor.redo();
+                }
+                // History may reach outside the open block; the block range is
+                // only trusted while the lines above it are untouched.
+                if let Some(edit) = &self.block_edit {
+                    if self.state.editor.lines.len() <= edit.start_line
+                        || self.state.editor.offset_for_position((edit.start_line, 0)) != edit.start_offset
+                    {
+                        self.discard_block_edit();
+                        self.parse_now_and_refresh();
+                    }
+                }
             }
             SourceCommand::Copy | SourceCommand::Cut => {
                 if let Some(text) = self.state.editor.selected_text() {
@@ -298,7 +320,14 @@ impl WorkspaceView {
                     }
                 }
             }
-            SourceCommand::SelectAll => self.state.editor.select_all(),
+            SourceCommand::SelectAll => match self.block_edit.clone() {
+                Some(edit) => {
+                    let end = edit.end_line(self.state.editor.lines.len()).unwrap_or(edit.start_line);
+                    let stop = self.state.editor.offset_for_position((end, self.state.editor.line_len(end)));
+                    self.state.editor.set_selection_offsets(edit.start_offset, stop, false);
+                }
+                None => self.state.editor.select_all(),
+            },
             SourceCommand::Delete => {
                 self.state.editor.delete_selection();
             }
@@ -341,7 +370,8 @@ impl WorkspaceView {
                 "a" => Some(SourceCommand::SelectAll),
                 _ => None,
             }
-        } else if key == "tab" {
+        } else if key == "tab" && !modifiers.control && !modifiers.alt {
+            // Ctrl+Tab cycles documents; only plain and Shift+Tab indent.
             Some(if modifiers.shift {
                 SourceCommand::Outdent
             } else {
@@ -353,6 +383,34 @@ impl WorkspaceView {
         if let Some(command) = command {
             self.source_command(command, window, cx);
             return true;
+        }
+        if self.block_edit.is_some() && self.source_composition.is_none() {
+            let revision = self.state.editor.revision;
+            let at_start = || self.state.editor.selection().is_none()
+                && self.state.editor.offset_for_position(self.state.editor.cursor())
+                    == self.block_edit.as_ref().map_or(0, |e| e.start_offset);
+            let at_end = || {
+                let edit = self.block_edit.as_ref().unwrap();
+                let end = edit.end_line(self.state.editor.lines.len()).unwrap_or(edit.start_line);
+                self.state.editor.selection().is_none()
+                    && self.state.editor.cursor() == (end, self.state.editor.line_len(end))
+            };
+            match key.as_str() {
+                "escape" => {
+                    self.exit_block_edit(cx);
+                    return true;
+                }
+                // Joining with the neighbouring block would edit outside the box.
+                "backspace" if at_start() => return true,
+                "delete" if at_end() => return true,
+                "up" | "down" => {
+                    self.block_vertical_move(key == "up", modifiers.shift);
+                    self.end_source_drag();
+                    self.source_changed(revision, window, cx);
+                    return true;
+                }
+                _ => {}
+            }
         }
         if self.source_composition.is_some() {
             if key == "escape" {
@@ -466,7 +524,7 @@ impl WorkspaceView {
         if !f32::from(position.x).is_finite() || !f32::from(position.y).is_finite() {
             return None;
         }
-        let rows = self.source_rows.lock().unwrap();
+        let rows = self.active_source_rows().lock().unwrap();
         let row = rows.iter().min_by(|a, b| {
             let distance = |row: &SourceRow| {
                 (f32::from(position.y) - f32::from(row.bounds.top()))
@@ -495,13 +553,29 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.source_mouse_down_from(event, false, window, cx);
+    }
+
+    /// `in_block`: the press landed in the preview block editor rather than the source pane.
+    pub fn source_mouse_down_from(
+        &mut self,
+        event: &MouseDownEvent,
+        in_block: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.source_composition.is_some() {
             self.cancel_source_composition();
             self.end_source_drag();
             // Re-hit the click after the original buffer's rows are laid out again.
-            self.source_click_after_composition = Some((event.clone(), false));
+            self.source_click_after_composition = Some((event.clone(), false, in_block));
             window.notify_text_input_changed(&self.focus_handle);
             cx.notify();
+            return;
+        }
+        if !in_block {
+            self.exit_block_edit(cx);
+        } else if event.button == MouseButton::Middle {
             return;
         }
         self.end_source_drag();
@@ -737,7 +811,9 @@ impl WorkspaceView {
         }
         drag.pointer = event.position;
         self.update_source_drag(window, cx);
-        self.start_source_autoscroll(cx);
+        if self.block_edit.is_none() {
+            self.start_source_autoscroll(cx);
+        }
     }
 
     fn source_scroll_velocity(&self) -> f32 {
@@ -1215,7 +1291,7 @@ impl EntityInputHandler for WorkspaceView {
         if start > end {
             return Vec::new();
         }
-        self.source_rows
+        self.active_source_rows()
             .lock()
             .unwrap()
             .iter()

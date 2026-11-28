@@ -207,6 +207,30 @@ impl EditorSnapshot {
     fn bytes(&self) -> usize { self.text.len() + self.columns.len() * std::mem::size_of::<std::ops::Range<usize>>() + std::mem::size_of::<Self>() }
 }
 
+/// Per-document editor state kept while another document is active.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EditorSession {
+    cursor: (usize, usize),
+    anchor: Option<(usize, usize)>,
+    undo_stack: Vec<EditorSnapshot>,
+    redo_stack: Vec<EditorSnapshot>,
+    undo_bytes: usize,
+    redo_bytes: usize,
+}
+
+impl EditorSession {
+    /// Bytes held by the undo and redo history.
+    pub fn history_bytes(&self) -> usize { self.undo_bytes + self.redo_bytes }
+
+    /// Drops the history but keeps the cursor and selection.
+    pub fn clear_history(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.undo_bytes = 0;
+        self.redo_bytes = 0;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorEngine {
     pub lines: Arc<Vec<String>>,
@@ -241,6 +265,38 @@ impl EditorEngine {
             redo_stack: Vec::new(),
             undo_bytes: 0,
             redo_bytes: 0,
+        }
+    }
+
+    /// Moves out the parts of this editor that belong to one document: undo/redo
+    /// history, cursor and selection. The text itself lives in the document buffer.
+    pub fn take_session(&mut self) -> EditorSession {
+        EditorSession {
+            cursor: (self.cursor_line, self.cursor_col),
+            anchor: self.selection_anchor,
+            undo_stack: std::mem::take(&mut self.undo_stack),
+            redo_stack: std::mem::take(&mut self.redo_stack),
+            undo_bytes: std::mem::take(&mut self.undo_bytes),
+            redo_bytes: std::mem::take(&mut self.redo_bytes),
+        }
+    }
+
+    /// Loads `text` and, when given, the session saved for it by [`Self::take_session`].
+    pub fn restore_session(&mut self, text: &str, session: Option<EditorSession>) {
+        self.reset_text(text);
+        let Some(session) = session else { return; };
+        self.undo_stack = session.undo_stack;
+        self.redo_stack = session.redo_stack;
+        self.undo_bytes = session.undo_bytes;
+        self.redo_bytes = session.redo_bytes;
+        let (line, col) = session.cursor;
+        self.set_cursor(line, col);
+        if let Some((line, col)) = session.anchor {
+            let anchor_line = line.min(self.lines.len() - 1);
+            let anchor_col = col.min(self.line_len(anchor_line));
+            if (anchor_line, anchor_col) != (self.cursor_line, self.cursor_col) {
+                self.selection_anchor = Some((anchor_line, anchor_col));
+            }
         }
     }
 
@@ -853,4 +909,21 @@ mod tests {
         assert_eq!(editor.cursor_line, 0);
         assert_eq!(editor.cursor_col, 0);
     }
+
+    #[test]
+    fn session_round_trip_keeps_undo_and_cursor() {
+        let mut editor = EditorEngine::new("one");
+        editor.set_cursor(0, 3);
+        editor.insert_text("!");
+        let session = editor.take_session();
+        let text_a = editor.to_text();
+        editor.restore_session("other doc", None);
+        assert!(!editor.can_undo());
+        editor.restore_session(&text_a, Some(session));
+        assert_eq!(editor.cursor(), (0, 4));
+        assert!(editor.can_undo());
+        editor.undo();
+        assert_eq!(editor.to_text(), "one");
+    }
+
 }

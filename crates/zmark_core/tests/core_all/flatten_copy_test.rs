@@ -17,6 +17,7 @@ fn test_pinned_copy_expectations_ast_construction() {
     let l2 = BlockElement::List {
         ordered: false,
         items: vec![ListItem {
+            marker: None,
             checked: None,
             body: vec![
                 BlockElement::Paragraph(InlineGroup(vec![InlineItem::Text(
@@ -49,6 +50,7 @@ fn test_pinned_copy_expectations_ast_construction() {
     let l4 = BlockElement::List {
         ordered: false,
         items: vec![ListItem {
+            marker: None,
             checked: None,
             body: vec![
                 BlockElement::Paragraph(InlineGroup(vec![InlineItem::Text("before".into())])),
@@ -74,6 +76,7 @@ fn test_boundary_expectations_ast_construction() {
     let la = BlockElement::List {
         ordered: false,
         items: vec![ListItem {
+            marker: None,
             checked: None,
             body: vec![
                 BlockElement::Paragraph(InlineGroup(vec![InlineItem::Text("x".into())])),
@@ -91,6 +94,7 @@ fn test_boundary_expectations_ast_construction() {
     let lb = BlockElement::List {
         ordered: false,
         items: vec![ListItem {
+            marker: None,
             checked: None,
             body: vec![BlockElement::FencedCode {
                 lang: None,
@@ -123,6 +127,7 @@ fn test_boundary_expectations_ast_construction() {
     let ld = BlockElement::List {
         ordered: false,
         items: vec![ListItem {
+            marker: None,
             checked: None,
             body: vec![
                 BlockElement::Paragraph(InlineGroup(vec![InlineItem::Text("before".into())])),

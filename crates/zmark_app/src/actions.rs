@@ -32,9 +32,16 @@ actions!(
         SourceBold,
         SourceNumberedList,
         SourceIndent,
-        SourceOutdent
+        SourceOutdent,
+        NextDocument,
+        PreviousDocument
     ]
 );
+
+/// Jump to an open document by tab position (`Ctrl+1…9`; slot 8 is the last one).
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(namespace = zmark, no_json)]
+pub struct ActivateDocument(pub usize);
 
 /// Initializes built-in default ZMark keybindings (preserving component bindings).
 pub fn init_key_bindings(cx: &mut App) {
@@ -82,6 +89,24 @@ pub fn sync_key_bindings(preferences: &Preferences, cx: &mut App) {
     let workspace_no_input_ctx = parse_ctx("Workspace && !Input && !InlineRename");
 
     let os = cx.platform_info().os;
+
+    // Fixed document-cycling keys. `Cmd+1…3` (Ctrl on Windows/Linux) belong to the
+    // view modes, so position jumps use Ctrl on macOS and Alt elsewhere.
+    let jump_modifier = if os == OperatingSystem::Mac { "ctrl" } else { "alt" };
+    let mut document_keys: Vec<(String, Box<dyn Action>)> = vec![
+        ("ctrl-tab".into(), Box::new(NextDocument)),
+        ("ctrl-shift-tab".into(), Box::new(PreviousDocument)),
+    ];
+    for slot in 0..9 {
+        document_keys.push((format!("{jump_modifier}-{}", slot + 1), Box::new(ActivateDocument(slot))));
+    }
+    let document_keys: Vec<KeyBinding> = document_keys
+        .into_iter()
+        .filter_map(|(spec, action)| {
+            KeyBinding::load(&spec, action, workspace_ctx.clone(), false, None, cx).ok()
+        })
+        .collect();
+    cx.bind_keys(document_keys);
     let mut custom_specs: Vec<(ShortcutActionId, String)> = Vec::new();
     let mut primary_taken: Vec<Keystroke> = Vec::new();
 
@@ -183,6 +208,9 @@ fn is_managed_zmark_action(action: &dyn Action) -> bool {
             | "zmark::UndoSidebarRemoval"
             | "zmark::SourceBold"
             | "zmark::SourceNumberedList"
+            | "zmark::NextDocument"
+            | "zmark::PreviousDocument"
+            | "zmark::ActivateDocument"
     )
 }
 

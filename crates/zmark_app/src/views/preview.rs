@@ -10,8 +10,19 @@ use crate::theme::ThemeColors;
 mod selection;
 mod mermaid;
 mod virtual_list;
+mod measured_blocks;
 pub use selection::*;
 pub use virtual_list::*;
+pub use measured_blocks::HeightMotion;
+
+/// Block-editor transition passed to the preview: the eased height group and
+/// whether the editor is opening (crossfade from the rendered block) or closing
+/// (the rendered block fades back in).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockMotion {
+    pub height: HeightMotion,
+    pub opening: bool,
+}
 
 pub type OnCopyCallback = Arc<dyn Fn(String, u64, &mut Window, &mut App) + Send + Sync>;
 /// Marks a lightbox request for a local image snapshot (as opposed to a Mermaid diagram,
@@ -20,9 +31,13 @@ pub const LOCAL_IMAGE_LIGHTBOX_HASH: u64 = 0;
 
 pub type OnOpenLightboxCallback = Arc<dyn Fn(std::path::PathBuf, u64, Option<(f32, f32)>, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewSelectionCallback = Arc<dyn Fn(Option<PreviewSelection>, bool, &mut Window, &mut App) + Send + Sync>;
+/// Toggles a task item: marker source range, current checked state.
+pub type OnToggleTaskCallback = Arc<dyn Fn(std::ops::Range<usize>, bool, &mut Window, &mut App) + Send + Sync>;
 pub type OnImageRecoveryCallback = Arc<dyn Fn(std::ops::Range<usize>, String, crate::local_images::RecoveryCandidate, &mut Window, &mut App) + Send + Sync>;
 pub type OnSelectHeadingCallback = Arc<dyn Fn(usize, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewAutoscrollCallback = Arc<dyn Fn(f32, &mut Window, &mut App) + Send + Sync>;
+/// A press on block `ix`: rendered char offset, click count, window position.
+pub type OnBlockPressCallback = Arc<dyn Fn(usize, usize, usize, Point<Pixels>, &mut Window, &mut App) + Send + Sync>;
 pub type OnPreviewWheelCallback = Arc<dyn Fn(&ScrollEvent, &mut Window, &mut App) + Send + Sync>;
 
 #[derive(Clone, Default)]
@@ -32,8 +47,11 @@ pub struct PreviewCallbacks {
     pub on_selection_change: Option<OnPreviewSelectionCallback>,
     pub on_autoscroll: Option<OnPreviewAutoscrollCallback>,
     pub on_image_recovery: Option<OnImageRecoveryCallback>,
+    pub on_toggle_task: Option<OnToggleTaskCallback>,
     pub on_select_heading: Option<OnSelectHeadingCallback>,
     pub on_wheel: Option<OnPreviewWheelCallback>,
+    /// Replaces the plain selection start on block presses (block editing).
+    pub on_block_press: Option<OnBlockPressCallback>,
 }
 
 pub fn render_preview_pane_with_callbacks(
@@ -53,6 +71,8 @@ pub fn render_preview_pane_with_callbacks(
     failures: &[crate::syntax::VisibleSyntaxFailure],
     images: crate::local_images::SharedImages,
     reduce_motion: bool,
+    block_editor: Option<crate::views::workspace::BlockEditorSlot>,
+    block_motions: Vec<BlockMotion>,
 ) -> impl IntoElement {
     let theme = theme.clone();
     let item_theme = theme.clone();
@@ -129,7 +149,6 @@ pub fn render_preview_pane_with_callbacks(
             });
     }
 
-    let mut content = div().relative().w_full().h(px(total));
     let has_toc = item_parsed
         .blocks
         .iter()
@@ -140,15 +159,17 @@ pub fn render_preview_pane_with_callbacks(
         Vec::new()
     };
 
-    for ix in visible_range {
-        let Some(block) = item_parsed.blocks.get(ix) else { continue; };
+    let item_toc = toc_headings;
+    let item_images = images.clone();
+    let motion_for_build = block_motions.clone();
+    let render_block = move |ix: usize| -> Option<AnyElement> {
+        let Some(block) = item_parsed.blocks.get(ix) else { return None; };
         let flat = zmark_core::ast::flatten_block(block, "0");
         let block_char_len = flat.text.chars().count();
         let selected_char_range = selection.and_then(|s| s.char_range_for_block(ix, block_char_len));
 
         let block_bounds_cell = Arc::new(std::cell::Cell::new(Bounds::default()));
         let bounds_for_canvas = block_bounds_cell.clone();
-        let measured_cell = measurement_sink.clone();
         let block_container = div()
             .relative()
             .w_full()
@@ -156,13 +177,7 @@ pub fn render_preview_pane_with_callbacks(
             .mx_auto()
             .child(
                 canvas(
-                    move |bounds, window, _cx| {
-                        bounds_for_canvas.set(bounds);
-                        let padding = f32::from(window.rem_size()); // pb_4
-                        measured_cell
-                            .borrow_mut()
-                            .push((ix, f32::from(bounds.size.height) + padding));
-                    },
+                    move |bounds, _window, _cx| bounds_for_canvas.set(bounds),
                     |_bounds, _, _window, _cx| {},
                 )
                 .absolute()
@@ -170,11 +185,12 @@ pub fn render_preview_pane_with_callbacks(
             )
             .child(match block {
                 BlockElement::TableOfContents => render_toc_block(
-                    &toc_headings,
+                    &item_toc,
                     item_callbacks.on_select_heading.as_ref(),
                     &item_theme,
                     strings,
                     ix,
+                    font_size,
                 ),
                 _ => render_block_element(
                     block,
@@ -185,11 +201,12 @@ pub fn render_preview_pane_with_callbacks(
                     item_callbacks.on_copy.as_ref(),
                     item_callbacks.on_open_lightbox.as_ref(),
                     item_callbacks.on_image_recovery.as_ref(),
+                    item_callbacks.on_toggle_task.as_ref(),
                     selected_char_range,
                     ix,
                     item_regions.clone(),
                     item_syntax_cache.clone(),
-                    &images,
+                    &item_images,
                     &item_parsed.code_blocks,
                     &flat,
                     "0",
@@ -198,12 +215,9 @@ pub fn render_preview_pane_with_callbacks(
                 ),
             });
 
+        // Positioned and measured by `MeasuredBlocks` in the same frame.
         let mut item = div()
-            .absolute()
-            .top(px(origins[ix]))
-            .left(px(0.))
             .w_full()
-            .min_h(px(sizes[ix]))
             .px_8()
             .pb_4()
             .child(block_container);
@@ -212,6 +226,7 @@ pub fn render_preview_pane_with_callbacks(
             let on_sel_down = on_selection_change.clone();
             let on_sel_move = on_selection_change.clone();
             let on_autoscroll = item_callbacks.on_autoscroll.clone();
+            let on_block_press = item_callbacks.on_block_press.clone();
             let text_for_down: Arc<str> = Arc::from(flat.text.as_str());
             let text_for_move = Arc::clone(&text_for_down);
             let bounds_cell_down = block_bounds_cell.clone();
@@ -234,8 +249,12 @@ pub fn render_preview_pane_with_callbacks(
                             bounds_cell_down.get(),
                         )
                     };
-                    let pos = PreviewCharPosition::new(ix, offset);
                     cx.stop_propagation();
+                    if let Some(ref press) = on_block_press {
+                        press(ix, offset, event.click_count, event.position, window, cx);
+                        return;
+                    }
+                    let pos = PreviewCharPosition::new(ix, offset);
                     on_sel_down(Some(PreviewSelection::new(pos, pos)), true, window, cx);
                 })
                 .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
@@ -274,8 +293,47 @@ pub fn render_preview_pane_with_callbacks(
                 });
         }
 
-        content = content.child(item.into_any_element());
-    }
+        Some(item.into_any_element())
+    };
+    let build_block = move |ix: usize| -> Option<AnyElement> {
+        let motion = motion_for_build.iter().find(|m| m.height.range.contains(&ix));
+        let progress = motion.map_or(1.0, |m| m.height.progress.clamp(0.0, 1.0));
+        if let Some(slot) = block_editor.as_ref().filter(|slot| slot.blocks.contains(&ix)) {
+            if ix != slot.blocks.start {
+                // Later blocks the editor covers measure as empty so the size table stays true.
+                return Some(div().into_any_element());
+            }
+            let editor = (slot.build)();
+            if motion.is_none_or(|m| !m.opening) || progress >= 1.0 {
+                return Some(editor);
+            }
+            // Crossfade: the rendered block fades out under the editor fading in.
+            // The editor is the later child, so it paints and hit-tests on top.
+            let mut stack = div().relative().w_full();
+            if let Some(rendered) = render_block(ix) {
+                stack = stack.child(
+                    div().absolute().top_0().left_0().w_full().opacity(1.0 - progress).child(rendered),
+                );
+            }
+            return Some(stack.child(div().w_full().opacity(progress).child(editor)).into_any_element());
+        }
+        let rendered = render_block(ix)?;
+        Some(match motion {
+            Some(m) if !m.opening && progress < 1.0 => {
+                div().w_full().opacity(0.2 + 0.8 * progress).child(rendered).into_any_element()
+            }
+            _ => rendered,
+        })
+    };
+    let content = measured_blocks::MeasuredBlocks::new(
+        visible_range,
+        origins,
+        sizes,
+        total,
+        measurement_sink,
+        Box::new(build_block),
+        block_motions.into_iter().map(|m| m.height).collect(),
+    );
 
     let mut scroll_view = div()
         .id("preview_scroll_view")
@@ -428,7 +486,10 @@ fn render_toc_block(
     theme: &ThemeColors,
     strings: &'static I18nStrings,
     block_ix: usize,
+    font_size: f32,
 ) -> AnyElement {
+    // One step below body text, never smaller than the sidebar's 13px rows.
+    let toc_size = px((font_size - 2.0).max(13.0));
     let min_level = headings.iter().map(|h| h.level).min().unwrap_or(1);
     let mut card = div()
         .id(SharedString::from(format!("preview_toc_{block_ix}")))
@@ -449,7 +510,7 @@ fn render_toc_block(
                 .flex()
                 .items_center()
                 .gap_1p5()
-                .text_xs()
+                .text_size(toc_size)
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_muted)
                 .child(svg().path("icons/list.svg").size(px(13.)).text_color(theme.text_muted))
@@ -459,7 +520,7 @@ fn render_toc_block(
     if headings.is_empty() {
         card = card.child(
             div()
-                .text_xs()
+                .text_size(toc_size)
                 .text_color(theme.text_muted)
                 .child(strings.outline_empty),
         );
@@ -479,7 +540,7 @@ fn render_toc_block(
                 .pr_2()
                 .py_1()
                 .rounded(px(5.))
-                .text_xs()
+                .text_size(toc_size)
                 .text_color(text_color)
                 .when(is_top, |el| el.font_weight(FontWeight::MEDIUM))
                 .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
@@ -536,6 +597,7 @@ fn render_block_element(
     on_copy: Option<&OnCopyCallback>,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
     on_image_recovery: Option<&OnImageRecoveryCallback>,
+    on_toggle_task: Option<&OnToggleTaskCallback>,
     selected_char_range: Option<std::ops::Range<usize>>,
     block_ix: usize,
     regions: Arc<RegionsRegistry>,
@@ -609,7 +671,7 @@ fn render_block_element(
                 .w_full()
                 .min_w(px(0.))
                 .text_size(px(base_font_size))
-                .line_height(relative(1.75))
+                .line_height(relative(crate::platform::preview_line_height()))
                 .text_color(theme.text_primary)
                 .child(render_styled_inlines(content, theme, base_font_size, el_range, images, on_image_recovery, on_open_lightbox, reduce_motion));
 
@@ -620,7 +682,7 @@ fn render_block_element(
                     text: content.plain_text(),
                     font_name: crate::platform::ui_font(),
                     font_size: base_font_size,
-                    line_height_factor: 1.75,
+                    line_height_factor: crate::platform::preview_line_height(),
                     padding_left: 0.0,
                     padding_top: 0.0,
                     padding_right: 0.0,
@@ -687,6 +749,7 @@ fn render_block_element(
                     on_copy,
                     on_open_lightbox,
                     on_image_recovery,
+                    on_toggle_task,
                     selected_char_range.clone(),
                     block_ix,
                     regions.clone(),
@@ -728,6 +791,7 @@ fn render_block_element(
             on_copy,
             on_open_lightbox,
             on_image_recovery,
+            on_toggle_task,
             selected_char_range,
             block_ix,
             regions,
@@ -895,16 +959,14 @@ fn render_styled_inlines(
             offset += len;
             match item {
                 InlineItem::Image { alt, url, source_range, .. } => {
-                    let state = images.lock().unwrap().request(url);
+                    let (state, known_size) = {
+                        let mut images = images.lock().unwrap();
+                        (images.request(url), images.known_size(url))
+                    };
                     match state {
                         crate::local_images::ImageState::Ready(image) => {
                             let reference = url.clone();
-                            let ratio = image.width as f32 / image.height as f32;
-                            // Cap the displayed height by shrinking the width instead of
-                            // letterboxing: a tall image must not own a whole viewport
-                            // (it made the preview blocks huge and left big empty gaps).
-                            let max_display_width = (MAX_IMAGE_DISPLAY_HEIGHT * ratio)
-                                .min(image.width as f32);
+                            let (ratio, max_display_width) = image_display_box(image.width, image.height);
                             let element = img(image.image_source())
                                 .absolute().inset_0().size_full()
                                 .object_fit(ObjectFit::Contain)
@@ -965,6 +1027,17 @@ fn render_styled_inlines(
                         }
                         state => {
                             if matches!(state, crate::local_images::ImageState::Waiting) {
+                                // Decoded before: reserve exactly the box the image will take,
+                                // so nothing below moves when it arrives again.
+                                if let Some((width, height)) = known_size {
+                                    let (ratio, max_display_width) = image_display_box(width, height);
+                                    let mut placeholder = div().relative().w_full().max_w(px(max_display_width))
+                                        .max_h(px(max_display_width / ratio)).min_w(px(0.))
+                                        .rounded_md().bg(theme.hover_bg())
+                                        .debug_selector(|| format!("local_image_status:{url}"));
+                                    placeholder.style().aspect_ratio = Some(ratio);
+                                    return placeholder.into_any_element();
+                                }
                                 // Loading: reserve the space with a quiet block instead of flashing
                                 // a text box that the image then replaces (the "stutter").
                                 return div().w_full().min_w(px(0.)).h(px(LOADING_IMAGE_HEIGHT))
@@ -1591,6 +1664,7 @@ fn render_list_element(
     on_copy: Option<&OnCopyCallback>,
     on_open_lightbox: Option<&OnOpenLightboxCallback>,
     on_image_recovery: Option<&OnImageRecoveryCallback>,
+    on_toggle_task: Option<&OnToggleTaskCallback>,
     selected_char_range: Option<std::ops::Range<usize>>,
     block_ix: usize,
     regions: Arc<RegionsRegistry>,
@@ -1606,7 +1680,19 @@ fn render_list_element(
 
     for (idx, item) in items.iter().enumerate() {
         let bullet_element = if let Some(checked) = item.checked {
+            let toggle = on_toggle_task.zip(item.marker.clone());
             div()
+                .id(SharedString::from(format!("task_box_{block_ix}_{path}_{idx}")))
+                .when_some(toggle, |el, (callback, marker)| {
+                    let callback = callback.clone();
+                    el.cursor_pointer()
+                        // Keep the press from starting a preview text selection.
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            callback(marker.clone(), checked, window, cx);
+                        })
+                })
                 .mt_1()
                 .w(px(14.))
                 .h(px(14.))
@@ -1626,6 +1712,7 @@ fn render_list_element(
                 } else {
                     div().into_any_element()
                 })
+                .into_any_element()
         } else if ordered {
             div()
                 .flex_shrink_0()
@@ -1635,6 +1722,7 @@ fn render_list_element(
                 .font_family(crate::platform::mono_font())
                 .text_color(theme.syntax_bullet)
                 .child(format!("{}.", idx + 1))
+                .into_any_element()
         } else {
             let bullet = match depth % 3 {
                 0 => "–",
@@ -1648,6 +1736,7 @@ fn render_list_element(
                 .text_size(px(base_font_size))
                 .text_color(theme.syntax_bullet)
                 .child(bullet)
+                .into_any_element()
         };
 
         let mut first_child_el = None;
@@ -1670,7 +1759,7 @@ fn render_list_element(
                                 .flex_1()
                                 .min_w(px(0.))
                                 .text_size(px(base_font_size))
-                                .line_height(relative(1.6))
+                                .line_height(relative(crate::platform::preview_list_line_height()))
                                 .text_color(theme.text_primary)
                                 .child(render_styled_inlines(content, theme, base_font_size, child_range, images, on_image_recovery, on_open_lightbox, reduce_motion)),
                             TextRegionInfo {
@@ -1678,7 +1767,7 @@ fn render_list_element(
                                 text: content_text,
                                 font_name: crate::platform::ui_font(),
                                 font_size: base_font_size,
-                                line_height_factor: 1.6,
+                                line_height_factor: crate::platform::preview_list_line_height(),
                                 padding_left: 0.0,
                                 padding_top: 0.0,
                                 padding_right: 0.0,
@@ -1700,6 +1789,7 @@ fn render_list_element(
                         on_copy,
                         on_open_lightbox,
                         on_image_recovery,
+                        on_toggle_task,
                         selected_char_range.clone(),
                         block_ix,
                         regions.clone(),
@@ -1732,6 +1822,7 @@ fn render_list_element(
                         on_copy,
                         on_open_lightbox,
                         on_image_recovery,
+                        on_toggle_task,
                         selected_char_range.clone(),
                         block_ix,
                         regions.clone(),
@@ -1753,6 +1844,7 @@ fn render_list_element(
                         on_copy,
                         on_open_lightbox,
                         on_image_recovery,
+                        on_toggle_task,
                         selected_char_range.clone(),
                         block_ix,
                         regions.clone(),
@@ -1816,6 +1908,15 @@ fn render_list_element(
 pub const MAX_IMAGE_DISPLAY_HEIGHT: f32 = 400.0;
 /// Height reserved for an image that is still decoding.
 const LOADING_IMAGE_HEIGHT: f32 = 120.0;
+
+/// Aspect ratio and maximum display width of an image of `width`×`height` pixels.
+/// The displayed height is capped by shrinking the width instead of
+/// letterboxing: a tall image must not own a whole viewport (it made the
+/// preview blocks huge and left big empty gaps).
+fn image_display_box(width: u32, height: u32) -> (f32, f32) {
+    let ratio = width as f32 / height.max(1) as f32;
+    (ratio, (MAX_IMAGE_DISPLAY_HEIGHT * ratio).min(width as f32))
+}
 
 pub fn should_wrap_code_block(lang: Option<&str>) -> bool {
     match lang {
@@ -1914,7 +2015,7 @@ fn render_code_block(
         .p_3()
         .text_size(px(code_font_size))
         .font_family(crate::platform::mono_font())
-        .line_height(relative(1.75))
+        .line_height(relative(crate::platform::preview_line_height()))
         .text_color(theme.syntax_code)
         .child(styled_text);
 
@@ -1931,7 +2032,7 @@ fn render_code_block(
             text: code.to_string(),
             font_name: crate::platform::mono_font(),
             font_size: code_font_size,
-            line_height_factor: 1.75,
+            line_height_factor: crate::platform::preview_line_height(),
             padding_left: 12.0,
             padding_top: 12.0,
             padding_right: 12.0,

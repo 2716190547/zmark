@@ -29,13 +29,17 @@
 | **0028** | [双向同步滚动、嵌套列表与代码块交互](0028-bidirectional-sync-scroll-nested-lists-and-codeblock-ux.md) | 已接受 (Accepted) | 100ms 回声抑制双向同步滚动、递归嵌套列表多层富文本与代码块横向滚动复制 |
 | **0029** | [GPUI 0.2 窗口装饰与图层变换约束](0029-gpui-window-chrome-and-overlay-constraints.md) | 已接受 (Accepted) | 红绿灯静态位置 + 折叠安全区；拖拽区显式 `start_window_move()`；灯箱缩放/平移用尺寸与偏移 |
 | **0030** | [macOS 研发工具链分工、Instruments 性能诊断与零成本 Ad-Hoc 签名](0030-macos-toolchain-profiling-and-adhoc-signing.md) | 已接受 (Accepted) | 工具链轻重解耦；Instruments 一键追踪掉帧；打包脚本集成零费用本地 Ad-Hoc 签名 |
-| **0031** | [侧栏中心导航、无 Tab 头部与多根工作区](0031-sidebar-centric-navigation-and-multi-root-workspace.md) | 已接受 (Accepted) | A/B 全部落地：无 Tab、多根工作区、外部文件组、共享扫描预算、多语言侧栏与错误反馈 |
+| **0031** | [侧栏中心导航、无 Tab 头部与多根工作区](0031-sidebar-centric-navigation-and-multi-root-workspace.md) | 已接受 (Accepted) | A/B 全部落地：默认无 Tab（0040 增加可选标签条）、多根工作区、外部文件组、共享扫描预算、多语言侧栏与错误反馈 |
 | **0032** | [视觉层级精进、无感知全屏适配与 HiDPI 流程图重采样灯箱](0032-canvas-header-visual-refinement-and-hidpi-lightbox.md) | 已通过 (Accepted) | 全屏左边距动态感知、侧栏草稿去常驻化、头部大标题与视图模式平铺统一、HiDPI 矢量重采样与显存保护 |
 | **0033** | [现代化设置视窗、侧栏层级降噪、灯箱纸张画布与沉浸阅读排版](0033-modern-settings-drawer-refinement-and-editor-reading.md) | 已通过 (Accepted) | 灯箱纸张实体画布隔离透光、侧栏移除工作区标头与灰点并升级13px、设置窗口无框胶囊重构、编辑器对齐/1.6x行高/轻量语法高亮 |
 | **0034** | [纯净中性调色体系、Apple 原生分组设置与均高切分软折行](0034-miaoyan-palette-apple-settings-and-visual-line-wrap.md) | 已通过 (Accepted) | 妙言纯净中性调色重构消灭脏感、去除未保存红点、侧栏两级层级/文件夹状态开合/Hover新建、18px顶栏大标题、Apple Grouped Inset Cards设置卡片、均高视觉行切分软折行与多色语义高亮 |
 | **0035** | [无缝贯穿设置视窗、系统化调色推导、图标线宽归一、点部语义上色与 Mermaid 语法脱糖](0035-settings-layout-derived-palette-icon-stroke-and-mermaid-desugaring.md) | 已通过 (Accepted) | 彻底移除 44px 横栏实现全高无缝分栏；macOS 原生 Segmented Control 槽底浮雕调色推导；顶栏设置常亮修复与 16px 图标线宽 1.8~2.25 viewBox 光学归一；Markdown 列表/语法标缀点部专属色；Mermaid 复合连线 & 自动笛卡尔展开与容错 |
 | **0036** | [选中态语义 Token、代码墨色、灯箱位图通道修复与设置页扁平化](0036-selection-tokens-code-ink-lightbox-bitmap-and-settings-flattening.md) | 已通过 (Accepted) | Phase G 历史决策；选中色、标题对齐及侧栏搜索推迟项由 0037 局部替代，其余继续有效 |
 | **0037** | [真实文字布局、虚拟化预览选区与侧栏文件名搜索](0037-real-text-layout-and-virtualized-preview-selection.md) | 已通过 (Accepted，含 P2 限制) | 真实折行与行级复用、预览跨块字符选区及纯文本复制、系统输入与后台文件名搜索；模式相关标题对齐、默认/Claude 暖选中色；遗留见 Phase H 验收 |
+| **0038** | [发行资产迁回源码仓库，并通过过渡版归档 zmark-releases](0038-move-releases-into-the-source-repository.md) | 已通过 (Accepted) | 安装包、签名更新清单与发布说明从 0.2.13 起发布到源码仓库 Releases，旧发行仓库归档保留 |
+| **0039** | [预览同帧测量与按文档保存的编辑、预览状态](0039-same-frame-preview-measurement-and-per-document-state.md) | 已通过 (Accepted) | 可见块在 prepaint 中先测量再定位，消除按估算高度排版的一帧；撤销历史、预览高度与滚动位置按文档保存；图片与 Mermaid 尺寸记忆 |
+| **0040** | [可选标签条](0040-optional-tab-bar.md) | 已通过 (Accepted) | 修订 0031 第 1 节：默认仍无标签，设置开关开启后头部显示由 `open_docs` 派生的标签条；拖动排序写回会话顺序；`Ctrl+Tab` 与按位置跳转快捷键常开 |
+| **0041** | [预览按块编辑](0041-preview-block-editing.md) | 已通过 (Accepted) | 开关开启后单击预览块，就地换成编辑共享 `EditorEngine` 的源码框；编辑期间不重新解析，退出时解析一次；代码块也可编辑 |
 
 ---
 

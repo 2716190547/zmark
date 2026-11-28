@@ -117,6 +117,8 @@ pub struct LightboxState {
     pub is_dragging: bool,
     pub drag_start_mouse: Option<(f32, f32)>,
     pub drag_start_pan: (f32, f32),
+    /// Window size from the last render, to locate the card's resting center.
+    viewport: (f32, f32),
 }
 
 impl Default for LightboxState {
@@ -142,6 +144,7 @@ impl LightboxState {
             is_dragging: false,
             drag_start_mouse: None,
             drag_start_pan: (0.0, 0.0),
+            viewport: (0.0, 0.0),
         }
     }
 
@@ -220,6 +223,7 @@ impl LightboxState {
 
     pub fn update_viewport(&mut self, viewport: Size<Pixels>) {
         let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
+        self.viewport = (width, height);
         if !self.is_fitted || !width.is_finite() || !height.is_finite() {
             return;
         }
@@ -241,20 +245,48 @@ impl LightboxState {
     }
 
     pub fn apply_scroll_zoom(&mut self, delta_y: f32) {
+        self.apply_scroll_zoom_at(delta_y, None);
+    }
+
+    /// Wheel zoom that keeps the point under `cursor` (window coordinates) in place.
+    pub fn apply_scroll_zoom_at(&mut self, delta_y: f32, cursor: Option<(f32, f32)>) {
         if !delta_y.is_finite() || delta_y == 0.0 {
             return;
         }
         // Reciprocal steps avoid drift and negative factors on large wheel events.
         let factor = 1.1_f32.powf((delta_y / 50.0).clamp(-8.0, 8.0));
-        self.set_zoom(self.zoom * factor);
+        self.zoom_to_at(self.zoom * factor, cursor);
     }
 
     /// Trackpad pinch: `delta` is the fractional change GPUI reports (0.1 = +10%).
     pub fn apply_pinch_zoom(&mut self, delta: f32) {
+        self.apply_pinch_zoom_at(delta, None);
+    }
+
+    /// Pinch zoom around `cursor` (window coordinates), like a map.
+    pub fn apply_pinch_zoom_at(&mut self, delta: f32, cursor: Option<(f32, f32)>) {
         if !delta.is_finite() || delta == 0.0 {
             return;
         }
-        self.set_zoom(self.zoom * (1.0 + delta).clamp(0.5, 2.0));
+        self.zoom_to_at(self.zoom * (1.0 + delta).clamp(0.5, 2.0), cursor);
+    }
+
+    /// Sets the zoom and shifts the pan so the image point under `cursor` stays
+    /// under it. Without a cursor (or before the first render) zooms around the center.
+    fn zoom_to_at(&mut self, new_zoom: f32, cursor: Option<(f32, f32)>) {
+        let old_zoom = self.zoom;
+        let pan_before = (self.pan_x, self.pan_y);
+        self.set_zoom(new_zoom);
+        let Some((x, y)) = cursor.filter(|(x, y)| x.is_finite() && y.is_finite()) else { return; };
+        if self.viewport.0 <= 0.0 || old_zoom <= 0.0 || self.is_dragging {
+            return;
+        }
+        let ratio = self.zoom / old_zoom;
+        // The card rests centered in the area above the HUD; pan moves that center.
+        let rest = (self.viewport.0 / 2.0, (self.viewport.1 - LIGHTBOX_HUD_SPACE) / 2.0);
+        let from_center = (x - rest.0 - pan_before.0, y - rest.1 - pan_before.1);
+        self.pan_x = x - rest.0 - from_center.0 * ratio;
+        self.pan_y = y - rest.1 - from_center.1 * ratio;
     }
 
     /// Two-finger trackpad scroll. macOS has already applied the user's
@@ -333,8 +365,14 @@ pub fn sharp_target_px(state: &LightboxState, scale_factor: f32) -> (u32, u32) {
     );
     let shrink = (4096.0 / w.max(h)).min((16_000_000.0 / (w * h)).sqrt()).min(1.0);
     (w, h) = (w * shrink, h * shrink);
-    let step = |v: f32| (((v / 64.0).ceil() as u32).saturating_mul(64)).clamp(64, 4000);
-    (step(w), step(h))
+    // Step only the long side and derive the other from the natural ratio. Rounding
+    // both sides separately changed the aspect ratio, so the sharp image arrived
+    // letterboxed inside the `Contain` box and the diagram's height jumped.
+    let long = w.max(h).max(1.0);
+    let stepped = (((long / 64.0).ceil() as u32).saturating_mul(64)).clamp(64, 4000) as f32;
+    let scale = stepped / long;
+    let side = |v: f32| ((v * scale).round() as u32).clamp(1, 4000);
+    (side(w), side(h))
 }
 
 pub fn render_lightbox(
@@ -392,6 +430,7 @@ pub fn render_lightbox(
             }),
         )
         .on_scroll(cx.listener(|this, event: &ScrollEvent, _window, cx| {
+            let cursor = Some((f32::from(event.position.x), f32::from(event.position.y)));
             // A macOS trackpad (precise pixel deltas) pans with two fingers and zooms
             // by pinching or with Cmd held; a mouse wheel keeps zooming.
             if let ScrollDelta::Pixels(p) = event.delta {
@@ -409,12 +448,13 @@ pub fn render_lightbox(
             // Zoom in when the wheel or fingers move up. With macOS natural scrolling
             // the system has already inverted the delta, so undo that first.
             let delta = if crate::platform::scroll_direction_inverted() { -delta } else { delta };
-            this.lightbox.apply_scroll_zoom(delta);
+            this.lightbox.apply_scroll_zoom_at(delta, cursor);
             cx.stop_propagation();
             cx.notify();
         }))
         .on_pinch(cx.listener(|this, event: &PinchEvent, _window, cx| {
-            this.lightbox.apply_pinch_zoom(event.delta);
+            let cursor = Some((f32::from(event.position.x), f32::from(event.position.y)));
+            this.lightbox.apply_pinch_zoom_at(event.delta, cursor);
             cx.stop_propagation();
             cx.notify();
         }))
@@ -661,6 +701,23 @@ impl Render for HudTooltipView {
 #[cfg(test)]
 mod pan_tests {
     use super::LightboxState;
+
+    #[test]
+    fn zoom_keeps_the_point_under_the_cursor() {
+        let mut state = LightboxState::new();
+        state.open_with_size(std::path::PathBuf::from("x.svg"), 1, (400.0, 200.0));
+        state.update_viewport(gpui::size(gpui::px(1200.), gpui::px(888.)));
+        state.set_zoom(1.0);
+        // Rest center is (600, 400). A cursor 100px right of center, 50px below.
+        let cursor = (700.0, 450.0);
+        let image_point = |s: &LightboxState| ((cursor.0 - 600.0 - s.pan_x) / s.zoom, (cursor.1 - 400.0 - s.pan_y) / s.zoom);
+        let before = image_point(&state);
+        state.apply_pinch_zoom_at(1.0, Some(cursor));
+        let after = image_point(&state);
+        assert!((state.zoom - 2.0).abs() < 1e-4);
+        assert!((before.0 - after.0).abs() < 1e-3 && (before.1 - after.1).abs() < 1e-3, "{before:?} -> {after:?}");
+        assert!((state.pan_x + 100.0).abs() < 1e-3 && (state.pan_y + 50.0).abs() < 1e-3);
+    }
 
     #[test]
     fn two_finger_pan_moves_the_image_and_leaves_fit() {

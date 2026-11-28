@@ -258,6 +258,9 @@ pub enum ImageState {
     RecoveryCandidates(Vec<RecoveryCandidate>),
 }
 
+/// Bound on remembered image sizes; a few dozen bytes each.
+const MAX_KNOWN_SIZES: usize = 4096;
+
 pub type SharedImages = Arc<Mutex<LocalImages>>;
 
 #[derive(Default)]
@@ -270,6 +273,9 @@ pub struct LocalImages {
     pub retired: Vec<Arc<LocalImage>>,
     /// Prepared snapshot waiting for GPUI's native decode and completion notification.
     pub loading: Option<(u64, String, Arc<LocalImage>)>,
+    /// Pixel size of images decoded before, by document and URL. Survives
+    /// eviction and document switches so a re-decode reserves the right height.
+    known_sizes: HashMap<(Option<PathBuf>, String), (u32, u32)>,
 }
 
 impl LocalImages {
@@ -295,6 +301,12 @@ impl LocalImages {
             }
         }
         self.wanted.clear();
+    }
+
+    /// Size of `url` from an earlier decode in the current document, if any.
+    pub fn known_size(&self, url: &str) -> Option<(u32, u32)> {
+        self.known_sizes.get(&(self.document.clone(), url.to_owned())).copied()
+            .filter(|&(w, h)| w > 0 && h > 0)
     }
 
     pub fn request(&mut self, url: &str) -> ImageState {
@@ -340,6 +352,10 @@ impl LocalImages {
             return false;
         }
         self.evict_hidden();
+        if let Ok(image) = &result {
+            if self.known_sizes.len() >= MAX_KNOWN_SIZES { self.known_sizes.clear(); }
+            self.known_sizes.insert((self.document.clone(), url.clone()), (image.width, image.height));
+        }
         let state = match result {
             Ok(image) if self.decoded_bytes() + image.decoded_bytes <= MAX_CACHE_BYTES => {
                 ImageState::Ready(image)

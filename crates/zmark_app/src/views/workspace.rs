@@ -20,6 +20,9 @@ use crate::views::settings::SettingsWindowView;
 
 mod source;
 mod find;
+mod tabs;
+mod block_edit;
+pub use block_edit::{BlockEdit, BlockEditorSlot};
 pub use source::{SourceCommand, SourceComposition, SourceDrag, SourceRow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +114,28 @@ impl gpui_component::scroll::ScrollbarHandle for EditorScrollbarHandle {
     }
 }
 
+/// Folder expand/collapse duration grows with the rows it reveals, so a long list is
+/// not squeezed into the time a short one takes. A short folder stays close to the
+/// sidebar slide and block-edit transitions.
+const FOLDER_MOTION_BASE_MS: u64 = 120;
+const FOLDER_MOTION_PER_ROW_MS: u64 = 8;
+const FOLDER_MOTION_MIN_MS: u64 = 160;
+const FOLDER_MOTION_MAX_MS: u64 = 450;
+
+fn folder_motion_ms(rows: usize) -> u64 {
+    (FOLDER_MOTION_BASE_MS + FOLDER_MOTION_PER_ROW_MS * rows as u64)
+        .clamp(FOLDER_MOTION_MIN_MS, FOLDER_MOTION_MAX_MS)
+}
+
+/// Rows a folder shows when open: its children, plus those of every child folder that is open.
+fn folder_rows(node: &crate::state::FileTreeNode) -> usize {
+    folder_rows_in(&node.children)
+}
+
+fn folder_rows_in(nodes: &[crate::state::FileTreeNode]) -> usize {
+    nodes.iter().map(|n| 1 + if n.is_dir && n.is_expanded { folder_rows(n) } else { 0 }).sum()
+}
+
 pub struct WorkspaceView {
     pub state: AppState,
     sidebar_selection: crate::views::sidebar_selection::SharedSelection,
@@ -126,6 +151,10 @@ pub struct WorkspaceView {
     sync_scroll_target: Option<(ScrollOrigin, f32)>,
     sync_scroll_task: Option<Task<()>>,
     pub preview_list: PreviewScrollState,
+    /// Document whose layout `preview_list` currently holds.
+    preview_doc: Option<crate::state::DocKey>,
+    /// Preview layout of background documents, with a hash of the buffer it was measured for.
+    preview_snapshots: std::collections::HashMap<crate::state::DocKey, (u64, crate::views::preview::PreviewSnapshot)>,
     preview_viewport_size: Option<Size<Pixels>>,
     pub preview_scroll_activation_observed: bool,
     pub preview_scroll_end_pending: bool,
@@ -168,6 +197,7 @@ pub struct WorkspaceView {
     export_press_generation: u64,
     update_press_generation: u64,
     settings_press_generation: u64,
+    tab_bar_scroll: ScrollHandle,
     pub update_config: UpdateConfig,
     pub update_status: UpdateStatus,
     pub prepared_update: Option<PreparedUpdate>,
@@ -188,7 +218,20 @@ pub struct WorkspaceView {
     pub source_rows: Arc<std::sync::Mutex<Vec<SourceRow>>>,
     pub source_composition: Option<SourceComposition>,
     pub source_drag: Option<SourceDrag>,
-    source_click_after_composition: Option<(MouseDownEvent, bool)>,
+    /// Press, released flag, and whether it landed in the block editor.
+    source_click_after_composition: Option<(MouseDownEvent, bool, bool)>,
+    /// Preview block open for in-place editing (`Preferences::preview_inline_edit`).
+    pub block_edit: Option<BlockEdit>,
+    /// Row geometry of the block editor; used instead of `source_rows` while it is open.
+    pub block_rows: Arc<std::sync::Mutex<Vec<SourceRow>>>,
+    /// The block editor's wrapped rows, for Up/Down.
+    pub block_visual: Arc<Vec<crate::editor_engine::VisualLine>>,
+    /// A press on an editable block, waiting to see whether it becomes a drag.
+    pending_block_click: Option<(usize, usize, Point<Pixels>)>,
+    /// Height transitions of blocks opening into or closing from the block editor.
+    block_motions: Vec<block_edit::BlockMotionState>,
+    /// Shaped block-editor rows, reused while the buffer and width are unchanged.
+    block_layout: Option<(block_edit::BlockLayoutKey, block_edit::BlockRows)>,
     pub source_autoscroll_task: Option<Task<()>>,
     source_focus_subscription: Option<Subscription>,
     pub document_layout_cache: crate::views::editor::DocumentLayoutCache,
@@ -293,6 +336,7 @@ impl WorkspaceView {
         crate::actions::ensure_key_bindings(&state.preferences, cx);
         let mut preview_list = PreviewScrollState::new();
         preview_list.reset(state.doc().parsed.blocks.len());
+        let preview_doc = state.active.clone();
         let mut view = Self {
             state,
             focus_handle: cx.focus_handle(),
@@ -308,7 +352,9 @@ impl WorkspaceView {
             split_scrollbar_content_height: Rc::new(Cell::new(None)),
             sync_scroll_target: None,
             sync_scroll_task: None,
+            preview_doc,
             preview_list,
+            preview_snapshots: std::collections::HashMap::new(),
             drawer_scroll_handle: ScrollHandle::new(),
             split_ratio: 0.5,
             is_resizing_split: false,
@@ -348,6 +394,7 @@ impl WorkspaceView {
             export_press_generation: 0,
             update_press_generation: 0,
             settings_press_generation: 0,
+            tab_bar_scroll: ScrollHandle::new(),
             update_config,
             update_status: UpdateStatus::Idle,
             prepared_update: None,
@@ -368,6 +415,12 @@ impl WorkspaceView {
             source_composition: None,
             source_drag: None,
             source_click_after_composition: None,
+            block_edit: None,
+            block_rows: Arc::new(std::sync::Mutex::new(Vec::new())),
+            block_visual: Arc::new(Vec::new()),
+            pending_block_click: None,
+            block_motions: Vec::new(),
+            block_layout: None,
             source_autoscroll_task: None,
             source_focus_subscription: None,
             document_layout_cache: crate::views::editor::DocumentLayoutCache::new(),
@@ -503,6 +556,8 @@ impl WorkspaceView {
 
     /// Swaps in a new document: the preview list drops cached heights and starts at the top.
     pub fn reset_preview_list(&mut self) {
+        self.discard_block_edit();
+        self.pending_block_click = None;
         self.cancel_source_composition();
         self.end_source_drag();
         self.source_rows.lock().unwrap().clear();
@@ -520,7 +575,9 @@ impl WorkspaceView {
             .reset(self.state.doc().parsed.blocks.len());
         self.last_preview_sync_offset = 0.0;
         self.rendered_regions.lock().unwrap().clear();
-        self.syntax_cache.lock().unwrap().clear();
+        // The syntax cache is keyed by code content and language, so entries
+        // stay valid across documents; keeping them avoids a plain-text flash
+        // when switching back.
         self.syntax_attempts.clear();
         self.syntax_block_states.clear();
         self.last_visible_syntax_keys.clear();
@@ -669,6 +726,12 @@ impl WorkspaceView {
 
     /// Debounces a reparse based on document size; very large documents wait for an explicit refresh.
     pub fn schedule_parse(&mut self, cx: &mut Context<Self>) {
+        if self.block_edit.is_some() {
+            // Block indices must stay put while a block is open; leaving it parses.
+            self.parse_task = None;
+            cx.notify();
+            return;
+        }
         let debounce = parse_debounce(self.state.doc().buffer.len());
         self.parse_task = None;
         self.parse_paused = debounce.is_none();
@@ -710,6 +773,7 @@ impl WorkspaceView {
             self.prune_syntax_state();
             self.syntax_warm_pending = true;
             self.invalidate_preview_list();
+            self.retarget_block_edit();
             if self.state.view_mode == ViewMode::Split {
                 self.align_preview_to_cursor();
             }
@@ -1947,7 +2011,10 @@ impl WorkspaceView {
     /// A new document starts from a preview scrolled to the top, parsing only if needed.
     /// Reclaims GPU texture memory by dropping any active HiDPI lightbox image.
     pub fn on_document_swapped(&mut self, mut window: Option<&mut Window>, cx: &mut App) {
+        // The open block belongs to the outgoing document.
+        self.discard_block_edit();
         self.release_hidden_diagrams = true;
+        self.reveal_active_tab();
         if let Some(image) = self.lightbox_local_image.take() {
             if let Some(render) = &image.render { cx.drop_image(render.clone(), window.as_deref_mut()); }
         }
@@ -1982,17 +2049,73 @@ impl WorkspaceView {
                 cx.remove_asset::<gpui::ImgResourceLoader>(&resource);
             }
         }
+        // Park the outgoing document's preview layout; it is keyed by the buffer
+        // it was measured for, so an edited or reloaded document starts fresh.
+        if let Some(old) = self.preview_doc.take() {
+            if let Some(open) = self.state.open_documents().iter().find(|d| d.key == old) {
+                let hash = buffer_hash(&open.doc.buffer);
+                self.preview_snapshots.insert(old, (hash, self.preview_list.snapshot()));
+            }
+        }
+        let open_keys: Vec<_> = self.state.open_documents().iter().map(|d| d.key.clone()).collect();
+        self.preview_snapshots.retain(|key, _| open_keys.contains(key));
         if self.state.view_mode != ViewMode::Source && self.state.doc().is_parse_stale() {
             self.parse_now_and_refresh();
         }
         self.reset_preview_list();
+        self.preview_doc = self.state.active.clone();
+        if let Some(key) = &self.preview_doc {
+            if let Some((hash, snapshot)) = self.preview_snapshots.remove(key) {
+                if hash == buffer_hash(&self.state.doc().buffer) && !self.state.doc().is_parse_stale() {
+                    let count = self.state.doc().parsed.blocks.len();
+                    self.preview_list.restore(count, snapshot);
+                }
+            }
+        }
         self.syntax_warm_pending = true;
+    }
+
+    /// Flips the task marker at `marker` (a source byte range from the current parse).
+    pub fn toggle_task(&mut self, marker: std::ops::Range<usize>, checked: bool, cx: &mut Context<Self>) {
+        // The marker comes from the parse before the open block's edits; close the
+        // block and let the next click act on the fresh parse.
+        if self.exit_block_edit(cx).is_some() { return; }
+        if self.state.doc().is_parse_stale() { return; }
+        let source = self.state.editor.to_text();
+        let Some(expected) = source.get(marker.clone()) else { return; };
+        let want = if checked { ["[x]", "[X]"].contains(&expected) } else { expected == "[ ]" };
+        if !want { return; }
+        let replacement = if checked { "[ ]" } else { "[x]" };
+        let expected = expected.to_string();
+        if !self.state.editor.replace_source_range(marker, &expected, replacement) { return; }
+        self.preview_selection = None;
+        self.is_preview_selecting = false;
+        self.state.sync_from_editor();
+        // A click expects an immediate result: parse now instead of waiting for
+        // the typing debounce. Documents too large for automatic parsing keep
+        // the normal paused path.
+        if crate::state::parse_debounce(self.state.doc().buffer.len()).is_some() {
+            self.parse_task = None;
+            self.parse_paused = false;
+            if self.state.parse_now() {
+                self.prune_syntax_state();
+                self.invalidate_preview_list();
+            }
+            self.schedule_syntax_parse(cx);
+        } else {
+            self.schedule_parse(cx);
+        }
+        self.trigger_auto_save(cx);
+        cx.notify();
     }
 
     pub fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
         let mode = if self.state.doc().path.as_ref().is_some_and(|p| !zmark_core::file_ops::is_markdown(p)) {
             ViewMode::Source
         } else { mode };
+        if mode == ViewMode::Source {
+            self.exit_block_edit(cx);
+        }
         self.cancel_source_composition();
         self.end_source_drag();
         self.cancel_pending_preview_seek();
@@ -2852,9 +2975,11 @@ impl WorkspaceView {
             if self.state.folder_expanded(path).is_some() {
                 self.exit_sidebar_multiselect(cx);
                 self.selected_directory = Some(path.clone());
+                // Rapid clicks arrive as click_count 2, 3, ...; only a double-click on the
+                // name renames, every other press toggles, so fast clicking keeps working.
                 if name && event.click_count == 2 {
                     self.begin_rename_target(key.clone(), true, window, cx);
-                } else if event.click_count == 1 {
+                } else {
                     if let Some(root) = self.state.workspace_roots.iter().position(|r| path.starts_with(&r.path)) {
                         self.toggle_folder(root, path, cx);
                     }
@@ -2870,15 +2995,20 @@ impl WorkspaceView {
             crate::state::DocKey::Path(path) => {
                 self.selected_directory = None;
                 if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
-                else {
+                else if self.state.is_active_path(path) {
+                    // Re-clicking the open file must not reset the preview.
+                    self.state.expand_to_file(path);
+                } else {
                     if let Err(error) = self.state.load_file(path.clone()) { self.error_banner = Some(error.to_string()); }
                     self.on_document_swapped(Some(window), cx);
                 }
             }
             crate::state::DocKey::Scratch(_) => {
                 self.selected_directory = None;
-                self.state.switch_document(key);
-                self.on_document_swapped(Some(window), cx);
+                if self.state.active.as_ref() != Some(key) {
+                    self.state.switch_document(key);
+                    self.on_document_swapped(Some(window), cx);
+                }
                 if name && event.click_count == 2 { self.begin_rename_target(key.clone(), true, window, cx); }
             }
         }
@@ -3421,7 +3551,11 @@ impl WorkspaceView {
         let drawer_open = self.state.drawer_open;
         let view_mode = self.state.view_mode;
         let strings = self.state.strings;
-        let is_renaming = self.is_renaming && !self.rename_in_sidebar;
+        let auto_save = self.state.preferences.auto_save && self.state.doc().path.is_some();
+        let show_tabs = self.state.preferences.show_tab_bar && self.state.active.is_some();
+        // With tabs the rename box lives inside the active tab, so the header
+        // layout stays as is.
+        let is_renaming = self.is_renaming && !self.rename_in_sidebar && !show_tabs;
         let rename_input = self.rename_input.clone();
 
         let os = cx.platform_info().os;
@@ -3471,16 +3605,21 @@ impl WorkspaceView {
 
         let viewport_w = f32::from(window.viewport_size().width);
         let col_w = self.state.preferences.max_column_width;
-        let header_pl = px(calculate_title_header_padding(
-            is_macos,
-            is_fullscreen,
-            drawer_open,
-            view_mode,
-            viewport_w,
-            col_w,
-            self.editor_text_start_offset(window),
-            self.state.preferences.drawer_width,
-        ));
+        // Tabs start at the canvas edge instead of the text column so more fit.
+        let header_pl = px(if show_tabs {
+            adaptive_header_padding(is_macos, is_fullscreen, drawer_open)
+        } else {
+            calculate_title_header_padding(
+                is_macos,
+                is_fullscreen,
+                drawer_open,
+                view_mode,
+                viewport_w,
+                col_w,
+                self.editor_text_start_offset(window),
+                self.state.preferences.drawer_width,
+            )
+        });
 
         // Right padding: on Windows/Linux, reserve 138px for system window controls (min/max/close).
         let header_pr = px(crate::platform::TRAILING_WINDOW_CONTROL_INSET);
@@ -3524,7 +3663,9 @@ impl WorkspaceView {
                     .items_center()
                     .gap_1p5()
                     .min_w(px(0.))
-                    .when(is_renaming, |el| el.flex_1())
+                    // With tabs the group takes all the room left of the tools, so the
+                    // tab bar always reaches them however wide they are.
+                    .when(is_renaming || show_tabs, |el| el.flex_1())
                     .when(!drawer_open, |el| {
                         el.child(render_icon_button(
                             "btn_expand_drawer",
@@ -3537,7 +3678,9 @@ impl WorkspaceView {
                             }),
                         ))
                     })
-                    .child(if is_renaming && active_key.is_some() {
+                    .child(if show_tabs {
+                        self.render_tab_bar(theme, is_dirty, cx)
+                    } else if is_renaming && active_key.is_some() {
                         // Same position and type as the static title: no frame, only a
                         // blinking caret, so entering rename never shifts the layout.
                         div()
@@ -3599,7 +3742,10 @@ impl WorkspaceView {
                                     .child(title_text),
                             )
                             .map(|el| {
-                                if is_dirty {
+                                // With auto-save the dirty state lasts about a second and
+                                // returns on every edit; pulsing the title each time reads
+                                // as flicker, so only pulse when saving is manual.
+                                if is_dirty && !auto_save {
                                     crate::views::motion::animated(
                                         el,
                                         reduce_motion,
@@ -3613,10 +3759,29 @@ impl WorkspaceView {
                                 }
                             })
                             .into_any_element()
+                    })
+                    // Free space after the tabs drags the window (ADR 0029); it never
+                    // shrinks below 12px, so overflowing tabs still leave a grip.
+                    .when(show_tabs, |el| {
+                        el.child(
+                            div()
+                                .id("canvas_header_drag_area")
+                                .debug_selector(|| "canvas_header_drag_area".into())
+                                .flex_1()
+                                .h_full()
+                                .min_w(px(12.))
+                                .occlude()
+                                .window_control_area(WindowControlArea::Drag)
+                                .when(!cfg!(target_os = "windows"), |el| {
+                                    el.on_mouse_down(MouseButton::Left, |_e, window, _| {
+                                        window.start_window_move();
+                                    })
+                                }),
+                        )
                     }),
             )
             // Draggable Window Control Area in center between title and action tools
-            .child(
+            .when(!show_tabs, |el| el.child(
                 div()
                     .id("canvas_header_drag_area")
                     .debug_selector(|| "canvas_header_drag_area".into())
@@ -3631,7 +3796,7 @@ impl WorkspaceView {
                             window.start_window_move();
                         })
                     }),
-            )
+            ))
             // Right Group: Flat View Mode Switcher + Action Buttons (Save, Export, Settings)
             .child(
                 if self.sidebar_selection.lock().unwrap().selected.len() > 1 {
@@ -3661,9 +3826,16 @@ impl WorkspaceView {
                     .gap_2()
                     .child(
                         div()
+                            .relative()
                             .flex()
                             .items_center()
                             .gap_1()
+                            .child(crate::views::slide_thumb::SlideThumb::new(
+                                "mode_switch_thumb",
+                                match view_mode { ViewMode::Source => 0, ViewMode::Split => 1, ViewMode::Preview => 2 },
+                                crate::views::slide_thumb::SlotLayout::Row { width: 28.0 },
+                                div().size_full().rounded(px(6.)).bg(mode_tab_colors(true, theme).0),
+                            ).gap(4.0))
                             .child(render_mode_icon_tab(
                                 "btn_mode_source",
                                 tip_source,
@@ -3995,6 +4167,11 @@ impl Render for WorkspaceView {
             .detach();
             self.preview_scroll_activation_observed = true;
         }
+        // Preview blocks request their images during prepaint (`MeasuredBlocks`),
+        // after this render returns. Finish a pending decode while `wanted` still
+        // holds the previous frame's requests; after `begin_frame` clears it the
+        // decode would be discarded as hidden and restarted forever.
+        self.complete_local_image_decode(window, cx);
         {
             let mut images = self.local_images.lock().unwrap();
             images.begin_frame(self.state.active.clone(), self.state.doc().path.clone());
@@ -4211,19 +4388,20 @@ impl Render for WorkspaceView {
         }
 
         let folder_targets = self.state.workspace_roots.iter().flat_map(|root| {
-            fn paths(nodes: &[crate::state::FileTreeNode], out: &mut Vec<(PathBuf, bool)>) {
-                for node in nodes.iter().filter(|node| node.is_dir) { out.push((node.path.clone(), node.is_expanded)); paths(&node.children, out); }
+            fn paths(nodes: &[crate::state::FileTreeNode], out: &mut Vec<(PathBuf, (bool, usize))>) {
+                for node in nodes.iter().filter(|node| node.is_dir) { out.push((node.path.clone(), (node.is_expanded, folder_rows(node)))); paths(&node.children, out); }
             }
-            let mut out = vec![(root.path.clone(), root.is_expanded)];
+            let mut out = vec![(root.path.clone(), (root.is_expanded, folder_rows_in(&root.tree)))];
             paths(&root.tree, &mut out);
             out
         }).collect::<HashMap<_, _>>();
         self.folder_transitions.retain(|path, _| folder_targets.contains_key(path));
         let mut folder_values = HashMap::new();
-        for (path, expanded) in folder_targets {
+        for (path, (expanded, rows)) in folder_targets {
             let transition = self.folder_transitions.entry(path.clone()).or_default();
             let target = if expanded { 1.0 } else { 0.0 };
-            let value = transition.sample(target, gpui_base::motion::Transition::new(std::time::Duration::from_millis(600)), window, cx);
+            let policy = gpui_base::motion::Transition::new(std::time::Duration::from_millis(folder_motion_ms(rows))).ease(gpui::ease_out_quint());
+            let value = transition.sample(target, policy, window, cx);
             folder_values.insert(path, value.value);
         }
         if !self.sidebar_selection.lock().unwrap().initialized {
@@ -4233,6 +4411,8 @@ impl Render for WorkspaceView {
             }
         }
 
+        let block_editor = self.block_editor_slot(window, cx);
+        let block_motions = self.sample_block_motions(window);
         let is_dirty = self.state.is_dirty();
         (self.dirty_pulse_generation, self.was_dirty) = crate::views::motion::advance_dirty_generation(
             self.was_dirty,
@@ -4305,7 +4485,7 @@ impl Render for WorkspaceView {
                 view_doc_switch.update(cx, |this, cx| {
                     if rename {
                         this.begin_rename_target(key.clone(), true, window, cx);
-                    } else {
+                    } else if this.state.active.as_ref() != Some(key) {
                         this.state.switch_document(key);
                         this.on_document_swapped(Some(window), cx);
                     }
@@ -4569,6 +4749,7 @@ impl Render for WorkspaceView {
                 cx.notify();
             }))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.pending_block_click = None;
                 this.release_source_drag(MouseButton::Left);
                 this.is_resizing_split = false;
                 this.end_drawer_resize();
@@ -4576,9 +4757,10 @@ impl Render for WorkspaceView {
                 this.end_preview_selection();
                 cx.notify();
             }))
-            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, window, cx| {
                 if event.button != MouseButton::Left { return; }
                 this.release_source_drag(MouseButton::Left);
+                this.finish_block_click(event.position, window, cx);
                 if this.is_resizing_split {
                     this.is_resizing_split = false;
                 }
@@ -4653,6 +4835,21 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(|this, _: &CloseActiveDoc, window, cx| {
                 if !this.workspace_shortcut_blocked() {
                     this.trigger_close_active(Some(window), cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::NextDocument, window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    if let Some(key) = this.state.cycled_document(1) { this.activate_document_key(key, window, cx); }
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::PreviousDocument, window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    if let Some(key) = this.state.cycled_document(-1) { this.activate_document_key(key, window, cx); }
+                }
+            }))
+            .on_action(cx.listener(|this, action: &crate::actions::ActivateDocument, window, cx| {
+                if !this.workspace_shortcut_blocked() {
+                    if let Some(key) = this.state.document_for_jump(action.0) { this.activate_document_key(key, window, cx); }
                 }
             }))
             .on_action(cx.listener(|this, _: &CancelRename, window, cx| {
@@ -4878,6 +5075,30 @@ impl Render for WorkspaceView {
                                     let on_toggle_pin = Arc::new(move |path: &PathBuf, _: &mut Window, cx: &mut App| {
                                         pin_view.update(cx, |this, cx| { this.state.toggle_sidebar_pin(path); cx.notify(); });
                                     });
+                                    let new_file_view = cx.entity().clone();
+                                    let on_new_file = Arc::new(move |dir: &PathBuf, window: &mut Window, cx: &mut App| {
+                                        new_file_view.update(cx, |this, cx| {
+                                            match this.state.create_file_in_dir(dir) {
+                                                Ok(_) => this.on_document_swapped(Some(window), cx),
+                                                Err(e) => this.state.set_error(format!("Failed to create file: {}", e)),
+                                            }
+                                            cx.notify();
+                                        });
+                                    });
+                                    let new_folder_view = cx.entity().clone();
+                                    let on_new_folder = Arc::new(move |dir: &PathBuf, window: &mut Window, cx: &mut App| {
+                                        new_folder_view.update(cx, |this, cx| {
+                                            let name = this.state.strings.untitled_folder;
+                                            match this.state.create_folder_in_dir(dir, name) {
+                                                Ok(path) => {
+                                                    this.selected_directory = Some(path.clone());
+                                                    this.begin_rename_target(crate::state::DocKey::Path(path), true, window, cx);
+                                                }
+                                                Err(e) => this.state.set_error(format!("Failed to create folder: {}", e)),
+                                            }
+                                            cx.notify();
+                                        });
+                                    });
                                     let undo_view = cx.entity().clone();
                                     let on_undo = Arc::new(move |_: &mut Window, cx: &mut App| {
                                         undo_view.update(cx, |this,cx| {
@@ -4899,6 +5120,8 @@ impl Render for WorkspaceView {
                                         hidden_paths: self.state.preferences.sidebar_hidden_paths.clone(),
                                         pinned_paths: self.state.preferences.sidebar_pinned_paths.clone(),
                                         on_toggle_pin: Some(on_toggle_pin),
+                                        on_new_file: Some(on_new_file),
+                                        on_new_folder: Some(on_new_folder),
                                         reduce_motion,
                                         on_row: Some(on_row),
                                         on_trash_directory: Some(on_trash_directory),
@@ -5092,10 +5315,10 @@ impl Render for WorkspaceView {
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     move |_, _, cx| {
-                                                        cx.reveal_path(&reveal_path);
+                                                        crate::platform::reveal_in_folder(&reveal_path, cx);
                                                     },
                                                 )
-                                                .child(strings.reveal_in_finder),
+                                                .child(strings.reveal_in_folder),
                                         )
                                         .child(
                                             div()
@@ -5260,6 +5483,17 @@ impl Render for WorkspaceView {
                                     let view = view_for_sel.clone();
                                     view.update(app, |this, cx| {
                                         if this.lightbox.is_open { return; }
+                                        let mut sel = sel;
+                                        // A press outside the open block closes it; the hit was
+                                        // made on the parse before the edit, so shift it.
+                                        if is_selecting && this.block_edit.is_some() {
+                                            if let Some(shift) = this.exit_block_edit(cx) {
+                                                sel = sel.map(|s| crate::views::preview::PreviewSelection::new(
+                                                    crate::views::preview::PreviewCharPosition::new(shift.apply(s.anchor.block_ix), s.anchor.char_offset),
+                                                    crate::views::preview::PreviewCharPosition::new(shift.apply(s.head.block_ix), s.head.char_offset),
+                                                ));
+                                            }
+                                        }
                                         if is_selecting || sel.is_none() {
                                             this.preview_selection = sel;
                                         }
@@ -5345,11 +5579,28 @@ impl Render for WorkspaceView {
                                     });
                                 });
 
+                                let task_view = cx.entity().clone();
+                                let task_doc = self.state.active.clone();
+                                let on_toggle_task: crate::views::preview::OnToggleTaskCallback = Arc::new(move |marker, checked, _window, app| {
+                                    task_view.update(app, |this, cx| {
+                                        // The AST ranges are only valid for the document they came from.
+                                        if this.state.active == task_doc { this.toggle_task(marker, checked, cx); }
+                                    });
+                                });
+
                                 let wheel_view = cx.entity().clone();
                                 let on_wheel: crate::views::preview::OnPreviewWheelCallback =
                                     Arc::new(move |event, window, app| {
                                         wheel_view.update(app, |this, cx| {
                                             this.handle_preview_scroll_wheel(event, window, cx);
+                                        });
+                                    });
+
+                                let press_view = cx.entity().clone();
+                                let on_block_press: crate::views::preview::OnBlockPressCallback =
+                                    Arc::new(move |ix, offset, clicks, position, window, app| {
+                                        press_view.update(app, |this, cx| {
+                                            this.preview_block_press(ix, offset, clicks, position, window, cx);
                                         });
                                     });
 
@@ -5359,8 +5610,10 @@ impl Render for WorkspaceView {
                                     on_selection_change: Some(on_selection_change),
                                     on_autoscroll: Some(on_autoscroll),
                                     on_image_recovery: Some(on_image_recovery),
+                                    on_toggle_task: Some(on_toggle_task),
                                     on_select_heading: Some(on_select_heading.clone()),
                                     on_wheel: Some(on_wheel),
+                                    on_block_press: Some(on_block_press),
                                 };
 
                                 div()
@@ -5491,6 +5744,8 @@ impl Render for WorkspaceView {
                                                         &preview_failures,
                                                         self.local_images.clone(),
                                                         reduce_motion,
+                                                        block_editor.clone(),
+                                                        block_motions.clone(),
                                                     ))
                                                     .child(self.render_column_resize_handles(cx))
                                                     .child(self.render_preview_scrollbar()))
@@ -5638,6 +5893,8 @@ impl Render for WorkspaceView {
                                                                     &preview_failures,
                                                                     self.local_images.clone(),
                                                                     reduce_motion,
+                                                                    block_editor.clone(),
+                                                                    block_motions.clone(),
                                                                 ))
                                                                 .child(self.render_column_resize_handles(cx))
                                                                 .child(self.render_preview_scrollbar()))
@@ -5697,7 +5954,6 @@ impl Render for WorkspaceView {
                         root.child(self.render_close_modal(theme, cx))
                     });
 
-        self.complete_local_image_decode(window, cx);
         let pinned_diagram = self.lightbox.svg_path.clone();
         let release_hidden = std::mem::take(&mut self.release_hidden_diagrams)
             || self.state.view_mode == ViewMode::Source;
@@ -5920,7 +6176,16 @@ pub fn outline_scroll_ease(t: f32) -> f32 {
 
 #[cfg(test)]
 mod scroll_tests {
-    use super::{outline_scroll_duration_ms, outline_scroll_ease, projected_scroll_offset};
+    use super::{folder_motion_ms, outline_scroll_duration_ms, outline_scroll_ease, projected_scroll_offset};
+
+    #[test]
+    fn folder_motion_grows_with_rows_within_bounds() {
+        assert_eq!(folder_motion_ms(0), 160);
+        assert_eq!(folder_motion_ms(5), 160);
+        assert_eq!(folder_motion_ms(20), 280);
+        assert!(folder_motion_ms(30) > folder_motion_ms(20));
+        assert_eq!(folder_motion_ms(500), 450);
+    }
 
     #[test]
     fn wheel_projection_matches_scroll_direction_and_clamps_at_edges() {
@@ -6025,7 +6290,9 @@ where
         .on_mouse_down(MouseButton::Left, handler);
 
     if active {
-        base.bg(bg_color).text_color(text_color).child(icon)
+        // The background is the sliding thumb behind the group, not this button.
+        let _ = bg_color;
+        base.text_color(text_color).child(icon)
     } else {
         base.text_color(text_color)
             .hover(|s| s.bg(theme.hover_bg()).text_color(theme.text_primary))
@@ -6245,4 +6512,12 @@ fn render_settings_icon(color: Hsla) -> impl IntoElement {
         .path("icons/settings.svg")
         .size(px(16.))
         .text_color(color)
+}
+
+/// Cheap identity for a document buffer, used to key saved preview layouts.
+fn buffer_hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
 }

@@ -467,6 +467,12 @@ pub struct Preferences {
     /// Show the editor gutter line numbers.
     #[serde(default = "default_true")]
     pub show_line_numbers: bool,
+    /// Show a tab per open document in the canvas header (off: title only, ADR 0031).
+    #[serde(default)]
+    pub show_tab_bar: bool,
+    /// Click a preview block to edit its source in place (off: the preview is read-only).
+    #[serde(default)]
+    pub preview_inline_edit: bool,
     /// One-time preference migrations (0 = pre-0.2.1 config).
     #[serde(default)]
     pub config_version: u32,
@@ -511,6 +517,8 @@ impl Default for Preferences {
             auto_save_on_blur: true,
             reduce_motion: false,
             show_line_numbers: true,
+            show_tab_bar: false,
+            preview_inline_edit: false,
             config_version: CURRENT_CONFIG_VERSION,
             workspace_roots: Vec::new(),
             sidebar_hidden_paths: Vec::new(),

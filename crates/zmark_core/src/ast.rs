@@ -96,6 +96,9 @@ pub struct HeadingItem {
 pub struct ListItem {
     pub checked: Option<bool>,
     pub body: Vec<BlockElement>,
+    /// Source byte range of the `[ ]` / `[x]` task marker, when this is a task item.
+    #[serde(default)]
+    pub marker: Option<std::ops::Range<usize>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1057,6 +1060,7 @@ where
             }
             Event::Start(Tag::Item) => {
                 let mut checked = None;
+                let mut marker = None;
                 let mut body = Vec::new();
                 let mut item_end = range.end;
                 let mut child_idx = 0;
@@ -1069,6 +1073,7 @@ where
                     }
                     if let Event::TaskListMarker(chk) = sub_ev {
                         checked = Some(*chk);
+                        marker = Some(sub_range.clone());
                         item_end = sub_range.end;
                         iter.next();
                         continue;
@@ -1090,7 +1095,7 @@ where
                         child_idx += 1;
                     }
                 }
-                items.push(ListItem { checked, body });
+                items.push(ListItem { checked, body, marker });
                 item_idx += 1;
                 end_offset = item_end;
             }

@@ -244,7 +244,8 @@ fn test_preview_task_list_checkbox_uses_syntax_bullet() {
     let task_item_pos = preview_src
         .find("if let Some(checked) = item.checked")
         .expect("task list checkbox branch must exist in preview.rs");
-    let task_item_section = &preview_src[task_item_pos..task_item_pos + 600];
+    // The branch also carries the click handler, so look far enough ahead to reach its styling.
+    let task_item_section = &preview_src[task_item_pos..(task_item_pos + 1600).min(preview_src.len())];
     // Ignore rustfmt line wrapping while retaining the checked-state color assertion.
     let normalized = task_item_section
         .split_whitespace()

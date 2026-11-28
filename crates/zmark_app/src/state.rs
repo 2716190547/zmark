@@ -75,6 +75,8 @@ impl DocKey {
 pub struct OpenDoc {
     pub key: DocKey,
     pub doc: Document,
+    /// Undo history, cursor and selection while this document is in the background.
+    pub session: Option<crate::editor_engine::EditorSession>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -489,6 +491,7 @@ impl AppState {
             let _ = preferences.save_to_path(&preferences_path);
         }
         crate::platform::set_fonts(&preferences.font_family, &preferences.code_font_family);
+        crate::platform::set_preview_line_height(Preferences::sanitize_line_height(preferences.line_height));
         let is_dark = match preferences.theme {
             ThemeMode::Light => false,
             ThemeMode::Dark => true,
@@ -510,6 +513,7 @@ impl AppState {
         let open_docs = vec![OpenDoc {
             key: key.clone(),
             doc,
+            session: None,
         }];
         let active = Some(key);
 
@@ -596,6 +600,16 @@ impl AppState {
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
+    pub fn set_show_tab_bar(&mut self, enabled: bool) {
+        self.preferences.show_tab_bar = enabled;
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
+    pub fn set_preview_inline_edit(&mut self, enabled: bool) {
+        self.preferences.preview_inline_edit = enabled;
+        let _ = self.preferences.save_to_path(&self.preferences_path);
+    }
+
     pub fn set_tab_size(&mut self, tab_size: usize) {
         self.preferences.tab_size = tab_size;
         let _ = self.preferences.save_to_path(&self.preferences_path);
@@ -643,6 +657,7 @@ impl AppState {
     pub fn set_line_height(&mut self, val: f32) {
         let clamped = Preferences::sanitize_line_height(val);
         self.preferences.line_height = clamped;
+        crate::platform::set_preview_line_height(clamped);
         let _ = self.preferences.save_to_path(&self.preferences_path);
     }
 
@@ -779,7 +794,12 @@ impl AppState {
         for open in &mut self.open_docs {
             match open.doc.check_disk_change() {
                 Ok(true) if self.active.as_ref() == Some(&open.key) => active_reloaded = true,
-                Ok(true) => open.doc.unload_parsed(),
+                Ok(true) => {
+                    open.doc.unload_parsed();
+                    // Reloaded from disk: like the active document, undo must not
+                    // bring back text that no longer matches the file.
+                    if let Some(session) = open.session.as_mut() { session.clear_history(); }
+                }
                 Ok(false) => {}
                 Err(error) => { failure.get_or_insert(error); }
             }
@@ -1365,28 +1385,59 @@ impl AppState {
             self.open_docs[0] = OpenDoc {
                 key: target_key.clone(),
                 doc: new_doc,
+                session: None,
             };
         } else {
             self.open_docs.push(OpenDoc {
                 key: target_key.clone(),
                 doc: new_doc,
+                session: None,
             });
         }
 
         let previous_key = self.active.clone();
+        self.park_editor_session();
         self.active = Some(target_key.clone());
         if let Some(previous_key) = previous_key.filter(|old| old != &target_key) {
             if let Some(old_pos) = self.open_docs.iter().position(|d| d.key == previous_key) {
                 self.open_docs[old_pos].doc.unload_parsed();
             }
         }
-        let buffer = &self.open_docs.iter().find(|d| self.active.as_ref() == Some(&d.key)).unwrap().doc.buffer;
-        self.editor.reset_text(buffer);
+        self.load_active_into_editor();
         if let Some(idx) = self.find_root_index_for_path(&path) {
             self.refresh_root(idx);
         }
         self.expand_to_file(&path);
         Ok(())
+    }
+
+    /// Stores the active document's editor session before another one is loaded.
+    fn park_editor_session(&mut self) {
+        let Some(active) = self.active.clone() else { return; };
+        let session = self.editor.take_session();
+        if let Some(open) = self.open_docs.iter_mut().find(|d| d.key == active) {
+            open.session = Some(session);
+        }
+        // Each document may hold up to 8 MiB of history; cap what background
+        // documents keep in total by dropping the largest histories first.
+        const BACKGROUND_HISTORY_BUDGET: usize = 32 * 1024 * 1024;
+        loop {
+            let total: usize = self.open_docs.iter().filter_map(|d| d.session.as_ref()).map(|s| s.history_bytes()).sum();
+            if total <= BACKGROUND_HISTORY_BUDGET { break; }
+            let Some(largest) = self.open_docs.iter_mut()
+                .filter_map(|d| d.session.as_mut())
+                .max_by_key(|s| s.history_bytes()) else { break; };
+            largest.clear_history();
+        }
+    }
+
+    /// Loads the active document into the editor with its saved session.
+    fn load_active_into_editor(&mut self) {
+        let Some(active) = self.active.clone() else { return; };
+        let Some(open) = self.open_docs.iter_mut().find(|d| d.key == active) else { return; };
+        let session = open.session.take();
+        let buffer = open.doc.buffer.clone();
+        self.editor.restore_session(&buffer, session);
     }
 
     pub fn switch_document(&mut self, key: &DocKey) {
@@ -1402,13 +1453,45 @@ impl AppState {
                     self.open_docs[old_pos].doc.unload_parsed();
                 }
             }
+            self.park_editor_session();
             self.active = Some(key.clone());
             self.open_docs[pos].doc.reparse();
-            self.editor.reset_text(&self.open_docs[pos].doc.buffer);
+            self.load_active_into_editor();
             if let DocKey::Path(ref p) = key {
                 self.expand_to_file(p);
             }
         }
+    }
+
+    /// The open document `step` places away from the active one in tab order,
+    /// wrapping at both ends; `None` when fewer than two documents are open.
+    pub fn cycled_document(&self, step: isize) -> Option<DocKey> {
+        let len = self.open_docs.len() as isize;
+        if len < 2 {
+            return None;
+        }
+        let current = self.active.as_ref()
+            .and_then(|key| self.open_docs.iter().position(|d| &d.key == key))
+            .unwrap_or(0) as isize;
+        Some(self.open_docs[(current + step).rem_euclid(len) as usize].key.clone())
+    }
+
+    /// The document for a `Ctrl+1…9` jump: 0–7 pick by position, 8 is always the last.
+    pub fn document_for_jump(&self, slot: usize) -> Option<DocKey> {
+        let idx = if slot >= 8 { self.open_docs.len().checked_sub(1)? } else { slot };
+        self.open_docs.get(idx).map(|d| d.key.clone())
+    }
+
+    /// Moves `key` to position `to` in tab order (the order the session restores).
+    pub fn move_document(&mut self, key: &DocKey, to: usize) -> bool {
+        let Some(from) = self.open_docs.iter().position(|d| &d.key == key) else { return false; };
+        let to = to.min(self.open_docs.len() - 1);
+        if from == to {
+            return false;
+        }
+        let doc = self.open_docs.remove(from);
+        self.open_docs.insert(to, doc);
+        true
     }
 
     /// Focuses the existing draft slot, or creates a new draft if none exists.
@@ -1425,9 +1508,11 @@ impl AppState {
         let key = DocKey::Scratch(self.next_scratch_id);
         self.next_scratch_id += 1;
 
+        self.park_editor_session();
         self.open_docs.push(OpenDoc {
             key: key.clone(),
             doc: scratch,
+            session: None,
         });
         self.active = Some(key);
         self.editor.reset_text("");
@@ -1564,7 +1649,7 @@ impl AppState {
                 let next_key = self.open_docs[next_idx].key.clone();
                 self.active = Some(next_key.clone());
                 self.open_docs[next_idx].doc.reparse();
-                self.editor.reset_text(&self.open_docs[next_idx].doc.buffer);
+                self.load_active_into_editor();
                 if let DocKey::Path(ref p) = next_key {
                     self.expand_to_file(p);
                 }
@@ -1589,8 +1674,9 @@ impl AppState {
         let key = DocKey::Scratch(self.next_scratch_id);
         self.next_scratch_id += 1;
         let doc = crate::welcome::document(self.preferences.locale);
+        self.park_editor_session();
         self.editor.reset_text(&doc.buffer);
-        self.open_docs.push(OpenDoc { key: key.clone(), doc });
+        self.open_docs.push(OpenDoc { key: key.clone(), doc, session: None });
         self.active = Some(key.clone());
         self.welcome_key = Some(key);
         Ok(())
@@ -1623,6 +1709,12 @@ impl AppState {
         opened
     }
 
+    /// True when `path` is the active document, comparing canonical paths.
+    pub fn is_active_path(&self, path: &std::path::Path) -> bool {
+        let Some(DocKey::Path(active)) = &self.active else { return false; };
+        active == path || path.canonicalize().is_ok_and(|p| &p == active)
+    }
+
     pub fn load_file(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
         self.open_file(path)
     }
@@ -1648,6 +1740,31 @@ impl AppState {
             }
         }
         self.open_file(candidate.clone())?;
+        Ok(candidate)
+    }
+
+    /// Creates an empty `name`, `name 1`, ... folder inside `dir` and reveals it in the tree.
+    pub fn create_folder_in_dir(&mut self, dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf, std::io::Error> {
+        if !dir.is_dir() {
+            return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Target directory does not exist"));
+        }
+        let mut candidate = dir.join(name);
+        let mut counter = 1;
+        loop {
+            match std::fs::create_dir(&candidate) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    candidate = dir.join(format!("{name} {counter}"));
+                    counter += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let candidate = candidate.canonicalize()?;
+        if let Some(idx) = self.find_root_index_for_path(&candidate) {
+            self.refresh_root(idx);
+        }
+        self.expand_to_file(&candidate);
         Ok(candidate)
     }
 
@@ -2723,6 +2840,7 @@ fn test_sidebar_draft_decentralization_lifecycle() {
     state.open_docs.push(OpenDoc {
         key: scratch_zero.clone(),
         doc: scratch_doc,
+        session: None,
     });
     state.active = Some(scratch_zero.clone());
 
@@ -2769,6 +2887,7 @@ fn test_sidebar_draft_decentralization_lifecycle() {
     state.open_docs.push(OpenDoc {
         key: DocKey::Scratch(0),
         doc: Document::new_scratch(),
+        session: None,
     });
     assert!(state.open_docs.iter().any(|d| d.key == DocKey::Scratch(0)));
 
@@ -2839,6 +2958,7 @@ fn test_matching_across_roots_loose_and_drafts() {
     state.open_docs.push(OpenDoc {
         key: DocKey::Path(ext_path),
         doc: ext_doc,
+        session: None,
     });
 
     state.set_search_query("external_loose");
@@ -2850,6 +2970,7 @@ fn test_matching_across_roots_loose_and_drafts() {
     state.open_docs.push(OpenDoc {
         key: DocKey::Scratch(99),
         doc: scratch_doc,
+        session: None,
     });
 
     state.set_search_query("Daily");

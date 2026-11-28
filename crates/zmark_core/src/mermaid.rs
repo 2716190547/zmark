@@ -3,6 +3,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn statement_terminators_are_stripped_but_entities_stay() {
+        assert_eq!(strip_statement_terminator("    classDef a fill:#fff,color:#000;"), "    classDef a fill:#fff,color:#000");
+        assert_eq!(strip_statement_terminator("A --> B; ;  "), "A --> B");
+        assert_eq!(strip_statement_terminator("A[\"x &amp;\"]"), "A[\"x &amp;\"]");
+        assert_eq!(strip_statement_terminator("A[x &amp;];"), "A[x &amp;]");
+        assert_eq!(strip_statement_terminator("A[x &amp;"), "A[x &amp;");
+        assert_eq!(strip_statement_terminator("A --> B"), "A --> B");
+    }
+
+    #[test]
+    fn trailing_semicolons_render_instead_of_failing_to_parse() {
+        let code = "graph TB\n    classDef a fill:#E1F5FE,stroke:#0288D1,font-weight:bold;\n    A[\"x\"]:::a --> B;\n    style B fill:#fff;\n";
+        render_to_svg(code).expect("semicolon-terminated statements should render");
+    }
+
+    #[test]
     fn test_render_mermaid_to_svg() {
         let code = r#"
 graph TD
@@ -283,6 +299,25 @@ struct EdgeMatch {
     start: usize,
     end: usize,
     edge_str: String,
+}
+
+/// Mermaid accepts `;` as a statement terminator (`classDef a fill:#fff;`, `A --> B;`),
+/// but the parser rejects it. Drops trailing `;` and spaces from a line, keeping the `;`
+/// of an HTML entity such as `&amp;` that a label may end with.
+fn strip_statement_terminator(line: &str) -> String {
+    let mut end = line.trim_end().len();
+    while line[..end].ends_with(';') {
+        let body = &line[..end - 1];
+        let is_entity = body.rfind('&').is_some_and(|amp| {
+            let name = &body[amp + 1..];
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '#')
+        });
+        if is_entity {
+            break;
+        }
+        end = body.trim_end().len();
+    }
+    line[..end].to_string()
 }
 
 fn is_whitelisted(trimmed: &str) -> bool {
@@ -858,6 +893,7 @@ pub fn sanitize_mermaid(code: &str) -> String {
     let mut out = String::with_capacity(code.len());
 
     for line in stitched {
+        let line = strip_statement_terminator(&line);
         let trimmed = line.trim();
 
         if trimmed.is_empty() {
