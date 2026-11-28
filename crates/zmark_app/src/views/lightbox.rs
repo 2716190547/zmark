@@ -333,8 +333,14 @@ pub fn sharp_target_px(state: &LightboxState, scale_factor: f32) -> (u32, u32) {
     );
     let shrink = (4096.0 / w.max(h)).min((16_000_000.0 / (w * h)).sqrt()).min(1.0);
     (w, h) = (w * shrink, h * shrink);
-    let step = |v: f32| (((v / 64.0).ceil() as u32).saturating_mul(64)).clamp(64, 4000);
-    (step(w), step(h))
+    // Step only the long side and derive the other from the natural ratio. Rounding
+    // both sides separately changed the aspect ratio, so the sharp image arrived
+    // letterboxed inside the `Contain` box and the diagram's height jumped.
+    let long = w.max(h).max(1.0);
+    let stepped = (((long / 64.0).ceil() as u32).saturating_mul(64)).clamp(64, 4000) as f32;
+    let scale = stepped / long;
+    let side = |v: f32| ((v * scale).round() as u32).clamp(1, 4000);
+    (side(w), side(h))
 }
 
 pub fn render_lightbox(
