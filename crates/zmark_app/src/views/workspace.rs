@@ -114,8 +114,27 @@ impl gpui_component::scroll::ScrollbarHandle for EditorScrollbarHandle {
     }
 }
 
-/// Folder expand/collapse duration; close to the sidebar slide and block-edit transitions.
-const FOLDER_MOTION_MS: u64 = 220;
+/// Folder expand/collapse duration grows with the rows it reveals, so a long list is
+/// not squeezed into the time a short one takes. A short folder stays close to the
+/// sidebar slide and block-edit transitions.
+const FOLDER_MOTION_BASE_MS: u64 = 120;
+const FOLDER_MOTION_PER_ROW_MS: u64 = 8;
+const FOLDER_MOTION_MIN_MS: u64 = 160;
+const FOLDER_MOTION_MAX_MS: u64 = 450;
+
+fn folder_motion_ms(rows: usize) -> u64 {
+    (FOLDER_MOTION_BASE_MS + FOLDER_MOTION_PER_ROW_MS * rows as u64)
+        .clamp(FOLDER_MOTION_MIN_MS, FOLDER_MOTION_MAX_MS)
+}
+
+/// Rows a folder shows when open: its children, plus those of every child folder that is open.
+fn folder_rows(node: &crate::state::FileTreeNode) -> usize {
+    folder_rows_in(&node.children)
+}
+
+fn folder_rows_in(nodes: &[crate::state::FileTreeNode]) -> usize {
+    nodes.iter().map(|n| 1 + if n.is_dir && n.is_expanded { folder_rows(n) } else { 0 }).sum()
+}
 
 pub struct WorkspaceView {
     pub state: AppState,
@@ -4362,19 +4381,19 @@ impl Render for WorkspaceView {
         }
 
         let folder_targets = self.state.workspace_roots.iter().flat_map(|root| {
-            fn paths(nodes: &[crate::state::FileTreeNode], out: &mut Vec<(PathBuf, bool)>) {
-                for node in nodes.iter().filter(|node| node.is_dir) { out.push((node.path.clone(), node.is_expanded)); paths(&node.children, out); }
+            fn paths(nodes: &[crate::state::FileTreeNode], out: &mut Vec<(PathBuf, (bool, usize))>) {
+                for node in nodes.iter().filter(|node| node.is_dir) { out.push((node.path.clone(), (node.is_expanded, folder_rows(node)))); paths(&node.children, out); }
             }
-            let mut out = vec![(root.path.clone(), root.is_expanded)];
+            let mut out = vec![(root.path.clone(), (root.is_expanded, folder_rows_in(&root.tree)))];
             paths(&root.tree, &mut out);
             out
         }).collect::<HashMap<_, _>>();
         self.folder_transitions.retain(|path, _| folder_targets.contains_key(path));
         let mut folder_values = HashMap::new();
-        for (path, expanded) in folder_targets {
+        for (path, (expanded, rows)) in folder_targets {
             let transition = self.folder_transitions.entry(path.clone()).or_default();
             let target = if expanded { 1.0 } else { 0.0 };
-            let policy = gpui_base::motion::Transition::new(std::time::Duration::from_millis(FOLDER_MOTION_MS)).ease(gpui::ease_out_quint());
+            let policy = gpui_base::motion::Transition::new(std::time::Duration::from_millis(folder_motion_ms(rows))).ease(gpui::ease_out_quint());
             let value = transition.sample(target, policy, window, cx);
             folder_values.insert(path, value.value);
         }
@@ -6150,7 +6169,16 @@ pub fn outline_scroll_ease(t: f32) -> f32 {
 
 #[cfg(test)]
 mod scroll_tests {
-    use super::{outline_scroll_duration_ms, outline_scroll_ease, projected_scroll_offset};
+    use super::{folder_motion_ms, outline_scroll_duration_ms, outline_scroll_ease, projected_scroll_offset};
+
+    #[test]
+    fn folder_motion_grows_with_rows_within_bounds() {
+        assert_eq!(folder_motion_ms(0), 160);
+        assert_eq!(folder_motion_ms(5), 160);
+        assert_eq!(folder_motion_ms(20), 280);
+        assert!(folder_motion_ms(30) > folder_motion_ms(20));
+        assert_eq!(folder_motion_ms(500), 450);
+    }
 
     #[test]
     fn wheel_projection_matches_scroll_direction_and_clamps_at_edges() {
