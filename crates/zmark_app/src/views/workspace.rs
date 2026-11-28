@@ -2017,6 +2017,24 @@ impl WorkspaceView {
         self.syntax_warm_pending = true;
     }
 
+    /// Flips the task marker at `marker` (a source byte range from the current parse).
+    pub fn toggle_task(&mut self, marker: std::ops::Range<usize>, checked: bool, cx: &mut Context<Self>) {
+        if self.state.doc().is_parse_stale() { return; }
+        let source = self.state.editor.to_text();
+        let Some(expected) = source.get(marker.clone()) else { return; };
+        let want = if checked { ["[x]", "[X]"].contains(&expected) } else { expected == "[ ]" };
+        if !want { return; }
+        let replacement = if checked { "[ ]" } else { "[x]" };
+        let expected = expected.to_string();
+        if !self.state.editor.replace_source_range(marker, &expected, replacement) { return; }
+        self.preview_selection = None;
+        self.is_preview_selecting = false;
+        self.state.sync_from_editor();
+        self.schedule_parse(cx);
+        self.trigger_auto_save(cx);
+        cx.notify();
+    }
+
     pub fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
         let mode = if self.state.doc().path.as_ref().is_some_and(|p| !zmark_core::file_ops::is_markdown(p)) {
             ViewMode::Source
@@ -5408,21 +5426,8 @@ impl Render for WorkspaceView {
                                 let task_doc = self.state.active.clone();
                                 let on_toggle_task: crate::views::preview::OnToggleTaskCallback = Arc::new(move |marker, checked, _window, app| {
                                     task_view.update(app, |this, cx| {
-                                        // The AST ranges are only valid for the document and parse they came from.
-                                        if this.state.active != task_doc || this.state.doc().is_parse_stale() { return; }
-                                        let source = this.state.editor.to_text();
-                                        let Some(expected) = source.get(marker.clone()) else { return; };
-                                        let want = if checked { ["[x]", "[X]"].contains(&expected) } else { expected == "[ ]" };
-                                        if !want { return; }
-                                        let replacement = if checked { "[ ]" } else { "[x]" };
-                                        let expected = expected.to_string();
-                                        if !this.state.editor.replace_source_range(marker, &expected, replacement) { return; }
-                                        this.preview_selection = None;
-                                        this.is_preview_selecting = false;
-                                        this.state.sync_from_editor();
-                                        this.schedule_parse(cx);
-                                        this.trigger_auto_save(cx);
-                                        cx.notify();
+                                        // The AST ranges are only valid for the document they came from.
+                                        if this.state.active == task_doc { this.toggle_task(marker, checked, cx); }
                                     });
                                 });
 

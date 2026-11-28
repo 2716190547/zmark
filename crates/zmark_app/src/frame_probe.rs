@@ -14,6 +14,16 @@
 //!   back and forth across the table.
 //! - `resize`: a 12 000-line document in Preview; change the window width
 //!   every 16 ms between 900 and 1400 px.
+//! - `doc-switch`: two 12 000-line documents (temporary files); switch between
+//!   them every 240 ms.
+//! - `task-toggle`: a 12 000-line document of task lists; toggle the first
+//!   visible task every 240 ms.
+//! - `line-height`: a 12 000-line document; alternate the line height
+//!   preference between 1.3 and 1.7 every 240 ms.
+//!
+//! The last three start scrolled to block 500 and print the top block at the
+//! end: it must still be block 500 (on `doc-switch`, after an even number of
+//! switches), so the viewport did not drift while layouts were rebuilt.
 //!
 //! Scenarios other than `modes` use a generated scratch document and an
 //! isolated preferences file, so they never touch the user's session or config.
@@ -43,6 +53,9 @@ pub enum Scenario {
     DragScroll,
     TableSelect,
     Resize,
+    DocSwitch,
+    TaskToggle,
+    LineHeight,
 }
 
 impl Scenario {
@@ -52,6 +65,9 @@ impl Scenario {
             Scenario::DragScroll => "drag-scroll",
             Scenario::TableSelect => "table-select",
             Scenario::Resize => "resize",
+            Scenario::DocSwitch => "doc-switch",
+            Scenario::TaskToggle => "task-toggle",
+            Scenario::LineHeight => "line-height",
         }
     }
 
@@ -60,7 +76,10 @@ impl Scenario {
     pub fn document(self) -> Option<String> {
         match self {
             Scenario::Modes => None,
-            Scenario::DragScroll | Scenario::Resize => Some(long_document(12_000)),
+            Scenario::DragScroll | Scenario::Resize | Scenario::DocSwitch | Scenario::LineHeight => {
+                Some(long_document(12_000))
+            }
+            Scenario::TaskToggle => Some(task_document(12_000)),
             Scenario::TableSelect => Some(table_document(30, 6)),
         }
     }
@@ -73,6 +92,9 @@ pub fn requested() -> Option<Scenario> {
         Ok("drag-scroll") => Scenario::DragScroll,
         Ok("table-select") => Scenario::TableSelect,
         Ok("resize") => Scenario::Resize,
+        Ok("doc-switch") => Scenario::DocSwitch,
+        Ok("task-toggle") => Scenario::TaskToggle,
+        Ok("line-height") => Scenario::LineHeight,
         _ => Scenario::Modes,
     };
     Some(scenario)
@@ -108,6 +130,22 @@ fn long_document(lines: usize) -> String {
     }
     md
 }
+
+fn task_document(lines: usize) -> String {
+    let mut md = String::with_capacity(lines * 48);
+    let mut block = 0;
+    while md.lines().count() < lines {
+        md.push_str(&format!("Tasks for section {block}:\n\n"));
+        md.push_str(&format!("- [ ] task {block}.a with a description long enough to wrap\n- [x] task {block}.b\n\n"));
+        block += 1;
+    }
+    md
+}
+
+/// Starting block for the layout-rebuild scenarios.
+const START_BLOCK: usize = 500;
+/// Steps between two rebuild actions (240 ms at 8 ms per step).
+const ACTION_EVERY: usize = 30;
 
 fn table_document(rows: usize, cols: usize) -> String {
     let mut md = String::new();
@@ -167,11 +205,34 @@ pub fn run(scenario: Scenario, view: Entity<WorkspaceView>, window: &mut Window,
             .detach();
         }
         _ => {
+            if scenario == Scenario::DocSwitch {
+                let path = std::env::temp_dir().join("zmark-frame-probe-b.md");
+                if std::fs::write(&path, long_document(12_000)).is_ok() {
+                    view.update(cx, |ws, cx| {
+                        if ws.state.open_file(path).is_ok() {
+                            ws.on_document_swapped(Some(window), cx);
+                        }
+                    });
+                }
+            }
             view.update(cx, |ws, cx| {
                 ws.set_view_mode(ViewMode::Preview, cx);
                 ws.parse_now_and_refresh();
                 cx.notify();
             });
+            if matches!(scenario, Scenario::DocSwitch | Scenario::TaskToggle | Scenario::LineHeight) {
+                let view = view.clone();
+                window
+                    .spawn(cx, async move |cx| {
+                        // Let the first layout settle, then park the viewport mid-document.
+                        cx.background_executor().timer(SETTLE / 2).await;
+                        let _ = cx.update(|_, cx| view.update(cx, |ws, cx| {
+                            ws.preview_list.scroll_to(gpui::ListOffset { item_ix: START_BLOCK, offset_in_item: px(0.) });
+                            cx.notify();
+                        }));
+                    })
+                    .detach();
+            }
             window
                 .spawn(cx, async move |cx| {
                     cx.background_executor().timer(SETTLE).await;
@@ -189,7 +250,7 @@ pub fn run(scenario: Scenario, view: Entity<WorkspaceView>, window: &mut Window,
                     let deadline = Instant::now() + WINDOW;
                     let mut step = 0usize;
                     while Instant::now() < deadline {
-                        let _ = cx.update(|window, cx| drive(scenario, step, pane, window, cx));
+                        let _ = cx.update(|window, cx| drive(scenario, step, pane, &view, window, cx));
                         step += 1;
                         cx.background_executor().timer(STEP).await;
                     }
@@ -208,6 +269,7 @@ fn drive(
     scenario: Scenario,
     step: usize,
     pane: gpui::Bounds<gpui::Pixels>,
+    view: &Entity<WorkspaceView>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -271,6 +333,39 @@ fn drive(
             let tri = if phase < 0.5 { phase * 2. } else { 2. - phase * 2. };
             window.resize(size(px(900. + 500. * tri), px(800.)));
         }
+        _ if step % ACTION_EVERY != ACTION_EVERY - 1 => {}
+        Scenario::DocSwitch => {
+            view.update(cx, |ws, cx| {
+                let docs = ws.state.open_documents();
+                let Some(pos) = docs.iter().position(|d| Some(&d.key) == ws.state.active.as_ref()) else { return; };
+                let next = docs[(pos + 1) % docs.len()].key.clone();
+                ws.state.switch_document(&next);
+                ws.on_document_swapped(Some(window), cx);
+                cx.notify();
+            });
+        }
+        Scenario::TaskToggle => {
+            view.update(cx, |ws, cx| {
+                let top = ws.preview_list.logical_scroll_top().item_ix;
+                let parsed = ws.state.doc().parsed.clone();
+                let task = parsed.blocks.iter().skip(top).find_map(|block| match block {
+                    zmark_core::ast::BlockElement::List { items, .. } => items
+                        .iter()
+                        .find_map(|item| item.marker.clone().zip(item.checked)),
+                    _ => None,
+                });
+                if let Some((marker, checked)) = task {
+                    ws.toggle_task(marker, checked, cx);
+                }
+            });
+        }
+        Scenario::LineHeight => {
+            view.update(cx, |ws, cx| {
+                let next = if (step / ACTION_EVERY) % 2 == 0 { 1.3 } else { 1.7 };
+                ws.state.set_line_height(next);
+                cx.notify();
+            });
+        }
     }
 }
 
@@ -305,11 +400,13 @@ fn finish(
         )
     });
     let top = ws.preview_list.logical_scroll_top();
+    let active = ws.state.doc().display_name_with_fallback("untitled");
     eprintln!(
-        "frame probe [{}]: selection {:?}, scroll top block {}",
+        "frame probe [{}]: selection {:?}, scroll top block {}, active {}",
         scenario.name(),
         selection,
-        top.item_ix
+        top.item_ix,
+        active
     );
 }
 
