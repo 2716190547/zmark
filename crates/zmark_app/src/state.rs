@@ -784,7 +784,12 @@ impl AppState {
         for open in &mut self.open_docs {
             match open.doc.check_disk_change() {
                 Ok(true) if self.active.as_ref() == Some(&open.key) => active_reloaded = true,
-                Ok(true) => open.doc.unload_parsed(),
+                Ok(true) => {
+                    open.doc.unload_parsed();
+                    // Reloaded from disk: like the active document, undo must not
+                    // bring back text that no longer matches the file.
+                    if let Some(session) = open.session.as_mut() { session.clear_history(); }
+                }
                 Ok(false) => {}
                 Err(error) => { failure.get_or_insert(error); }
             }
