@@ -686,7 +686,12 @@ mod tests {
         state.scroll.set_offset(point(px(0.), px(-(max + 500.0))));
         let (range, _) = state.visible_range(32.0);
         assert!((state.offset() - max).abs() < 0.01, "offset {} not clamped to {max}", state.offset());
-        assert!(state.origins[range.start] <= max, "range {range:?} starts below the viewport top");
+        // A unit test has no viewport (height 0), so at the end nothing is visible and the
+        // range is empty at the block count; a non-empty range must not start below the top.
+        assert!(
+            state.origins.get(range.start).is_none_or(|origin| *origin <= max),
+            "range {range:?} starts below the viewport top"
+        );
     }
 
     #[test]
@@ -713,9 +718,19 @@ mod tests {
         let new = zmark_core::ast::parse_markdown("a\n\n- [x] b\n\nc\n\nd\n");
         let measured = vec![Some(10.0), Some(20.0), Some(30.0), Some(40.0)];
         assert_eq!(carry_measured(Some(&old), &measured, &new), vec![Some(10.0), None, Some(30.0), Some(40.0)]);
-        let inserted = zmark_core::ast::parse_markdown("a\n\nnew\n\n- [ ] b\n\nc\n\nd\n");
-        assert_eq!(carry_measured(Some(&old), &measured, &inserted), vec![Some(10.0), None, Some(20.0), Some(30.0), Some(40.0)]);
         assert_eq!(carry_measured(Some(&old), &measured, &old), measured);
+        // Inserting before a block keeps the suffix. The old list is not part of it: a task
+        // item carries its marker's source byte range, which the insertion shifts, so that
+        // block is measured again (harmless: only its own height is re-measured).
+        let inserted = zmark_core::ast::parse_markdown("a\n\nnew\n\n- [ ] b\n\nc\n\nd\n");
+        assert_eq!(carry_measured(Some(&old), &measured, &inserted), vec![Some(10.0), None, None, Some(30.0), Some(40.0)]);
+        // Blocks without source ranges survive an insertion before them.
+        let plain_old = zmark_core::ast::parse_markdown("a\n\nb\n\nc\n\nd\n");
+        let plain_new = zmark_core::ast::parse_markdown("a\n\nnew\n\nb\n\nc\n\nd\n");
+        assert_eq!(
+            carry_measured(Some(&plain_old), &measured, &plain_new),
+            vec![Some(10.0), None, Some(20.0), Some(30.0), Some(40.0)]
+        );
     }
 
     #[test]
